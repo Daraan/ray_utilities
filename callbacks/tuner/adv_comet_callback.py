@@ -1,3 +1,5 @@
+# ruff: noqa: PLC0415
+
 from __future__ import annotations
 import logging
 import math
@@ -9,7 +11,7 @@ from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
 from ray.tune.experiment import Trial
 
 from interpretable_ddts.runfiles.constants import DEFAULT_VIDEO_KEYS
-from interpretable_ddts.tools import numpy_to_video
+from ray_utilities.video.numpy_to_video import numpy_to_video
 
 
 if TYPE_CHECKING:
