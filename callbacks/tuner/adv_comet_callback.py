@@ -13,10 +13,13 @@ from ray.tune.experiment import Trial
 from interpretable_ddts.runfiles.constants import DEFAULT_VIDEO_KEYS
 from ray_utilities.video.numpy_to_video import numpy_to_video
 
-
 if TYPE_CHECKING:
     from ray.tune.experiment.trial import Trial
     from comet_ml import Experiment, OfflineExperiment
+
+__all__ = [
+    "AdvCometLoggerCallback",
+]
 
 
 class AdvCometLoggerCallback(CometLoggerCallback):

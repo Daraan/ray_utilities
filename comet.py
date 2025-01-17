@@ -1,14 +1,15 @@
 # ruff: noqa: PLC0415
 
-from interpretable_ddts.runfiles.constants import COMET_OFFLINE_DIRECTORY
-
 import logging
 import os
 from pathlib import Path
 
+import comet_ml
+
+from interpretable_ddts.runfiles.constants import COMET_OFFLINE_DIRECTORY
+
 
 def comet_upload_offline_experiments():
-    import comet_ml
 
     archives = list(map(str, Path(COMET_OFFLINE_DIRECTORY).glob("*.zip")))
     if not archives:
