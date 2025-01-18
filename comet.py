@@ -3,11 +3,21 @@
 import logging
 import os
 from pathlib import Path
+from typing import Optional, cast
 
 import comet_ml
 
 from interpretable_ddts.runfiles.constants import COMET_OFFLINE_DIRECTORY
 
+_api: Optional[comet_ml.API] = None
+"""Singleton instance of the Comet API client to make use of caching."""
+
+def get_comet_api() -> comet_ml.API:
+    """Create a persistent Comet API client that makes use of caching."""
+    global _api  # noqa: PLW0603
+    if _api is None:
+        _api = comet_ml.API()
+    return _api
 
 def comet_upload_offline_experiments():
 
@@ -21,3 +31,13 @@ def comet_upload_offline_experiments():
     new_dir.mkdir(exist_ok=True)
     for path in Path(os.environ["COMET_OFFLINE_DIRECTORY"]).glob("*.zip"):
         path.rename(new_dir / path.name)
+
+def comet_assure_project_exists(workspace_name: str, project_name: str, project_description: Optional[str] = None):
+    api = get_comet_api()
+    projects = cast(list[str], api.get(workspace_name))
+    if project_name not in projects:
+        api.create_project(
+            workspace_name,
+            project_name,
+            project_description=project_description,
+        )
