@@ -19,6 +19,25 @@ def get_comet_api() -> comet_ml.API:
         _api = comet_ml.API()
     return _api
 
+
+def get_default_workspace() -> str:
+    """
+    Returns the default Comet workspace.
+
+    this looks up env custom environment variable COMET_DEFAULT_WORKSPACE
+    or the first workspace in the list of workspaces.
+    """
+    try:
+        return (
+            os.environ.get("COMET_DEFAULT_WORKSPACE")
+            or get_comet_api().get_default_workspace()
+        )
+    except IndexError as e:
+        raise ValueError(
+            "COMET_DEFAULT_WORKSPACE is not set and no comet workspaces were found. Create a workspace first."
+        ) from e
+
+
 def comet_upload_offline_experiments():
 
     archives = list(map(str, Path(COMET_OFFLINE_DIRECTORY).glob("*.zip")))
