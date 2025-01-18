@@ -21,6 +21,8 @@ __all__ = [
     "AdvCometLoggerCallback",
 ]
 
+_LOGGER = logging.getLogger(__name__)
+
 
 class AdvCometLoggerCallback(CometLoggerCallback):
     # Copy from parent for pylance
@@ -78,10 +80,7 @@ class AdvCometLoggerCallback(CometLoggerCallback):
 
     _trial_experiments: dict[Trial, Experiment | OfflineExperiment]
 
-    _exclude_results: ClassVar[list[str]] = [*CometLoggerCallback._exclude_results, "cli_args/test"]
-
-    def _cli_to_str(self, args: dict, prefix="--", sep=" ") -> str:
-        return sep.join([f"{prefix}{k} {v}" for k, v in args.items()])
+    _exclude_results: ClassVar[list[str]] = [*CometLoggerCallback._exclude_results, "cli_args/test"]  # noqa: SLF001
 
     def __init__(
         self,
@@ -105,7 +104,7 @@ class AdvCometLoggerCallback(CometLoggerCallback):
         self._log_only_once = [*self._to_exclude, "config", *self._to_system]
         if "training_iteration" in self._log_only_once:
             self._log_only_once.remove("training_iteration")
-            logging.warning("training_iteration must be in the results to log it")
+            _LOGGER.warning("training_iteration must be in the results to log it")
         self._video_keys = video_keys
 
     def log_trial_start(self, trial: "Trial"):
