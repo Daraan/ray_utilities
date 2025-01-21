@@ -53,6 +53,11 @@ class AdvCometLoggerCallback(CometLoggerCallback):
                 Defaults to None.
             save_checkpoints: If ``True``, model checkpoints will be saved to
                 Comet ML as artifacts. Defaults to ``False``.
+            exclude_metrics: List of metric keys to exclude from logging.
+            log_cli_args: If ``True``, the command line arguments will be logged to Other.
+            video_keys: List of keys to log as videos.
+            log_to_other: List of keys to log to Other instead of Metrics/Hyperparameters.
+                Use '/' to denote nested keys.
             **experiment_kwargs: Other keyword arguments will be passed to the
                 constructor for comet_ml.Experiment (or OfflineExperiment if
                 online=False).
@@ -93,8 +98,28 @@ class AdvCometLoggerCallback(CometLoggerCallback):
         log_to_other: Optional[Iterable[str]] = ("comment", "cli_args/comment"),
         log_cli_args: bool = True,
         video_keys: Iterable[str] = DEFAULT_VIDEO_KEYS,  # NOTE: stored as string not list of keys
+        log_pip_packages: bool = False,
         **experiment_kwargs,
     ):
+        """
+        Args:
+            online: Whether to make use of an Online or
+                Offline Experiment. Defaults to True.
+            tags: Tags to add to the logged Experiment.
+                Defaults to None.
+            save_checkpoints: If ``True``, model checkpoints will be saved to
+                Comet ML as artifacts. Defaults to ``False``.
+            exclude_metrics: List of metric keys to exclude from logging.
+            log_cli_args: If ``True``, the command line arguments will be logged to Other.
+            video_keys: List of keys to log as videos.
+            log_to_other: List of keys to log to Other instead of Metrics/Hyperparameters.
+                Use '/' to denote nested keys.
+            log_pip_packages: If ``True``, the installed packages will be logged, this is always ``True``
+                if ``log_env_details`` is ``True``, which however is more expensive if set to ``True``.
+            **experiment_kwargs: Other keyword arguments will be passed to the
+                constructor for comet_ml.Experiment (or OfflineExperiment if
+                online=False).
+        """
         super().__init__(online=online, tags=tags, save_checkpoints=save_checkpoints, **experiment_kwargs)  # pyright: ignore[reportArgumentType]
 
         exclude_video_keys = ["/".join(keys) for keys in video_keys]
@@ -106,6 +131,8 @@ class AdvCometLoggerCallback(CometLoggerCallback):
             self._log_only_once.remove("training_iteration")
             _LOGGER.warning("training_iteration must be in the results to log it")
         self._video_keys = video_keys
+        self._log_pip_packages = log_pip_packages and not experiment_kwargs.get("log_env_details", False)
+        """If log_env_details is True pip packages are already logged."""
 
     def log_trial_start(self, trial: "Trial"):
         """
@@ -124,6 +151,12 @@ class AdvCometLoggerCallback(CometLoggerCallback):
         if trial not in self._trial_experiments:
             experiment_cls = Experiment if self.online else OfflineExperiment
             experiment = experiment_cls(**self.experiment_kwargs)
+            if self._log_pip_packages:
+                try:
+                    experiment.set_pip_packages()
+                except Exception:
+                    from comet_ml.experiment import EXPERIMENT_START_FAILED_SET_PIP_PACKAGES_ERROR
+                    logging.getLogger("comet_ml.experiment").exception(EXPERIMENT_START_FAILED_SET_PIP_PACKAGES_ERROR)
             self._trial_experiments[trial] = experiment
             # Set global experiment to None to allow for multiple experiments.
             set_global_experiment(None)
