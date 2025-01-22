@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 from ray.tune.logger import TBXLoggerCallback
-from interpretable_ddts.runfiles.constants import DEFAULT_VIDEO_KEYS
+from ray_utilities.constants import DEFAULT_VIDEO_KEYS
 
 TYPE_CHECKING = False
 if TYPE_CHECKING:

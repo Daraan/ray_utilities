@@ -7,7 +7,7 @@ from typing import Optional, cast
 
 import comet_ml
 
-from interpretable_ddts.runfiles.constants import COMET_OFFLINE_DIRECTORY
+from ray_utilities.constants import COMET_OFFLINE_DIRECTORY
 
 _api: Optional[comet_ml.API] = None
 """Singleton instance of the Comet API client to make use of caching."""

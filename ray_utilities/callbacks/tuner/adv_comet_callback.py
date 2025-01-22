@@ -10,7 +10,7 @@ from ray.air.integrations.comet import CometLoggerCallback, flatten_dict
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
 from ray.tune.experiment import Trial
 
-from interpretable_ddts.runfiles.constants import DEFAULT_VIDEO_KEYS
+from ray_utilities.constants import DEFAULT_VIDEO_KEYS
 from ray_utilities.video.numpy_to_video import numpy_to_video
 
 if TYPE_CHECKING:
@@ -156,6 +156,7 @@ class AdvCometLoggerCallback(CometLoggerCallback):
                     experiment.set_pip_packages()
                 except Exception:
                     from comet_ml.experiment import EXPERIMENT_START_FAILED_SET_PIP_PACKAGES_ERROR
+
                     logging.getLogger("comet_ml.experiment").exception(EXPERIMENT_START_FAILED_SET_PIP_PACKAGES_ERROR)
             self._trial_experiments[trial] = experiment
             # Set global experiment to None to allow for multiple experiments.

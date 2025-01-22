@@ -31,6 +31,7 @@ DEFAULT_TUNER_CALLBACKS_RENDER: list[type["Callback"]] = [
 ]
 """Default callbacks to use when needing render_mode"""
 
+
 def create_tuner_callbacks(*, render: bool) -> list[Callback]:
     if render:
         return [cb() for cb in DEFAULT_TUNER_CALLBACKS_RENDER]
