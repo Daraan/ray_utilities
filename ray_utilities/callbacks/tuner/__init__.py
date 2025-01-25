@@ -1,10 +1,11 @@
+from __future__ import annotations
 from ray.tune import Callback
 from .adv_comet_callback import AdvCometLoggerCallback
 from .adv_csv_callback import AdvCSVLoggerCallback
 from .adv_json_logger_callback import AdvJsonLoggerCallback
 from .adv_tbx_logger_callback import AdvTBXLoggerCallback
 
-TYPE_CHECKING = False
+from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ray.tune.callback import Callback
 
@@ -32,7 +33,7 @@ DEFAULT_TUNER_CALLBACKS_RENDER: list[type["Callback"]] = [
 """Default callbacks to use when needing render_mode"""
 
 
-def create_tuner_callbacks(*, render: bool) -> list[Callback]:
+def create_tuner_callbacks(*, render: bool) -> list["Callback"]:
     if render:
         return [cb() for cb in DEFAULT_TUNER_CALLBACKS_RENDER]
     return [cb() for cb in DEFAULT_TUNER_CALLBACKS_NO_RENDER]

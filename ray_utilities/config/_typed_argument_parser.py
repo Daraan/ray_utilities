@@ -77,7 +77,7 @@ class DefaultLoggingArgParser(Tap):
     tags: list[str] = []  # noqa: RUF012
 
     def _parse_comet(
-        self, value: Literal["offline", "offline+upload", "off", "on"]
+        self, value: Literal["offline", "offline+upload", "on"]
     ) -> Literal["offline", "offline+upload", "on", False]:
         if value in ("0", "False", "off"):
             return False
