@@ -6,6 +6,7 @@ from .adv_json_logger_callback import AdvJsonLoggerCallback
 from .adv_tbx_logger_callback import AdvTBXLoggerCallback
 
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from ray.tune.callback import Callback
 
