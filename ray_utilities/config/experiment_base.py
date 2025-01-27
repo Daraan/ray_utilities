@@ -4,8 +4,22 @@ import logging
 
 # pyright: enableExperimentalFeatures=true
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, Optional, Sequence, TypeAlias, TypedDict
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    ClassVar,
+    Generic,
+    Literal,
+    Optional,
+    Sequence,
+    TypeAlias,
+    TypedDict,
+    overload,
+)
 
+from ray import tune
+from ray.rllib.core.rl_module import MultiRLModuleSpec
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from typing_extensions import TypeVar
 
@@ -19,7 +33,7 @@ if TYPE_CHECKING:
     from ray.rllib.algorithms import AlgorithmConfig
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
     from ray.rllib.env.multi_agent_env import EnvType
-    from typing_extensions import Never, NoReturn, TypeForm
+    from typing_extensions import TypeForm
 
 __all__ = [
     "DefaultArgumentParser",
@@ -59,12 +73,16 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
     ]
     """extra tags to add if """
 
-    # region Argument Parsing
-
-    def __init__(self, args: Optional[Sequence[str]] = None):
+    def __init__(self, args: Optional[Sequence[str]] = None, *, init_config: bool = True):
         self.parser: Parser[ParserType]
         self.parser = self.create_parser()
         self.args = self.parse_args(args)
+        if init_config:
+            self.config: _ConfigType = self.create_config()
+            self.param_space = self.create_param_space()
+            self.trainable = self.create_trainable()
+
+    # region Argument Parsing
 
     def create_parser(self) -> Parser[ParserType]:
         self.parser = DefaultArgumentParser()
@@ -101,6 +119,8 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
         return self.args
 
     # endregion
+
+    # region Tags
 
     def _substitute_tag(self, tag: str):
         if not tag.startswith("<"):
@@ -139,27 +159,96 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
             *self._parse_extra_tags(extra_tags),
         ]
 
+    # endregion
+    # region hparams
+
     def clean_args_to_hparams(self, args: Optional[NamespaceType[ParserType]] = None):
         args = args or self.get_args()
         upload_args = remove_ignored_args(args, remove=(*LOG_IGNORE_ARGS, "process_number"))
         return upload_args
 
+    def create_param_space(self) -> dict[str, Any]:
+        """
+        Create a dict to upload as hyperparameters and pass as first argument to the trainable
+
+        Attention:
+            This function must set the `hparams` attribute
+        """
+        module_spec = self.get_module_spec(copy=False)
+        param_space: dict[str, Any] = {
+            "env": self.config.env if isinstance(self.config.env, str) else self.config.env.unwrapped.spec.id,  # pyright: ignore[reportOptionalMemberAccess]
+            "algo": self.config.algo_class.__name__ if self.config.algo_class is not None else "UNDEFINED",
+            "module": module_spec.module_class.__name__ if module_spec.module_class is not None else "UNDEFINED",
+            "model_config": module_spec.model_config,
+        }
+        # WandB might not log them if they are not selected as choice
+        param_space = {k: tune.choice([v]) for k, v in param_space.items()}
+        # Log CLI args as hyperparameters
+        param_space["cli_args"] = self.clean_args_to_hparams(self.args)
+        self.param_space = param_space
+        return param_space
+
     # region config and trainable
 
     @abstractmethod
-    def create_config(self, args: NamespaceType[ParserType]) -> _ConfigType:
+    def _create_config(self) -> _ConfigType:
         """Creates the config for the experiment."""
+
+    def create_config(self) -> _ConfigType:
+        """
+        Creates the config for the experiment.
+
+        Attention:
+            Do not overwrite this method. Overwrite _create_config instead.
+        """
+        self.config = self._create_config()
+        return self.config
+
+    @overload
+    def get_module_spec(self, *, copy: Literal[False]) -> RLModuleSpec: ...
+
+    @overload
+    def get_module_spec(
+        self,
+        *,
+        copy: Literal[True],
+        env: Optional[EnvType] = None,
+        spaces: Optional[dict[str, gym.Space]] = None,
+        inference_only: Optional[bool] = None,
+    ) -> RLModuleSpec: ...
+
+    def get_module_spec(
+        self,
+        *,
+        copy: bool,
+        env: Optional[EnvType] = None,
+        spaces: Optional[dict[str, gym.Space]] = None,
+        inference_only: Optional[bool] = None,
+    ) -> RLModuleSpec:
+        if not self.config:
+            raise ValueError("Config not defined yet, call create_config first.")
+        if copy:
+            return self.config.get_rl_module_spec(env, spaces, inference_only)
+        if self.config._rl_module_spec is None:
+            raise ValueError("ModuleSpec not defined yet, call config.rl_module first.")
+        assert not isinstance(self.config._rl_module_spec, MultiRLModuleSpec)
+        return self.config._rl_module_spec
 
     def create_config_and_module_spec(
         self,
-        args: NamespaceType[ParserType],
         *,
         env: Optional[EnvType] = None,
         spaces: Optional[dict[str, gym.Space]] = None,
         inference_only: Optional[bool] = None,
     ) -> tuple[_ConfigType, RLModuleSpec]:
-        """Creates the config and module spec for the experiment."""
-        config = self.create_config(args)
+        """
+        Creates the config and module spec for the experiment.
+
+        Warning:
+            The returned module_spec can be a copy. Modifying it will not result in a change when
+            calling config.build() again.
+        """
+        config = self.create_config()
         module_spec = config.get_rl_module_spec(env=env, spaces=spaces, inference_only=inference_only)
         if not module_spec.action_space:
             logger.warning(
@@ -174,9 +263,7 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
         return config, module_spec
 
     @abstractmethod
-    def trainable_from_config(
-        self, *, args: NamespaceType[ParserType], config: _ConfigType
-    ) -> Callable[[dict[str, Any]], TrainableReturnData]:
+    def create_trainable(self) -> Callable[[dict[str, Any]], TrainableReturnData]:
         """Return a trainable for the Tuner to use."""
 
     # endregion
