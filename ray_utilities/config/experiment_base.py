@@ -14,7 +14,6 @@ from typing import (
     Optional,
     Sequence,
     TypeAlias,
-    TypedDict,
     overload,
 )
 
@@ -29,6 +28,7 @@ from ._typed_argument_parser import DefaultArgumentParser
 from .tuner_setup import TunerSetup
 
 if TYPE_CHECKING:
+    from ray_utilities import TrainableReturnData
     import argparse
 
     import gymnasium as gym
@@ -51,11 +51,6 @@ Parser: TypeAlias = "argparse.ArgumentParser | ParserType"
 NamespaceType: TypeAlias = "argparse.Namespace | ParserType"  # Generic
 
 _ConfigType = TypeVar("_ConfigType", bound="AlgorithmConfig")
-
-
-class TrainableReturnData(TypedDict, total=False):
-    pass
-
 
 class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
     """

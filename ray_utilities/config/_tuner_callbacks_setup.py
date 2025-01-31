@@ -45,7 +45,11 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         return tags
 
     def create_wandb_logger(self) -> WandbLoggerCallback:
-        """Create wandb logger"""
+        """
+        Create wandb logger
+
+        For more keywords see: https://docs.wandb.ai/ref/python/init/
+        """
         args = self._setup.args
         mode: Literal["offline", "disabled", "online"]
         if args.wandb in (False, "disabled"):
@@ -55,7 +59,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
 
         return WandbLoggerCallback(
             project=self._setup.project_name,
-            group=self._setup.group_name,  # if not set Tuner name is used
+            group=self._setup.group_name,  # if not set trainable name is used
             excludes=["system/*"],
             upload_checkpoints=False,
             save_code=False,  # Code diff
@@ -68,6 +72,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             tags=self.get_tags(),
             mode=mode,
             job_type="train",
+            log_config=False,  # Log "config" key of results; usefull if params change. Defaults to False.
             # config_exclude_keys
             # config_include_keys
             # settings advanced wandb.Settings
