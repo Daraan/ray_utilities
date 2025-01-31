@@ -71,10 +71,14 @@ class DefaultEnvironmentArgParser(Tap):
 
 class DefaultLoggingArgParser(Tap):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
-    wandb: bool = False
+    wandb: Literal["offline", "offline+upload", "online", False] = False
     comet: Literal["offline", "offline+upload", "on", False] = False
     comment: Optional[str] = None
     tags: list[str] = []  # noqa: RUF012
+
+    @property
+    def use_comet_offline(self) -> bool:
+        return self.comet and self.comet.lower().startswith("offline")
 
     def _parse_comet(
         self, value: Literal["offline", "offline+upload", "on"]
@@ -88,7 +92,9 @@ class DefaultLoggingArgParser(Tap):
     def configure(self) -> None:
         super().configure()
         self.add_argument("--log_level")
-        self.add_argument("--wandb", "-wb")
+        self.add_argument(
+            "--wandb", "-wb", nargs="?", const="online", default=False, choices=["offline", "offline+upload", "online"]
+        )
         self.add_argument(
             "--comet",
             nargs="?",

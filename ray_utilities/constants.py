@@ -4,7 +4,7 @@ from pathlib import Path
 
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS, EPISODE_RETURN_MEAN, EVALUATION_RESULTS
 
-_COMET_OFFFLINE_DIRECTORY_SUGGESTION = Path(__file__).parent.parent / "outputs" / ".cometml-runs"
+_COMET_OFFFLINE_DIRECTORY_SUGGESTION = (Path("../") / "outputs" / ".cometml-runs").resolve()
 _COMET_OFFFLINE_DIRECTORY_SUGGESTION_STR = str(_COMET_OFFFLINE_DIRECTORY_SUGGESTION)
 
 if (

@@ -20,11 +20,13 @@ from typing import (
 
 from ray import tune
 from ray.rllib.core.rl_module import MultiRLModuleSpec
-from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
+from tap.tap import Tap
 from typing_extensions import TypeVar
 
+from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
+
 from ._typed_argument_parser import DefaultArgumentParser
-from tap.tap import Tap
+from .tuner_setup import TunerSetup
 
 if TYPE_CHECKING:
     import argparse
@@ -32,8 +34,8 @@ if TYPE_CHECKING:
     import gymnasium as gym
     from ray.rllib.algorithms import AlgorithmConfig
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
-    from ray.rllib.env.multi_agent_env import EnvType
-    from typing_extensions import TypeForm
+    from ray.rllib.utils.typing import EnvType
+    # from typing_extensions import TypeForm
 
 __all__ = [
     "DefaultArgumentParser",
@@ -44,7 +46,7 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-ParserType = TypeVar("ParserType", bound="Tap", default="DefaultArgumentParser")
+ParserType = TypeVar("ParserType", bound="DefaultArgumentParser", default="DefaultArgumentParser")
 Parser: TypeAlias = "argparse.ArgumentParser | ParserType"
 NamespaceType: TypeAlias = "argparse.Namespace | ParserType"  # Generic
 
@@ -72,6 +74,25 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
         "<agent_type>",
     ]
     """extra tags to add if """
+
+    @property
+    @abstractmethod
+    def project_name(self) -> str:
+        """
+        Name of the project for logging. Will be used for:
+            - output folder
+            - wandb project
+            - comet workspace
+        """
+
+    @property
+    @abstractmethod
+    def group_name(self) -> str:
+        """
+        Name of the group for logging. Will be used for:
+            - wandb group
+            - comet project
+        """
 
     def __init__(self, args: Optional[Sequence[str]] = None, *, init_config: bool = True):
         self.parser: Parser[ParserType]
@@ -155,7 +176,7 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
             logger.info("Parsed arguments have not attribute tags.")
             return self._parse_extra_tags(extra_tags)
         return [
-            *self.args.tags,  # type: ignore[attr-defined]
+            *self.args.tags,
             *self._parse_extra_tags(extra_tags),
         ]
 
@@ -265,6 +286,13 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
     @abstractmethod
     def create_trainable(self) -> Callable[[dict[str, Any]], TrainableReturnData]:
         """Return a trainable for the Tuner to use."""
+
+    # endregion
+
+    # region Tuner
+
+    def create_tuner(self) -> tune.Tuner:
+        return TunerSetup(setup=self).create_tuner()
 
     # endregion
 
