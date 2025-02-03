@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 import logging
 
 # pyright: enableExperimentalFeatures=true
@@ -95,8 +96,8 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
         self.args = self.parse_args(args)
         if init_config:
             self.config: _ConfigType = self.create_config()
-            self.param_space = self.create_param_space()
             self.trainable = self.create_trainable()
+            self.param_space = self.create_param_space()
 
     # region Argument Parsing
 
@@ -183,6 +184,12 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
         upload_args = remove_ignored_args(args, remove=(*LOG_IGNORE_ARGS, "process_number"))
         return upload_args
 
+    def get_trainable_name(self) -> str:
+        trainable = self.trainable or self.create_trainable()
+        while isinstance(trainable, partial):
+            trainable = trainable.func
+        return trainable.__name__
+
     def create_param_space(self) -> dict[str, Any]:
         """
         Create a dict to upload as hyperparameters and pass as first argument to the trainable
@@ -192,10 +199,13 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
         """
         module_spec = self.get_module_spec(copy=False)
         param_space: dict[str, Any] = {
-            "env": self.config.env if isinstance(self.config.env, str) else self.config.env.unwrapped.spec.id,  # pyright: ignore[reportOptionalMemberAccess]
+            "env": (
+                self.config.env if isinstance(self.config.env, str) else self.config.env.unwrapped.spec.id  # pyright: ignore[reportOptionalMemberAccess]
+            ),  # pyright: ignore[reportOptionalMemberAccess]
             "algo": self.config.algo_class.__name__ if self.config.algo_class is not None else "UNDEFINED",
             "module": module_spec.module_class.__name__ if module_spec.module_class is not None else "UNDEFINED",
             "model_config": module_spec.model_config,
+            "trainable_name": self.get_trainable_name(),
         }
         # WandB might not log them if they are not selected as choice
         param_space = {k: tune.choice([v]) for k, v in param_space.items()}
