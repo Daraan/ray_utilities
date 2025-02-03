@@ -1,8 +1,10 @@
 # Currently cannot use variables, even if final or literal, with TypedDict
 # pyright: enableExperimentalFeatures=true
 from __future__ import annotations
-from typing_extensions import TypedDict, Required, Never, NotRequired
+
 from typing import TYPE_CHECKING
+
+from typing_extensions import Never, NotRequired, Required, TypedDict
 
 if TYPE_CHECKING:
     from typing import type_check_only
@@ -30,23 +32,26 @@ if TYPE_CHECKING:
     class _NotRequiredEnvRunners(TypedDict, total=False, closed=False):
         env_runners: NotRequired[EnvRunnersResultsDict]
 
-    class _TrainableReturnDataWOEnvRunners(TypedDict, total=False, closed=False, extra_items=_ExtraItems):
+    class _AlgoReturnDataWithoutEnvRunners(TypedDict, total=False, closed=False, extra_items=_ExtraItems):
         done: Required[bool]
         evaluation: EvaluationResultsDict
         env_runners: Required[EnvRunnersResultsDict] | NotRequired[EnvRunnersResultsDict]
         # Present in rllib results
         training_iteration: int
-        timestamp: int
 
         should_checkpoint: bool
 
         comment: str
         trial_id: int | str
-        time_this_iter_s: float
         episodes_total: int
         episodes_this_iter: int
         learners: dict[str, dict[str, float | int]]
+
+        # Times
         timers: dict[str, float]
+        timestamp: int
+        time_total_s: float
+        time_this_iter_s: float
 
         # System results
         date: str
@@ -55,13 +60,13 @@ if TYPE_CHECKING:
         pid: int
 
     @type_check_only
-    class TrainableReturnData(
-        _TrainableReturnDataWOEnvRunners, _NotRequiredEnvRunners, total=False, closed=False, extra_items=_ExtraItems
+    class AlgorithmReturnData(
+        _AlgoReturnDataWithoutEnvRunners, _NotRequiredEnvRunners, total=False, closed=False, extra_items=_ExtraItems
     ):
         ...
 
     @type_check_only
-    class StrictTrainableReturnData(
-        _TrainableReturnDataWOEnvRunners, _RequiredEnvRunners, total=False, closed=False, extra_items=_ExtraItems
+    class StrictAlgorithmReturnData(
+        _AlgoReturnDataWithoutEnvRunners, _RequiredEnvRunners, total=False, closed=False, extra_items=_ExtraItems
     ):
-        ...
+        """Return data with env_runners present"""

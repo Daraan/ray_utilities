@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 
 if TYPE_CHECKING:
-    from ray_utilities._trainable_return_type import TrainableReturnData
+    from ray_utilities._trainable_return_type import AlgorithmReturnData
     from ray.tune.experiment import Trial
 
 
@@ -63,7 +63,7 @@ class AdvWandbLoggerCallback(WandbLoggerCallback):
 
         self._start_logging_actor(trial, exclude_results, **wandb_init_kwargs)
 
-    def log_trial_result(self, iteration: int, trial: "Trial", result: "TrainableReturnData"):  # noqa: ARG002 # pyright: ignore[reportIncompatibleMethodOverride]
+    def log_trial_result(self, iteration: int, trial: "Trial", result: "AlgorithmReturnData"):  # noqa: ARG002 # pyright: ignore[reportIncompatibleMethodOverride]
         if trial not in self._trial_logging_actors:
             self.log_trial_start(trial)
         if not self.log_config:

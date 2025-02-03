@@ -17,7 +17,7 @@ import gymnasium as gym
 
 if TYPE_CHECKING:
     from ray.tune.experiment import Trial
-    from ._trainable_return_type import TrainableReturnData, StrictTrainableReturnData  # noqa: TC004
+    from ._trainable_return_type import AlgorithmReturnData, StrictAlgorithmReturnData  # noqa: TC004
 
 GYM_VERSION = parse_version(gym.__version__)
 GYM_V_0_26: bool = GYM_VERSION >= Version("0.26")
@@ -33,8 +33,8 @@ __all__ = [
     "GYM_V1",
     "GYM_VERSION",
     "GYM_V_0_26",
-    "StrictTrainableReturnData",
-    "TrainableReturnData",
+    "AlgorithmReturnData",
+    "StrictAlgorithmReturnData",
     "is_pbar",
     "seed_everything",
     "trial_name_creator",
