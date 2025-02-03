@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from ray.air.integrations.wandb import WandbLoggerCallback
 
 from ray_utilities.callbacks.tuner import AdvCometLoggerCallback, create_tuner_callbacks
+from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 
 if TYPE_CHECKING:
     from ray.tune import Callback
@@ -34,6 +35,14 @@ logger = logging.getLogger(__name__)
 
 
 class TunerCallbackSetup(_TunerCallbackSetupBase):
+
+    EXCLUDE_METRICS = (
+            "time_since_restore",
+            "iterations_since_restore",
+            "timestamp",
+            # "training_iteration", #  needed for the callback
+        )
+
     def __init__(self, *, setup: ExperimentSetupBase[ConfigType, ParserType], extra_tags: Optional[list[str]] = None):
         self._setup = setup
         self._extra_tags = extra_tags
@@ -57,10 +66,25 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         else:
             mode = args.wandb.split("+")[0]  # pyright: ignore[reportAssignmentType]
 
-        return WandbLoggerCallback(
+        import wandb
+        # Note: Settings are overwritten by the keywords provided below (or by ray)
+        try:
+            adv_settings = wandb.Settings(
+                disable_code=args.test,
+                disable_git=args.test,
+                # Internal setting
+                # Disable system metrics collection.
+                x_disable_stats=args.test,
+                # Disable check for latest version of wandb, from PyPI.
+                x_disable_update_check=not args.test,
+            )
+        except Exception:
+            logger.exception("Error creating wandb.Settings")
+            adv_settings = None
+        return AdvWandbLoggerCallback(
             project=self._setup.project_name,
             group=self._setup.group_name,  # if not set trainable name is used
-            excludes=["system/*"],
+            excludes=["node_ip", *self.EXCLUDE_METRICS, "cli_args/test", "cli_args/num_jobs"],
             upload_checkpoints=False,
             save_code=False,  # Code diff
             # For more keywords see: https://docs.wandb.ai/ref/python/init/
@@ -72,10 +96,10 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             tags=self.get_tags(),
             mode=mode,
             job_type="train",
-            log_config=False,  # Log "config" key of results; usefull if params change. Defaults to False.
-            # config_exclude_keys
-            # config_include_keys
+            log_config=False,  # Log "config" key of results; useful if params change. Defaults to False.
+            config_exclude_keys=["node_ip", "cli_args/test", "cli_args/num_jobs"],
             # settings advanced wandb.Settings
+            settings=adv_settings,
         )
 
     def create_comet_logger(
@@ -123,12 +147,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             auto_histogram_gradient_logging=False,  # Default False
             auto_histogram_activation_logging=False,  # Default False
             # Custom keywords of Adv Callback
-            exclude_metrics=(
-                "time_since_restore",
-                "iterations_since_restore",
-                "timestamp",
-                # "training_iteration", #  needed for the callback
-            ),
+            exclude_metrics=self.EXCLUDE_METRICS,
             log_to_other=("comment", "cli_args/comment", "cli_args/test", "cli_args/num_jobs"),
             log_cli_args=True,
             log_pip_packages=True,  # only relevant if log_env_details=False
@@ -144,7 +163,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             callbacks.append(self.create_wandb_logger())
         else:
             logger.info("Not logging to WandB")
-        if self._setup.args:
+        if self._setup.args.comet:
             callbacks.append(self.create_comet_logger())
         else:
             logger.info("Not logging to Comet")

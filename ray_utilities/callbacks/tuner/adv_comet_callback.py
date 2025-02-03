@@ -1,21 +1,24 @@
 # ruff: noqa: PLC0415
 
 from __future__ import annotations
+
 import logging
 import math
 import sys
 import tempfile
-from typing import ClassVar, Dict, Iterable, List, Optional, TYPE_CHECKING
-from ray.air.integrations.comet import CometLoggerCallback, flatten_dict
+from typing import TYPE_CHECKING, ClassVar, Dict, Iterable, List, Optional
+
+from ray.air.integrations.comet import CometLoggerCallback
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
 from ray.tune.experiment import Trial
+from ray.tune.utils import flatten_dict
 
 from ray_utilities.constants import DEFAULT_VIDEO_KEYS
 from ray_utilities.video.numpy_to_video import numpy_to_video
 
 if TYPE_CHECKING:
-    from ray.tune.experiment.trial import Trial
     from comet_ml import Experiment, OfflineExperiment
+    from ray.tune.experiment.trial import Trial
 
 __all__ = [
     "AdvCometLoggerCallback",
@@ -85,7 +88,10 @@ class AdvCometLoggerCallback(CometLoggerCallback):
 
     _trial_experiments: dict[Trial, Experiment | OfflineExperiment]
 
-    _exclude_results: ClassVar[list[str]] = [*CometLoggerCallback._exclude_results, "cli_args/test"]  # noqa: SLF001
+    _exclude_results: ClassVar[list[str]] = [
+        *CometLoggerCallback._exclude_results,  # noqa: SLF001
+        "cli_args/test",
+    ]
 
     def __init__(
         self,

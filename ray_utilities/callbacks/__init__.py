@@ -21,6 +21,7 @@ LOG_IGNORE_ARGS = (
     "silent",
     "tags",
     "log_level",
+    "use_comet_offline",
 )
 """
 Keys that should not be processed by logging callbacks
