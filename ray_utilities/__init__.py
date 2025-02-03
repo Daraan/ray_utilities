@@ -15,10 +15,9 @@ from tqdm import tqdm
 from packaging.version import parse as parse_version, Version
 import gymnasium as gym
 
-from ._trainable_return_type import TrainableReturnData, StrictTrainableReturnData
-
 if TYPE_CHECKING:
     from ray.tune.experiment import Trial
+    from ._trainable_return_type import TrainableReturnData, StrictTrainableReturnData  # noqa: TC004
 
 GYM_VERSION = parse_version(gym.__version__)
 GYM_V_0_26: bool = GYM_VERSION >= Version("0.26")

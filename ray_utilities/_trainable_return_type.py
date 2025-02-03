@@ -1,7 +1,7 @@
 # Currently cannot use variables, even if final or literal, with TypedDict
 # pyright: enableExperimentalFeatures=true
 from __future__ import annotations
-from typing_extensions import TypedDict, Required, Never
+from typing_extensions import TypedDict, Required, Never, NotRequired
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -24,11 +24,16 @@ if TYPE_CHECKING:
         env_runners: Required[EnvRunnersResultsDict]
         discrete: _EvaluationNoDiscreteDict
 
-    @type_check_only
-    class TrainableReturnData(TypedDict, total=False, closed=False, extra_items=_ExtraItems):
+    class _RequiredEnvRunners(TypedDict, total=False, closed=False):
+        env_runners: Required[EnvRunnersResultsDict]
+
+    class _NotRequiredEnvRunners(TypedDict, total=False, closed=False):
+        env_runners: NotRequired[EnvRunnersResultsDict]
+
+    class _TrainableReturnDataWOEnvRunners(TypedDict, total=False, closed=False, extra_items=_ExtraItems):
         done: Required[bool]
-        env_runners: EnvRunnersResultsDict
         evaluation: EvaluationResultsDict
+        env_runners: Required[EnvRunnersResultsDict] | NotRequired[EnvRunnersResultsDict]
         # Present in rllib results
         training_iteration: int
         timestamp: int
@@ -50,5 +55,13 @@ if TYPE_CHECKING:
         pid: int
 
     @type_check_only
-    class StrictTrainableReturnData(TrainableReturnData, total=True):
-        env_runners: Required[EnvRunnersResultsDict]
+    class TrainableReturnData(
+        _TrainableReturnDataWOEnvRunners, _NotRequiredEnvRunners, total=False, closed=False, extra_items=_ExtraItems
+    ):
+        ...
+
+    @type_check_only
+    class StrictTrainableReturnData(
+        _TrainableReturnDataWOEnvRunners, _RequiredEnvRunners, total=False, closed=False, extra_items=_ExtraItems
+    ):
+        ...
