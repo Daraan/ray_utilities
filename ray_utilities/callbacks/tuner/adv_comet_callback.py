@@ -212,6 +212,7 @@ class AdvCometLoggerCallback(CometLoggerCallback):
 
     def log_trial_result(self, iteration: int, trial: Trial, result: Dict):
         step = result["training_iteration"]
+        # TODO: adjust for nested video keys!
         videos: dict[str, dict[str, list | float]] = {k: v for k in self._video_keys if (v := result.get(k))}
         # Remove Video keys and NaN values which can cause problems in the Metrics Tab when logged
         if trial in self._trial_experiments:

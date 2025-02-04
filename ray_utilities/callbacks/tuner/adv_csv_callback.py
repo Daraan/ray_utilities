@@ -6,12 +6,16 @@ Note:
 
 from __future__ import annotations
 
-from ray.tune.logger import CSVLoggerCallback
-from ray_utilities.constants import DEFAULT_VIDEO_KEYS
+from typing import TYPE_CHECKING
 
-TYPE_CHECKING = False
+from ray.tune.logger import CSVLoggerCallback
+
+from ray_utilities.postprocessing import remove_videos
+
 if TYPE_CHECKING:
-    from ray.tune.experiment.trial import Trial  # noqa: TC002
+    from ray.tune.experiment.trial import Trial
+
+    from ray_utilities.typing.metrics import LogMetricsDict
 
 
 class AdvCSVLoggerCallback(CSVLoggerCallback):
@@ -25,7 +29,12 @@ class AdvCSVLoggerCallback(CSVLoggerCallback):
     at the first iteration.
     """
 
-    _video_keys = DEFAULT_VIDEO_KEYS
-
-    def log_trial_result(self, iteration: int, trial: "Trial", result: dict):
-        super().log_trial_result(iteration, trial, {k: v for k, v in result.items() if k not in self._video_keys})
+    def log_trial_result(self, iteration: int, trial: "Trial", result: dict | LogMetricsDict):
+        if trial not in self._trial_csv:
+            # Keys are permanently set; remove videos from the first iteration
+            result = remove_videos(result)
+        super().log_trial_result(
+            iteration,
+            trial,
+            result,  # type: ignore[arg-type]
+        )

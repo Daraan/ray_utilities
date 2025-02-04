@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from typing import Optional
-from typing_extensions import Literal
+
 from tap import Tap
+from typing_extensions import Literal
 
 
 class _DefaultSetupArgumentParser(Tap):

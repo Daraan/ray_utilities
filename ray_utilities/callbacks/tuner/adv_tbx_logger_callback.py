@@ -1,13 +1,19 @@
 from __future__ import annotations
+from typing import TYPE_CHECKING
+import logging
 
 import numpy as np
 from ray.tune.logger import TBXLoggerCallback
+
 from ray_utilities.constants import DEFAULT_VIDEO_KEYS
+from ray_utilities.postprocessing import strip_videos_metadata
 
-TYPE_CHECKING = False
 if TYPE_CHECKING:
-    from ray.tune.experiment.trial import Trial  # noqa: TC002
+    from ray_utilities.typing.metrics import LogMetricsDict
+    from ray.tune.experiment.trial import Trial
 
+
+logger = logging.getLogger(__name__)
 
 class AdvTBXLoggerCallback(TBXLoggerCallback):
     """TensorBoardX Logger.
@@ -26,22 +32,9 @@ class AdvTBXLoggerCallback(TBXLoggerCallback):
 
     _video_keys = DEFAULT_VIDEO_KEYS
 
-    def log_trial_result(self, iteration: int, trial: "Trial", result: dict):
-        # Check valid video
-        has_videos = any(k in result for k in self._video_keys)
-        if not has_videos:
-            super().log_trial_result(iteration, trial, result)
-            return
-        result = result.copy()
-        for k in self._video_keys:
-            if k in result:
-                video = result[k]["video"]
-                if not (isinstance(video, np.ndarray) and video.ndim == 5):
-                    # assume it is a list of videos; likely length 1
-                    if len(video) != 1:
-                        print("unexpected video shape", np.shape(video))
-                    video = video[0]
-                if not (isinstance(video, np.ndarray) and video.ndim == 5):
-                    print("WARNING - video will not be logged as video to TBX because it is not a 5D numpy array")
-                result[k] = video  # place ndarray in result dict
-        super().log_trial_result(iteration, trial, result)
+    def log_trial_result(self, iteration: int, trial: "Trial", result: dict | LogMetricsDict):
+        super().log_trial_result(
+            iteration,
+            trial,
+            strip_videos_metadata(result),
+        )
