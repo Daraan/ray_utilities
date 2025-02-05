@@ -4,6 +4,7 @@ from .adv_comet_callback import AdvCometLoggerCallback
 from .adv_csv_callback import AdvCSVLoggerCallback
 from .adv_json_logger_callback import AdvJsonLoggerCallback
 from .adv_tbx_logger_callback import AdvTBXLoggerCallback
+from .adv_wandb_callback import AdvWandbLoggerCallback
 
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ __all__ = [
     "AdvCometLoggerCallback",
     "AdvJsonLoggerCallback",
     "AdvTBXLoggerCallback",
+    "AdvWandbLoggerCallback",
 ]
 
 

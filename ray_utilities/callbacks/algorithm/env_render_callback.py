@@ -1,22 +1,21 @@
 from __future__ import annotations
 
-# ruff: noqa: ARG001,ARG002
+from typing import TYPE_CHECKING, Callable, Literal, Optional, Sequence, TypeVar, Union
 
+# ruff: noqa: ARG001,ARG002
 import gymnasium as gym
 import numpy as np
-from typing import Callable, Literal, Optional, Sequence, TYPE_CHECKING, TypeVar, Union
-
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
 from ray.rllib.utils.images import resize
 
 if TYPE_CHECKING:
-    from typing_extensions import TypeAlias
-    from ray.rllib.policy.policy import SampleBatch
-    from ray.rllib.env.env_runner import EnvRunner
+    from gymnasium.wrappers.vector_list_info import VectorListInfo
     from ray.rllib.core.rl_module.rl_module import RLModule
+    from ray.rllib.env.env_runner import EnvRunner
+    from ray.rllib.policy.sample_batch import SampleBatch
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
     from ray.rllib.utils.typing import EpisodeType
-    from gymnasium.wrappers.vector_list_info import VectorListInfo
+    from typing_extensions import TypeAlias
 
 _Condition: TypeAlias = Callable[
     ["AdvEnvRenderCallback", "EpisodeType", "EnvRunner", "gym.Env", Optional["MetricsLogger"], Optional["RLModule"]],

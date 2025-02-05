@@ -1,22 +1,22 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 import logging
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Optional
-from typing_extensions import TypeVar
 
 from dotenv import load_dotenv
-from ray.air.integrations.wandb import WandbLoggerCallback
+from typing_extensions import TypeVar
 
 from ray_utilities.callbacks.tuner import AdvCometLoggerCallback, create_tuner_callbacks
 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 
 if TYPE_CHECKING:
+    from ray.air.integrations.wandb import WandbLoggerCallback
+    from ray.rllib.algorithms import AlgorithmConfig
     from ray.tune import Callback
 
-    from ray.rllib.algorithms import AlgorithmConfig
-    from ray_utilities.config.experiment_base import ExperimentSetupBase, DefaultArgumentParser
+    from ray_utilities.config.experiment_base import DefaultArgumentParser, ExperimentSetupBase
 
 
 class _TunerCallbackSetupBase(ABC):
@@ -35,13 +35,16 @@ logger = logging.getLogger(__name__)
 
 
 class TunerCallbackSetup(_TunerCallbackSetupBase):
-
     EXCLUDE_METRICS = (
-            "time_since_restore",
-            "iterations_since_restore",
-            "timestamp",
-            # "training_iteration", #  needed for the callback
-        )
+        "time_since_restore",
+        "iterations_since_restore",
+        "timestamp",
+        "learners",
+        "timers",
+        "num_agent_steps_sampled_lifetime",
+        "fault_tolerance",
+        # "training_iteration", #  needed for the callback
+    )
 
     def __init__(self, *, setup: ExperimentSetupBase[ConfigType, ParserType], extra_tags: Optional[list[str]] = None):
         self._setup = setup
@@ -67,6 +70,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             mode = args.wandb.split("+")[0]  # pyright: ignore[reportAssignmentType]
 
         import wandb
+
         # Note: Settings are overwritten by the keywords provided below (or by ray)
         try:
             adv_settings = wandb.Settings(
@@ -84,7 +88,16 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         return AdvWandbLoggerCallback(
             project=self._setup.project_name,
             group=self._setup.group_name,  # if not set trainable name is used
-            excludes=["node_ip", *self.EXCLUDE_METRICS, "cli_args/test", "cli_args/num_jobs"],
+            excludes=[
+                "node_ip",
+                *self.EXCLUDE_METRICS,
+                "cli_args/test",
+                "cli_args/num_jobs",
+                "learners",
+                "timers",
+                "num_agent_steps_sampled_lifetime",
+                "fault_tolerance",
+            ],
             upload_checkpoints=False,
             save_code=False,  # Code diff
             # For more keywords see: https://docs.wandb.ai/ref/python/init/
@@ -159,11 +172,11 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
 
     def create_callbacks(self) -> list[Callback]:
         callbacks: list[Callback] = create_tuner_callbacks(render=bool(self._setup.args.render_mode))
-        if self._setup.args.wandb:
+        if self._setup.args.wandb or self._setup.args.test:
             callbacks.append(self.create_wandb_logger())
         else:
             logger.info("Not logging to WandB")
-        if self._setup.args.comet:
+        if self._setup.args.comet or self._setup.args.test:
             callbacks.append(self.create_comet_logger())
         else:
             logger.info("Not logging to Comet")

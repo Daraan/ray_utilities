@@ -1,14 +1,14 @@
-from ray.air.integrations.wandb import WandbLoggerCallback, _QueueItem, _clean_log
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from ray.air.integrations.wandb import WandbLoggerCallback, _clean_log, _QueueItem
 
 if TYPE_CHECKING:
-    from ray_utilities._trainable_return_type import AlgorithmReturnData
     from ray.tune.experiment import Trial
+
+    from ray_utilities.typing import AlgorithmReturnData
 
 
 class AdvWandbLoggerCallback(WandbLoggerCallback):
-
     AUTO_CONFIG_KEYS: ClassVar[list[str]] = list({*WandbLoggerCallback.AUTO_CONFIG_KEYS, "trainable_name"})
 
     def log_trial_start(self, trial: "Trial"):
@@ -37,9 +37,7 @@ class AdvWandbLoggerCallback(WandbLoggerCallback):
 
         # remove unpickleable items!
         config: dict[str, Any] = _clean_log(config)  # pyright: ignore[reportAssignmentType]
-        config = {
-            key: value for key, value in config.items() if key not in self.excludes
-        }
+        config = {key: value for key, value in config.items() if key not in self.excludes}
         # --- New Code --- : Remove nested keys
         for nested_key in filter(lambda x: "/" in x, self.excludes):
             key, sub_key = nested_key.split("/")
@@ -64,6 +62,7 @@ class AdvWandbLoggerCallback(WandbLoggerCallback):
         self._start_logging_actor(trial, exclude_results, **wandb_init_kwargs)
 
     def log_trial_result(self, iteration: int, trial: "Trial", result: "AlgorithmReturnData"):  # noqa: ARG002 # pyright: ignore[reportIncompatibleMethodOverride]
+        """Called each time a trial reports a result."""
         if trial not in self._trial_logging_actors:
             self.log_trial_start(trial)
         if not self.log_config:

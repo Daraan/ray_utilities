@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from functools import partial
 import logging
 
 # pyright: enableExperimentalFeatures=true
 from abc import ABC, abstractmethod
+from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -29,13 +29,14 @@ from ._typed_argument_parser import DefaultArgumentParser
 from .tuner_setup import TunerSetup
 
 if TYPE_CHECKING:
-    from ray_utilities import AlgorithmReturnData
     import argparse
 
     import gymnasium as gym
     from ray.rllib.algorithms import AlgorithmConfig
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
     from ray.rllib.utils.typing import EnvType
+
+    from ray_utilities import AlgorithmReturnData
     # from typing_extensions import TypeForm
 
 __all__ = [
@@ -52,6 +53,7 @@ Parser: TypeAlias = "argparse.ArgumentParser | ParserType"
 NamespaceType: TypeAlias = "argparse.Namespace | ParserType"  # Generic
 
 _ConfigType = TypeVar("_ConfigType", bound="AlgorithmConfig")
+
 
 class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
     """

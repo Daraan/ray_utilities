@@ -6,17 +6,19 @@ import logging
 import math
 import sys
 import tempfile
-from typing import TYPE_CHECKING, ClassVar, Dict, Iterable, List, Optional
+from typing import TYPE_CHECKING, ClassVar, Iterable, List, Optional
 
 from ray.air.integrations.comet import CometLoggerCallback
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
 from ray.tune.experiment import Trial
 from ray.tune.utils import flatten_dict
 
-from ray_utilities.constants import DEFAULT_VIDEO_KEYS
+from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, EPISODE_VIDEO_PREFIX
 from ray_utilities.video.numpy_to_video import numpy_to_video
 
 if TYPE_CHECKING:
+    from ray_utilities.typing import CometStripedVideoFilename
+    from ray_utilities.typing import LogMetricsDict, FlatLogMetricsDict
     from comet_ml import Experiment, OfflineExperiment
     from ray.tune.experiment.trial import Trial
 
@@ -92,6 +94,7 @@ class AdvCometLoggerCallback(CometLoggerCallback):
         *CometLoggerCallback._exclude_results,  # noqa: SLF001
         "cli_args/test",
     ]
+    """Metrics that are not logged"""
 
     def __init__(
         self,
@@ -103,7 +106,7 @@ class AdvCometLoggerCallback(CometLoggerCallback):
         exclude_metrics: Optional[Iterable[str]] = None,
         log_to_other: Optional[Iterable[str]] = ("comment", "cli_args/comment"),
         log_cli_args: bool = True,
-        video_keys: Iterable[str] = DEFAULT_VIDEO_KEYS,  # NOTE: stored as string not list of keys
+        video_keys: Iterable[tuple[str, ...]] = DEFAULT_VIDEO_DICT_KEYS,  # NOTE: stored as string not list of keys
         log_pip_packages: bool = False,
         **experiment_kwargs,
     ):
@@ -128,15 +131,28 @@ class AdvCometLoggerCallback(CometLoggerCallback):
         """
         super().__init__(online=online, tags=tags, save_checkpoints=save_checkpoints, **experiment_kwargs)  # pyright: ignore[reportArgumentType]
 
-        exclude_video_keys = ["/".join(keys) for keys in video_keys]
-        self._to_exclude.extend([*exclude_metrics, *exclude_video_keys] if exclude_metrics else exclude_video_keys)
+        # Join video keys for flat dict access
+        self._video_keys = video_keys
+        """Video keys in their tuple form; probably without /video and /reward suffix"""
+        joined_keys = ["/".join(keys) for keys in video_keys]
+        # Videos are stored as dict with "video" and "reward" keys
+        self._flat_video_lookup_keys = [k + "/video" if not k.endswith("/video") else k for k in joined_keys]
+        """Contains only /video keys"""
+        self._flat_video_keys = self._flat_video_lookup_keys + [
+            k + "/reward" if not k.endswith("/reward") else k for k in joined_keys
+        ]
+        """Contains /video and /reward keys"""
+
+        self._to_exclude.extend(
+            [*exclude_metrics, *self._flat_video_keys] if exclude_metrics else self._flat_video_keys
+        )
+        """Keys that are not logged at all"""
         self._to_other.extend(log_to_other or [])
         self._cli_args = " ".join(sys.argv[1:]) if log_cli_args else None
         self._log_only_once = [*self._to_exclude, "config", *self._to_system]
         if "training_iteration" in self._log_only_once:
             self._log_only_once.remove("training_iteration")
             _LOGGER.warning("training_iteration must be in the results to log it")
-        self._video_keys = video_keys
         self._log_pip_packages = log_pip_packages and not experiment_kwargs.get("log_env_details", False)
         """If log_env_details is True pip packages are already logged."""
 
@@ -210,38 +226,48 @@ class AdvCometLoggerCallback(CometLoggerCallback):
         if to_other:
             experiment.log_others(to_other)
 
-    def log_trial_result(self, iteration: int, trial: Trial, result: Dict):
+    def log_trial_result(self, iteration: int, trial: Trial, result: dict | LogMetricsDict):
         step = result["training_iteration"]
-        videos: dict[str, dict[str, list | float]] = {k: v for k in self._video_keys if (v := result.get(k))}
+        # Will be flattened in super anyway
+        flat_result: FlatLogMetricsDict = flatten_dict(result, delimiter="/")  # type: ignore[arg-type]
+        del result  # avoid using it by mistake
+
+        videos: dict[str, list[int]] = {k: v for k in self._flat_video_keys if (v := flat_result.get(k))}
+
         # Remove Video keys and NaN values which can cause problems in the Metrics Tab when logged
         if trial in self._trial_experiments:
             # log_trial_start was called already, do not log parameters again
             # NOTE: # WARNING: This prevents config_updates during the run!
-            result = {
+            log_result = {
                 k: v
-                for k, v in result.items()
-                if not (k in self._log_only_once or k in self._video_keys)
+                for k, v in flat_result.items()
+                if not (k in self._log_only_once or k in self._flat_video_keys)
                 and (not isinstance(v, float) or not math.isnan(v))
-            }
+            }  # type: ignore[assignment]
         else:
-            result = {
+            log_result = {
                 k: v
-                for k, v in result.items()
-                if k not in self._video_keys and (not isinstance(v, float) or not math.isnan(v))
-            }
+                for k, v in flat_result.items()
+                if k not in self._flat_video_keys and (not isinstance(v, float) or not math.isnan(v))
+            }  # type: ignore[assignment]
 
         # Cannot remove this
-        result["training_iteration"] = step
+        log_result["training_iteration"] = step
         # Log normal metrics and parameters
-        super().log_trial_result(iteration, trial, result)
+        print(step)
+        super().log_trial_result(iteration, trial, log_result)  # pyright: ignore[reportArgumentType]
         if videos:
             experiment = self._trial_experiments[trial]
             # TODO: store in final file path; or extract video at the end to final path
-            for key, data in videos.items():
-                video: list[int] = data["video"]  # type: ignore[arg-type]
-                stripped_key = (
-                    key.replace(ENV_RUNNER_RESULTS + "/", "").replace("episode_videos_", "").replace("/", "_")
-                )
+            for video_key in self._flat_video_lookup_keys:
+                video = videos.get(video_key)
+                if not video:
+                    continue
+                # turn key to evaluation_best_video, evaluation_discrete_best_video, etc.
+                stripped_key: CometStripedVideoFilename = (
+                    video_key.replace(ENV_RUNNER_RESULTS + "/", "").replace(EPISODE_VIDEO_PREFIX, "").replace("/", "_")
+                )  # type: ignore[assignment]
+                # Filename that is used for logging; not on disk
                 filename = f"videos/{stripped_key}.mp4"  # e.g. step0040_best.mp4
                 with tempfile.NamedTemporaryFile(suffix=".mp4", dir="temp_dir") as temp:
                     # os.makedirs(os.path.dirname(filename), exist_ok=True)
@@ -250,6 +276,9 @@ class AdvCometLoggerCallback(CometLoggerCallback):
                         temp.name,
                         name=filename,
                         step=step,
-                        metadata={"reward": data["reward"], "discrete": "discrete" in key},
+                        metadata={
+                            "reward": flat_result[video_key.replace("/video", "/reward")],
+                            "discrete": "discrete" in video_key,
+                        },
                     )
             experiment.log_other("hasVideo", value=True)

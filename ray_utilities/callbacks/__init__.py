@@ -1,10 +1,11 @@
 from __future__ import annotations
-from typing import Any, Iterable, TypeVar, cast, overload, TYPE_CHECKING
 
+from typing import TYPE_CHECKING, Any, Iterable, TypeVar, cast, overload
 
 if TYPE_CHECKING:
-    from tap import Tap
     import argparse
+
+    from tap import Tap
 
 __all__ = [
     "LOG_IGNORE_ARGS",

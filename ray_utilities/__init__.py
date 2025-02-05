@@ -3,21 +3,23 @@
 # ruff: noqa: PLC0415  # imports at top level of file; safe import time if not needed.
 
 from __future__ import annotations
+
+import datetime
 import random
 import time
-import datetime
-from typing import Iterable, Optional, TypeVar, TYPE_CHECKING, overload
-from typing_extensions import TypeIs
+from typing import TYPE_CHECKING, Any, Iterable, Optional, TypeVar, overload
 
+import gymnasium as gym
+from packaging.version import Version
+from packaging.version import parse as parse_version
 from ray.experimental import tqdm_ray
 from tqdm import tqdm
+from typing_extensions import TypeIs
 
-from packaging.version import parse as parse_version, Version
-import gymnasium as gym
+from .typing.algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
 
 if TYPE_CHECKING:
     from ray.tune.experiment import Trial
-    from ._trainable_return_type import AlgorithmReturnData, StrictAlgorithmReturnData  # noqa: TC004
 
 GYM_VERSION = parse_version(gym.__version__)
 GYM_V_0_26: bool = GYM_VERSION >= Version("0.26")
@@ -116,3 +118,17 @@ def seed_everything(env, seed: Optional[int], *, torch_manual=False):
 
     seed, next_seed = _split_seed(next_seed)
     return seed, next_seed
+
+
+def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, Any]]:
+    nested_metrics = metrics.copy()
+    for key_orig, v in metrics.items():
+        k = key_orig
+        subdict = nested_metrics
+        while "/" in k:
+            parent, k = k.split("/", 1)
+            subdict = subdict.setdefault(parent, {})
+        subdict[k] = v
+        if key_orig != k:
+            del nested_metrics[key_orig]
+    return nested_metrics

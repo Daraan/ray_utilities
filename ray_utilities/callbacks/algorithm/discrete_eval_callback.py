@@ -1,7 +1,6 @@
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
+
 from interpretable_ddts.agents.rllib_port.discrete_evaluation import discrete_evaluate_on_local_env_runner
-
-
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
 from ray.rllib.utils.metrics import EVALUATION_RESULTS
 from ray.rllib.utils.metrics.metrics_logger import MetricsLogger

@@ -6,12 +6,16 @@ Note:
 
 from __future__ import annotations
 
-from ray.tune.logger import JsonLoggerCallback
-from ray_utilities.constants import DEFAULT_VIDEO_KEYS
+from typing import TYPE_CHECKING, Any
 
-TYPE_CHECKING = False
+from ray.tune.logger import JsonLoggerCallback
+
+from ray_utilities.postprocessing import remove_videos
+
 if TYPE_CHECKING:
-    from ray.tune.experiment.trial import Trial  # noqa: TC002
+    from ray.tune.experiment.trial import Trial
+
+    from ray_utilities.typing.metrics import LogMetricsDict
 
 
 class AdvJsonLoggerCallback(JsonLoggerCallback):
@@ -24,7 +28,9 @@ class AdvJsonLoggerCallback(JsonLoggerCallback):
     This updates class does not log videos stored in the DEFAULT_VIDEO_KEYS.
     """
 
-    _video_keys = DEFAULT_VIDEO_KEYS
-
-    def log_trial_result(self, iteration: int, trial: "Trial", result: dict):
-        super().log_trial_result(iteration, trial, {k: v for k, v in result.items() if k not in self._video_keys})
+    def log_trial_result(self, iteration: int, trial: "Trial", result: dict[Any, Any] | LogMetricsDict):
+        super().log_trial_result(
+            iteration,
+            trial,
+            remove_videos(result),  # pyright: ignore[reportArgumentType]
+        )
