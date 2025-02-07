@@ -15,6 +15,7 @@ ExtraItems = Any  # float | int | str | bool | None | dict[str, "_ExtraItems"] |
 # ruff: noqa: E402
 from .algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
 from .metrics import FlatLogMetricsDict, LogMetricsDict
+from .trainable_return import TrainableReturnData
 
 __all__ = [
     "AlgorithmReturnData",
@@ -22,6 +23,7 @@ __all__ = [
     "FlatLogMetricsDict",
     "LogMetricsDict",
     "StrictAlgorithmReturnData",
+    "TrainableReturnData",
 ]
 
 

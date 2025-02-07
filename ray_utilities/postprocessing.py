@@ -4,7 +4,6 @@ import logging
 import math
 
 # pyright: enableExperimentalFeatures=true
-import os
 from functools import partial
 from typing import (
     TYPE_CHECKING,
@@ -14,7 +13,7 @@ from typing import (
     Optional,
     TypeGuard,
     TypeVar,
-    cast,
+    TypedDict,
     overload,
 )
 
@@ -27,7 +26,6 @@ from ray.rllib.utils.metrics import (
     EPISODE_RETURN_MIN,
     EVALUATION_RESULTS,
 )
-from wandb import Video
 
 from ray_utilities.constants import (
     DEFAULT_VIDEO_DICT_KEYS,
@@ -38,20 +36,17 @@ from ray_utilities.temp import TEMP_DIR_PATH
 from ray_utilities.video.numpy_to_video import create_temp_video
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from typing_extensions import TypeForm
 
     from ray_utilities.typing import LogMetricsDict, StrictAlgorithmReturnData
     from ray_utilities.typing.algorithm_return import EvaluationResultsDict
-    from ray_utilities.typing.metrics import (
-        AutoExtendedLogMetricsDict,
-        VideoMetricsDict,
-        _LogMetricsEvalEnvRunnersResultsDict,
-    )
+    from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict
 
 __all__ = ["RESULTS_TO_KEEP", "filter_metrics"]
 
 # NOTE: This should not overlap!
-RESULTS_TO_KEEP = {
+RESULTS_TO_KEEP: set[tuple[str, ...]] = {
     (ENV_RUNNER_RESULTS, EPISODE_RETURN_MEAN),
     # (ENV_RUNNER_RESULTS, NUM_EPISODES),
     (EVALUATION_RESULTS, ENV_RUNNER_RESULTS, EPISODE_RETURN_MEAN),
@@ -68,14 +63,16 @@ RESULTS_TO_REMOVE = {"fault_tolerance", "num_agent_steps_sampled_lifetime", "lea
 _MISSING: Any = object()
 
 _M = TypeVar("_M", bound=Mapping[Any, Any])
+_D = TypeVar("_D", bound=dict[Any, Any])
 _T = TypeVar("_T")
+_TD = TypeVar("_TD", bound=TypedDict)
 
 _MetricDict = TypeVar("_MetricDict", "AutoExtendedLogMetricsDict", "LogMetricsDict")
 
 _logger = logging.getLogger(__name__)
 
 
-def _find_item(obj: Mapping[str, Any], keys: list[str]) -> Any:
+def _find_item(obj: Mapping[str, Any], keys: Sequence[str]) -> Any:
     if len(keys) == 1:
         return obj.get(keys[0], _MISSING)
     value = obj.get(keys[0], _MISSING)
@@ -105,23 +102,30 @@ def remove_unwanted_metrics(results: _M, *, cast_to: TypeForm[_T] = _MISSING) ->
 
 
 @overload
+def filter_metrics(results: _D, extra_keys_to_keep: Optional[list[tuple[str, ...]]] = None) -> _D: ...
+
+
+@overload
 def filter_metrics(results: _M, extra_keys_to_keep: Optional[list[tuple[str, ...]]] = None) -> _M: ...
 
 
 @overload
 def filter_metrics(
-    results: Mapping[str, Any], extra_keys_to_keep: Optional[list[tuple[str, ...]]] = None, *, cast_to: TypeForm[_T]
+    results: Mapping[str, Any],
+    extra_keys_to_keep: Optional[list[tuple[str, ...]]] = None,
+    *,
+    cast_to: TypeForm[_T],
 ) -> _T: ...
 
 
 def filter_metrics(
-    results: _M,
+    results: _D | Mapping[Any, Any],
     extra_keys_to_keep: Optional[list[tuple[str, ...]]] = None,
     *,
     cast_to: TypeForm[_T] = _MISSING,  # noqa: ARG001
-) -> _M | _T:
+) -> _T | _D:
     """Reduces the metrics to only keep `RESULTS_TO_KEEP` and `extra_keys_to_keep`."""
-    reduced: dict[str, Any] = {}
+    reduced = {}
     _count = 0
     if extra_keys_to_keep:
         keys_to_keep = RESULTS_TO_KEEP.copy()
@@ -141,7 +145,6 @@ def filter_metrics(
             _count += 1
     if _count != len(RESULTS_TO_KEEP):
         _logger.warning("Reduced results do not match the expected amount of keys: %s", reduced)
-
     return reduced  # type: ignore[return-type]
 
 
@@ -179,7 +182,7 @@ def remove_videos(
                     did_copy = True
                 parent_dir = metrics
                 for key in keys[:-1]:
-                    parent_dir[key] = parent_dir[key].copy()  # pyright: ignore[reportGeneralTypeIssues]
+                    parent_dir[key] = parent_dir[key].copy()  # pyright: ignore[reportGeneralTypeIssues, reportTypedDictNotRequiredAccess]
                     parent_dir = parent_dir[key]  # pyright: ignore[reportGeneralTypeIssues, reportTypedDictNotRequiredAccess]
                 # parent_dir = cast("_LogMetricsEvaluationResultsDict", parent_dir)
                 del parent_dir[keys[-1]]  # pyright: ignore[reportGeneralTypeIssues]
@@ -316,6 +319,7 @@ def create_log_metrics(result: StrictAlgorithmReturnData, *, save_video=False) -
             },
         },
         "training_iteration": result["training_iteration"],
+        "done": result["done"],
     }
 
     if EVALUATION_RESULTS in result:
@@ -342,14 +346,14 @@ def create_log_metrics(result: StrictAlgorithmReturnData, *, save_video=False) -
             if discrete_evaluation_videos_best := discrete_evaluation_results[ENV_RUNNER_RESULTS].get(
                 EPISODE_BEST_VIDEO
             ):
-                metrics[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS][EPISODE_BEST_VIDEO] = {
+                metrics[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS][EPISODE_BEST_VIDEO] = {  # pyright: ignore[reportTypedDictNotRequiredAccess] # fmt: skip
                     "video": discrete_evaluation_videos_best,
                     "reward": discrete_evaluation_results[ENV_RUNNER_RESULTS][EPISODE_RETURN_MAX],
                 }
             if discrete_evaluation_videos_worst := discrete_evaluation_results[ENV_RUNNER_RESULTS].get(
                 EPISODE_WORST_VIDEO
             ):
-                metrics[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS][EPISODE_WORST_VIDEO] = {
+                metrics[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS][EPISODE_WORST_VIDEO] = {  # pyright: ignore[reportTypedDictNotRequiredAccess] # fmt: skip
                     "video": discrete_evaluation_videos_worst,
                     "reward": discrete_evaluation_results[ENV_RUNNER_RESULTS][EPISODE_RETURN_MIN],
                 }
@@ -375,3 +379,14 @@ def update_running_reward(new_reward: float, reward_array: list[float]) -> float
 
 def create_running_reward_updater() -> Callable[[float], float]:
     return partial(update_running_reward, reward_array=[])
+
+
+def verify_keys(metrics: Mapping[Any, Any], typ: type[_TD], *, test_optional: bool = True) -> TypeGuard[_TD]:
+    if not all(k in metrics for k in typ.__required_keys__):
+        missing = set(typ.__required_keys__) - set(metrics.keys())
+        return False
+    if test_optional:
+        if not all(k in metrics for k in typ.__optional_keys__):
+            missing = set(typ.__optional_keys__) - set(metrics.keys())
+            _logger.warning("Optional keys missing from %r: %s", typ, missing)
+    return True

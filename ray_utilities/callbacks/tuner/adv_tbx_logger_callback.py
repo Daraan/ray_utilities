@@ -62,7 +62,7 @@ class AdvTBXLoggerCallback(TBXLoggerCallback):
                         did_copy = True
                     parent_dir = result
                     for key in keys[:-1]:
-                        parent_dir[key] = parent_dir[key].copy()  # pyright: ignore[reportGeneralTypeIssues]
+                        parent_dir[key] = parent_dir[key].copy()  # pyright: ignore[reportGeneralTypeIssues, reportTypedDictNotRequiredAccess]
                         parent_dir = parent_dir[key]  # pyright: ignore[reportGeneralTypeIssues, reportTypedDictNotRequiredAccess]
                     parent_dir = cast("_LogMetricsEvalEnvRunnersResultsDict", parent_dir)
                     video = subdir[keys[-1]]["video"]

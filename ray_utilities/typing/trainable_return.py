@@ -4,23 +4,17 @@ from typing import TYPE_CHECKING
 
 from typing_extensions import Required
 
-from ray_utilities.typing.algorithm_return import (
-    EvaluationResultsDict,
-    _RequiredEnvRunners,
-)
+from .algorithm_return import _NotRequiredEnvRunners
 
-from . import _PEP_728_AVAILABLE, ExtraItems
+if TYPE_CHECKING:
+    from .metrics import _LogMetricsEvaluationResultsDict
 
 # pyright: enableExperimentalFeatures=true
 
 
-if _PEP_728_AVAILABLE or TYPE_CHECKING:
-
-    class TrainableReturnData(_RequiredEnvRunners, total=False, extra_items=ExtraItems):
-        evaluation: EvaluationResultsDict
-        training_iteration: int
-        done: Required[bool]
-        comment: str
-        trial_id: int | str
-else:
-    TrainableReturnData = dict
+class TrainableReturnData(_NotRequiredEnvRunners, total=False, closed=False):
+    evaluation: Required[_LogMetricsEvaluationResultsDict]
+    training_iteration: int
+    done: Required[bool]
+    comment: str
+    trial_id: int | str

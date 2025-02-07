@@ -29,14 +29,13 @@ from ._typed_argument_parser import DefaultArgumentParser
 from .tuner_setup import TunerSetup
 
 if TYPE_CHECKING:
+    from ray_utilities.typing import TrainableReturnData
     import argparse
 
     import gymnasium as gym
     from ray.rllib.algorithms import AlgorithmConfig
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
     from ray.rllib.utils.typing import EnvType
-
-    from ray_utilities import AlgorithmReturnData
 
     # from typing_extensions import TypeForm
 
@@ -292,7 +291,7 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
         return config, module_spec
 
     @abstractmethod
-    def create_trainable(self) -> Callable[[dict[str, Any]], AlgorithmReturnData]:
+    def create_trainable(self) -> Callable[[dict[str, Any]], TrainableReturnData]:
         """Return a trainable for the Tuner to use."""
 
     # endregion

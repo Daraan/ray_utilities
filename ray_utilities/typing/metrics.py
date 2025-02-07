@@ -38,6 +38,8 @@ if _PEP_728_AVAILABLE or TYPE_CHECKING:
 
     class _LogMetricsEnvRunnersResultsDict(TypedDict):
         episode_return_mean: float
+        epioode_return_max: NotRequired[float]
+        epioode_return_min: NotRequired[float]
 
     class _LogMetricsEvalEnvRunnersResultsDict(_LogMetricsEnvRunnersResultsDict, total=False):
         """
@@ -52,7 +54,7 @@ if _PEP_728_AVAILABLE or TYPE_CHECKING:
         env_runners: Required[_LogMetricsEvalEnvRunnersResultsDict]  # pyright: ignore[reportIncompatibleVariableOverride]
         discrete: NotRequired[Never]
 
-    class _LogMetricsEvaluationResultsDict(EvaluationResultsDict, _WarnVideosToEnvRunners):
+    class _LogMetricsEvaluationResultsDict(EvaluationResultsDict, _WarnVideosToEnvRunners, total=False):
         env_runners: Required[_LogMetricsEvalEnvRunnersResultsDict]  # pyright: ignore[reportIncompatibleVariableOverride]
         discrete: _LogMetricsEvaluationResultsWithoutDiscreteDict  # pyright: ignore[reportIncompatibleVariableOverride]
 
@@ -60,6 +62,9 @@ if _PEP_728_AVAILABLE or TYPE_CHECKING:
         env_runners: _LogMetricsEnvRunnersResultsDict
         evaluation: _LogMetricsEvaluationResultsDict
         training_iteration: int
+        """The number of times train.report() has been called"""
+
+        done: bool
 
     class AutoExtendedLogMetricsDict(LogMetricsDict):
         """
@@ -72,10 +77,10 @@ if _PEP_728_AVAILABLE or TYPE_CHECKING:
             - Trial.last_result
         """
 
+        done: bool
         training_iteration: int  # auto filled in
         """The number of times train.report() has been called"""
         trial_id: int | str  # auto filled in
-        done: bool
 
     FlatLogMetricsDict = TypedDict(
         "FlatLogMetricsDict",

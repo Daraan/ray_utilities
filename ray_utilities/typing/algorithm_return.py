@@ -19,12 +19,14 @@ __all__ = [
     "StrictAlgorithmReturnData",
 ]
 
-if _PEP_728_AVAILABLE or TYPE_CHECKING:
 
-    class EnvRunnersResultsDict(TypedDict, closed=False):
-        episode_return_mean: float
-        episode_return_max: float
-        episode_return_min: float
+class EnvRunnersResultsDict(TypedDict, closed=False):
+    episode_return_mean: float
+    episode_return_max: float
+    episode_return_min: float
+
+
+if _PEP_728_AVAILABLE or TYPE_CHECKING:
 
     class EvalEnvRunnersResultsDict(EnvRunnersResultsDict, total=False, extra_items=ExtraItems):
         episode_videos_best: list[NDArray]
@@ -43,6 +45,14 @@ if _PEP_728_AVAILABLE or TYPE_CHECKING:
         # array is shape=4D -> A batch of images (B, c, h, w).
         # array is shape=5D -> A video (1, L, c, h, w), where L is the length of the
         """
+else:
+
+    class EvalEnvRunnersResultsDict(EnvRunnersResultsDict, total=False):
+        episode_videos_best: list[NDArray]
+        episode_videos_worst: list[NDArray]
+
+
+if _PEP_728_AVAILABLE or TYPE_CHECKING:
 
     class _EvaluationNoDiscreteDict(TypedDict, extra_items=ExtraItems):
         env_runners: EvalEnvRunnersResultsDict
@@ -51,12 +61,26 @@ if _PEP_728_AVAILABLE or TYPE_CHECKING:
     class EvaluationResultsDict(TypedDict, total=False, extra_items=ExtraItems):
         env_runners: Required[EvalEnvRunnersResultsDict]
         discrete: _EvaluationNoDiscreteDict
+else:
 
-    class _RequiredEnvRunners(TypedDict, total=False, closed=False):
-        env_runners: Required[EnvRunnersResultsDict]
+    class _EvaluationNoDiscreteDict(TypedDict):
+        env_runners: EvalEnvRunnersResultsDict
+        discrete: NotRequired[Never]
 
-    class _NotRequiredEnvRunners(TypedDict, total=False, closed=False):
-        env_runners: NotRequired[EnvRunnersResultsDict]
+    class EvaluationResultsDict(TypedDict, total=False):
+        env_runners: Required[EvalEnvRunnersResultsDict]
+        discrete: _EvaluationNoDiscreteDict
+
+
+class _RequiredEnvRunners(TypedDict, total=False, closed=False):
+    env_runners: Required[EnvRunnersResultsDict]
+
+
+class _NotRequiredEnvRunners(TypedDict, total=False, closed=False):
+    env_runners: NotRequired[EnvRunnersResultsDict]
+
+
+if _PEP_728_AVAILABLE or TYPE_CHECKING:
 
     class _AlgoReturnDataWithoutEnvRunners(TypedDict, total=False, extra_items=ExtraItems):
         done: Required[bool]
@@ -69,7 +93,7 @@ if _PEP_728_AVAILABLE or TYPE_CHECKING:
         should_checkpoint: bool
 
         comment: str
-        trial_id: int | str
+        trial_id: Required[int | str]
         episodes_total: int
         episodes_this_iter: int
         learners: dict[str, dict[str, float | int]]
@@ -117,11 +141,8 @@ if _PEP_728_AVAILABLE or TYPE_CHECKING:
         See Also:
             - https://docs.ray.io/en/latest/tune/tutorials/tune-metrics.html#tune-autofilled-metrics
         """
-
 else:
     # PEP 728 not yet released in typing_extensions
     AlgorithmReturnData = dict
     StrictAlgorithmReturnData = dict
-    EvaluationResultsDict = dict
-    EnvRunnersResultsDict = dict
-    _EvaluationNoDiscreteDict = dict
+    _AlgoReturnDataWithoutEnvRunners = dict

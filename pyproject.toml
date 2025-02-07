@@ -107,3 +107,6 @@ force-single-line = false  # default: false
 split_on_trailing_comma = true
 include_trailing_comma = true
 profile = "black"
+
+[tool.pyright]
+reportDeprecated = true
