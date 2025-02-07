@@ -14,7 +14,7 @@ ExtraItems = Any  # float | int | str | bool | None | dict[str, "_ExtraItems"] |
 # Below requires _PEP_728_AVAILABLE
 # ruff: noqa: E402
 from .algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
-from .metrics import LogMetricsDict, FlatLogMetricsDict
+from .metrics import FlatLogMetricsDict, LogMetricsDict
 
 __all__ = [
     "AlgorithmReturnData",

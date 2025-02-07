@@ -1,8 +1,21 @@
+from __future__ import annotations
+
+import os
+import uuid
+from typing import TYPE_CHECKING, Optional
+
 import cv2
 import numpy as np
 
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
 
-def numpy_to_video(data: list, video_filename: str = "output.mp4", frame_rate: int = 10):
+from ray_utilities.temp import TEMP_DIR_PATH
+
+
+def numpy_to_video(
+    data: list[float | int] | NDArray | list[NDArray], video_filename: str = "output.mp4", frame_rate: int = 10
+) -> None:
     """
 
     Note:
@@ -23,7 +36,7 @@ def numpy_to_video(data: list, video_filename: str = "output.mp4", frame_rate: i
         # For CV2, the channel should be the last dimension
         assert video.shape[-3] in (1, 3)
         video = video.transpose(0, 2, 3, 1)
-    _length, frame_height, frame_width, _ = video.shape
+    _length, frame_height, frame_width, _colors = video.shape
 
     fourcc = cv2.VideoWriter_fourcc(*"avc1")  # type: ignore[attr-defined]
     out = cv2.VideoWriter(
@@ -37,7 +50,23 @@ def numpy_to_video(data: list, video_filename: str = "output.mp4", frame_rate: i
         for frame in video:
             out.write(frame)
     else:
-        for frame in video.reshape(-1, *video.shape[-3:]):
+        for frame in video.reshape(-1, *video.shape[-3:]):  # make 4D; might merges multiple videos
             out.write(frame)
 
     out.release()
+
+
+def create_temp_video(
+    data: list[float | int] | NDArray | list[NDArray],
+    suffix: str = ".mp4",
+    frame_rate: int = 10,
+    dir: Optional[str] = None,
+) -> str:
+    """
+    Args:
+        dir: The directory to save the video file. If None, it will be saved in the TEMP_DIR_PATH.
+    """
+    assert suffix == ".mp4", "Only MP4 format is supported"
+    path = os.path.join(TEMP_DIR_PATH if dir is None else dir, f"{uuid.uuid4().hex}{suffix}")
+    numpy_to_video(data, path, frame_rate)
+    return path

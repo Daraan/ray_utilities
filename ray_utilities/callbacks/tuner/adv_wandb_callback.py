@@ -1,14 +1,30 @@
-from typing import TYPE_CHECKING, Any, ClassVar
+from __future__ import annotations
+
+import os
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from ray.air.integrations.wandb import WandbLoggerCallback, _clean_log, _QueueItem
+
+from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS
+
+from ._save_video_callback import SaveVideoFirstCallback
 
 if TYPE_CHECKING:
     from ray.tune.experiment import Trial
 
-    from ray_utilities.typing import AlgorithmReturnData
+    from ray_utilities.typing.metrics import (
+        AutoExtendedLogMetricsDict,
+        VideoMetricsDict,
+        _LogMetricsEvalEnvRunnersResultsDict,
+    )
+
+try:
+    from wandb import Video
+except ImportError:
+    pass  # wandb not installed
 
 
-class AdvWandbLoggerCallback(WandbLoggerCallback):
+class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
     AUTO_CONFIG_KEYS: ClassVar[list[str]] = list({*WandbLoggerCallback.AUTO_CONFIG_KEYS, "trainable_name"})
 
     def log_trial_start(self, trial: "Trial"):
@@ -61,7 +77,38 @@ class AdvWandbLoggerCallback(WandbLoggerCallback):
 
         self._start_logging_actor(trial, exclude_results, **wandb_init_kwargs)
 
-    def log_trial_result(self, iteration: int, trial: "Trial", result: "AlgorithmReturnData"):  # noqa: ARG002 # pyright: ignore[reportIncompatibleMethodOverride]
+    @staticmethod
+    def preprocess_videos(metrics: dict[Any, Any] | AutoExtendedLogMetricsDict) -> dict[Any, Any]:
+        did_copy = False
+        for keys in DEFAULT_VIDEO_DICT_KEYS:
+            subdir = metrics
+            for key in keys[:-1]:
+                if key not in subdir:
+                    break
+                subdir = subdir[key]  # pyright: ignore[reportGeneralTypeIssues, reportTypedDictNotRequiredAccess]
+            else:
+                # Perform a selective deep copy on the modified items
+                subdir = cast("dict[str, VideoMetricsDict]", subdir)
+                if keys[-1] in subdir and "video_path" in subdir[keys[-1]]:
+                    if not did_copy:
+                        metrics = metrics.copy()
+                        did_copy = True
+                    parent_dir = metrics
+                    for key in keys[:-1]:
+                        parent_dir[key] = parent_dir[key].copy()  # pyright: ignore[reportGeneralTypeIssues, reportTypedDictNotRequiredAccess]  # fmt: skip
+                        parent_dir = parent_dir[key]  # pyright: ignore[reportGeneralTypeIssues, reportTypedDictNotRequiredAccess]  # fmt: skip
+                    parent_dir = cast("_LogMetricsEvalEnvRunnersResultsDict", parent_dir)
+                    parent_dir[keys[-1]] = video_dict = cast("VideoMetricsDict", parent_dir[keys[-1]]).copy()  # pyright: ignore[reportTypedDictNotRequiredAccess]  # fmt: skip
+                    # IMPORTANT use absolute path as local path is a ray session!
+                    video_dict["video"] = Video(os.path.abspath(video_dict.pop("video_path")), format="mp4")  # type: ignore[assignment]
+        return metrics  # type: ignore[return-value]
+
+    def log_trial_result(
+        self,
+        iteration: int,  # noqa: ARG002
+        trial: "Trial",
+        result: "dict | AutoExtendedLogMetricsDict",
+    ):
         """Called each time a trial reports a result."""
         if trial not in self._trial_logging_actors:
             self.log_trial_start(trial)
@@ -69,5 +116,5 @@ class AdvWandbLoggerCallback(WandbLoggerCallback):
             # Config will be logged once log_trial_start
             result.pop("config", None)  # pyright: ignore[reportCallIssue,reportArgumentType] # pyright bug
 
-        result = _clean_log(result)  # pyright: ignore[reportAssignmentType]
-        self._trial_queues[trial].put((_QueueItem.RESULT, result))
+        result_clean = _clean_log(self.preprocess_videos(result))
+        self._trial_queues[trial].put((_QueueItem.RESULT, result_clean))

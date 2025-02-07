@@ -16,7 +16,10 @@ if TYPE_CHECKING:
     from ray.rllib.algorithms import AlgorithmConfig
     from ray.tune import Callback
 
-    from ray_utilities.config.experiment_base import DefaultArgumentParser, ExperimentSetupBase
+    from ray_utilities.config.experiment_base import (
+        DefaultArgumentParser,
+        ExperimentSetupBase,
+    )
 
 
 class _TunerCallbackSetupBase(ABC):
@@ -110,6 +113,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             mode=mode,
             job_type="train",
             log_config=False,  # Log "config" key of results; useful if params change. Defaults to False.
+            # TODO: `config_exclude_keys` is deprecated. Use `config=wandb.helper.parse_config(config_object, exclude=('key',))` instead.  # noqa: E501
             config_exclude_keys=["node_ip", "cli_args/test", "cli_args/num_jobs"],
             # settings advanced wandb.Settings
             settings=adv_settings,

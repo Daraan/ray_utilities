@@ -1,12 +1,23 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Literal, Optional, Sequence, TypeVar, Union
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    ClassVar,
+    Literal,
+    Optional,
+    Sequence,
+    TypeVar,
+    Union,
+)
 
 # ruff: noqa: ARG001,ARG002
 import gymnasium as gym
 import numpy as np
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
 from ray.rllib.utils.images import resize
+
+from ray_utilities.constants import EPISODE_BEST_VIDEO, EPISODE_WORST_VIDEO
 
 if TYPE_CHECKING:
     from gymnasium.wrappers.vector_list_info import VectorListInfo
@@ -17,10 +28,30 @@ if TYPE_CHECKING:
     from ray.rllib.utils.typing import EpisodeType
     from typing_extensions import TypeAlias
 
-_Condition: TypeAlias = Callable[
-    ["AdvEnvRenderCallback", "EpisodeType", "EnvRunner", "gym.Env", Optional["MetricsLogger"], Optional["RLModule"]],
-    bool | None,
-]
+_Condition: TypeAlias = (
+    Callable[
+        [
+            "AdvEnvRenderCallback",
+            "EpisodeType",
+            Optional["EnvRunner"],
+            "gym.Env",
+            Optional["MetricsLogger"],
+            Optional["RLModule"],
+        ],
+        bool | None,
+    ]
+    | Callable[
+        [
+            "AdvEnvRenderCallback",
+            "EpisodeType",
+            "EnvRunner",
+            "gym.Env",
+            Optional["MetricsLogger"],
+            Optional["RLModule"],
+        ],
+        bool | None,
+    ]
+)
 _C = TypeVar("_C", bound=_Condition)
 
 
@@ -32,7 +63,7 @@ def _check_condition(func: _C) -> _C:
 def always_render(
     callback: AdvEnvRenderCallback,
     episode: EpisodeType,
-    env_runner: EnvRunner,
+    env_runner: Optional["EnvRunner"],
     env: gym.Env,
     metrics_logger: Optional[MetricsLogger],
     rl_module: Optional[RLModule],
@@ -84,7 +115,7 @@ class AdvEnvRenderCallback(DefaultCallbacks):
     and temporarily store it in the Episode object.
     """
 
-    episode_render_condition: _Condition = render_during_evaluation
+    episode_render_condition: ClassVar[_Condition] = render_during_evaluation
     """
     Required condition to render the environment on each episode step.
     Should only depend on episode-constant values for example depend on the episode number.
@@ -96,7 +127,7 @@ class AdvEnvRenderCallback(DefaultCallbacks):
         ValueError: If the condition changes during an episode
     """
 
-    episode_save_condition: _Condition = always_render
+    episode_save_condition: ClassVar[_Condition] = always_render
     """
     Condition evaluated at the end of an episode if the saved video should be saved in the metrics logger.
 
@@ -118,9 +149,9 @@ class AdvEnvRenderCallback(DefaultCallbacks):
         self,
         *,
         episode: EpisodeType,
-        env_runner: Optional["EnvRunner"] = None,
+        env_runner: EnvRunner = None,  # pyright: ignore[reportArgumentType]
         metrics_logger: Optional[MetricsLogger] = None,
-        env: gym.Env = None,  # type: ignore
+        env: gym.Env = None,  # pyright: ignore[reportArgumentType]
         env_index: int,
         rl_module: Optional[RLModule] = None,
         **kwargs,
@@ -176,7 +207,7 @@ class AdvEnvRenderCallback(DefaultCallbacks):
         self,
         *,
         episode: EpisodeType,
-        env_runner: Optional[EnvRunner] = None,
+        env_runner: EnvRunner = None,  # pyright: ignore[reportArgumentType]
         metrics_logger: Optional[MetricsLogger] = None,
         env: gym.Env | VectorListInfo = None,  # type: ignore
         env_index: int,
@@ -232,7 +263,7 @@ class AdvEnvRenderCallback(DefaultCallbacks):
         # Best video.
         if self.best_episode_and_return[0] is not None:
             metrics_logger.log_value(
-                "episode_videos_best",
+                EPISODE_BEST_VIDEO,
                 self.best_episode_and_return[0],
                 # Do not reduce the videos (across the various parallel EnvRunners).
                 # This would not make sense (mean over the pixels?). Instead, we want to
@@ -248,7 +279,7 @@ class AdvEnvRenderCallback(DefaultCallbacks):
         # Worst video.
         if self.worst_episode_and_return[0] is not None:
             metrics_logger.log_value(
-                "episode_videos_worst",
+                EPISODE_WORST_VIDEO,
                 self.worst_episode_and_return[0],
                 # Same logging options as above.
                 reduce=None,

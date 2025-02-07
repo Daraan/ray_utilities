@@ -1,12 +1,14 @@
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from ray.tune import Callback
+
 from .adv_comet_callback import AdvCometLoggerCallback
 from .adv_csv_callback import AdvCSVLoggerCallback
 from .adv_json_logger_callback import AdvJsonLoggerCallback
 from .adv_tbx_logger_callback import AdvTBXLoggerCallback
 from .adv_wandb_callback import AdvWandbLoggerCallback
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ray.tune.callback import Callback

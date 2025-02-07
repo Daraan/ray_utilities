@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from ray.rllib.utils.typing import EnvType
 
     from ray_utilities import AlgorithmReturnData
+
     # from typing_extensions import TypeForm
 
 __all__ = [

@@ -1,13 +1,18 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
 
-# pyright: enableExperimentalFeatures=true
+from typing import TYPE_CHECKING
 
 from typing_extensions import Required
 
-from ray_utilities.typing.algorithm_return import EvaluationResultsDict, _RequiredEnvRunners
+from ray_utilities.typing.algorithm_return import (
+    EvaluationResultsDict,
+    _RequiredEnvRunners,
+)
 
-from . import ExtraItems, _PEP_728_AVAILABLE
+from . import _PEP_728_AVAILABLE, ExtraItems
+
+# pyright: enableExperimentalFeatures=true
+
 
 if _PEP_728_AVAILABLE or TYPE_CHECKING:
 

@@ -6,21 +6,24 @@ import logging
 import math
 import sys
 import tempfile
-from typing import TYPE_CHECKING, ClassVar, Iterable, List, Optional
+from typing import TYPE_CHECKING, ClassVar, Iterable, List, Optional, cast
 
 from ray.air.integrations.comet import CometLoggerCallback
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
 from ray.tune.experiment import Trial
 from ray.tune.utils import flatten_dict
 
+from ray_utilities.callbacks.tuner._save_video_callback import SaveVideoFirstCallback
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, EPISODE_VIDEO_PREFIX
 from ray_utilities.video.numpy_to_video import numpy_to_video
 
 if TYPE_CHECKING:
-    from ray_utilities.typing import CometStripedVideoFilename
-    from ray_utilities.typing import LogMetricsDict, FlatLogMetricsDict
     from comet_ml import Experiment, OfflineExperiment
+    from numpy.typing import NDArray
     from ray.tune.experiment.trial import Trial
+
+    from ray_utilities.typing import CometStripedVideoFilename, FlatLogMetricsDict
+    from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict
 
 __all__ = [
     "AdvCometLoggerCallback",
@@ -29,7 +32,7 @@ __all__ = [
 _LOGGER = logging.getLogger(__name__)
 
 
-class AdvCometLoggerCallback(CometLoggerCallback):
+class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
     # Copy from parent for pylance
     """CometLoggerCallback for logging Tune results to Comet.
 
@@ -93,6 +96,10 @@ class AdvCometLoggerCallback(CometLoggerCallback):
     _exclude_results: ClassVar[list[str]] = [
         *CometLoggerCallback._exclude_results,  # noqa: SLF001
         "cli_args/test",
+        "evaluation/discrete/env_runners/episode_videos_best/video_path",
+        "evaluation/discrete/env_runners/episode_videos_worst/video_path",
+        "evaluation/env_runners/episode_videos_best/video_path",
+        "evaluation/env_runners/episode_videos_worst/video_path",
     ]
     """Metrics that are not logged"""
 
@@ -177,7 +184,9 @@ class AdvCometLoggerCallback(CometLoggerCallback):
                 try:
                     experiment.set_pip_packages()
                 except Exception:
-                    from comet_ml.experiment import EXPERIMENT_START_FAILED_SET_PIP_PACKAGES_ERROR
+                    from comet_ml.experiment import (
+                        EXPERIMENT_START_FAILED_SET_PIP_PACKAGES_ERROR,
+                    )
 
                     logging.getLogger("comet_ml.experiment").exception(EXPERIMENT_START_FAILED_SET_PIP_PACKAGES_ERROR)
             self._trial_experiments[trial] = experiment
@@ -226,13 +235,13 @@ class AdvCometLoggerCallback(CometLoggerCallback):
         if to_other:
             experiment.log_others(to_other)
 
-    def log_trial_result(self, iteration: int, trial: Trial, result: dict | LogMetricsDict):
-        step = result["training_iteration"]
+    def log_trial_result(self, iteration: int, trial: Trial, result: dict | AutoExtendedLogMetricsDict):
+        step: int = result["training_iteration"]  # maybe result.get(TIMESTEPS_TOTAL) or result[TRAINING_ITERATION]
         # Will be flattened in super anyway
         flat_result: FlatLogMetricsDict = flatten_dict(result, delimiter="/")  # type: ignore[arg-type]
         del result  # avoid using it by mistake
 
-        videos: dict[str, list[int]] = {k: v for k in self._flat_video_keys if (v := flat_result.get(k))}
+        videos: dict[str, NDArray | float | str] = {k: v for k in self._flat_video_keys if (v := flat_result.get(k))}
 
         # Remove Video keys and NaN values which can cause problems in the Metrics Tab when logged
         if trial in self._trial_experiments:
@@ -254,13 +263,11 @@ class AdvCometLoggerCallback(CometLoggerCallback):
         # Cannot remove this
         log_result["training_iteration"] = step
         # Log normal metrics and parameters
-        print(step)
         super().log_trial_result(iteration, trial, log_result)  # pyright: ignore[reportArgumentType]
         if videos:
             experiment = self._trial_experiments[trial]
-            # TODO: store in final file path; or extract video at the end to final path
             for video_key in self._flat_video_lookup_keys:
-                video = videos.get(video_key)
+                video: None | NDArray | str = videos.get(video_key)  # type: ignore[assignment] # do not extract float
                 if not video:
                     continue
                 # turn key to evaluation_best_video, evaluation_discrete_best_video, etc.
@@ -269,16 +276,32 @@ class AdvCometLoggerCallback(CometLoggerCallback):
                 )  # type: ignore[assignment]
                 # Filename that is used for logging; not on disk
                 filename = f"videos/{stripped_key}.mp4"  # e.g. step0040_best.mp4
-                with tempfile.NamedTemporaryFile(suffix=".mp4", dir="temp_dir") as temp:
-                    # os.makedirs(os.path.dirname(filename), exist_ok=True)
-                    numpy_to_video(video, video_filename=temp.name)
-                    experiment.log_video(
-                        temp.name,
-                        name=filename,
-                        step=step,
-                        metadata={
-                            "reward": flat_result[video_key.replace("/video", "/reward")],
-                            "discrete": "discrete" in video_key,
-                        },
-                    )
+
+                # Already a saved video:
+                if (video_path_key := video_key.replace("/video", "/video_path")) in flat_result:
+                    video = cast(str, flat_result[video_path_key])
+                    logging.getLogger("comet_ml").debug("Logging video from %s", video)
+
+                metadata = {
+                    "reward": flat_result[video_key.replace("/video", "/reward")],
+                    "discrete": "discrete" in video_key,
+                    **(
+                        {"video_path": flat_result[path_key]}
+                        if (path_key := video_key.replace("/video", "/video_path")) in flat_result
+                        else {}
+                    ),
+                }
+
+                if isinstance(video, str):
+                    experiment.log_video(video, name=filename, step=step, metadata=metadata)
+                else:
+                    with tempfile.NamedTemporaryFile(suffix=".mp4", dir="temp_dir") as temp:
+                        # os.makedirs(os.path.dirname(filename), exist_ok=True)
+                        numpy_to_video(video, video_filename=temp.name)
+                        experiment.log_video(
+                            temp.name,
+                            name=filename,
+                            step=step,
+                            metadata=metadata,
+                        )
             experiment.log_other("hasVideo", value=True)
