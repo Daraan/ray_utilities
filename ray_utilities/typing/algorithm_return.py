@@ -58,9 +58,12 @@ if _PEP_728_AVAILABLE or TYPE_CHECKING:
         env_runners: EvalEnvRunnersResultsDict
         discrete: NotRequired[Never]
 
-    class EvaluationResultsDict(TypedDict, total=False, extra_items=ExtraItems):
-        env_runners: Required[EvalEnvRunnersResultsDict]
-        discrete: _EvaluationNoDiscreteDict
+    class EvaluationResultsDict(TypedDict, extra_items=ExtraItems):
+        env_runners: EvalEnvRunnersResultsDict
+        discrete: NotRequired[_EvaluationNoDiscreteDict]
+        """Custom key - evaluation results for discrete actions"""
+        evaluated_this_step: NotRequired[bool]
+        """Custom key"""
 else:
 
     class _EvaluationNoDiscreteDict(TypedDict):
@@ -124,16 +127,14 @@ if _PEP_728_AVAILABLE or TYPE_CHECKING:
         timesteps_since_restore: int
         """Number of timesteps since restoring from a checkpoint"""
 
-    class AlgorithmReturnData(
-        _AlgoReturnDataWithoutEnvRunners, _NotRequiredEnvRunners, total=False, extra_items=ExtraItems
-    ):
+    class AlgorithmReturnData(_AlgoReturnDataWithoutEnvRunners, _NotRequiredEnvRunners, extra_items=ExtraItems):
         """
         See Also:
             - https://docs.ray.io/en/latest/tune/tutorials/tune-metrics.html#tune-autofilled-metrics
         """
 
     class StrictAlgorithmReturnData(  # pyright: ignore[reportIncompatibleVariableOverride]
-        _AlgoReturnDataWithoutEnvRunners, _RequiredEnvRunners, total=False, extra_items=ExtraItems
+        _AlgoReturnDataWithoutEnvRunners, _RequiredEnvRunners, extra_items=ExtraItems
     ):
         """
         Return data with env_runners present

@@ -11,9 +11,9 @@ from typing import (
     Callable,
     Mapping,
     Optional,
-    TypeGuard,
-    TypeVar,
+    ParamSpec,
     TypedDict,
+    TypeGuard,
     overload,
 )
 
@@ -26,6 +26,7 @@ from ray.rllib.utils.metrics import (
     EPISODE_RETURN_MIN,
     EVALUATION_RESULTS,
 )
+from typing_extensions import TypeVar
 
 from ray_utilities.constants import (
     DEFAULT_VIDEO_DICT_KEYS,
@@ -33,10 +34,12 @@ from ray_utilities.constants import (
     EPISODE_WORST_VIDEO,
 )
 from ray_utilities.temp import TEMP_DIR_PATH
+from ray_utilities.typing.trainable_return import TrainableReturnData
 from ray_utilities.video.numpy_to_video import create_temp_video
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
     from typing_extensions import TypeForm
 
     from ray_utilities.typing import LogMetricsDict, StrictAlgorithmReturnData
@@ -52,10 +55,13 @@ RESULTS_TO_KEEP: set[tuple[str, ...]] = {
     (EVALUATION_RESULTS, ENV_RUNNER_RESULTS, EPISODE_RETURN_MEAN),
     (EVALUATION_RESULTS, "discrete", ENV_RUNNER_RESULTS, EPISODE_RETURN_MEAN),
     ("comment",),
+    ("trial_id",),
+    ("training_iteration",),
 }
 RESULTS_TO_KEEP.update((key,) for key in CometLoggerCallback._other_results)
 RESULTS_TO_KEEP.update((key,) for key in CometLoggerCallback._system_results)
 RESULTS_TO_KEEP.update((key,) for key in CometLoggerCallback._exclude_results)
+RESULTS_TO_KEEP.update((key,) for key in TrainableReturnData.__required_keys__)
 assert all(isinstance(key, (tuple, list)) for key in RESULTS_TO_KEEP)
 
 RESULTS_TO_REMOVE = {"fault_tolerance", "num_agent_steps_sampled_lifetime", "learners", "timers"}
@@ -65,7 +71,8 @@ _MISSING: Any = object()
 _M = TypeVar("_M", bound=Mapping[Any, Any])
 _D = TypeVar("_D", bound=dict[Any, Any])
 _T = TypeVar("_T")
-_TD = TypeVar("_TD", bound=TypedDict)
+_TD = TypeVar("_TD", bound=TypedDict, default="TrainableReturnData")  # pyright: ignore[reportInvalidTypeForm]
+_P = ParamSpec("_P")
 
 _MetricDict = TypeVar("_MetricDict", "AutoExtendedLogMetricsDict", "LogMetricsDict")
 
@@ -384,9 +391,31 @@ def create_running_reward_updater() -> Callable[[float], float]:
 def verify_keys(metrics: Mapping[Any, Any], typ: type[_TD], *, test_optional: bool = True) -> TypeGuard[_TD]:
     if not all(k in metrics for k in typ.__required_keys__):
         missing = set(typ.__required_keys__) - set(metrics.keys())
+        _logger.error("Required keys missing from %r: %s", typ, missing)
         return False
     if test_optional:
         if not all(k in metrics for k in typ.__optional_keys__):
             missing = set(typ.__optional_keys__) - set(metrics.keys())
-            _logger.warning("Optional keys missing from %r: %s", typ, missing)
     return True
+
+
+def verify_return(return_type: type[_TD]):
+    """
+    Verify the required keys of the return type are present in the return value.
+
+    Attention:
+        It is not guranteed that all required keys are present at runtime
+        in the __required_keys__ attribute.
+        `TypedDict`s that are checked should prefer using `total=True`
+        over `total=False` with `NotRequired`.
+    """
+
+    def decorator(func: Callable[_P, _TD]) -> Callable[_P, _TD]:
+        def wrapper(*args, **kwargs):
+            result = func(*args, **kwargs)
+            verify_keys(result, return_type)
+            return result
+
+        return wrapper
+
+    return decorator

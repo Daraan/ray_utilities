@@ -64,5 +64,9 @@ Note:
     The video might still be a dict with "video" and "reward" keys.
 """
 
-
 assert all(EPISODE_VIDEO_PREFIX in key for key in DEFAULT_VIDEO_DICT_KEYS_FLATTENED)
+
+EVALUATED_THIS_STEP = "evaluated_this_step"
+"""
+Metric to log as bool with reduce_on_results=True to indicate that evaluation was done this step.
+"""

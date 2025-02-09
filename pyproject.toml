@@ -109,4 +109,6 @@ include_trailing_comma = true
 profile = "black"
 
 [tool.pyright]
-reportDeprecated = true
+reportDeprecated = "warning"
+reportUnnecessaryComparison = "warning"
+reportUnnecessaryCast = "warning"
