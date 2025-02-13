@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Annotated, Literal, TypeAlias, TypeGuard
 
 from typing_extensions import Never, NotRequired, Required, TypedDict
 
-from . import _PEP_728_AVAILABLE
 from .algorithm_return import EvaluationResultsDict, _EvaluationNoDiscreteDict
 
 # pyright: enableExperimentalFeatures=true

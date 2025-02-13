@@ -1,7 +1,11 @@
 import logging
 import os
 from pathlib import Path
+import time
 
+import gymnasium as gym
+from packaging.version import Version, parse as parse_version
+import ray
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
     EPISODE_RETURN_MEAN,
@@ -70,3 +74,12 @@ EVALUATED_THIS_STEP = "evaluated_this_step"
 """
 Metric to log as bool with reduce_on_results=True to indicate that evaluation was done this step.
 """
+
+
+RAY_VERSION = parse_version(ray.__version__)
+GYM_VERSION = parse_version(gym.__version__)
+GYM_V1: bool = GYM_VERSION >= Version("1.0.0")
+"""Gymnasium version 1.0.0 and above"""
+GYM_V_0_26: bool = GYM_VERSION >= Version("0.26")
+"""First gymnasium version and above"""
+RAY_UTILITIES_INITALIZATION_TIMESTAMP = time.time()

@@ -24,6 +24,7 @@ from tap.tap import Tap
 from typing_extensions import TypeVar
 
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
+from ray_utilities.comet import CometArchiveTracker
 
 from ._typed_argument_parser import DefaultArgumentParser
 from .tuner_setup import TunerSetup
@@ -100,6 +101,10 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
             self.config: _ConfigType = self.create_config()
             self.trainable = self.create_trainable()
             self.param_space = self.create_param_space()
+        if self.args.comet:
+            self.comet_tracker = CometArchiveTracker()
+        else:
+            self.comet_tracker = None
 
     # region Argument Parsing
 
@@ -216,6 +221,8 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
         self.param_space = param_space
         return param_space
 
+    # endregion
+
     # region config and trainable
 
     @abstractmethod
@@ -300,6 +307,26 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
 
     def create_tuner(self) -> tune.Tuner:
         return TunerSetup(setup=self).create_tuner()
+
+    # endregion
+
+    # region upload experiments
+
+    def comet_upload_offline_experiments(self):
+        """Note this does not check for args.comet"""
+        if self.comet_tracker is None:
+            logger.info("No comet tracker / args.comet defined. Will not upload offline experiments.")
+            return
+        self.comet_tracker.upload_and_move()
+
+    def wandb_upload_offline_experiments(self):
+        logger.warning("Wandb offline upload is not yet implemented.")
+
+    def upload_offline_experiments(self):
+        if self.args.comet and "upload" in self.args.comet:
+            self.comet_upload_offline_experiments()
+        if self.args.wandb and "upload" in self.args.wandb:
+            self.wandb_upload_offline_experiments()
 
     # endregion
 
