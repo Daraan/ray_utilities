@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import datetime
+import logging
+import colorlog
 import random
 from typing import TYPE_CHECKING, Any, Iterable, Optional, TypeVar, overload
 
@@ -39,6 +41,18 @@ __all__ = [
     "seed_everything",
     "trial_name_creator",
 ]
+
+logger = logging.getLogger(__name__)
+if not logger.hasHandlers():
+    logger.setLevel(logging.DEBUG)
+    utilities_handler = colorlog.StreamHandler()
+    formatter = colorlog.ColoredFormatter(
+        "%(log_color)s[%(levelname)s][ %(filename)s:%(lineno)d, %(funcName)s] :%(reset)s %(message)s"
+    )
+    utilities_handler.setFormatter(formatter)
+    logger.addHandler(utilities_handler)
+logger.info("Ray utilities imported")
+logger.debug("Ray utilities logger debug level set")
 
 
 def trial_name_creator(trial: Trial) -> str:

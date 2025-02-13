@@ -169,7 +169,11 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType_co, ParserType_co]):
             subst = self._substitute_tag(tag)
             if not isinstance(subst, str):
                 extra_tags[i] = ""
-                logger.debug("Could not find tag: %s in the ArgumentParser %s", tag, self.__class__.__name__)
+                # Info if a tag is not found, this could be due to a not provided bool argument
+                # e.g. --gpu is not provided
+                logger.debug(
+                    "Could not find tag: %s in the ArgumentParser %s, or it is not set", tag, self.__class__.__name__
+                )
                 continue
             extra_tags[i] = subst
         return list(filter(None, extra_tags))

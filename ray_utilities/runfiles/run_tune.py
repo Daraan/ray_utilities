@@ -47,7 +47,8 @@ def run_tune(
     # -- Test --
     if args.test and args.not_parallel and test_mode_func:
         # will spew some warnings about train.report
-        print(f"-- FULL TEST MODE running {test_mode_func!r} --")
+        func_name = getattr(test_mode_func, "__name__", repr(test_mode_func))
+        print(f"-- FULL TEST MODE running {func_name} --")
         logger.info("-- FULL TEST MODE --")
         return test_mode_func(trainable, setup)
 

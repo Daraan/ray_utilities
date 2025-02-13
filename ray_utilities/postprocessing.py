@@ -150,8 +150,6 @@ def filter_metrics(
                 raise ValueError(f"Key {keys[-1]} already exists in {sub_dir}")
             sub_dir[keys[-1]] = value
             _count += 1
-    if _count != len(RESULTS_TO_KEEP):
-        _logger.warning("Reduced results do not match the expected amount of keys: %s", reduced)
     return reduced  # type: ignore[return-type]
 
 
