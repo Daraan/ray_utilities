@@ -49,14 +49,14 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-ParserType = TypeVar("ParserType", bound="DefaultArgumentParser", default="DefaultArgumentParser")
-Parser: TypeAlias = "argparse.ArgumentParser | ParserType"
-NamespaceType: TypeAlias = "argparse.Namespace | ParserType"  # Generic
+ParserType_co = TypeVar("ParserType_co", bound="DefaultArgumentParser", covariant=True)
+Parser: TypeAlias = "argparse.ArgumentParser | ParserType_co"
+NamespaceType: TypeAlias = "argparse.Namespace | ParserType_co"  # Generic
 
-_ConfigType = TypeVar("_ConfigType", bound="AlgorithmConfig")
+_ConfigType_co = TypeVar("_ConfigType_co", bound="AlgorithmConfig", covariant=True)
 
 
-class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
+class ExperimentSetupBase(ABC, Generic[_ConfigType_co, ParserType_co]):
     """
     Methods:
     - create_parser
@@ -94,11 +94,11 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
         """
 
     def __init__(self, args: Optional[Sequence[str]] = None, *, init_config: bool = True):
-        self.parser: Parser[ParserType]
+        self.parser: Parser[ParserType_co]
         self.parser = self.create_parser()
         self.args = self.parse_args(args)
         if init_config:
-            self.config: _ConfigType = self.create_config()
+            self.config: _ConfigType_co = self.create_config()
             self.trainable = self.create_trainable()
             self.param_space = self.create_param_space()
         if self.args.comet:
@@ -108,11 +108,11 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
 
     # region Argument Parsing
 
-    def create_parser(self) -> Parser[ParserType]:
+    def create_parser(self) -> Parser[ParserType_co]:
         self.parser = DefaultArgumentParser()
         return self.parser
 
-    def postprocess_args(self, args: NamespaceType[ParserType]) -> NamespaceType[ParserType]:
+    def postprocess_args(self, args: NamespaceType[ParserType_co]) -> NamespaceType[ParserType_co]:
         """
         Post-process the arguments.
 
@@ -121,17 +121,17 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
         """
         return args
 
-    def args_to_dict(self, args: ParserType | argparse.Namespace) -> dict[str, Any]:
+    def args_to_dict(self, args: ParserType_co | argparse.Namespace) -> dict[str, Any]:
         if isinstance(args, Tap):
             return {k: getattr(args, k) for k in args.class_variables}
         return vars(args).copy()
 
-    def get_args(self) -> NamespaceType[ParserType]:
+    def get_args(self) -> NamespaceType[ParserType_co]:
         if not self.args:
             self.args = self.parse_args()
         return self.args
 
-    def parse_args(self, args: Sequence[str] | None = None) -> NamespaceType[ParserType]:
+    def parse_args(self, args: Sequence[str] | None = None) -> NamespaceType[ParserType_co]:
         """
         Raises:
             ValueError: If parse_args is called twice without recreating the parser.
@@ -186,7 +186,7 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
     # endregion
     # region hparams
 
-    def clean_args_to_hparams(self, args: Optional[NamespaceType[ParserType]] = None):
+    def clean_args_to_hparams(self, args: Optional[NamespaceType[ParserType_co]] = None):
         args = args or self.get_args()
         upload_args = remove_ignored_args(args, remove=(*LOG_IGNORE_ARGS, "process_number"))
         return upload_args
@@ -226,10 +226,10 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
     # region config and trainable
 
     @abstractmethod
-    def _create_config(self) -> _ConfigType:
+    def _create_config(self) -> _ConfigType_co:
         """Creates the config for the experiment."""
 
-    def create_config(self) -> _ConfigType:
+    def create_config(self) -> _ConfigType_co:
         """
         Creates the config for the experiment.
 
@@ -275,7 +275,7 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType, ParserType]):
         env: Optional[EnvType] = None,
         spaces: Optional[dict[str, gym.Space]] = None,
         inference_only: Optional[bool] = None,
-    ) -> tuple[_ConfigType, RLModuleSpec]:
+    ) -> tuple[_ConfigType_co, RLModuleSpec]:
         """
         Creates the config and module spec for the experiment.
 

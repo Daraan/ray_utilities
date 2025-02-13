@@ -21,6 +21,7 @@ from tqdm import tqdm
 from typing_extensions import TypeIs
 
 from ray_utilities.constants import GYM_V_0_26, RAY_UTILITIES_INITALIZATION_TIMESTAMP
+from ray_utilities.runfiles.run_tune import run_tune
 
 from .typing.algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
 
@@ -34,6 +35,7 @@ __all__ = [
     "AlgorithmReturnData",
     "StrictAlgorithmReturnData",
     "is_pbar",
+    "run_tune",
     "seed_everything",
     "trial_name_creator",
 ]
