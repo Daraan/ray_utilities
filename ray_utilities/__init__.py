@@ -23,7 +23,6 @@ from tqdm import tqdm
 from typing_extensions import TypeIs
 
 from ray_utilities.constants import GYM_V_0_26, RAY_UTILITIES_INITALIZATION_TIMESTAMP
-from ray_utilities.runfiles.run_tune import run_tune
 
 from .typing.algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
 
@@ -61,8 +60,8 @@ def trial_name_creator(trial: Trial) -> str:
     return "_".join(
         [
             trial.trainable_name,
-            trial.evaluated_params["env"],
-            trial.evaluated_params["module"],
+            trial.config["env"],
+            trial.config["module"],
             start_time_str,
             trial.trial_id,
         ]
@@ -152,3 +151,7 @@ def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, An
         if key_orig != k:
             del nested_metrics[key_orig]
     return nested_metrics
+
+
+# Circular import
+from ray_utilities.runfiles.run_tune import run_tune  # noqa: E402

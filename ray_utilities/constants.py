@@ -83,3 +83,6 @@ GYM_V1: bool = GYM_VERSION >= Version("1.0.0")
 GYM_V_0_26: bool = GYM_VERSION >= Version("0.26")
 """First gymnasium version and above"""
 RAY_UTILITIES_INITALIZATION_TIMESTAMP = time.time()
+
+CLI_REPORTER_PARAMETER_COLUMNS = ["algo", "module", "model_config"]
+"""Keys from param_space"""

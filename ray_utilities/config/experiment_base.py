@@ -1,8 +1,7 @@
 from __future__ import annotations
+# pyright: enableExperimentalFeatures=true
 
 import logging
-
-# pyright: enableExperimentalFeatures=true
 from abc import ABC, abstractmethod
 from functools import partial
 from typing import (
@@ -30,13 +29,14 @@ from ._typed_argument_parser import DefaultArgumentParser
 from .tuner_setup import TunerSetup
 
 if TYPE_CHECKING:
-    from ray_utilities.typing import TrainableReturnData
     import argparse
 
     import gymnasium as gym
     from ray.rllib.algorithms import AlgorithmConfig
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
     from ray.rllib.utils.typing import EnvType
+
+    from ray_utilities.typing import TrainableReturnData
 
     # from typing_extensions import TypeForm
 
@@ -209,17 +209,24 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType_co, ParserType_co]):
             This function must set the `hparams` attribute
         """
         module_spec = self.get_module_spec(copy=False)
+        # Arguments reported on the CLI
         param_space: dict[str, Any] = {
             "env": (
                 self.config.env if isinstance(self.config.env, str) else self.config.env.unwrapped.spec.id  # pyright: ignore[reportOptionalMemberAccess]
             ),  # pyright: ignore[reportOptionalMemberAccess]
             "algo": self.config.algo_class.__name__ if self.config.algo_class is not None else "UNDEFINED",
             "module": module_spec.module_class.__name__ if module_spec.module_class is not None else "UNDEFINED",
-            "model_config": module_spec.model_config,
             "trainable_name": self.get_trainable_name(),
         }
-        # WandB might not log them if they are not selected as choice
+        # If not logged in choice will not be reported in the CLI interface
         param_space = {k: tune.choice([v]) for k, v in param_space.items()}
+        if self.args.seed is not None:
+            param_space["env_seed"] = tune.randint(0, 2**16)
+            # logger.debug("Creating envs with seeds: %s", param_space["env_seed"])
+
+        # Other args not shown in the CLI
+
+        param_space["model_config"] = (module_spec.model_config,)
         # Log CLI args as hyperparameters
         param_space["cli_args"] = self.clean_args_to_hparams(self.args)
         self.param_space = param_space
@@ -303,7 +310,12 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType_co, ParserType_co]):
 
     @abstractmethod
     def create_trainable(self) -> Callable[[dict[str, Any]], TrainableReturnData]:
-        """Return a trainable for the Tuner to use."""
+        """
+        Return a trainable for the Tuner to use.
+
+        Note:
+            set trainable._progress_metrics to adjust the reporter output
+        """
 
     # endregion
 

@@ -8,7 +8,7 @@ from typing_extensions import TypeVar
 
 from ray_utilities import trial_name_creator
 from ray_utilities.config._tuner_callbacks_setup import TunerCallbackSetup
-from ray_utilities.constants import DISC_EVAL_METRIC_RETURN_MEAN
+from ray_utilities.constants import CLI_REPORTER_PARAMETER_COLUMNS, DISC_EVAL_METRIC_RETURN_MEAN
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import AlgorithmConfig
@@ -71,7 +71,11 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             storage_path=Path("../outputs/experiments").resolve(),  # pyright: ignore[reportArgumentType]
             name=self.get_experiment_name(),
             log_to_file=False,  # True for hydra like logging to files; or (stoud, stderr.log) files
-            progress_reporter=tune.CLIReporter(mode="max", max_report_frequency=45),
+            # NOTE: Does not seem to work with new air output
+            progress_reporter=tune.CLIReporter(
+                max_report_frequency=45,
+                parameter_columns=CLI_REPORTER_PARAMETER_COLUMNS,
+            ),
             # JSON, CSV, and Tensorboard loggers are created automatically by Tune
             # to disable set TUNE_DISABLE_AUTO_CALLBACK_LOGGERS environment variable to "1"
             callbacks=callbacks,
