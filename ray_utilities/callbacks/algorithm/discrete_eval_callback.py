@@ -1,23 +1,29 @@
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Optional, cast
-
 
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
 from ray.rllib.utils.metrics import EVALUATION_RESULTS
 from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 
-from interpretable_ddts.agents.rllib_port.discrete_evaluation import discrete_evaluate_on_local_env_runner
 from ray_utilities.constants import EVALUATED_THIS_STEP
+from ray_utilities.discrete_evaluation import discrete_evaluate_on_local_env_runner
 
 if TYPE_CHECKING:
+    from interpretable_ddts.agents.ddt_ppo_module import DDTModule
     from ray.rllib.algorithms import Algorithm
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
-
-    from interpretable_ddts.agents.ddt_ppo_module import DDTModule
+    from ray.rllib.policy.sample_batch import MultiAgentBatch, SampleBatch
+    from ray.rllib.utils.typing import ResultDict
 
 __all__ = ["DiscreteEvalCallback"]
 
 logger = logging.getLogger(__name__)
+
+DiscreteEvalFunctionType = Callable[
+    ["Algorithm", "SingleAgentEnvRunner", "MetricsLogger"],
+    tuple["ResultDict | None", int, int, list["SampleBatch | MultiAgentBatch"]],
+]
 
 
 class DiscreteEvalCallback(DefaultCallbacks):

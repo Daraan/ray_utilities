@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from ray.rllib.algorithms import AlgorithmConfig
     from ray.tune.experiment import Trial
 
-    from ray_utilities.config._typed_argument_parser import DefaultArgumentParser
+    from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
     from ray_utilities.config.experiment_base import ExperimentSetupBase
 
 __all__ = [

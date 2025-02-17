@@ -25,8 +25,8 @@ from typing_extensions import TypeVar
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.comet import CometArchiveTracker
 
-from ._typed_argument_parser import DefaultArgumentParser
 from .tuner_setup import TunerSetup
+from .typed_argument_parser import DefaultArgumentParser
 
 if TYPE_CHECKING:
     import argparse
