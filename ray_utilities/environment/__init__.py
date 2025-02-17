@@ -51,4 +51,5 @@ def env_creator_with_seed(config: EnvContext):
     env.np_random = geni
     return env
 
+
 register_env("seeded_env", env_creator_with_seed)
