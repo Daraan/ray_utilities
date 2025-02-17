@@ -5,16 +5,19 @@ from typing import TYPE_CHECKING, Optional, TypeVar
 
 from ray.tune.result_grid import ResultGrid
 
+from ray_utilities import seed_everything
+
 if TYPE_CHECKING:
+    from ray.rllib.algorithms import AlgorithmConfig
     from ray.tune.result_grid import ResultGrid
 
-    from ray_utilities.config.experiment_base import ExperimentSetupBase
+    from ray_utilities.config import DefaultArgumentParser, ExperimentSetupBase
     from ray_utilities.typing import TestModeCallable
     from ray_utilities.typing.trainable_return import TrainableReturnData
 
 logger = logging.getLogger(__name__)
 
-_SetupT = TypeVar("_SetupT", bound="ExperimentSetupBase")
+_SetupT = TypeVar("_SetupT", bound="ExperimentSetupBase[AlgorithmConfig, DefaultArgumentParser]")
 
 
 def run_tune(
@@ -42,6 +45,10 @@ def run_tune(
     if isinstance(setup, type):
         setup = setup()
     args = setup.get_args()
+    if args.seed is not None:
+        logger.debug("Setting seed to %s", args.seed)
+        seed_everything(env=None, seed=args.seed, torch_manual=True, torch_deterministic=True)
+        setup.config.seed = args.seed
     trainable = setup.trainable
 
     # -- Test --

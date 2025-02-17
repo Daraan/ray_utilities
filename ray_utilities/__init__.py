@@ -94,7 +94,12 @@ def _split_seed(seed: Optional[int]) -> tuple[int, int] | tuple[None, None]:
     return gen.randrange(2**32), gen.randrange(2**32)
 
 
-def seed_everything(env, seed: Optional[int], *, torch_manual=False):
+_IntOrNone = TypeVar("_IntOrNone", int, None)
+
+
+def seed_everything(
+    env, seed: _IntOrNone, *, torch_manual=False, torch_deterministic=None
+) -> tuple[_IntOrNone, _IntOrNone]:
     """
     Args:
         torch_manual: If True, will set torch.manual_seed and torch.cuda.manual_seed_all
@@ -121,6 +126,9 @@ def seed_everything(env, seed: Optional[int], *, torch_manual=False):
         )  # setting torch manual seed causes bad models, # ok seed 124
         seed, next_seed = _split_seed(next_seed)
         torch.cuda.manual_seed_all(seed)
+    if torch_deterministic is not None:
+        logger.debug("Setting torch deterministic algorithms to %s", torch_deterministic)
+        torch.use_deterministic_algorithms(torch_deterministic)
     if env:
         if not GYM_V_0_26:  # gymnasium does not have this
             seed, next_seed = _split_seed(next_seed)
