@@ -81,12 +81,12 @@ class DefaultLoggingArgParser(Tap):
     def use_comet_offline(self) -> bool:
         return self.comet and self.comet.lower().startswith("offline")
 
-    def _parse_comet(
+    def _parse_comet(  # noqa: PLR6301  # could be static
         self, value: Literal["offline", "offline+upload", "on"]
     ) -> Literal["offline", "offline+upload", "on", False]:
-        if value in ("0", "False", "off"):
+        if value in {"0", "False", "off"}:
             return False
-        if value in ("1", "True", "on"):
+        if value in {"1", "True", "on"}:
             return "on"
         return value
 

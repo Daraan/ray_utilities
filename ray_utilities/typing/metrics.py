@@ -115,7 +115,7 @@ FlatLogMetricsDict = TypedDict(
     closed=False,
 )
 
-## TypeGuards
+# TypeGuards
 
 
 def has_video_key(

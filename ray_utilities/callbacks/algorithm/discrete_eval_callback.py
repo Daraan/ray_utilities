@@ -10,7 +10,7 @@ from ray_utilities.constants import EVALUATED_THIS_STEP
 from ray_utilities.discrete_evaluation import discrete_evaluate_on_local_env_runner
 
 if TYPE_CHECKING:
-    from interpretable_ddts.agents.ddt_ppo_module import DDTModule
+    from interpretable_ddts.rllib_port.ddt_ppo_module import DDTModule
     from ray.rllib.algorithms import Algorithm
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
     from ray.rllib.policy.sample_batch import MultiAgentBatch, SampleBatch

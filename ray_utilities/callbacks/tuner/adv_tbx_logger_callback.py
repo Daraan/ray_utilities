@@ -40,7 +40,8 @@ class AdvTBXLoggerCallback(TBXLoggerCallback):
 
     _video_keys = DEFAULT_VIDEO_DICT_KEYS
 
-    def preprocess_videos(self, result: dict[str, Any] | AutoExtendedLogMetricsDict) -> dict[Any, Any]:
+    @staticmethod
+    def preprocess_videos(result: dict[str, Any] | AutoExtendedLogMetricsDict) -> dict[Any, Any]:
         """
         For tensorboard it must hold that:
 

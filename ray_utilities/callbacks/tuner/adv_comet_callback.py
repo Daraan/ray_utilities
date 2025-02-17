@@ -160,7 +160,7 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         if "training_iteration" in self._log_only_once:
             self._log_only_once.remove("training_iteration")
             _LOGGER.warning("training_iteration must be in the results to log it")
-        self._log_pip_packages = log_pip_packages and not experiment_kwargs.get("log_env_details", False)
+        self._log_pip_packages = log_pip_packages and not experiment_kwargs.get("log_env_details", False)  # noqa: RUF056
         """If log_env_details is True pip packages are already logged."""
 
     def log_trial_start(self, trial: "Trial"):
@@ -267,7 +267,7 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         if videos:
             experiment = self._trial_experiments[trial]
             for video_key in self._flat_video_lookup_keys:
-                video: None | NDArray | str = videos.get(video_key)  # type: ignore[assignment] # do not extract float
+                video: NDArray | str | None = videos.get(video_key)  # type: ignore[assignment] # do not extract float
                 if not video:
                     continue
                 # turn key to evaluation_best_video, evaluation_discrete_best_video, etc.

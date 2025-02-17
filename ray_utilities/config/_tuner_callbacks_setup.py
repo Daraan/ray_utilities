@@ -108,7 +108,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             # https://docs.wandb.ai/guides/integrations/openai-gym/
             monitor_gym=False,
             # Special comment
-            notes=args.comment if args.comment else None,
+            notes=args.comment or None,
             tags=self.get_tags(),
             mode=mode,
             job_type="train",

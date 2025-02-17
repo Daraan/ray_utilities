@@ -1,4 +1,3 @@
-import logging
 import os
 from pathlib import Path
 import time
@@ -19,7 +18,11 @@ if (
     os.environ.get("COMET_OFFLINE_DIRECTORY", _COMET_OFFFLINE_DIRECTORY_SUGGESTION_STR)
     != _COMET_OFFFLINE_DIRECTORY_SUGGESTION_STR
 ):
-    logging.warning("COMET_OFFLINE_DIRECTORY already set to: %s", os.environ.get("COMET_OFFLINE_DIRECTORY"))
+    import logging
+
+    logging.getLogger(__name__).warning(
+        "COMET_OFFLINE_DIRECTORY already set to: %s", os.environ.get("COMET_OFFLINE_DIRECTORY")
+    )
 
 os.environ["COMET_OFFLINE_DIRECTORY"] = COMET_OFFLINE_DIRECTORY = _COMET_OFFFLINE_DIRECTORY_SUGGESTION_STR
 

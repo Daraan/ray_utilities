@@ -1,9 +1,10 @@
 from __future__ import annotations
+# pyright: enableExperimentalFeatures=true
+# ruff: noqa: PLC0415  # imports at top level of file; safe import time if not needed.
 
 import logging
 import math
 
-# pyright: enableExperimentalFeatures=true
 from functools import partial
 from typing import (
     TYPE_CHECKING,
@@ -133,7 +134,6 @@ def filter_metrics(
 ) -> _T | _D:
     """Reduces the metrics to only keep `RESULTS_TO_KEEP` and `extra_keys_to_keep`."""
     reduced = {}
-    _count = 0
     if extra_keys_to_keep:
         keys_to_keep = RESULTS_TO_KEEP.copy()
         keys_to_keep.update(extra_keys_to_keep)
@@ -149,7 +149,6 @@ def filter_metrics(
             if keys[-1] in sub_dir:
                 raise ValueError(f"Key {keys[-1]} already exists in {sub_dir}")
             sub_dir[keys[-1]] = value
-            _count += 1
     return reduced  # type: ignore[return-type]
 
 
@@ -330,7 +329,7 @@ def create_log_metrics(result: StrictAlgorithmReturnData, *, save_video=False) -
     if EVALUATION_RESULTS in result:
         # Check for NaN values, if they are not the evaluation metrics warn.
         if any(isinstance(value, float) and math.isnan(value) for value in metrics.values()):
-            logging.warning("NaN values in metrics: %s", metrics)
+            _logger.warning("NaN values in metrics: %s", metrics)
 
         # Store videos
         if evaluation_videos_best := result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(
@@ -351,17 +350,17 @@ def create_log_metrics(result: StrictAlgorithmReturnData, *, save_video=False) -
             if discrete_evaluation_videos_best := discrete_evaluation_results[ENV_RUNNER_RESULTS].get(
                 EPISODE_BEST_VIDEO
             ):
-                metrics[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS][EPISODE_BEST_VIDEO] = {  # pyright: ignore[reportTypedDictNotRequiredAccess] # fmt: skip
+                metrics[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS][EPISODE_BEST_VIDEO] = {  # pyright: ignore[reportTypedDictNotRequiredAccess]
                     "video": discrete_evaluation_videos_best,
                     "reward": discrete_evaluation_results[ENV_RUNNER_RESULTS][EPISODE_RETURN_MAX],
-                }
+                }  # fmt: skip
             if discrete_evaluation_videos_worst := discrete_evaluation_results[ENV_RUNNER_RESULTS].get(
                 EPISODE_WORST_VIDEO
             ):
-                metrics[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS][EPISODE_WORST_VIDEO] = {  # pyright: ignore[reportTypedDictNotRequiredAccess] # fmt: skip
+                metrics[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS][EPISODE_WORST_VIDEO] = {  # pyright: ignore[reportTypedDictNotRequiredAccess]
                     "video": discrete_evaluation_videos_worst,
                     "reward": discrete_evaluation_results[ENV_RUNNER_RESULTS][EPISODE_RETURN_MIN],
-                }
+                }  # fmt: skip
             if discrete_evaluation_videos_best:
                 check_if_video(discrete_evaluation_videos_best, "discrete" + EPISODE_BEST_VIDEO)
             if discrete_evaluation_videos_worst:

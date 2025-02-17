@@ -45,6 +45,7 @@ if _PEP_728_AVAILABLE or TYPE_CHECKING:
         # array is shape=4D -> A batch of images (B, c, h, w).
         # array is shape=5D -> A video (1, L, c, h, w), where L is the length of the
         """
+
 else:
 
     class EvalEnvRunnersResultsDict(EnvRunnersResultsDict, total=False):
@@ -64,6 +65,7 @@ if _PEP_728_AVAILABLE or TYPE_CHECKING:
         """Custom key - evaluation results for discrete actions"""
         evaluated_this_step: NotRequired[bool]
         """Custom key"""
+
 else:
 
     class _EvaluationNoDiscreteDict(TypedDict):
@@ -142,6 +144,7 @@ if _PEP_728_AVAILABLE or TYPE_CHECKING:
         See Also:
             - https://docs.ray.io/en/latest/tune/tutorials/tune-metrics.html#tune-autofilled-metrics
         """
+
 else:
     # PEP 728 not yet released in typing_extensions
     AlgorithmReturnData = dict

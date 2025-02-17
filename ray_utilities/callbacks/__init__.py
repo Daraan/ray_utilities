@@ -58,5 +58,5 @@ def remove_ignored_args(
             args = args.as_dict()
         else:
             args = vars(args)
-        args = cast(dict[str, Any], args)
+        args = cast("dict[str, Any]", args)
     return {k: v for k, v in args.items() if k not in remove}
