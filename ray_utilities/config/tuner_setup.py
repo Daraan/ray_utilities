@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, ClassVar, Literal, Optional, Protocol
+from typing import TYPE_CHECKING, Callable, ClassVar, Literal, Optional, Protocol, cast, overload
 
 from ray import train, tune
 from typing_extensions import TypeVar
@@ -11,11 +11,12 @@ from ray_utilities.config._tuner_callbacks_setup import TunerCallbackSetup
 from ray_utilities.constants import CLI_REPORTER_PARAMETER_COLUMNS, DISC_EVAL_METRIC_RETURN_MEAN
 
 if TYPE_CHECKING:
+    from ray.air.config import RunConfig as RunConfigV1
     from ray.rllib.algorithms import AlgorithmConfig
     from ray.tune.experiment import Trial
 
-    from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
     from ray_utilities.config.experiment_base import ExperimentSetupBase
+    from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 
 __all__ = [
     "TunerSetup",
@@ -33,7 +34,9 @@ class _TunerSetupBase(Protocol):
 
     def create_tune_config(self) -> tune.TuneConfig: ...
 
-    def create_run_config(self, callbacks: list[tune.Callback]) -> train.RunConfig: ...
+    def create_run_config(
+        self, callbacks: list[tune.Callback] | list[train.UserCallback]
+    ) -> train.RunConfig | RunConfigV1: ...
 
     def create_tuner(self) -> tune.Tuner: ...
 
@@ -65,7 +68,19 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             trial_name_creator=trial_name_creator,
         )
 
-    def create_run_config(self, callbacks: list[tune.Callback]) -> train.RunConfig:
+    @overload
+    def create_run_config(self, callbacks: list[tune.Callback]) -> RunConfigV1: ...
+
+    @overload
+    def create_run_config(self, callbacks: list[train.UserCallback]) -> train.RunConfig: ...
+
+    def create_run_config(
+        self, callbacks: list[tune.Callback] | list[train.UserCallback]
+    ) -> RunConfigV1 | train.RunConfig:
+        # NOTE: RunConfig V2 is coming up in the future, which will disallow some callbacks
+        if TYPE_CHECKING:  # Currently type-checker treats RunConfig as the new version, which is wrong
+            train.RunConfig = RunConfigV1
+            callbacks = cast("list[tune.Callback]", callbacks)
         return train.RunConfig(
             # Trial artifacts are uploaded periodically to this directory
             storage_path=Path("../outputs/experiments").resolve(),  # pyright: ignore[reportArgumentType]

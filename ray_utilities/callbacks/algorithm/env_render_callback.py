@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+# ruff: noqa: ARG001,ARG002
+import logging
 from typing import (
     TYPE_CHECKING,
+    Any,
     Callable,
     ClassVar,
     Literal,
@@ -11,16 +14,23 @@ from typing import (
     Union,
 )
 
-# ruff: noqa: ARG001,ARG002
-import gymnasium as gym
 import numpy as np
+from gymnasium.vector import SyncVectorEnv
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
 from ray.rllib.utils.images import resize
 
-from ray_utilities.constants import EPISODE_BEST_VIDEO, EPISODE_WORST_VIDEO
+from ray_utilities.constants import EPISODE_BEST_VIDEO, EPISODE_WORST_VIDEO, GYM_V1
 
 if TYPE_CHECKING:
-    from gymnasium.wrappers.vector_list_info import VectorListInfo
+    import gymnasium as gym
+    from gymnasium.vector import VectorEnv
+
+    if GYM_V1:
+        from gymnasium.wrappers.vector import DictInfoToList  # pyright: ignore[reportMissingImports]
+    else:
+        from gymnasium.wrappers.vector_list_info import (  # pyright: ignore[reportMissingImports]
+            VectorListInfo as DictInfoToList,
+        )
     from ray.rllib.core.rl_module.rl_module import RLModule
     from ray.rllib.env.env_runner import EnvRunner
     from ray.rllib.policy.sample_batch import SampleBatch
@@ -28,24 +38,30 @@ if TYPE_CHECKING:
     from ray.rllib.utils.typing import EpisodeType
     from typing_extensions import TypeAlias
 
+logger = logging.getLogger(__name__)
+
+_EnvType: TypeAlias = "gym.Env | DictInfoToList | VectorEnv"
+
 _Condition: TypeAlias = (
+    # With optional EnvRunner
     Callable[
         [
             "AdvEnvRenderCallback",
             "EpisodeType",
             Optional["EnvRunner"],
-            "gym.Env",
+            _EnvType,
             Optional["MetricsLogger"],
             Optional["RLModule"],
         ],
         bool | None,
     ]
+    # Without EnvRunner
     | Callable[
         [
             "AdvEnvRenderCallback",
             "EpisodeType",
             "EnvRunner",
-            "gym.Env",
+            _EnvType,
             Optional["MetricsLogger"],
             Optional["RLModule"],
         ],
@@ -56,6 +72,7 @@ _C = TypeVar("_C", bound=_Condition)
 
 
 def _check_condition(func: _C) -> _C:
+    """Decorator to check if a function's signature satisfies the _Condition type alias."""
     return func
 
 
@@ -64,7 +81,7 @@ def always_render(
     callback: AdvEnvRenderCallback,
     episode: EpisodeType,
     env_runner: Optional["EnvRunner"],
-    env: gym.Env,
+    env: _EnvType,
     metrics_logger: Optional[MetricsLogger],
     rl_module: Optional[RLModule],
 ) -> Literal[True]:
@@ -77,7 +94,7 @@ def render_during_evaluation(
     callback: AdvEnvRenderCallback,
     episode: EpisodeType,
     env_runner: EnvRunner,
-    env: gym.Env,
+    env: _EnvType,
     metrics_logger: Optional[MetricsLogger],
     rl_module: Optional[RLModule],
 ) -> bool | None:
@@ -134,6 +151,7 @@ class AdvEnvRenderCallback(DefaultCallbacks):
     """
 
     def __init__(self, env_runner_indices: Optional[Sequence[int]] = None):
+        # TODO: add some specification for image size
         super().__init__()
         # Only render and record on certain EnvRunner indices?
         self.env_runner_indices = env_runner_indices
@@ -168,7 +186,7 @@ class AdvEnvRenderCallback(DefaultCallbacks):
         episode: EpisodeType,
         env_runner: Optional[EnvRunner] = None,
         metrics_logger: Optional[MetricsLogger] = None,
-        env: gym.Env | VectorListInfo = None,  # pyright: ignore[reportArgumentType]
+        env: gym.Env | VectorEnv | Any = None,
         env_index: int,
         rl_module: Optional[RLModule] = None,
         **kwargs,
@@ -182,12 +200,14 @@ class AdvEnvRenderCallback(DefaultCallbacks):
         if self.env_runner_indices is not None and env_runner.worker_index not in self.env_runner_indices:  # type: ignore[attr-defined]
             return
         # If we have a vector env, only render the sub-env at index 0.
-        if isinstance(env.unwrapped, gym.vector.VectorEnv):
-            image = env.envs[0].render()  # type: ignore[attr-defined]
+        if isinstance(env.unwrapped, SyncVectorEnv):
+            assert not TYPE_CHECKING or isinstance(env, SyncVectorEnv)
+            image = env.envs[0].render()
         # Render the gym.Env.
         else:
             image = env.render()
         if image is None:
+            logger.warning("Env.render() returned None. Skipping rendering.")
             return
 
         # Original render images for CartPole are 400x600 (hxw). We'll downsize here to
@@ -209,7 +229,7 @@ class AdvEnvRenderCallback(DefaultCallbacks):
         episode: EpisodeType,
         env_runner: EnvRunner = None,  # pyright: ignore[reportArgumentType]
         metrics_logger: Optional[MetricsLogger] = None,
-        env: gym.Env | VectorListInfo = None,  # type: ignore
+        env: gym.Env | DictInfoToList | VectorEnv | Any = None,
         env_index: int,
         rl_module: Optional[RLModule] = None,
         **kwargs,

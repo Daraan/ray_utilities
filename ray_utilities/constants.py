@@ -89,3 +89,9 @@ RAY_UTILITIES_INITALIZATION_TIMESTAMP = time.time()
 
 CLI_REPORTER_PARAMETER_COLUMNS = ["algo", "module", "model_config"]
 """Keys from param_space"""
+
+RAY_NEW_API_STACK_ENABLED = RAY_VERSION >= Version("2.40.0")
+"""
+See Also:
+    https://docs.ray.io/en/latest/rllib/new-api-stack-migration-guide.html
+"""

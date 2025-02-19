@@ -226,7 +226,7 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType_co, ParserType_co]):
 
         # Other args not shown in the CLI
 
-        param_space["model_config"] = (module_spec.model_config,)
+        param_space["model_config"] = module_spec.model_config
         # Log CLI args as hyperparameters
         param_space["cli_args"] = self.clean_args_to_hparams(self.args)
         self.param_space = param_space

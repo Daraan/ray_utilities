@@ -34,6 +34,7 @@ def discrete_evaluate_on_local_env_runner(
             "force the local (non-eval) EnvRunner to have an environment to "
             "evaluate on."
         )
+    assert self.config
     if self.config.evaluation_parallel_to_training:
         raise ValueError(
             "Cannot run on local evaluation worker parallel to training! Try "

@@ -52,6 +52,7 @@ class DiscreteEvalCallback(DefaultCallbacks):
         evaluation_metrics[EVALUATED_THIS_STEP] = True  # Note: NotRequired key
         if not getattr(module, "CAN_USE_DISCRETE_EVAL", False):
             return
+        assert metrics_logger
         module.switch_mode(discrete=True)
         assert module.is_discrete
         (
@@ -62,7 +63,7 @@ class DiscreteEvalCallback(DefaultCallbacks):
         ) = discrete_evaluate_on_local_env_runner(algorithm, env_runner, metrics_logger)
         module.switch_mode(discrete=False)
         assert module.is_discrete is False
-        assert discrete_eval_results is None
+        assert discrete_eval_results is None  # new API stack
         if discrete_eval_results is None:  # and algorithm.config.enable_env_runner_and_connector_v2:
             discrete_eval_results = metrics_logger.reduce((EVALUATION_RESULTS, "discrete"), return_stats_obj=False)
         evaluation_metrics["discrete"] = discrete_eval_results

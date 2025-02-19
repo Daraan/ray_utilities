@@ -57,6 +57,7 @@ def run_tune(
         func_name = getattr(test_mode_func, "__name__", repr(test_mode_func))
         print(f"-- FULL TEST MODE running {func_name} --")
         logger.info("-- FULL TEST MODE --")
+        # Possibly set RAY_DEBUG=legacy
         return test_mode_func(trainable, setup)
 
     # Use tune.with_parameters to pass large objects to the trainable
