@@ -254,6 +254,22 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType_co, ParserType_co]):
         self.config = self._create_config()
         return self.config
 
+    @classmethod
+    @abstractmethod
+    def config_from_args(cls, args: ParserType_co | argparse.Namespace) -> _ConfigType_co:
+        """
+        Create an algorithm configuration; similar to `create_config` but as a `classmethod`.
+
+        Tip:
+            This method is useful if you do not have access to the setup instance, e.g.
+            inside the trainable function.
+
+        Usage:
+            .. code-block:: python
+
+                algo: AlgorithmConfig = Setup.config_from_args(args)
+        """
+
     @overload
     def get_module_spec(self, *, copy: Literal[False]) -> RLModuleSpec: ...
 
