@@ -209,13 +209,17 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType_co, ParserType_co]):
             This function must set the `hparams` attribute
         """
         module_spec = self.get_module_spec(copy=False)
+        if module_spec:
+            module = module_spec.module_class.__name__ if module_spec.module_class is not None else "UNDEFINED"
+        else:
+            module = None
         # Arguments reported on the CLI
         param_space: dict[str, Any] = {
             "env": (
                 self.config.env if isinstance(self.config.env, str) else self.config.env.unwrapped.spec.id  # pyright: ignore[reportOptionalMemberAccess]
             ),  # pyright: ignore[reportOptionalMemberAccess]
             "algo": self.config.algo_class.__name__ if self.config.algo_class is not None else "UNDEFINED",
-            "module": module_spec.module_class.__name__ if module_spec.module_class is not None else "UNDEFINED",
+            "module": module,
             "trainable_name": self.get_trainable_name(),
         }
         # If not logged in choice will not be reported in the CLI interface
@@ -226,7 +230,7 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType_co, ParserType_co]):
 
         # Other args not shown in the CLI
 
-        param_space["model_config"] = module_spec.model_config
+        param_space["model_config"] = module_spec and module_spec.model_config
         # Log CLI args as hyperparameters
         param_space["cli_args"] = self.clean_args_to_hparams(self.args)
         self.param_space = param_space
@@ -276,7 +280,8 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType_co, ParserType_co]):
         if copy:
             return self.config.get_rl_module_spec(env, spaces, inference_only)
         if self.config._rl_module_spec is None:
-            raise ValueError("ModuleSpec not defined yet, call config.rl_module first.")
+            logger.warning("ModuleSpec not defined yet, call config.rl_module first")
+            return None
         assert not isinstance(self.config._rl_module_spec, MultiRLModuleSpec)
         return self.config._rl_module_spec
 
