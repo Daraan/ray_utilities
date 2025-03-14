@@ -36,7 +36,7 @@ class _TunerSetupBase(Protocol):
 
     def create_run_config(
         self, callbacks: list[tune.Callback] | list[train.UserCallback]
-    ) -> train.RunConfig | RunConfigV1: ...
+    ) -> tune.RunConfig | RunConfigV1 | train.RunConfig: ...
 
     def create_tuner(self) -> tune.Tuner: ...
 
@@ -69,19 +69,18 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
         )
 
     @overload
-    def create_run_config(self, callbacks: list[tune.Callback]) -> RunConfigV1: ...
+    def create_run_config(self, callbacks: list[tune.Callback]) -> tune.RunConfig: ...
 
     @overload
     def create_run_config(self, callbacks: list[train.UserCallback]) -> train.RunConfig: ...
 
     def create_run_config(
         self, callbacks: list[tune.Callback] | list[train.UserCallback]
-    ) -> RunConfigV1 | train.RunConfig:
+    ) -> tune.RunConfig | train.RunConfig:
         # NOTE: RunConfig V2 is coming up in the future, which will disallow some callbacks
         if TYPE_CHECKING:  # Currently type-checker treats RunConfig as the new version, which is wrong
-            train.RunConfig = RunConfigV1
             callbacks = cast("list[tune.Callback]", callbacks)
-        return train.RunConfig(
+        return tune.RunConfig(
             # Trial artifacts are uploaded periodically to this directory
             storage_path=Path("../outputs/experiments").resolve(),  # pyright: ignore[reportArgumentType]
             name=self.get_experiment_name(),
@@ -95,8 +94,8 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             # to disable set TUNE_DISABLE_AUTO_CALLBACK_LOGGERS environment variable to "1"
             callbacks=callbacks,
             # Use fail_fast for during debugging/testing to stop all experiments
-            failure_config=train.FailureConfig(fail_fast=True),
-            checkpoint_config=train.CheckpointConfig(
+            failure_config=tune.FailureConfig(fail_fast=True),
+            checkpoint_config=tune.CheckpointConfig(
                 num_to_keep=4,
                 checkpoint_score_order="max",
                 checkpoint_score_attribute=self.eval_metric,
