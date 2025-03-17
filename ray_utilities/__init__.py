@@ -6,9 +6,10 @@ from __future__ import annotations
 
 import datetime
 import logging
-import colorlog
 import random
 from typing import TYPE_CHECKING, Any, Iterable, Optional, TypeVar, overload
+
+import colorlog
 
 # fmt: off
 try:
@@ -18,6 +19,7 @@ except ImportError:
     pass
 # fmt: on
 
+import gymnasium as gym
 from ray.experimental import tqdm_ray
 from tqdm import tqdm
 from typing_extensions import TypeIs
@@ -27,6 +29,7 @@ from ray_utilities.constants import GYM_V_0_26, RAY_UTILITIES_INITALIZATION_TIME
 from .typing.algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
 
 if TYPE_CHECKING:
+    from ray.rllib.algorithms import AlgorithmConfig
     from ray.tune.experiment import Trial
 
 
@@ -152,6 +155,19 @@ def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, An
             del nested_metrics[key_orig]
     return nested_metrics
 
+
+def create_env_for_config(config: AlgorithmConfig, env_spec: str | gym.Env):
+    if isinstance(config.env, str) and config.env != "seeded_env":
+        init_env = gym.make(config.env)
+    elif config.env == "seeded_env":
+        if isinstance(env_spec, str):
+            init_env = gym.make(env_spec)
+        else:
+            init_env = env_spec
+    else:
+        assert not TYPE_CHECKING or config.env
+        init_env = gym.make(config.env.unwrapped.spec.id)  # pyright: ignore[reportOptionalMemberAccess]
+    return init_env
 
 # Circular import
 from ray_utilities.runfiles.run_tune import run_tune  # noqa: E402

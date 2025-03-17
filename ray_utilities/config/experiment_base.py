@@ -24,6 +24,7 @@ from typing_extensions import TypeVar
 
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.comet import CometArchiveTracker
+from ray_utilities.environment import create_env
 
 from .tuner_setup import TunerSetup
 from .typed_argument_parser import DefaultArgumentParser
@@ -119,6 +120,9 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType_co, ParserType_co]):
         Note:
             This is not an abstract method
         """
+        init_env = create_env(args.env_type)
+        env_name = init_env.unwrapped.spec.id  # pyright: ignore[reportOptionalMemberAccess]
+        args.env_type = env_name
         return args
 
     def args_to_dict(self, args: ParserType_co | argparse.Namespace) -> dict[str, Any]:
