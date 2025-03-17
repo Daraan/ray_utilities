@@ -7,7 +7,6 @@ from ray.rllib.core.models.base import ACTOR, CRITIC, ENCODER_OUT
 from ray.rllib.core.models.configs import ActorCriticEncoderConfig
 
 
-
 class DummyActorCriticEncoder(ActorCriticEncoder):
     """A dummy encoder that just outputs the input as is."""
 
