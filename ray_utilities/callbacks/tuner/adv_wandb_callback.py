@@ -112,9 +112,9 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
         """Called each time a trial reports a result."""
         if trial not in self._trial_logging_actors:
             self.log_trial_start(trial)
-        if not self.log_config:
-            # Config will be logged once log_trial_start
-            result.pop("config", None)  # pyright: ignore[reportCallIssue,reportArgumentType] # pyright bug
 
         result_clean = _clean_log(self.preprocess_videos(result))
+        if not self.log_config:
+            # Config will be logged once log_trial_start
+            result_clean.pop("config", None)  # type: ignore
         self._trial_queues[trial].put((_QueueItem.RESULT, result_clean))
