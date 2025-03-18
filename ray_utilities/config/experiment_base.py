@@ -1,6 +1,6 @@
 from __future__ import annotations
-# pyright: enableExperimentalFeatures=true
 
+# pyright: enableExperimentalFeatures=true
 import logging
 from abc import ABC, abstractmethod
 from functools import partial
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     import argparse
 
     import gymnasium as gym
-    from ray.rllib.algorithms import AlgorithmConfig
+    from ray.rllib.algorithms import PPO, Algorithm, AlgorithmConfig
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
     from ray.rllib.utils.typing import EnvType
 
@@ -54,10 +54,11 @@ ParserType_co = TypeVar("ParserType_co", bound="DefaultArgumentParser", covarian
 Parser: TypeAlias = "argparse.ArgumentParser | ParserType_co"
 NamespaceType: TypeAlias = "argparse.Namespace | ParserType_co"  # Generic
 
-_ConfigType_co = TypeVar("_ConfigType_co", bound="AlgorithmConfig", covariant=True)
+_ConfigType_co = TypeVar("_ConfigType_co", bound="AlgorithmConfig", covariant=True, default="AlgorithmConfig")
+_AlgorithmType_co = TypeVar("_AlgorithmType_co", bound="Algorithm", covariant=True, default="PPO")
 
 
-class ExperimentSetupBase(ABC, Generic[_ConfigType_co, ParserType_co]):
+class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _AlgorithmType_co]):
     """
     Methods:
     - create_parser
@@ -274,6 +275,15 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType_co, ParserType_co]):
                 algo: AlgorithmConfig = Setup.config_from_args(args)
         """
 
+    def build_algo(self) -> _AlgorithmType_co:
+        try:
+            return self.config.build_algo()  # type: ignore[return-type]
+        except AttributeError as e:
+            if "build_algo" not in str(e):
+                raise
+            # Older API
+            return self.config.build()  # type: ignore[return-type]
+
     @overload
     def get_module_spec(self, *, copy: Literal[False]) -> RLModuleSpec: ...
 
@@ -300,6 +310,7 @@ class ExperimentSetupBase(ABC, Generic[_ConfigType_co, ParserType_co]):
         if copy:
             return self.config.get_rl_module_spec(env, spaces, inference_only)
         if self.config._rl_module_spec is None:
+            # Or OLD API
             logger.warning("ModuleSpec not defined yet, call config.rl_module first")
             return None
         assert not isinstance(self.config._rl_module_spec, MultiRLModuleSpec)

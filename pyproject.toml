@@ -103,6 +103,10 @@ exclude = [
 [tool.ruff.lint.isort]
 force-single-line = false  # default: false
 
+[tool.ruff.lint.pyflakes]
+# Avoid F401 error when Generic is not detected
+extend-generics = ["ray_utilities.config.experiment_base.ExperimentSetupBase"]
+
 [tool.isort]
 split_on_trailing_comma = true
 include_trailing_comma = true

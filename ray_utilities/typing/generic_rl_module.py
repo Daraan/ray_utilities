@@ -11,11 +11,12 @@ if TYPE_CHECKING:
 
 _ModelConfig_co = TypeVar("_ModelConfig_co", bound="None | dict | DefaultModelConfig", covariant=True)
 
+
 class RLModuleWithConfig(RLModule, Generic[_ModelConfig_co]):
     """A RLModule with a config attribute."""
 
     def __instance_members(self):
         self.model_config: Optional[Union[dict, DefaultModelConfig]]
 
-class CatalogWithConfig(Catalog, Generic[_ModelConfig_co]):
-    ...
+
+class CatalogWithConfig(Catalog, Generic[_ModelConfig_co]): ...

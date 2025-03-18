@@ -6,6 +6,11 @@ from ray.rllib.core.models.base import ACTOR, CRITIC, ENCODER_OUT
 
 from ray.rllib.core.models.configs import ActorCriticEncoderConfig
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ray_utilities.typing.model_return import ActorCriticEncoderOutput
+
 
 class DummyActorCriticEncoder(ActorCriticEncoder):
     """A dummy encoder that just outputs the input as is."""
@@ -16,8 +21,8 @@ class DummyActorCriticEncoder(ActorCriticEncoder):
         super(ActorCriticEncoder, self).__init__(config)
         self.config: ActorCriticEncoderConfig
 
-    def _forward(self, inputs: dict, **kwargs) -> dict:  # noqa: ARG002
-        return {
+    def _forward(self, inputs: dict, **kwargs) -> ActorCriticEncoderOutput:  # noqa: ARG002 # type: ignore[override]
+        return {  # type: ignore[return-type]
             ENCODER_OUT: {
                 ACTOR: inputs,
                 # Add critic from value network
@@ -32,7 +37,7 @@ class DummyActorCriticEncoder(ActorCriticEncoder):
         return
 
     # NOTE: When using frameworks this should be framework.Module shadowed
-    def __call__(self, inputs: dict, **kwargs) -> dict:
+    def __call__(self, inputs: dict, **kwargs) -> ActorCriticEncoderOutput:
         return self._forward(inputs, **kwargs)
 
 

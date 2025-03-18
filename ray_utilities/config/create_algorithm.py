@@ -10,7 +10,6 @@ from ray.tune import logger as tune_logger
 
 from ray_utilities.callbacks.algorithm.discrete_eval_callback import DiscreteEvalCallback
 from ray_utilities.callbacks.algorithm.env_render_callback import make_render_callback
-from ray_utilities.constants import RAY_NEW_API_STACK_ENABLED
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import AlgorithmConfig
@@ -30,6 +29,7 @@ def create_algorithm_config(
     env_type: Optional[str | gym.Env] = None,
     env_seed: Optional[int] = None,
     *,
+    new_api: Optional[bool] = True,
     module_class: type[RLModule | RLModuleWithConfig[_ModelConfig]],
     catalog_class: type[Catalog | CatalogWithConfig[_ModelConfig]],
     model_config: dict[str, Any] | _ModelConfig,
@@ -205,12 +205,8 @@ def create_algorithm_config(
         # Using these could be useful if no Tuner is used
         logger_config={"type": tune_logger.NoopLogger},
     )
-    if not RAY_NEW_API_STACK_ENABLED:
-        # by default enabled from ray 2.40.0; should be called after .exploration
-        config.api_stack(
-            enable_rl_module_and_learner=True,
-            enable_env_runner_and_connector_v2=True,
-        )
+    if new_api is not None:
+        config.api_stack(enable_rl_module_and_learner=new_api, enable_env_runner_and_connector_v2=new_api)
     # Checks
     config.validate_train_batch_size_vs_rollout_fragment_length()
     return config, module_spec

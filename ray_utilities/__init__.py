@@ -7,7 +7,7 @@ from __future__ import annotations
 import datetime
 import logging
 import random
-from typing import TYPE_CHECKING, Any, Iterable, Optional, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Iterable, Literal, Optional, TypeVar, overload
 
 import colorlog
 
@@ -73,6 +73,24 @@ def trial_name_creator(trial: Trial) -> str:
 
 def is_pbar(pbar: Iterable[_T]) -> TypeIs[tqdm_ray.tqdm | tqdm[_T]]:
     return isinstance(pbar, (tqdm_ray.tqdm, tqdm))
+
+
+@overload
+def episode_iterator(args: dict[str, Any], hparams: Any, *, use_pbar: Literal[False]) -> range: ...
+
+
+@overload
+def episode_iterator(args: dict[str, Any], hparams: dict[Any, Any], *, use_pbar: Literal[True]) -> tqdm_ray.tqdm: ...
+
+
+def episode_iterator(args: dict[str, Any], hparams: dict[str, Any], *, use_pbar=True) -> tqdm_ray.tqdm | range:
+    """Creates an iterator for `args["episodes"]`
+
+    Will create a `tqdm` if `use_pbar` is True, otherwise returns a range object.
+    """
+    if use_pbar:
+        return tqdm_ray.tqdm(range(args["episodes"]), position=hparams.get("process_number", None))
+    return range(args["episodes"])
 
 
 @overload
@@ -168,6 +186,7 @@ def create_env_for_config(config: AlgorithmConfig, env_spec: str | gym.Env):
         assert not TYPE_CHECKING or config.env
         init_env = gym.make(config.env.unwrapped.spec.id)  # pyright: ignore[reportOptionalMemberAccess]
     return init_env
+
 
 # Circular import
 from ray_utilities.runfiles.run_tune import run_tune  # noqa: E402
