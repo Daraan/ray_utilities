@@ -25,7 +25,6 @@ from tqdm import tqdm
 from typing_extensions import TypeIs
 
 from ray_utilities.constants import GYM_V_0_26, RAY_UTILITIES_INITALIZATION_TIMESTAMP
-
 from .typing.algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
 
 if TYPE_CHECKING:
@@ -38,6 +37,7 @@ _T = TypeVar("_T")
 __all__ = [
     "AlgorithmReturnData",
     "StrictAlgorithmReturnData",
+    "default_trainable",
     "is_pbar",
     "run_tune",
     "seed_everything",
@@ -190,3 +190,4 @@ def create_env_for_config(config: AlgorithmConfig, env_spec: str | gym.Env):
 
 # Circular import
 from ray_utilities.runfiles.run_tune import run_tune  # noqa: E402
+from ray_utilities.default_trainable import default_trainable  # noqa: E402

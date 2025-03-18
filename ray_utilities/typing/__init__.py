@@ -1,9 +1,12 @@
 import importlib.metadata
 from collections.abc import Callable
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal, TypeVar, TYPE_CHECKING
 
 import typing_extensions
 from packaging.version import Version
+
+if TYPE_CHECKING:
+    from ray.rllib.algorithms import AlgorithmConfig, Algorithm
 
 _PEP_728_AVAILABLE = getattr(typing_extensions, "_PEP_728_IMPLEMENTED", False) or Version(
     importlib.metadata.version("typing-extensions")
@@ -44,7 +47,7 @@ FunctionalTrainable = typing_extensions.TypeAliasType(
     "FunctionalTrainable", Callable[[dict[str, Any]], TrainableReturnData]
 )
 
-_ESB_co = TypeVar("_ESB_co", bound="ExperimentSetupBase", covariant=True)
+_ESB_co = TypeVar("_ESB_co", bound="ExperimentSetupBase[Any, AlgorithmConfig, Algorithm]", covariant=True)
 
 TestModeCallable = typing_extensions.TypeAliasType(
     "TestModeCallable", Callable[[FunctionalTrainable, _ESB_co], TrainableReturnData], type_params=(_ESB_co,)

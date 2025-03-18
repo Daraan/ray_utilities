@@ -8,7 +8,7 @@ from ray.tune.result_grid import ResultGrid
 from ray_utilities import seed_everything
 
 if TYPE_CHECKING:
-    from ray.rllib.algorithms import AlgorithmConfig
+    from ray.rllib.algorithms import AlgorithmConfig, Algorithm
     from ray.tune.result_grid import ResultGrid
 
     from ray_utilities.config import DefaultArgumentParser, ExperimentSetupBase
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_SetupT = TypeVar("_SetupT", bound="ExperimentSetupBase[AlgorithmConfig, DefaultArgumentParser]")
+_SetupT = TypeVar("_SetupT", bound="ExperimentSetupBase[DefaultArgumentParser, AlgorithmConfig, Algorithm]")
 
 
 def run_tune(
