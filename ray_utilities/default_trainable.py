@@ -1,9 +1,10 @@
-from __future__ import annotations
 # pyright: enableExperimentalFeatures=true
+from __future__ import annotations
 
 import logging
 import tempfile
 
+from functools import partial, wraps
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from ray import tune
@@ -19,12 +20,22 @@ from ray_utilities.callbacks.progress_bar import update_pbar
 from ray_utilities.config.experiment_base import ExperimentSetupBase
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.constants import EVALUATED_THIS_STEP
-from ray_utilities.postprocessing import create_log_metrics, create_running_reward_updater, filter_metrics
+from ray_utilities.postprocessing import (
+    create_log_metrics,
+    create_running_reward_updater,
+    filter_metrics,
+)
+from ray_utilities.postprocessing import (
+    verify_return as verify_return_type,
+)
+from ray_utilities.typing import TrainableReturnData
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
 
-    from ray_utilities.typing import LogMetricsDict, StrictAlgorithmReturnData, TrainableReturnData
+    from ray_utilities.typing import LogMetricsDict, StrictAlgorithmReturnData
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +44,44 @@ DefaultExperimentSetup = TypeAliasType(
 )
 
 
+def create_default_trainable(
+    *,
+    use_pbar: bool = True,
+    discrete_eval: bool = False,
+    setup: Optional[DefaultExperimentSetup] = None,
+    setup_class: Optional[type[DefaultExperimentSetup]] = None,
+    disable_report: bool = False,
+    # Keywords not for default_trainable
+    verify_return: bool = True,
+) -> Callable[[dict[str, Any]], TrainableReturnData]:
+    """
+    Creates a wrapped `default_trainable` function with the given parameters.
+
+    The resulting Callable only accepts one positional argument, `hparams`,
+    which is the hyperparameters selected for the trial from the search space from ray tune.
+
+    Args:
+        verify_return: Whether to verify the return of the trainable function.
+    """
+    assert setup or setup_class, "Either setup or setup_class must be provided."
+    trainable = partial(
+        default_trainable,
+        use_pbar=use_pbar,
+        discrete_eval=discrete_eval,
+        setup=setup,
+        setup_class=setup_class,
+        disable_report=disable_report,
+    )
+    if verify_return:
+        return verify_return_type(TrainableReturnData)(trainable)
+    return wraps(default_trainable)(trainable)
+
+
 def default_trainable(
     hparams,
     *,
     use_pbar: bool = True,
+    discrete_eval: bool = False,
     setup: Optional[DefaultExperimentSetup] = None,
     setup_class: Optional[type[DefaultExperimentSetup]] = None,
     disable_report: bool = False,
@@ -50,6 +95,7 @@ def default_trainable(
         Best practice is to not refer to any objects from outer scope in the training_function
     """
     if setup:
+        # TODO: Use hparams
         args = setup.args
         args = vars(args).copy()
         config = setup.config
@@ -80,7 +126,7 @@ def default_trainable(
         result = cast("StrictAlgorithmReturnData", algo.train())
 
         # Reduce to key-metrics
-        metrics = create_log_metrics(result)
+        metrics = create_log_metrics(result, discrete_eval=discrete_eval)
         # Possibly use if train.get_context().get_local/global_rank() == 0 to save videos
         # Unknown if should save video here and clean from metrics or save in a callback later is faster.
 

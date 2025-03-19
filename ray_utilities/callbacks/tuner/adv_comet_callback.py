@@ -156,7 +156,7 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         """Keys that are not logged at all"""
         self._to_other.extend(log_to_other or [])
         self._cli_args = " ".join(sys.argv[1:]) if log_cli_args else None
-        self._log_only_once = [*self._to_exclude, *self._to_system] # + all config values; but flat keys!
+        self._log_only_once = [*self._to_exclude, *self._to_system]  # + all config values; but flat keys!
         if "training_iteration" in self._log_only_once:
             self._log_only_once.remove("training_iteration")
             _LOGGER.warning("training_iteration must be in the results to log it")

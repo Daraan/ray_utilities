@@ -75,7 +75,7 @@ def discrete_evaluate_on_local_env_runner(
 
     if not self.config.enable_env_runner_and_connector_v2:
         # OLD API
-        env_runner_results = cast("list[RolloutMetrics]", env_runner_results)
+        env_runner_results = cast("list[RolloutMetrics]", env_runner_results)  # pyright: ignore[reportInvalidTypeForm] # bad support in ray
         env_runner_results = summarize_episodes(
             env_runner_results,
             env_runner_results,

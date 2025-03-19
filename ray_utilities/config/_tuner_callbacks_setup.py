@@ -31,8 +31,8 @@ __all__ = [
     "TunerCallbackSetup",
 ]
 
-ConfigType = TypeVar("ConfigType", bound="AlgorithmConfig")
-ParserType = TypeVar("ParserType", bound="DefaultArgumentParser", default="DefaultArgumentParser")
+ConfigTypeT = TypeVar("ConfigTypeT", bound="AlgorithmConfig")
+ParserTypeT = TypeVar("ParserTypeT", bound="DefaultArgumentParser")
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         # "training_iteration", #  needed for the callback
     )
 
-    def __init__(self, *, setup: ExperimentSetupBase[ConfigType, ParserType], extra_tags: Optional[list[str]] = None):
+    def __init__(self, *, setup: ExperimentSetupBase[ParserTypeT, ConfigTypeT], extra_tags: Optional[list[str]] = None):
         self._setup = setup
         self._extra_tags = extra_tags
 

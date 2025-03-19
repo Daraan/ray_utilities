@@ -37,6 +37,7 @@ _T = TypeVar("_T")
 __all__ = [
     "AlgorithmReturnData",
     "StrictAlgorithmReturnData",
+    "create_default_trainable",
     "default_trainable",
     "is_pbar",
     "run_tune",
@@ -60,15 +61,17 @@ logger.debug("Ray utilities logger debug level set")
 def trial_name_creator(trial: Trial) -> str:
     start_time = datetime.datetime.fromtimestamp(trial.run_metadata.start_time or RAY_UTILITIES_INITALIZATION_TIMESTAMP)
     start_time_str = start_time.strftime("%Y-%m-%d_%H:%M")
-    return "_".join(
-        [
-            trial.trainable_name,
-            trial.config["env"],
-            trial.config["module"],
-            start_time_str,
-            trial.trial_id,
-        ]
-    )
+    module = trial.config["module"]
+    if module is None:
+        module = trial.config["cli_args"]["agent_type"]
+    fields = [
+        trial.trainable_name,
+        trial.config["env"],
+        module,
+        start_time_str,
+        trial.trial_id,
+    ]
+    return "_".join(fields)
 
 
 def is_pbar(pbar: Iterable[_T]) -> TypeIs[tqdm_ray.tqdm | tqdm[_T]]:
@@ -190,4 +193,4 @@ def create_env_for_config(config: AlgorithmConfig, env_spec: str | gym.Env):
 
 # Circular import
 from ray_utilities.runfiles.run_tune import run_tune  # noqa: E402
-from ray_utilities.default_trainable import default_trainable  # noqa: E402
+from ray_utilities.default_trainable import default_trainable, create_default_trainable  # noqa: E402

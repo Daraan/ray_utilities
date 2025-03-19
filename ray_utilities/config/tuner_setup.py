@@ -23,8 +23,8 @@ __all__ = [
 ]
 
 
-ConfigType = TypeVar("ConfigType", bound="AlgorithmConfig")
-ParserType = TypeVar("ParserType", bound="DefaultArgumentParser", default="DefaultArgumentParser")
+ConfigTypeT = TypeVar("ConfigTypeT", bound="AlgorithmConfig")
+ParserTypeT = TypeVar("ParserTypeT", bound="DefaultArgumentParser")
 
 
 class _TunerSetupBase(Protocol):
@@ -49,7 +49,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
     def __init__(
         self,
         *,
-        setup: ExperimentSetupBase[ConfigType, ParserType],
+        setup: ExperimentSetupBase[ParserTypeT, ConfigTypeT],
         extra_tags: Optional[list[str]] = None,
     ):
         self._setup = setup

@@ -281,7 +281,9 @@ def _old_strip_metadata_from_flat_metrics(result: dict[str, Any]) -> dict[str, A
     return result
 
 
-def create_log_metrics(result: StrictAlgorithmReturnData, *, save_video=False) -> LogMetricsDict:
+def create_log_metrics(
+    result: StrictAlgorithmReturnData, *, save_video=False, discrete_eval: bool = False
+) -> LogMetricsDict:
     """
     Filters the result of the Algorithm training step to only keep the relevant metrics.
 
@@ -316,15 +318,16 @@ def create_log_metrics(result: StrictAlgorithmReturnData, *, save_video=False) -
             ENV_RUNNER_RESULTS: {
                 EPISODE_RETURN_MEAN: eval_mean,
             },
-            "discrete": {
-                ENV_RUNNER_RESULTS: {
-                    EPISODE_RETURN_MEAN: disc_eval_mean,
-                },
-            },
         },
         "training_iteration": result["training_iteration"],
         "done": result["done"],
     }
+    if discrete_eval:
+        metrics[EVALUATION_RESULTS]["discrete"] = {
+            ENV_RUNNER_RESULTS: {
+                EPISODE_RETURN_MEAN: disc_eval_mean,
+            },
+        }
 
     if EVALUATION_RESULTS in result:
         # Check for NaN values, if they are not the evaluation metrics warn.

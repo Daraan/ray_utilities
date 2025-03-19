@@ -195,7 +195,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
     # endregion
     # region hparams
 
-    def clean_args_to_hparams(self, args: Optional[NamespaceType[ParserType_co]] = None):
+    def clean_args_to_hparams(self, args: Optional[NamespaceType[ParserType_co]] = None) -> dict[str, Any]:
         args = args or self.get_args()
         upload_args = remove_ignored_args(args, remove=(*LOG_IGNORE_ARGS, "process_number"))
         return upload_args
@@ -234,7 +234,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
             # logger.debug("Creating envs with seeds: %s", param_space["env_seed"])
 
         # Other args not shown in the CLI
-
+        # NOTE: This is None when the Old API / no module_spec is used!
         param_space["model_config"] = module_spec and module_spec.model_config
         # Log CLI args as hyperparameters
         param_space["cli_args"] = self.clean_args_to_hparams(self.args)
@@ -285,7 +285,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
             return self.config.build()  # type: ignore[return-type]
 
     @overload
-    def get_module_spec(self, *, copy: Literal[False]) -> RLModuleSpec: ...
+    def get_module_spec(self, *, copy: Literal[False]) -> RLModuleSpec | None: ...
 
     @overload
     def get_module_spec(
@@ -304,14 +304,14 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
         env: Optional[EnvType] = None,
         spaces: Optional[dict[str, gym.Space]] = None,
         inference_only: Optional[bool] = None,
-    ) -> RLModuleSpec:
+    ) -> RLModuleSpec | None:
         if not self.config:
             raise ValueError("Config not defined yet, call create_config first.")
         if copy:
             return self.config.get_rl_module_spec(env, spaces, inference_only)
         if self.config._rl_module_spec is None:
             # Or OLD API
-            logger.warning("ModuleSpec not defined yet, call config.rl_module first")
+            logger.warning("ModuleSpec not defined yet, call config.rl_module first if you use the new API")
             return None
         assert not isinstance(self.config._rl_module_spec, MultiRLModuleSpec)
         return self.config._rl_module_spec
@@ -357,7 +357,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
 
     # region Tuner
 
-    def create_tuner(self) -> tune.Tuner:
+    def create_tuner(self: ExperimentSetupBase[ParserType_co, _ConfigType_co]) -> tune.Tuner:
         return TunerSetup(setup=self).create_tuner()
 
     # endregion
