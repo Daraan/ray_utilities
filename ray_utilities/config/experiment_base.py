@@ -202,8 +202,13 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
 
     def get_trainable_name(self) -> str:
         trainable = self.trainable or self.create_trainable()
-        while isinstance(trainable, partial):
-            trainable = trainable.func
+        last = None
+        while last != trainable:
+            last = trainable
+            while isinstance(trainable, partial):
+                trainable = trainable.func
+            while hasattr(trainable, "__wrapped__"):
+                trainable = trainable.__wrapped__  # type: ignore[attr-defined]
         return trainable.__name__
 
     def create_param_space(self) -> dict[str, Any]:

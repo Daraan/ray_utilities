@@ -52,13 +52,15 @@ def run_tune(
     trainable = setup.trainable
 
     # -- Test --
-    if args.test and args.not_parallel and test_mode_func:
+    if args.test and args.not_parallel:
         # will spew some warnings about train.report
-        func_name = getattr(test_mode_func, "__name__", repr(test_mode_func))
+        func_name = getattr(test_mode_func, "__name__", repr(test_mode_func)) if test_mode_func else trainable.__name__
         print(f"-- FULL TEST MODE running {func_name} --")
         logger.info("-- FULL TEST MODE --")
         # Possibly set RAY_DEBUG=legacy
-        return test_mode_func(trainable, setup)
+        if test_mode_func:
+            return test_mode_func(trainable, setup)
+        return trainable(setup.param_space)
 
     # Use tune.with_parameters to pass large objects to the trainable
     tuner = setup.create_tuner()

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import math
 
-from functools import partial
+from functools import partial, wraps
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -411,6 +411,7 @@ def verify_return(return_type: type[_TD]):
     """
 
     def decorator(func: Callable[_P, _TD]) -> Callable[_P, _TD]:
+        @wraps(func)
         def wrapper(*args, **kwargs):
             result = func(*args, **kwargs)
             verify_keys(result, return_type)
