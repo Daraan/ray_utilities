@@ -65,6 +65,11 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
     - create_config
     - trainable_from_config
     - trainable_return_type
+
+    Generics:
+        ParserType_co: Type of the ArgumentParser, e.g. DefaultArgumentParser
+        _ConfigType_co: Type of the AlgorithmConfig, e.g. PPOConfig
+        _AlgorithmType_co: Type of the Algorithm, e.g. PPO
     """
 
     default_extra_tags: ClassVar[list[str]] = [
