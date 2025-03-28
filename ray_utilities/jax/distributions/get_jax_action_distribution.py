@@ -1,15 +1,14 @@
 """Port of Catalog._get_dist_cls_from_action_space"""
+from __future__ import annotations
 
 import enum
-from typing import Optional, Sequence
+from typing import Optional, Sequence, TYPE_CHECKING
 
 import gymnasium as gym
 import numpy as np
 import tree
 from gymnasium import spaces
 from gymnasium.spaces import Box, Discrete
-from ray.rllib.core.models.catalog import Catalog
-from ray.rllib.models.distributions import Distribution
 from ray.rllib.utils.spaces.simplex import Simplex
 from ray.rllib.utils.spaces.space_utils import flatten_space, get_base_struct_from_space
 
@@ -22,11 +21,15 @@ from ray_utilities.jax.distributions.jax_distributions import (
     RLlibToJaxDistribution,
 )
 
+if TYPE_CHECKING:
+    from ray.rllib.models.distributions import Distribution
+    from ray.rllib.core.models.catalog import Catalog
+
 __all__ = ["get_jax_dist_cls_from_action_space"]
 
 
 def get_jax_dist_cls_from_action_space(
-    cls: Catalog,
+    cls: type[Catalog] | Catalog,
     action_space: gym.Space,
     *,
     framework: Optional[str] = None,
@@ -155,7 +158,7 @@ def _multi_categorical_dist_partial_helper(action_space: gym.spaces.MultiDiscret
     return partial_dist_cls
 
 
-def _multi_action_dist_partial_helper(catalog_cls: "Catalog", action_space: gym.Space, framework: str):
+def _multi_action_dist_partial_helper(catalog_cls: type[Catalog] | Catalog, action_space: gym.Space, framework: str):
     """Helper method to get a partial of a MultiActionDistribution.
 
     This is useful for when we want to create MultiActionDistributions from

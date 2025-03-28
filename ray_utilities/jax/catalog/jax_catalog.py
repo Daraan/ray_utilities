@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Optional
 
 from ray.rllib.core.models.catalog import Catalog
 
-from .get_jax_action_distribution import get_jax_dist_cls_from_action_space
+from ray_utilities.jax.distributions.get_jax_action_distribution import get_jax_dist_cls_from_action_space
 
 if TYPE_CHECKING:
     import gymnasium as gym
