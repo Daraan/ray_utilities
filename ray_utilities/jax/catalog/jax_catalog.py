@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
     from ray_utilities.jax.distributions.jax_distributions import RLlibToJaxDistribution
 
+
 class JaxCatalog(Catalog):
     """Provides _get_dist_cls_from_action_space to return JAX based action distributions."""
 

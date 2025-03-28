@@ -18,10 +18,12 @@ if TYPE_CHECKING:
     import chex
     import gymnasium as gym
     from ray.rllib.utils.typing import TensorType
+
     IntLike = Union[int, np.int16, np.int32, np.int64]
     from tensorflow_probability.substrates.jax import distributions as __tfd
 
 logger = logging.getLogger(__name__)
+
 
 def _get_tfp_distributions():
     """Type hint support for return value"""
@@ -36,13 +38,12 @@ class RLlibToJaxDistribution(RllibDistribution, distrax.Distribution):
         self._dist = self._get_jax_distribution(*args, **kwargs)
 
     @abstractmethod
-    def _get_jax_distribution(self, *args, **kwargs) -> distrax.Distribution:
-        ...
+    def _get_jax_distribution(self, *args, **kwargs) -> distrax.Distribution: ...
 
     def sample(
         self,
         *,
-        seed: IntLike | chex.PRNGKey, # XXX <-- not RLlib interface
+        seed: IntLike | chex.PRNGKey,  # XXX <-- not RLlib interface
         sample_shape: Union[IntLike, Sequence[IntLike]] = (),
         return_logp: bool = False,
         **kwargs,
@@ -60,17 +61,16 @@ class RLlibToJaxDistribution(RllibDistribution, distrax.Distribution):
         return self._dist.kl_divergence(other, **kwargs)
 
     @abstractmethod
-    def to_deterministic(self) -> Deterministic:
-        ...
+    def to_deterministic(self) -> Deterministic: ...
+
 
 class SupportsLogitsMixin(RllibDistribution):
-
     @classmethod
     def from_logits(cls, logits: TensorType, **kwargs):
         return cls(logits=logits, **kwargs)  # type: ignore[call-arg]
 
-class _EntropyArgCorrector(RllibDistribution):
 
+class _EntropyArgCorrector(RllibDistribution):
     def entropy(self, **kwargs) -> TensorType:
         return cast(
             DistraxDistribution,
@@ -79,7 +79,6 @@ class _EntropyArgCorrector(RllibDistribution):
 
 
 class Normal(_EntropyArgCorrector, distrax.Normal, RLlibToJaxDistribution):
-
     def __init__(self, loc: chex.Numeric, scale: chex.Numeric):
         super().__init__(loc, scale)
         self._dist: distrax.Normal
@@ -90,7 +89,7 @@ class Normal(_EntropyArgCorrector, distrax.Normal, RLlibToJaxDistribution):
     def rsample(
         self,
         *,
-        seed: IntLike | chex.PRNGKey, # XXX <-- not RLlib interface
+        seed: IntLike | chex.PRNGKey,  # XXX <-- not RLlib interface
         sample_shape: Tuple[int, ...] = (),
         return_logp: bool = False,
         **kwargs,
@@ -109,12 +108,12 @@ class Normal(_EntropyArgCorrector, distrax.Normal, RLlibToJaxDistribution):
     def to_deterministic(self) -> Deterministic:
         return Deterministic(loc=self.loc)
 
+
 if TYPE_CHECKING:
     Normal(1, 0)
 
 
 class Categorical(_EntropyArgCorrector, SupportsLogitsMixin, distrax.Categorical, RLlibToJaxDistribution):
-
     def __init__(
         self,
         probs: Optional[chex.Array] = None,
@@ -166,7 +165,6 @@ if TYPE_CHECKING:
 
 
 class Deterministic(_EntropyArgCorrector, distrax.Deterministic, RLlibToJaxDistribution):
-
     def __init__(self, loc: chex.Array, atol: Optional[chex.Numeric] = None, rtol: Optional[chex.Numeric] = None):
         super().__init__(loc=loc, atol=atol, rtol=rtol)
 
@@ -187,8 +185,10 @@ class Deterministic(_EntropyArgCorrector, distrax.Deterministic, RLlibToJaxDistr
     def to_deterministic(self) -> Self:
         return self
 
+
 if TYPE_CHECKING:
     Deterministic(jnp.array(1))
+
 
 # Note: Torch distribution works better with various structures
 class MultiCategorical(RLlibToJaxDistribution):
@@ -221,14 +221,10 @@ class MultiCategorical(RLlibToJaxDistribution):
         return jnp.sum(logps, axis=0)
 
     def entropy(self, **kwargs) -> TensorType:  # noqa: ARG002
-        return jnp.sum(
-            jnp.stack([cat.entropy() for cat in self._cats], axis=-1), axis=-1
-        )
+        return jnp.sum(jnp.stack([cat.entropy() for cat in self._cats], axis=-1), axis=-1)
 
     def kl(self, other: MultiCategorical, **kwargs) -> TensorType:  # noqa: ARG002  # type: ignore[override]
-        kls = jnp.stack(
-            [cat.kl(oth_cat) for cat, oth_cat in zip(self._cats, other._cats)], axis=-1
-        )
+        kls = jnp.stack([cat.kl(oth_cat) for cat, oth_cat in zip(self._cats, other._cats)], axis=-1)
         return jnp.sum(kls, axis=-1)
 
     @staticmethod
@@ -256,14 +252,11 @@ class MultiCategorical(RLlibToJaxDistribution):
                 vectors to be passed into each child distribution.
             **kwargs: Forward compatibility kwargs.
         """
-        categoricals = [
-            Categorical(logits=logits)
-            for logits in jnp.split(logits, input_lens, axis=-1)
-        ]
+        categoricals = [Categorical(logits=logits) for logits in jnp.split(logits, input_lens, axis=-1)]
 
         return cls(categoricals=categoricals)
 
-    def to_deterministic(self) -> "MultiDistribution": # type: ignore
+    def to_deterministic(self) -> "MultiDistribution":  # type: ignore
         return MultiDistribution([cat.to_deterministic() for cat in self._cats])
 
     def log_prob(self, value):
@@ -276,8 +269,10 @@ class MultiCategorical(RLlibToJaxDistribution):
     def event_shape(self) -> Tuple[int, ...]:
         return ()
 
+
 if TYPE_CHECKING:
     MultiCategorical([Categorical(None, None), Categorical(None, None)])
+
 
 class MultiDistribution(RLlibToJaxDistribution):
     """Action distribution that operates on multiple, possibly nested actions."""
@@ -403,7 +398,9 @@ class MultiDistribution(RLlibToJaxDistribution):
             list(split_logits),
         )
 
-        child_distribution_struct: Any | dict | list = tree.unflatten_as(child_distribution_cls_struct, child_distribution_list)
+        child_distribution_struct: Any | dict | list = tree.unflatten_as(
+            child_distribution_cls_struct, child_distribution_list
+        )
 
         return MultiDistribution(
             child_distribution_struct=child_distribution_struct,

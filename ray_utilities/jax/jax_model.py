@@ -8,6 +8,7 @@ import flax.linen as nn
 import jax
 from ray.rllib.core.models.base import Model
 
+
 if TYPE_CHECKING:
     import chex
     from flax.core.scope import (
@@ -29,7 +30,6 @@ logger = logging.getLogger(__name__)
 
 
 class BaseModel(Model):
-
     def get_num_parameters(self) -> tuple[int, int]:
         # Unknown
         logger.warning("Warning num_parameters called which might be wrong")

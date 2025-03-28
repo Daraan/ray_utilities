@@ -1,4 +1,5 @@
 """Port of Catalog._get_dist_cls_from_action_space"""
+
 from __future__ import annotations
 
 import enum
@@ -66,37 +67,31 @@ def get_jax_dist_cls_from_action_space(
         MultiCategorical = "MultiCategorical"
 
     distribution_dicts = {
-                DistEnum.Deterministic: Deterministic,
-                DistEnum.DiagGaussian: Normal,  # DiagGaussian
-                DistEnum.Categorical: Categorical,
-            }
+        DistEnum.Deterministic: Deterministic,
+        DistEnum.DiagGaussian: Normal,  # DiagGaussian
+        DistEnum.Categorical: Categorical,
+    }
 
     # Only add a MultiAction distribution class to the dict if we can compute its
     # components (we need a Tuple/Dict space for this).
     if isinstance(action_space, (spaces.Tuple, spaces.Dict)):
         partial_multi_action_distribution_cls = _multi_action_dist_partial_helper(
-                catalog_cls=cls,
-                action_space=action_space,
-                framework=framework,
-            )
+            catalog_cls=cls,
+            action_space=action_space,
+            framework=framework,
+        )
 
-        distribution_dicts[
-                DistEnum.MultiDistribution
-            ] = partial_multi_action_distribution_cls
+        distribution_dicts[DistEnum.MultiDistribution] = partial_multi_action_distribution_cls
 
     # Only add a MultiCategorical distribution class to the dict if we can compute
     # its components (we need a MultiDiscrete space for this).
     if isinstance(action_space, spaces.MultiDiscrete):
-        partial_multi_categorical_distribution_cls = (
-                _multi_categorical_dist_partial_helper(
-                    action_space=action_space,
-                    framework=framework,
-                )
-            )
+        partial_multi_categorical_distribution_cls = _multi_categorical_dist_partial_helper(
+            action_space=action_space,
+            framework=framework,
+        )
 
-        distribution_dicts[
-                DistEnum.MultiCategorical
-            ] = partial_multi_categorical_distribution_cls
+        distribution_dicts[DistEnum.MultiCategorical] = partial_multi_categorical_distribution_cls
 
     # Step 2: Return the correct distribution class for the given action space.
 
@@ -104,18 +99,17 @@ def get_jax_dist_cls_from_action_space(
     if isinstance(action_space, Box):
         if action_space.dtype.char in np.typecodes["AllInteger"]:
             raise ValueError(
-                    "Box(..., `int`) action spaces are not supported. "
-                    "Use MultiDiscrete  or Box(..., `float`)."
-                )
+                "Box(..., `int`) action spaces are not supported. Use MultiDiscrete  or Box(..., `float`)."
+            )
         if len(action_space.shape) > 1:
             from ray.rllib.utils.error import UnsupportedSpaceException
 
             raise UnsupportedSpaceException(
-                    f"Action space has multiple dimensions {action_space.shape}. "
-                    f"Consider reshaping this into a single dimension, using a "
-                    f"custom action distribution, using a Tuple action space, "
-                    f"or the multi-agent API."
-                )
+                f"Action space has multiple dimensions {action_space.shape}. "
+                f"Consider reshaping this into a single dimension, using a "
+                f"custom action distribution, using a Tuple action space, "
+                f"or the multi-agent API."
+            )
         return distribution_dicts[DistEnum.DiagGaussian]
 
     # Discrete Space -> Categorical.
