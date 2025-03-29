@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import logging
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import flax.linen as nn
 import jax
 from ray.rllib.core.models.base import Model
-
 
 if TYPE_CHECKING:
     import chex
@@ -50,31 +49,51 @@ class BaseModel(Model):
 
 
 class FlaxRLModel(BaseModel, nn.Module):
-    def _forward(self, input_dict: dict, **kwargs) -> dict | chex.Array:
+    def _forward(self, input_dict: dict, **kwargs) -> dict | TensorType:
         breakpoint()
         out = super().__call__(input_dict["obs"], **kwargs)
         return out
 
+@runtime_checkable
+class PureJaxModelProtocol(Protocol):
+
+    # TODO: maybe generalize args
+    def apply(
+        self,
+        params: FrozenVariableDict,
+        inputs: chex.Array,
+        indices: FrozenVariableDict,
+        **kwargs: Any,
+    ) -> jax.Array | chex.Array:
+        """Applies the model to the input data."""
+        ...
+
+    def init(self, random_key: chex.Array, *args, **kwargs) -> dict[str, chex.Array]:
+        """Initializes the model with random keys and arguments."""
+        ...
+
+    def init_indices(self, random_key: chex.Array, *args, **kwargs) -> dict[str, chex.Array]:
+        ...
 
 class JaxRLModel(BaseModel):
+    if TYPE_CHECKING:
+        def __init__(self, *, config, **kwargs):
+            self.model: PureJaxModelProtocol
+            super().__init__(config=config, **kwargs)
+
     @abstractmethod
     def init_state(self, rng: chex.PRNGKey, sample: TensorType | chex.Array) -> TrainState:
         pass
 
-    @abstractmethod
-    def apply(
-        self,
-        *args,
-        **kwargs,
-    ) -> Any | tuple[Any, FrozenVariableDict | dict[str, Any]]:
-        pass
-
     def _forward(self, input_dict: dict, **kwargs) -> dict | TensorType:
-        variables, indices = "XXX", "XXX"  # TODO: implement
-        return self.apply(inputs=input_dict["obs"], **kwargs)
+        return self.model.apply(
+            input_dict["params"],
+            inputs=input_dict["obs"],
+            indices=input_dict["indices"],
+            **kwargs,
+        )
 
     def __call__(self, *args, **kwargs):
-        breakpoint()
         # This is a dummy method to do checked forward passes.
         return self._forward(*args, **kwargs)
 
