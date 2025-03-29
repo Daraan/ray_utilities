@@ -105,7 +105,10 @@ force-single-line = false  # default: false
 
 [tool.ruff.lint.pyflakes]
 # Avoid F401 error when Generic is not detected
-extend-generics = ["ray_utilities.config.experiment_base.ExperimentSetupBase"]
+extend-generics = [
+    "ray_utilities.config.experiment_base.ExperimentSetupBase",
+    "ray_utilities.jax.jax_model.FlaxRLModel",
+]
 
 [tool.isort]
 split_on_trailing_comma = true

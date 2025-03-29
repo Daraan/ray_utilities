@@ -2,33 +2,31 @@ from __future__ import annotations
 
 import logging
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Generic, Protocol, runtime_checkable
 
-import flax.linen as nn
 import jax
 from ray.rllib.core.models.base import Model
+from typing_extensions import TypeVar
 
 if TYPE_CHECKING:
     import chex
-    from flax.core.scope import (
-        CollectionFilter,
-        DenyList,
-        Variable,
-        union_filters,
-    )
+    import flax.linen as nn
     from flax.training.train_state import TrainState
-    from flax.typing import (
-        FrozenVariableDict,
-        PRNGKey,
-        RNGSequences,
-        VariableDict,
-    )
     from ray.rllib.utils.typing import TensorType
+    from flax.typing import FrozenVariableDict
+
+    from config_types.params_types import GeneralParams
 
 logger = logging.getLogger(__name__)
 
+ConfigType = TypeVar("ConfigType", bound="GeneralParams", default="GeneralParams")
+ModelType = TypeVar("ModelType", bound="nn.Module", default="nn.Module")
+
 
 class BaseModel(Model):
+    def __call__(self, *args, **kwargs) -> TensorType:
+        return self._forward(*args, **kwargs)
+
     def get_num_parameters(self) -> tuple[int, int]:
         # Unknown
         logger.warning("Warning num_parameters called which might be wrong")
@@ -48,21 +46,36 @@ class BaseModel(Model):
         return super()._set_to_dummy_weights(value_sequence)
 
 
-class FlaxRLModel(BaseModel, nn.Module):
-    def _forward(self, input_dict: dict, **kwargs) -> dict | TensorType:
-        breakpoint()
-        out = super().__call__(input_dict["obs"], **kwargs)
+class FlaxRLModel(Generic[ModelType, ConfigType], BaseModel):
+    def __call__(self, *args, **kwargs) -> chex.Array:
+        return self._forward(*args, **kwargs)
+
+    @abstractmethod
+    def _setup_model(self, *args, **kwargs) -> ModelType:
+        """Set up the underlying flax model."""
+        ...
+
+    def __init__(self, config: ConfigType, **kwargs):
+        self.config: ConfigType = config
+        super().__init__(config=config)  # pyright: ignore[reportArgumentType]  # ModelConfig
+        self.model: ModelType = self._setup_model(**kwargs)
+
+    def _forward(self, input_dict: dict, **kwargs) -> TensorType:
+        out = self.model.apply(input_dict["state"].params, input_dict["obs"], **kwargs)
         return out
+
+    @abstractmethod
+    def init_state(self, *args, **kwargs) -> TrainState: ...
+
 
 @runtime_checkable
 class PureJaxModelProtocol(Protocol):
-
     # TODO: maybe generalize args
     def apply(
         self,
         params: FrozenVariableDict,
         inputs: chex.Array,
-        indices: FrozenVariableDict,
+        indices: FrozenVariableDict | dict,
         **kwargs: Any,
     ) -> jax.Array | chex.Array:
         """Applies the model to the input data."""
@@ -72,11 +85,12 @@ class PureJaxModelProtocol(Protocol):
         """Initializes the model with random keys and arguments."""
         ...
 
-    def init_indices(self, random_key: chex.Array, *args, **kwargs) -> dict[str, chex.Array]:
-        ...
+    def init_indices(self, random_key: chex.Array, *args, **kwargs) -> dict[str, chex.Array]: ...
+
 
 class JaxRLModel(BaseModel):
     if TYPE_CHECKING:
+
         def __init__(self, *, config, **kwargs):
             self.model: PureJaxModelProtocol
             super().__init__(config=config, **kwargs)
@@ -87,16 +101,12 @@ class JaxRLModel(BaseModel):
 
     def _forward(self, input_dict: dict, **kwargs) -> dict | TensorType:
         return self.model.apply(
-            input_dict["params"],
+            input_dict["state"].params,
             inputs=input_dict["obs"],
-            indices=input_dict["indices"],
+            indices=input_dict["state"].indices,
             **kwargs,
         )
 
     def __call__(self, *args, **kwargs):
         # This is a dummy method to do checked forward passes.
         return self._forward(*args, **kwargs)
-
-
-if TYPE_CHECKING:
-    ...
