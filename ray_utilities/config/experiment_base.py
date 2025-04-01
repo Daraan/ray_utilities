@@ -100,14 +100,23 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
             - comet project
         """
 
-    def __init__(self, args: Optional[Sequence[str]] = None, *, init_config: bool = True):
+    def __init__(
+        self,
+        args: Optional[Sequence[str]] = None,
+        *,
+        init_config: bool = True,
+        init_param_space: bool = True,
+        init_trainable: bool = True,
+    ):
         self.parser: Parser[ParserType_co]
         self.parser = self.create_parser()
         self.args = self.parse_args(args)
         if init_config:
             self.config: _ConfigType_co = self.create_config()
-            self.trainable = self.create_trainable()
+        if init_param_space:
             self.param_space = self.create_param_space()
+        if init_trainable:
+            self.trainable = self.create_trainable()
         if self.args.comet:
             self.comet_tracker = CometArchiveTracker()
         else:
@@ -221,7 +230,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
         Create a dict to upload as hyperparameters and pass as first argument to the trainable
 
         Attention:
-            This function must set the `hparams` attribute
+            This function must set the `param_space` attribute
         """
         module_spec = self.get_module_spec(copy=False)
         if module_spec:
