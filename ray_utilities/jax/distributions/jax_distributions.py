@@ -34,7 +34,7 @@ def _get_tfp_distributions():
 
 class RLlibToJaxDistribution(RllibDistribution, distrax.Distribution):
     def __init__(self, *args, **kwargs):
-        super().__init__()
+        super().__init__(*args, **kwargs)
         self._dist = self._get_jax_distribution(*args, **kwargs)
 
     @abstractmethod
@@ -113,13 +113,14 @@ if TYPE_CHECKING:
     Normal(1, 0)
 
 
-class Categorical(_EntropyArgCorrector, SupportsLogitsMixin, distrax.Categorical, RLlibToJaxDistribution):
+class Categorical(_EntropyArgCorrector, SupportsLogitsMixin, RLlibToJaxDistribution, distrax.Categorical):
     def __init__(
         self,
         probs: Optional[chex.Array] = None,
         logits: Optional[chex.Array] = None,
         dtype: Union[jnp.dtype, type[Any]] = int,
     ):
+        # Problem super call call to distrax.Categorical does not forward to RLlibDistribution
         super().__init__(probs=probs, logits=logits, dtype=dtype)
         self.one_hot = _get_tfp_distributions().OneHotCategorical(logits=logits, probs=probs)
 
@@ -164,7 +165,7 @@ if TYPE_CHECKING:
     Categorical(None, None)
 
 
-class Deterministic(_EntropyArgCorrector, distrax.Deterministic, RLlibToJaxDistribution):
+class Deterministic(_EntropyArgCorrector, RLlibToJaxDistribution, distrax.Deterministic):
     def __init__(self, loc: chex.Array, atol: Optional[chex.Numeric] = None, rtol: Optional[chex.Numeric] = None):
         super().__init__(loc=loc, atol=atol, rtol=rtol)
 

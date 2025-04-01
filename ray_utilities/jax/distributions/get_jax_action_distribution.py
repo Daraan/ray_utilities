@@ -34,7 +34,7 @@ def get_jax_dist_cls_from_action_space(
     action_space: gym.Space,
     *,
     framework: Optional[str] = None,
-) -> RLlibToJaxDistribution:
+) -> type[RLlibToJaxDistribution]:
     """Returns a distribution class for the given action space.
 
     You can get the required input dimension for the distribution by calling
@@ -66,7 +66,7 @@ def get_jax_dist_cls_from_action_space(
         MultiDistribution = "MultiDistribution"
         MultiCategorical = "MultiCategorical"
 
-    distribution_dicts = {
+    distribution_dicts: dict[DistEnum, type[RLlibToJaxDistribution]] = {
         DistEnum.Deterministic: Deterministic,
         DistEnum.DiagGaussian: Normal,  # DiagGaussian
         DistEnum.Categorical: Categorical,
@@ -132,7 +132,9 @@ def get_jax_dist_cls_from_action_space(
     raise NotImplementedError(f"Unsupported action space: `{action_space}`")
 
 
-def _multi_categorical_dist_partial_helper(action_space: gym.spaces.MultiDiscrete, framework: str) -> Distribution:  # noqa: ARG001
+def _multi_categorical_dist_partial_helper(
+    action_space: gym.spaces.MultiDiscrete, framework: str  # noqa: ARG001
+) -> type[RLlibToJaxDistribution]:
     """Helper method to get a partial of a MultiCategorical Distribution.
 
     This is useful for when we want to create MultiCategorical Distribution from
@@ -152,7 +154,9 @@ def _multi_categorical_dist_partial_helper(action_space: gym.spaces.MultiDiscret
     return partial_dist_cls
 
 
-def _multi_action_dist_partial_helper(catalog_cls: type[Catalog] | Catalog, action_space: gym.Space, framework: str):
+def _multi_action_dist_partial_helper(
+    catalog_cls: type[Catalog] | Catalog, action_space: gym.Space, framework: str
+) -> type[RLlibToJaxDistribution]:
     """Helper method to get a partial of a MultiActionDistribution.
 
     This is useful for when we want to create MultiActionDistributions from
