@@ -15,7 +15,7 @@ from typing import (
 )
 
 import numpy as np
-from gymnasium.vector import SyncVectorEnv
+from gymnasium.vector import SyncVectorEnv, AsyncVectorEnv
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
 from ray.rllib.utils.images import resize
 
@@ -203,16 +203,18 @@ class AdvEnvRenderCallback(DefaultCallbacks):
         if isinstance(env.unwrapped, SyncVectorEnv):
             assert not TYPE_CHECKING or isinstance(env, SyncVectorEnv)
             image = env.envs[0].render()
-        # Render the gym.Env.
         else:
             image = env.render()
         if image is None:
             logger.warning("Env.render() returned None. Skipping rendering.")
             return
+        if isinstance(env.unwrapped, AsyncVectorEnv):
+            # tuple of images
+            image = image[0]
 
         # Original render images for CartPole are 400x600 (hxw). We'll downsize here to
         # a very small dimension (to save space and bandwidth).
-        image = resize(image, 64, 96)  # type: ignore[arg-type]
+        image = resize(image, 64, 96)  # pyright: ignore[reportArgumentType]
         # For WandB videos, we need to put channels first.
         image = np.transpose(image, axes=[2, 0, 1])
         # Add the compiled single-step image as temp. data to our Episode object.

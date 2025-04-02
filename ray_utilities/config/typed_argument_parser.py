@@ -30,7 +30,7 @@ class _DefaultSetupArgumentParser(Tap):
         self.add_argument("-s", "--seed", default=None, type=int)
 
 
-class DefaultResssourceArgParser(Tap):
+class DefaultResourceArgParser(Tap):
     num_jobs: int = 5
     """Trials to run in parallel"""
 
@@ -118,7 +118,7 @@ class DefaultExtraArgs(Tap):
 
 class DefaultArgumentParser(
     _DefaultSetupArgumentParser,
-    DefaultResssourceArgParser,
+    DefaultResourceArgParser,
     DefaultEnvironmentArgParser,
     DefaultLoggingArgParser,
     DefaultExtraArgs,

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import logging
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Generic, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Generic, Mapping, Protocol, runtime_checkable
 
 import jax
 from ray.rllib.core.models.base import Model
 from typing_extensions import TypeVar
 
 if TYPE_CHECKING:
+    # TODO: move to submodule
+    from sympol import Indices
     import chex
     import flax.linen as nn
     from flax.training.train_state import TrainState
@@ -75,7 +77,7 @@ class PureJaxModelProtocol(Protocol):
         self,
         params: FrozenVariableDict,
         inputs: chex.Array,
-        indices: FrozenVariableDict | dict,
+        indices: FrozenVariableDict | dict | Mapping,
         **kwargs: Any,
     ) -> jax.Array | chex.Array:
         """Applies the model to the input data."""
@@ -85,7 +87,7 @@ class PureJaxModelProtocol(Protocol):
         """Initializes the model with random keys and arguments."""
         ...
 
-    def init_indices(self, random_key: chex.Array, *args, **kwargs) -> dict[str, chex.Array]: ...
+    def init_indices(self, random_key: chex.Array, *args, **kwargs) -> dict[str, chex.Array] | Indices: ...
 
 
 class JaxRLModel(BaseModel):
