@@ -62,8 +62,8 @@ class FlaxRLModel(Generic[ModelType, ConfigType], BaseModel):
         super().__init__(config=config)  # pyright: ignore[reportArgumentType]  # ModelConfig
         self.model: ModelType = self._setup_model(**kwargs)
 
-    def _forward(self, input_dict: dict, **kwargs) -> TensorType:
-        out = self.model.apply(input_dict["state"].params, input_dict["obs"], **kwargs)
+    def _forward(self, input_dict: dict, *, state: TrainState, **kwargs) -> TensorType:
+        out = self.model.apply(state.params, input_dict["obs"], **kwargs)
         return out
 
     @abstractmethod

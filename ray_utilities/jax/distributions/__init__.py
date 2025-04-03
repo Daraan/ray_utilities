@@ -1,4 +1,4 @@
-from .get_distributions_mixin import RLModuleGetJaxDistributions
+from .get_distributions_mixin import GetJaxDistributionsMixin
 from .get_jax_action_distribution import get_jax_dist_cls_from_action_space
 from .jax_distributions import (
     Categorical,
@@ -12,10 +12,10 @@ from .jax_distributions import (
 __all__ = [
     "Categorical",
     "Deterministic",
+    "GetJaxDistributionsMixin",
     "MultiCategorical",
     "MultiDistribution",
     "Normal",
-    "RLModuleGetJaxDistributions",
     "RLlibToJaxDistribution",
     "get_jax_dist_cls_from_action_space",
 ]

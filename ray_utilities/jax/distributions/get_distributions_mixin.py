@@ -1,9 +1,19 @@
+from __future__ import annotations
+
 import gymnasium as gym
 from ray_utilities.jax.distributions.jax_distributions import Categorical, Normal, RLlibToJaxDistribution
 
-__all__ = ["RLModuleGetJaxDistributions"]
+__all__ = ["GetJaxDistributionsMixin"]
 
-class RLModuleGetJaxDistributions:
+class GetJaxDistributionsMixin:
+    """
+    Mixin providing methods for RLModules
+
+    Methods:
+        - get_train_action_dist_cls
+        - get_exploration_action_dist_cls
+        - get_inference_action_dict_cls
+    """
 
     action_dist_cls: type[RLlibToJaxDistribution]
     action_space: gym.Space
