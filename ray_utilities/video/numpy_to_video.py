@@ -10,7 +10,7 @@ import numpy as np
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-from ray_utilities.temp import TEMP_DIR_PATH
+from ray_utilities.temp_dir import TEMP_DIR_PATH
 
 
 def numpy_to_video(

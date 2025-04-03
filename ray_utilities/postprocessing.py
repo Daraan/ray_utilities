@@ -34,7 +34,7 @@ from ray_utilities.constants import (
     EPISODE_BEST_VIDEO,
     EPISODE_WORST_VIDEO,
 )
-from ray_utilities.temp import TEMP_DIR_PATH
+from ray_utilities.temp_dir import TEMP_DIR_PATH
 from ray_utilities.typing.trainable_return import TrainableReturnData
 from ray_utilities.video.numpy_to_video import create_temp_video
 
