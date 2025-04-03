@@ -5,11 +5,8 @@
 from __future__ import annotations
 
 import datetime
-import logging
 import random
 from typing import TYPE_CHECKING, Any, Iterable, Literal, Optional, TypeVar, overload
-
-import colorlog
 
 # fmt: off
 try:
@@ -25,11 +22,17 @@ from tqdm import tqdm
 from typing_extensions import TypeIs
 
 from ray_utilities.constants import GYM_V_0_26, RAY_UTILITIES_INITALIZATION_TIMESTAMP
-from .typing.algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
+from ray_utilities.nice_logging import nicer_logging
+from ray_utilities.typing.algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import AlgorithmConfig
     from ray.tune.experiment import Trial
+
+
+logger = nicer_logging(__name__)
+logger.info("Ray utilities imported")
+logger.debug("Ray utilities logger debug level set")
 
 
 _T = TypeVar("_T")
@@ -44,18 +47,6 @@ __all__ = [
     "seed_everything",
     "trial_name_creator",
 ]
-
-logger = logging.getLogger(__name__)
-if not logger.hasHandlers():
-    logger.setLevel(logging.DEBUG)
-    utilities_handler = colorlog.StreamHandler()
-    formatter = colorlog.ColoredFormatter(
-        "%(log_color)s[%(levelname)s][ %(filename)s:%(lineno)d, %(funcName)s] :%(reset)s %(message)s"
-    )
-    utilities_handler.setFormatter(formatter)
-    logger.addHandler(utilities_handler)
-logger.info("Ray utilities imported")
-logger.debug("Ray utilities logger debug level set")
 
 
 def trial_name_creator(trial: Trial) -> str:
@@ -192,5 +183,5 @@ def create_env_for_config(config: AlgorithmConfig, env_spec: str | gym.Env):
 
 
 # Circular import
+from ray_utilities.default_trainable import create_default_trainable, default_trainable  # noqa: E402
 from ray_utilities.runfiles.run_tune import run_tune  # noqa: E402
-from ray_utilities.default_trainable import default_trainable, create_default_trainable  # noqa: E402
