@@ -25,6 +25,7 @@ from typing_extensions import TypeVar
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.comet import CometArchiveTracker
 from ray_utilities.environment import create_env
+from ray_utilities.misc import get_trainable_name
 
 from .tuner_setup import TunerSetup
 from .typed_argument_parser import DefaultArgumentParser
@@ -223,14 +224,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
 
     def get_trainable_name(self) -> str:
         trainable = getattr(self, "trainable", None) or self.create_trainable()
-        last = None
-        while last != trainable:
-            last = trainable
-            while isinstance(trainable, partial):
-                trainable = trainable.func
-            while hasattr(trainable, "__wrapped__"):
-                trainable = trainable.__wrapped__  # type: ignore[attr-defined]
-        return trainable.__name__
+        return get_trainable_name(trainable)
 
     def create_param_space(self) -> dict[str, Any]:
         """

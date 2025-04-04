@@ -8,7 +8,7 @@ from ray import train, tune
 from ray.rllib.algorithms.ppo import PPO
 from typing_extensions import TypeVar
 
-from ray_utilities import trial_name_creator
+from ray_utilities.misc import trial_name_creator
 from ray_utilities.config._tuner_callbacks_setup import TunerCallbackSetup
 from ray_utilities.constants import CLI_REPORTER_PARAMETER_COLUMNS, DISC_EVAL_METRIC_RETURN_MEAN
 

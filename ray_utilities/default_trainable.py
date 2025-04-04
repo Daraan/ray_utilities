@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import logging
 import tempfile
-
 from functools import partial, wraps
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional, cast, overload
 
 from ray import tune
+from ray.experimental import tqdm_ray
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
     EPISODE_RETURN_MEAN,
@@ -15,11 +15,12 @@ from ray.rllib.utils.metrics import (
 )
 from typing_extensions import TypeAliasType
 
-from ray_utilities import episode_iterator, is_pbar
 from ray_utilities.callbacks.progress_bar import update_pbar
 from ray_utilities.config.experiment_base import ExperimentSetupBase
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.constants import EVALUATED_THIS_STEP
+from ray_utilities.environment import seed_environments_for_config
+from ray_utilities.misc import is_pbar
 from ray_utilities.postprocessing import (
     create_log_metrics,
     create_running_reward_updater,
@@ -42,6 +43,24 @@ logger = logging.getLogger(__name__)
 DefaultExperimentSetup = TypeAliasType(
     "DefaultExperimentSetup", ExperimentSetupBase[DefaultArgumentParser, "AlgorithmConfig", "Algorithm"]
 )
+
+
+@overload
+def episode_iterator(args: dict[str, Any], hparams: Any, *, use_pbar: Literal[False]) -> range: ...
+
+
+@overload
+def episode_iterator(args: dict[str, Any], hparams: dict[Any, Any], *, use_pbar: Literal[True]) -> tqdm_ray.tqdm: ...
+
+
+def episode_iterator(args: dict[str, Any], hparams: dict[str, Any], *, use_pbar: bool = True) -> tqdm_ray.tqdm | range:
+    """Creates an iterator for `args["episodes"]`
+
+    Will create a `tqdm` if `use_pbar` is True, otherwise returns a range object.
+    """
+    if use_pbar:
+        return tqdm_ray.tqdm(range(args["episodes"]), position=hparams.get("process_number", None))
+    return range(args["episodes"])
 
 
 def create_default_trainable(
@@ -111,14 +130,18 @@ def default_trainable(
     else:
         raise ValueError("Either setup or setup_class must be provided.")
 
-    env_seed = hparams.get("env_seed", None)
-    if env_seed is not None:
-        env_config = config.env_config
-        env_config.update({"seed": env_seed, "env_type": config.env})
-        config.environment("seeded_env", env_config=env_config)
+    # config.environment("seeded_env", env_config=env_config)
     if (run_seed := hparams.get("run_seed", None)) is not None:
         logger.debug("Using run_seed for config.seed %s", run_seed)
         config.debugging(seed=run_seed)
+    if args["env_seeding_strategy"] == "sequential":
+        seed_environments_for_config(config, run_seed)
+    elif args["env_seeding_strategy"] == "same":
+        seed_environments_for_config(config, args["seed"])
+    elif args["env_seeding_strategy"] == "constant":
+        seed_environments_for_config(config, 0)
+    else:
+        seed_environments_for_config(config, None)
     try:
         algo = config.build_algo()
     except AttributeError:

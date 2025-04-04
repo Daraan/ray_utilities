@@ -1,9 +1,18 @@
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
+from typing_extensions import deprecated
 
 import gymnasium as gym
 import numpy as np
-from ray.rllib.env.env_context import EnvContext
 from ray.tune.registry import register_env
+
+from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback, make_seeded_env_callback
+
+if TYPE_CHECKING:
+    from ray.rllib.algorithms import AlgorithmConfig
+    from ray.rllib.env.env_context import EnvContext
 
 __all__ = [
     "create_env",
@@ -11,7 +20,6 @@ __all__ = [
     "parse_env_name",
 ]
 
-_logger = logging.getLogger(__name__)
 
 env_short_names = {
     "lunar": "LunarLander-v2",
@@ -19,6 +27,7 @@ env_short_names = {
     "cartpole": "CartPole-v1",
 }
 
+_logger = logging.getLogger(__name__)
 
 def parse_env_name(name: str) -> str:
     return env_short_names.get(name, name)
@@ -32,9 +41,13 @@ def create_env(name: str, **kwargs) -> gym.Env:
 
 _seed_counter = 0
 
-
+@deprecated("in favor of callback")
 def env_creator_with_seed(config: EnvContext):
-    """"""
+    """
+    Creates an environment with seed
+
+    Deprecated in favor of callback.
+    """
     # NOTE: DO NOT MODIFY CONFIG; reused for VectorEnv
     this_env_config = config.copy()
     seed: int = this_env_config.pop("seed")
@@ -75,3 +88,58 @@ def env_creator_with_seed(config: EnvContext):
 
 
 register_env("seeded_env", env_creator_with_seed)
+
+
+def create_env_for_config(config: AlgorithmConfig, env_spec: str | gym.Env):
+    """
+    Creates an initial environment for the given config.env.
+
+    If it is a `seeded_env` it will create a config from `env_spec` instead.
+    """
+    if isinstance(config.env, str) and config.env != "seeded_env":
+        init_env = gym.make(config.env)
+    elif config.env == "seeded_env":
+        if isinstance(env_spec, str):
+            init_env = gym.make(env_spec)
+        else:
+            init_env = env_spec
+    else:
+        assert not TYPE_CHECKING or config.env
+        init_env = gym.make(config.env.unwrapped.spec.id)  # pyright: ignore[reportOptionalMemberAccess]
+    return init_env
+
+def seed_environments_for_config(config: AlgorithmConfig, env_seed: int | None):
+    """
+    Adds/replaces a common deterministic seeding that is used to seed all environments created when this config is build.
+
+    Choose One:
+    - Same environment seeding across trials:
+        seed_environments_for_config(config, constant_seed)
+    - Different, but deterministic, seeding across trials:
+        seed_environments_for_config(config, run_seed)
+    """
+    seed_envs_cb = make_seeded_env_callback(env_seed)
+    # NOTE: Needs NEW API
+    if config.callbacks_on_environment_created:
+        if callable(config.callbacks_on_environment_created):
+            config.callbacks(on_environment_created=[config.callbacks_on_environment_created, seed_envs_cb])
+        else:  # assume another iterable
+            try:
+                l_before = len(config.callbacks_on_environment_created)
+            except (TypeError, Exception):  # Some iterable without len?
+                l_before = None
+            config.callbacks(
+                on_environment_created=[
+                    *(
+                        cb
+                        for cb in config.callbacks_on_environment_created
+                        if not isinstance(cb, SeedEnvsCallback)
+                        or (isinstance(cb, type) and issubclass(cb, SeedEnvsCallback))
+                    ),
+                    seed_envs_cb,
+                ]
+            )
+            if l_before == len(config.callbacks_on_environment_created):
+                _logger.info("A SeedEnvsCallback was replaced by calling seed_environments_for_config.")
+    else:
+        config.callbacks(on_environment_created=seed_envs_cb)

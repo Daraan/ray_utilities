@@ -57,6 +57,21 @@ class DefaultEnvironmentArgParser(Tap):
     render_mode: Optional[Literal["human", "rgb_array", "ansi"]] = None
     """Render mode"""
 
+    env_seeding_strategy: Literal["random", "constant", "same", "sequential"] = "sequential"
+    """
+    Options:
+        - random: subsequent and repeated trials are independent
+            `make_seeded_env_callback(None)`
+        - constant: use a constant seed for all trials
+            `make_seeded_env_callback(0)`
+        - same: Identical to `seed` option.
+            `make_seeded_env_callback(args.seed)`
+        - sequential: use different, but deterministic, seeds for each trial,
+            i.e. the first trial will always use the same seed, but a different one from
+            the subsequent trials.
+            `make_seeded_env_callback(run_seed)`
+    """
+
     def configure(self) -> None:
         super().configure()
         self.add_argument(

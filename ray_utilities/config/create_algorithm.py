@@ -12,6 +12,7 @@ from ray.tune import logger as tune_logger
 
 from ray_utilities.callbacks.algorithm.discrete_eval_callback import DiscreteEvalCallback
 from ray_utilities.callbacks.algorithm.env_render_callback import make_render_callback
+from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback, make_seeded_env_callback
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import AlgorithmConfig
@@ -70,7 +71,7 @@ def create_algorithm_config(
         env_config["render_mode"] = args["render_mode"]
     if env_seed is not None:
         env_config.update({"seed": env_seed, "env_type": env_spec})
-        config.environment("seeded_env", env_config=env_config)
+        # Will use a SeededEnvCallback to apply seed and generators
     elif env_config:
         config.environment(env_spec, env_config=env_config)
     else:
@@ -197,6 +198,15 @@ def create_algorithm_config(
         ),
     )
     callbacks: list[type[DefaultCallbacks]] = [DiscreteEvalCallback] if discrete_eval else []
+    if args["env_seeding_strategy"] == "sequential":
+        # Must set this in the trainable with seed_environments_for_config(config, run_seed)
+        logger.info(
+            "Using sequential env seed strategy, call seed_environments_for_config(config, run_seed) with a sampled seed for the trial."
+        )
+    elif args["env_seeding_strategy"] == "same":
+        make_seeded_env_callback(args["seed"])
+    elif args["env_seeding_strategy"] == "constant":
+        make_seeded_env_callback(SeedEnvsCallback.env_seed)
     if args["render_mode"]:
         callbacks.append(make_render_callback())
 

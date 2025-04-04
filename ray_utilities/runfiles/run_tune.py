@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Optional, TypeVar
 
 from ray.tune.result_grid import ResultGrid
 
-from ray_utilities import seed_everything
+from ray_utilities.random import seed_everything
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
