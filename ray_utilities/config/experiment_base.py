@@ -81,15 +81,22 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
     ]
     """extra tags to add if """
 
+    PROJECT: str = "Unnamed Project"
+
     @property
-    @abstractmethod
     def project_name(self) -> str:
-        """
-        Name of the project for logging. Will be used for:
-            - output folder
-            - wandb project
-            - comet workspace
-        """
+        """Name for the output folder, wandb project, and comet workspace."""
+        if self.PROJECT == "Unnamed Project":
+            logger.warning(
+                "Setup class %s has no custom PROJECT attribute set to determine `project_name`.",
+                self.__class__.__name__,
+            )
+        return "dev-workspace" if self.args.test else self.PROJECT
+
+    @project_name.setter
+    def project_name(self, value: str):
+        logger.warning("Setting project name to %s. Prefer creation of a new class", value)
+        self.PROJECT: str = value
 
     @property
     @abstractmethod
@@ -395,6 +402,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
 
     def upload_offline_experiments(self):
         if self.args.comet and "upload" in self.args.comet:
+            logger.info("Uploading offline experiments to Comet")
             self.comet_upload_offline_experiments()
         if self.args.wandb and "upload" in self.args.wandb:
             self.wandb_upload_offline_experiments()

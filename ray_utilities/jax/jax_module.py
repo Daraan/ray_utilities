@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
     _StateDict = TypeVar("_StateDict", bound=dict[str, Any], covariant=True)
 
+
 class JaxModule(RLModule):
     """
     Attributes:
@@ -34,6 +35,7 @@ class JaxModule(RLModule):
         if not state:
             logger.warning("State is empty, not setting state.")
         self.states = state
+
 
 if TYPE_CHECKING:
     JaxModule()

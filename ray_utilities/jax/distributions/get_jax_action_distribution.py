@@ -133,7 +133,8 @@ def get_jax_dist_cls_from_action_space(
 
 
 def _multi_categorical_dist_partial_helper(
-    action_space: gym.spaces.MultiDiscrete, framework: str  # noqa: ARG001
+    action_space: gym.spaces.MultiDiscrete,
+    framework: str,  # noqa: ARG001
 ) -> type[RLlibToJaxDistribution]:
     """Helper method to get a partial of a MultiCategorical Distribution.
 

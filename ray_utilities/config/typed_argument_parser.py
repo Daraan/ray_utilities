@@ -70,10 +70,14 @@ class DefaultEnvironmentArgParser(Tap):
         )
 
 
+OnlineLoggingOption = Literal["offline", "offline+upload", "online", "off", False]
+"""off -> NO LOGGING; offline -> offline logging but no upload"""
+
+
 class DefaultLoggingArgParser(Tap):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
-    wandb: Literal["offline", "offline+upload", "online", False] = False
-    comet: Literal["offline", "offline+upload", "on", False] = False
+    wandb: OnlineLoggingOption = False
+    comet: OnlineLoggingOption = False
     comment: Optional[str] = None
     tags: list[str] = []  # noqa: RUF012
 
@@ -81,28 +85,35 @@ class DefaultLoggingArgParser(Tap):
     def use_comet_offline(self) -> bool:
         return self.comet and self.comet.lower().startswith("offline")
 
-    def _parse_comet(  # noqa: PLR6301  # could be static
-        self, value: Literal["offline", "offline+upload", "on"]
-    ) -> Literal["offline", "offline+upload", "on", False]:
-        if value in {"0", "False", "off"}:
+    def _parse_logger_choices(  # noqa: PLR6301  # could be static
+        self, value: OnlineLoggingOption
+    ) -> OnlineLoggingOption | Literal[False]:
+        if value in {"0", "False", "off"}:  # off -> no logging
             return False
         if value in {"1", "True", "on"}:
-            return "on"
+            return "online"
         return value
 
     def configure(self) -> None:
         super().configure()
         self.add_argument("--log_level")
+        logger_choices: list[OnlineLoggingOption] = ["offline", "offline+upload", "online", "off"]
         self.add_argument(
-            "--wandb", "-wb", nargs="?", const="online", default=False, choices=["offline", "offline+upload", "online"]
+            "--wandb",
+            "-wb",
+            nargs="?",
+            const="online",
+            default=False,
+            choices=logger_choices,
+            type=self._parse_logger_choices,
         )
         self.add_argument(
             "--comet",
             nargs="?",
-            const="on",
-            default="off",
-            choices=["offline", "offline+upload", "off", "on"],
-            type=self._parse_comet,
+            const="online",
+            default=False,
+            choices=logger_choices,
+            type=self._parse_logger_choices,
         )
         self.add_argument("--comment", "-c", type=str, default=None)
         self.add_argument("--tags", nargs="+", default=[])

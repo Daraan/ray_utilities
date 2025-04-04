@@ -99,7 +99,6 @@ def default_trainable(
         args = setup.args
         args = vars(args).copy()
         config = setup.config
-        algo = setup.build_algo()
     elif setup_class:
         args = hparams["cli_args"]
         # TODO: this should use the parameters from the search space
@@ -107,10 +106,23 @@ def default_trainable(
         try:
             config = setup_class.config_from_args(args, env_seed=hparams.get("env_seed"))  # pyright: ignore[reportCallIssue]
         except TypeError:
+            logger.debug("Setup class %s does not support 'env_seed'. Extend config_from_args", setup_class)
             config = setup_class.config_from_args(args)
-        algo = config.build_algo()
     else:
         raise ValueError("Either setup or setup_class must be provided.")
+
+    env_seed = hparams.get("env_seed", None)
+    if env_seed is not None:
+        env_config = config.env_config
+        env_config.update({"seed": env_seed, "env_type": config.env})
+        config.environment("seeded_env", env_config=env_config)
+    if (run_seed := hparams.get("run_seed", None)) is not None:
+        logger.debug("Using run_seed for config.seed %s", run_seed)
+        config.debugging(seed=run_seed)
+    try:
+        algo = config.build_algo()
+    except AttributeError:
+        algo = config.build()
 
     running_reward_updater = create_running_reward_updater()
     running_eval_reward_updater = create_running_reward_updater()
@@ -156,7 +168,12 @@ def default_trainable(
                 tune.report(metrics=report_metrics, checkpoint=tune.Checkpoint.from_directory(tempdir))
         # Report metrics
         elif not disable_report:
-            tune.report(report_metrics, checkpoint=None)
+            try:
+                tune.report(report_metrics, checkpoint=None)
+            except AttributeError:
+                import ray.train
+
+                ray.train.report(report_metrics, checkpoint=None)
 
         # Update progress bar
         if not is_pbar(pbar):

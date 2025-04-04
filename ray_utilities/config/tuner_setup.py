@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, ClassVar, Literal, Optional, Protocol, cast, overload
 
 from ray import train, tune
+from ray.rllib.algorithms.ppo import PPO
 from typing_extensions import TypeVar
 
 from ray_utilities import trial_name_creator
@@ -26,6 +28,7 @@ __all__ = [
 ConfigTypeT = TypeVar("ConfigTypeT", bound="AlgorithmConfig")
 ParserTypeT = TypeVar("ParserTypeT", bound="DefaultArgumentParser")
 
+logger = logging.getLogger(__name__)
 
 class _TunerSetupBase(Protocol):
     eval_metric: ClassVar[str]
@@ -80,7 +83,16 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
         # NOTE: RunConfig V2 is coming up in the future, which will disallow some callbacks
         if TYPE_CHECKING:  # Currently type-checker treats RunConfig as the new version, which is wrong
             callbacks = cast("list[tune.Callback]", callbacks)
-        return tune.RunConfig(
+        logger.info("Creating run config with %s callbacks", len(callbacks))
+        try:
+            RunConfig = tune.RunConfig
+            FailureConfig = tune.FailureConfig
+            CheckpointConfig = tune.CheckpointConfig
+        except AttributeError:
+            RunConfig = train.RunConfig
+            FailureConfig = train.FailureConfig
+            CheckpointConfig = train.CheckpointConfig
+        return RunConfig(
             # Trial artifacts are uploaded periodically to this directory
             storage_path=Path("../outputs/experiments").resolve(),  # pyright: ignore[reportArgumentType]
             name=self.get_experiment_name(),
@@ -94,8 +106,8 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             # to disable set TUNE_DISABLE_AUTO_CALLBACK_LOGGERS environment variable to "1"
             callbacks=callbacks,
             # Use fail_fast for during debugging/testing to stop all experiments
-            failure_config=tune.FailureConfig(fail_fast=True),
-            checkpoint_config=tune.CheckpointConfig(
+            failure_config=FailureConfig(fail_fast=True),
+            checkpoint_config=CheckpointConfig(
                 num_to_keep=4,
                 checkpoint_score_order="max",
                 checkpoint_score_attribute=self.eval_metric,
@@ -103,8 +115,13 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
         )
 
     def create_tuner(self) -> tune.Tuner:
+        ressource_requirements = PPO.default_resource_request(self._setup.config)
+        logger.info("Default resource per trial: %s", ressource_requirements)
+        trainable = tune.with_resources(self._setup.trainable, ressource_requirements)
+        # functools.update_wrapper(trainable, self._setup.trainable)
+        trainable.__name__ = self._setup.trainable.__name__
         return tune.Tuner(
-            trainable=self._setup.trainable,  # Note: possibly can also be a list
+            trainable=trainable,  # Updated to use the modified trainable with resource requirements
             param_space=self._setup.param_space,
             tune_config=self.create_tune_config(),
             run_config=self.create_run_config(self.create_callbacks()),

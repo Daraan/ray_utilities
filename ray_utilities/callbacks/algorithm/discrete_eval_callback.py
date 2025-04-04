@@ -27,6 +27,8 @@ DiscreteEvalFunctionType = Callable[
 
 
 class DiscreteEvalCallback(DefaultCallbacks):
+    _warned_once: bool = False
+
     def on_evaluate_end(
         self,
         *,
@@ -41,9 +43,20 @@ class DiscreteEvalCallback(DefaultCallbacks):
             env_runner = algorithm.env_runner_group.local_env_runner  # type: ignore[attr-defined]
         elif eval_workers.num_healthy_remote_workers() == 0:
             env_runner = algorithm.eval_env_runner
+        elif eval_workers.local_env_runner:
+            if not self._warned_once:
+                logger.info(
+                    "Parallel discrete evaluation not implemented. Using one local env_runner for discrete evaluation."
+                )
+                self._warned_once = True
+            env_runner = eval_workers.local_env_runner
         else:
+            if not self._warned_once:
+                logger.warning("No eval workers available for discrete evaluation. Using local env_runner.")
+                self._warned_once = True
+            env_runner = algorithm.eval_env_runner
             # possibly still use eval_env_runner
-            raise NotImplementedError("Parallel discrete evaluation not implemented")
+            # raise NotImplementedError("Parallel discrete evaluation not implemented")
         env_runner = cast("SingleAgentEnvRunner", env_runner)
         if metrics_logger is None:
             logger.warning("No metrics logger provided for discrete evaluation")

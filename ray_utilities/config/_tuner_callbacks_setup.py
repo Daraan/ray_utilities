@@ -178,10 +178,12 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         callbacks: list[Callback] = create_tuner_callbacks(render=bool(self._setup.args.render_mode))
         if self._setup.args.wandb or self._setup.args.test:
             callbacks.append(self.create_wandb_logger())
+            logger.info("Created WanbB logger" if self._setup.args.wandb else "Created WandB logger - for testing")
         else:
             logger.info("Not logging to WandB")
         if self._setup.args.comet or self._setup.args.test:
             callbacks.append(self.create_comet_logger())
+            logger.info("Created comet logger" if self._setup.args.comet else "Created comet logger - for testing")
         else:
             logger.info("Not logging to Comet")
         return callbacks

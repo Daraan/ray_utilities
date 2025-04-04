@@ -5,6 +5,7 @@ from ray_utilities.jax.distributions.jax_distributions import Categorical, Norma
 
 __all__ = ["GetJaxDistributionsMixin"]
 
+
 class GetJaxDistributionsMixin:
     """
     Mixin providing methods for RLModules
@@ -25,8 +26,7 @@ class GetJaxDistributionsMixin:
         return self.get_inference_action_dist_cls()
 
     def get_inference_action_dist_cls(self) -> type[RLlibToJaxDistribution]:
-
-        if self.action_dist_cls is not None: # pyright: ignore[reportUnnecessaryComparison]
+        if self.action_dist_cls is not None:  # pyright: ignore[reportUnnecessaryComparison]
             return self.action_dist_cls
         if isinstance(self.action_space, gym.spaces.Discrete):
             return Categorical

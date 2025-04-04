@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from ray.tune.experiment import Trial
 
 
-logger = nicer_logging(__name__)
+logger = nicer_logging(__name__, level="DEBUG")
 logger.info("Ray utilities imported")
 logger.debug("Ray utilities logger debug level set")
 
@@ -111,9 +111,7 @@ def _split_seed(seed: Optional[int]) -> tuple[int, int] | tuple[None, None]:
 _IntOrNone = TypeVar("_IntOrNone", bound=int | None)
 
 
-def seed_everything(
-    env, seed: _IntOrNone, *, torch_manual=False, torch_deterministic=None
-) -> tuple[_IntOrNone, _IntOrNone]:
+def seed_everything(env, seed: _IntOrNone, *, torch_manual=False, torch_deterministic=None) -> _IntOrNone:
     """
     Args:
         torch_manual: If True, will set torch.manual_seed and torch.cuda.manual_seed_all
@@ -150,8 +148,7 @@ def seed_everything(
         seed, next_seed = _split_seed(next_seed)
         env.action_space.seed(seed)
 
-    seed, next_seed = _split_seed(next_seed)
-    return seed, next_seed
+    return next_seed
 
 
 def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, Any]]:

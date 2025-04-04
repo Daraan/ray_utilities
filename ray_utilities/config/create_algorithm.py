@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, cast
 
 import gymnasium as gym
+from gymnasium.envs.registration import VectorizeMode
 from ray.rllib.algorithms.callbacks import DefaultCallbacks, make_multi_callbacks
 from ray.rllib.algorithms.ppo.ppo import PPOConfig
 from ray.rllib.core.rl_module import RLModule, RLModuleSpec
@@ -23,6 +25,7 @@ _ConfigType = TypeVar("_ConfigType", bound="AlgorithmConfig")
 
 _ModelConfig = TypeVar("_ModelConfig", bound="None | dict | Any")
 
+logger = logging.getLogger(__name__)
 
 def create_algorithm_config(
     args: dict[str, Any] | NamespaceType[DefaultArgumentParser],
@@ -72,6 +75,13 @@ def create_algorithm_config(
         config.environment(env_spec, env_config=env_config)
     else:
         config.environment(env_spec)
+    try:
+        config.env_runners(
+            # experimental
+            gym_env_vectorize_mode=VectorizeMode.ASYNC,  # pyright: ignore[reportArgumentType]
+        )
+    except TypeError:
+        logger.error("Current ray version does not support AlgorithmConfig.env_runners(gym_env_vectorize_mode=...)")
     config.resources(
         # num_gpus=1 if args["gpu"] else 0,4
         # process that runs Algorithm.training_step() during Tune
@@ -102,7 +112,7 @@ def create_algorithm_config(
     config.learners(
         # for fractional GPUs, you should always set num_learners to 0 or 1
         num_learners=0 if args["parallel"] else 0,
-        num_cpus_per_learner=0 if args["test"] else 1,
+        num_cpus_per_learner=0 if args["test"] and args["num_jobs"] < 2 else 1,
         num_gpus_per_learner=1 if args["gpu"] else 0,
     )
 
@@ -122,14 +132,22 @@ def create_algorithm_config(
                 [800, 1e-4],
             ]
         ),
-        num_epochs=20,
         # The total effective batch size is then
         # `num_learners` x `train_batch_size_per_learner` and you can
         # access it with the property `AlgorithmConfig.total_train_batch_size`.
-        minibatch_size=8,
         train_batch_size_per_learner=36,
         grad_clip=0.5,
     )
+    try:
+        cast("PPOConfig", config).training(
+            num_epochs=20,
+            minibatch_size=8,
+        )
+    except TypeError:
+        cast("PPOConfig", config).training(
+            num_sgd_iter=20,
+            sgd_minibatch_size=8,
+        )
     if isinstance(config, PPOConfig):
         config.training(
             # PPO Specific

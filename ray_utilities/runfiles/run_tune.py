@@ -8,7 +8,7 @@ from ray.tune.result_grid import ResultGrid
 from ray_utilities import seed_everything
 
 if TYPE_CHECKING:
-    from ray.rllib.algorithms import AlgorithmConfig, Algorithm
+    from ray.rllib.algorithms import Algorithm, AlgorithmConfig
     from ray.tune.result_grid import ResultGrid
 
     from ray_utilities.config import DefaultArgumentParser, ExperimentSetupBase
@@ -47,7 +47,7 @@ def run_tune(
     args = setup.get_args()
     if args.seed is not None:
         logger.debug("Setting seed to %s", args.seed)
-        seed_everything(env=None, seed=args.seed, torch_manual=True, torch_deterministic=True)
+        _next_seed = seed_everything(env=None, seed=args.seed, torch_manual=True, torch_deterministic=True)
         setup.config.seed = args.seed
     trainable = setup.trainable
 
@@ -61,8 +61,8 @@ def run_tune(
         if test_mode_func:
             return test_mode_func(trainable, setup)
         return trainable(setup.param_space)
-
     # Use tune.with_parameters to pass large objects to the trainable
+
     tuner = setup.create_tuner()
     results = tuner.fit()
     setup.upload_offline_experiments()
