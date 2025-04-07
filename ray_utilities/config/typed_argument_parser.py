@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from tap import Tap
 from typing_extensions import Literal
@@ -106,6 +106,10 @@ class DefaultLoggingArgParser(Tap):
     @property
     def use_comet_offline(self) -> bool:
         return self.comet and self.comet.lower().startswith("offline")
+    
+    def __setstate__(self, d: dict[str, Any]) -> None:
+        d.pop("use_comet_offline", None)  # do not set property
+        return super().__setstate__(d)
 
     def _parse_logger_choices(  # noqa: PLR6301  # could be static
         self, value: OnlineLoggingOption
