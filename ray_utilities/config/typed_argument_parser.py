@@ -83,6 +83,13 @@ class DefaultEnvironmentArgParser(Tap):
             default=None,
             choices=["human", "rgb_array", "ansi"],
         )
+        self.add_argument(
+            "--env_seeding_strategy",
+            "-ess",
+            type=str,
+            default="sequential",
+            choices=["random", "constant", "same", "sequential"],
+        )
 
 
 OnlineLoggingOption = Literal["offline", "offline+upload", "online", "off", False]
