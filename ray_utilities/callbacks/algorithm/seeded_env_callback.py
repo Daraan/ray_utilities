@@ -8,8 +8,8 @@ from ray.rllib.algorithms.callbacks import DefaultCallbacks
 
 if TYPE_CHECKING:
     import gymnasium as gym
-    from ray.rllib.env.env_context import EnvContext
     from ray.rllib.env.env_runner import EnvRunner
+    from ray.rllib.env.env_context import EnvContext
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
     from typing_extensions import TypeIs
 
@@ -41,6 +41,8 @@ class SeedEnvsCallback(DefaultCallbacks):
     def on_environment_created(
         self,
         *,
+        env_runner: EnvRunner,  # noqa: ARG002
+        metrics_logger: Optional[MetricsLogger] = None,
         env: gym.vector.AsyncVectorEnv | gym.vector.VectorEnv | gym.Env,
         env_context: EnvContext,
         **kwargs,  # noqa: ARG002
@@ -85,15 +87,19 @@ class SeedEnvsCallback(DefaultCallbacks):
             env.np_random = rngs[0]
 
         # NOTE: Could log seeds in metrics_logger
-        # metrics_logger.log_metrics({"seeds": seeds})
+        if metrics_logger:
+            metrics_logger.log_value(
+                ("env_runners", "environments", "seeds"), tuple(seeds.tolist()), clear_on_reduce=False, reduce=None
+            )
 
     def __call__(self, **kwargs):
         """This is a no-op. The class is used as a callback."""
         return self.on_environment_created(**kwargs)
 
-    def __init__(self, **kwarsg):  # treat like a callback function
-        if "env_context" in kwarsg:
-            self.on_environment_created(**kwarsg)
+    def __init__(self, **kwargs):  # treat like a callback function
+        if "env_context" in kwargs:
+            self.on_environment_created(**kwargs)
+
 
 def make_seeded_env_callback(env_seed_: int | None) -> type[SeedEnvsCallback]:
     """Create a callback that seeds the environment."""
