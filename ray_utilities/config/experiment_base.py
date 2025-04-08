@@ -17,6 +17,7 @@ from typing import (
     overload,
 )
 
+import ray
 from ray import tune
 from ray.rllib.core.rl_module import MultiRLModuleSpec
 from tap.tap import Tap
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
     import argparse
 
     import gymnasium as gym
+    import ray.tune.search.sample  # noqa: TC004
     from ray.rllib.algorithms import PPO, Algorithm, AlgorithmConfig
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
     from ray.rllib.utils.typing import EnvType
@@ -225,6 +227,11 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
     def get_trainable_name(self) -> str:
         trainable = getattr(self, "trainable", None) or self.create_trainable()
         return get_trainable_name(trainable)
+
+    def sample_params(self):
+        params = self.create_param_space()
+        return {k: v.sample() if isinstance(v, ray.tune.search.sample.Domain) else v for k, v in params.items()}
+
 
     def create_param_space(self) -> dict[str, Any]:
         """

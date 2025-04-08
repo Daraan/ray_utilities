@@ -39,7 +39,7 @@ def create_algorithm_config(
     model_config: dict[str, Any] | _ModelConfig,
     config_class: type[_ConfigType] = PPOConfig,
     framework: Literal["torch", "tf2"],
-    discrete_eval: bool = True,
+    discrete_eval: bool = False,
 ) -> tuple[_ConfigType, RLModuleSpec]:
     """
     Creates a basic algorithm
@@ -136,7 +136,7 @@ def create_algorithm_config(
         # The total effective batch size is then
         # `num_learners` x `train_batch_size_per_learner` and you can
         # access it with the property `AlgorithmConfig.total_train_batch_size`.
-        train_batch_size_per_learner=36,
+        train_batch_size_per_learner=32,
         grad_clip=0.5,
     )
     try:
@@ -235,6 +235,15 @@ def create_algorithm_config(
     )
     if new_api is not None:
         config.api_stack(enable_rl_module_and_learner=new_api, enable_env_runner_and_connector_v2=new_api)
-    # Checks
+        # Checks
+    try:
+        if config.train_batch_size_per_learner % config.minibatch_size != 0:  # pyright: ignore[reportOperatorIssue]
+            logger.warning(
+                "Train batch size (%s) is not divisible by minibatch size (%s).",
+                config.train_batch_size_per_learner,
+                config.minibatch_size,
+            )
+    except TypeError:
+        logger.debug("Error encountered while checking train_batch_size_per_learner", exc_info=True)
     config.validate_train_batch_size_vs_rollout_fragment_length()
     return config, module_spec

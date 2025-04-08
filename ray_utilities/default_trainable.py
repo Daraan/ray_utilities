@@ -113,6 +113,7 @@ def default_trainable(
     Attention:
         Best practice is to not refer to any objects from outer scope in the training_function
     """
+    # region setup config
     if setup:
         # TODO: Use hparams
         args = setup.args
@@ -130,10 +131,12 @@ def default_trainable(
     else:
         raise ValueError("Either setup or setup_class must be provided.")
 
-    # config.environment("seeded_env", env_config=env_config)
+    # endregion
+    # region seeding
     if (run_seed := hparams.get("run_seed", None)) is not None:
         logger.debug("Using run_seed for config.seed %s", run_seed)
         config.debugging(seed=run_seed)
+    # Seeded environments
     if args["env_seeding_strategy"] == "sequential":
         seed_environments_for_config(config, run_seed)
     elif args["env_seeding_strategy"] == "same":
@@ -142,7 +145,9 @@ def default_trainable(
         seed_environments_for_config(config, 0)
     else:
         seed_environments_for_config(config, None)
+    # endregion
     try:
+        # new API
         algo = config.build_algo()
     except AttributeError:
         algo = config.build()
