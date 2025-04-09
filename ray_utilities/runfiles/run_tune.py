@@ -64,7 +64,7 @@ def run_tune(
         # Possibly set RAY_DEBUG=legacy
         if test_mode_func:
             return test_mode_func(trainable, setup)
-        return trainable(setup.param_space)
+        return trainable(setup.sample_params())
     # Use tune.with_parameters to pass large objects to the trainable
 
     tuner = setup.create_tuner()
