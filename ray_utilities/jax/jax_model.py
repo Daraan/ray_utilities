@@ -49,8 +49,9 @@ class BaseModel(Model):
 
 
 class FlaxRLModel(Generic[ModelType, ConfigType], BaseModel):
-    def __call__(self, *args, **kwargs) -> chex.Array:
-        return self._forward(*args, **kwargs)
+
+    def __call__(self, input_dict: dict, *, parameters, **kwargs) -> chex.Array:
+        return self._forward(input_dict, parameters=parameters, **kwargs)
 
     @abstractmethod
     def _setup_model(self, *args, **kwargs) -> ModelType:
@@ -62,8 +63,8 @@ class FlaxRLModel(Generic[ModelType, ConfigType], BaseModel):
         super().__init__(config=config)  # pyright: ignore[reportArgumentType]  # ModelConfig
         self.model: ModelType = self._setup_model(**kwargs)
 
-    def _forward(self, input_dict: dict, *, state: TrainState, **kwargs) -> TensorType:
-        out = self.model.apply(state.params, input_dict["obs"], **kwargs)
+    def _forward(self, input_dict: dict, *, parameters, **kwargs) -> TensorType:
+        out = self.model.apply(parameters, input_dict["obs"], **kwargs)
         return out
 
     @abstractmethod
@@ -101,14 +102,14 @@ class JaxRLModel(BaseModel):
     def init_state(self, rng: chex.PRNGKey, sample: TensorType | chex.Array) -> TrainState:
         pass
 
-    def _forward(self, input_dict: dict, **kwargs) -> dict | TensorType:
+    def _forward(self, input_dict: dict, *, parameters, indices, **kwargs) -> dict | TensorType:
         return self.model.apply(
-            input_dict["state"].params,
+            params=parameters,
             inputs=input_dict["obs"],
-            indices=input_dict["state"].indices,
+            indices=indices,
             **kwargs,
         )
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, input_dict: dict, *, parameters, indices, **kwargs):
         # This is a dummy method to do checked forward passes.
-        return self._forward(*args, **kwargs)
+        return self._forward(input_dict, parameters=parameters, indices=indices, **kwargs)
