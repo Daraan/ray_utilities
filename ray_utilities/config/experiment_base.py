@@ -3,7 +3,6 @@ from __future__ import annotations
 # pyright: enableExperimentalFeatures=true
 import logging
 from abc import ABC, abstractmethod
-from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -14,6 +13,7 @@ from typing import (
     Optional,
     Sequence,
     TypeAlias,
+    final,
     overload,
 )
 
@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     import gymnasium as gym
     import ray.tune.search.sample  # noqa: TC004
     from ray.rllib.algorithms import PPO, Algorithm, AlgorithmConfig
+    from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
     from ray.rllib.utils.typing import EnvType
 
@@ -53,15 +54,15 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-ParserType_co = TypeVar("ParserType_co", bound="DefaultArgumentParser", covariant=True)
-Parser: TypeAlias = "argparse.ArgumentParser | ParserType_co"
-NamespaceType: TypeAlias = "argparse.Namespace | ParserType_co"  # Generic
+ParserType = TypeVar("ParserType", bound="DefaultArgumentParser")
+Parser: TypeAlias = "argparse.ArgumentParser | ParserType"
+NamespaceType: TypeAlias = "argparse.Namespace | ParserType"  # Generic
 
 _ConfigType_co = TypeVar("_ConfigType_co", bound="AlgorithmConfig", covariant=True, default="AlgorithmConfig")
 _AlgorithmType_co = TypeVar("_AlgorithmType_co", bound="Algorithm", covariant=True, default="PPO")
 
 
-class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _AlgorithmType_co]):
+class ExperimentSetupBase(ABC, Generic[ParserType, _ConfigType_co, _AlgorithmType_co]):
     """
     Methods:
     - create_parser
@@ -70,7 +71,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
     - trainable_return_type
 
     Generics:
-        ParserType_co: Type of the ArgumentParser, e.g. DefaultArgumentParser
+        ParserType: Type of the ArgumentParser, e.g. DefaultArgumentParser
         _ConfigType_co: Type of the AlgorithmConfig, e.g. PPOConfig
         _AlgorithmType_co: Type of the Algorithm, e.g. PPO
     """
@@ -85,6 +86,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
     """extra tags to add if """
 
     PROJECT: str = "Unnamed Project"
+
+    _retrieved_callbacks = False
 
     @property
     def project_name(self) -> str:
@@ -118,7 +121,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
         init_param_space: bool = True,
         init_trainable: bool = True,
     ):
-        self.parser: Parser[ParserType_co]
+        self.parser: Parser[ParserType]
         self.parser = self.create_parser()
         self.args = self.parse_args(args)
         if init_config:
@@ -134,11 +137,11 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
 
     # region Argument Parsing
 
-    def create_parser(self) -> Parser[ParserType_co]:
+    def create_parser(self) -> Parser[ParserType]:
         self.parser = DefaultArgumentParser()
         return self.parser
 
-    def postprocess_args(self, args: NamespaceType[ParserType_co]) -> NamespaceType[ParserType_co]:
+    def postprocess_args(self, args: NamespaceType[ParserType]) -> NamespaceType[ParserType]:
         """
         Post-process the arguments.
 
@@ -150,17 +153,17 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
         args.env_type = env_name
         return args
 
-    def args_to_dict(self, args: ParserType_co | argparse.Namespace) -> dict[str, Any]:
+    def args_to_dict(self, args: NamespaceType[ParserType]) -> dict[str, Any]:
         if isinstance(args, Tap):
             return {k: getattr(args, k) for k in args.class_variables}
         return vars(args).copy()
 
-    def get_args(self) -> NamespaceType[ParserType_co]:
+    def get_args(self) -> NamespaceType[ParserType]:
         if not self.args:
             self.args = self.parse_args()
         return self.args
 
-    def parse_args(self, args: Sequence[str] | None = None) -> NamespaceType[ParserType_co]:
+    def parse_args(self, args: Sequence[str] | None = None) -> NamespaceType[ParserType]:
         """
         Raises:
             ValueError: If parse_args is called twice without recreating the parser.
@@ -219,7 +222,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
     # endregion
     # region hparams
 
-    def clean_args_to_hparams(self, args: Optional[NamespaceType[ParserType_co]] = None) -> dict[str, Any]:
+    def clean_args_to_hparams(self, args: Optional[NamespaceType[ParserType]] = None) -> dict[str, Any]:
         args = args or self.get_args()
         upload_args = remove_ignored_args(args, remove=(*LOG_IGNORE_ARGS, "process_number"))
         return upload_args
@@ -231,7 +234,6 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
     def sample_params(self):
         params = self.create_param_space()
         return {k: v.sample() if isinstance(v, ray.tune.search.sample.Domain) else v for k, v in params.items()}
-
 
     def create_param_space(self) -> dict[str, Any]:
         """
@@ -272,23 +274,57 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
 
     # region config and trainable
 
-    @abstractmethod
-    def _create_config(self) -> _ConfigType_co:
-        """Creates the config for the experiment."""
+    def _create_config(self):
+        # Overwrite if config_from_args is not sufficient.
+        return self.config_from_args(self.args)
 
+    @final
     def create_config(self) -> _ConfigType_co:
         """
         Creates the config for the experiment.
 
         Attention:
-            Do not overwrite this method. Overwrite _create_config instead.
+            Do not overwrite this method. Overwrite _create_config / config_from_args instead.
         """
         self.config = self._create_config()
+        type(self)._check_callbacks_requested()  # classmethod!
+        type(self)._retrieved_callbacks = False  # Reset for next call
         return self.config
 
     @classmethod
     @abstractmethod
-    def config_from_args(cls, args: ParserType_co | argparse.Namespace) -> _ConfigType_co:
+    def _config_from_args(cls, args: ParserType | argparse.Namespace) -> _ConfigType_co:
+        """
+        Create an algorithm configuration; similar to `create_config` but as a `classmethod`.
+
+        Tip:
+            This method is useful if you do not have access to the setup instance, e.g.
+            inside the trainable function.
+
+        Usage:
+            .. code-block:: python
+
+                algo: AlgorithmConfig = Setup.config_from_args(args)
+
+            The easiest way to write this method is to use:
+
+            ```python
+            config, _spec = create_algorithm_config(
+                args,
+                env_type=args.env_type,
+                module_class=YourModuleClass,
+                catalog_class=YourCatalogClass,
+                model_config=args.as_dict() if hasattr(args, "as_dict") else vars(args).copy(),
+                framework="torch",  # or "tf2"; "jax" not supported
+                discrete_eval=False,
+            )
+            cls.add_callbacks_to_config(config, cls._get_callbacks_from_args(args))
+            ```
+        """
+
+    @final
+    @classmethod
+    def config_from_args(cls, args: NamespaceType[ParserType]) -> _ConfigType_co:
         """
         Create an algorithm configuration; similar to `create_config` but as a `classmethod`.
 
@@ -301,6 +337,10 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
 
                 algo: AlgorithmConfig = Setup.config_from_args(args)
         """
+        config = cls._config_from_args(args)
+        cls._check_callbacks_requested()
+        # do not reset as we also check in create_config
+        return config
 
     def build_algo(self) -> _AlgorithmType_co:
         try:
@@ -384,7 +424,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
 
     # region Tuner
 
-    def create_tuner(self: ExperimentSetupBase[ParserType_co, _ConfigType_co]) -> tune.Tuner:
+    def create_tuner(self: ExperimentSetupBase[ParserType, _ConfigType_co]) -> tune.Tuner:
         return TunerSetup(setup=self).create_tuner()
 
     # endregion
@@ -407,6 +447,77 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
             self.comet_upload_offline_experiments()
         if self.args.wandb and "upload" in self.args.wandb:
             self.wandb_upload_offline_experiments()
+
+    # endregion
+
+    # region callbacks
+
+    @classmethod
+    def _check_callbacks_requested(cls):
+        """
+        Check if the callbacks have been requested.
+
+        Note:
+            This is only a weak check - on the class - to be compatible with
+            config_from_args.
+        """
+        if cls._retrieved_callbacks:
+            return True
+        logger.warning(
+            "Callbacks for the Setup class %s have not been retrieved after creating the config. "
+            "This may result in missing callbacks in the experiment.",
+            cls.__name__,
+            stacklevel=3,
+        )
+        return False
+
+    @classmethod
+    @abstractmethod
+    def _get_callbacks_from_args(cls, args: NamespaceType[ParserType]) -> list[type[RLlibCallback]]:
+        ...
+
+    def _get_callbacks(self) -> list[type[RLlibCallback]]:
+        """
+        Returns a list of callbacks to be used with the experiment.
+
+        Attention:
+            Callbacks should be retrieved via get_callbacks,
+            which sets the flag that the callbacks have been requested
+            on the respective subclass.
+
+            Overwrite this method if _get_callbacks_from_args is not sufficient.
+        """
+        return self._get_callbacks_from_args(self.args)
+
+    @final
+    def get_callbacks(self) -> list[Callable]:
+        """
+        Returns a list of callbacks to be used with the experiment.
+
+        Do not overwrite this method. Overwrite _get_callbacks instead.
+        """
+        self._retrieved_callbacks = True
+        return self._get_callbacks()
+
+    @staticmethod
+    def add_callbacks_to_config(config: AlgorithmConfig, callbacks: type[RLlibCallback] | list[type[RLlibCallback]]):
+        """
+        Add the callbacks to the config.
+
+        Args:
+            config: The config to add the callback to.
+            callback: The callback to add to the config.
+        """
+        if not isinstance(callbacks, (list, tuple)):
+            callbacks = [callbacks]
+        if isinstance(config.callbacks_class, list):
+            config.callbacks_class.extend(callbacks)
+        elif getattr(config.callbacks_class, "IS_CALLBACK_CONTAINER", False):
+            # Deprecated Multi callback
+            config.callbacks_class._callback_list.extend(callbacks)  # type: ignore[attr-defined]
+        else:
+            # Newer API
+            config.callbacks(callbacks_class=[config.callbacks_class, *callbacks])
 
     # endregion
 

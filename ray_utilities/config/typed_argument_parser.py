@@ -152,6 +152,11 @@ class DefaultExtraArgs(Tap):
         super().configure()
         self.add_argument("--extra", help="extra arguments", nargs="+")
 
+class OptionalExtenionsArgs(Tap):
+    dynamic_buffer: bool = False
+    """Use DynamicBufferCallback"""
+    # static_batch: bool = True
+
 
 class DefaultArgumentParser(
     _DefaultSetupArgumentParser,
@@ -159,6 +164,7 @@ class DefaultArgumentParser(
     DefaultEnvironmentArgParser,
     DefaultLoggingArgParser,
     DefaultExtraArgs,
+    OptionalExtenionsArgs,
 ):
     def configure(self) -> None:
         return super().configure()
