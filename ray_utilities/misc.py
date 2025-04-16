@@ -6,13 +6,14 @@ from typing import TYPE_CHECKING, TypeVar
 
 from ray.experimental import tqdm_ray
 from tqdm import tqdm
-from typing_extensions import TypeIs, Iterable
+from typing_extensions import Iterable, TypeIs
 
 from ray_utilities.constants import RAY_UTILITIES_INITIALIZATION_TIMESTAMP
 
 if TYPE_CHECKING:
-    from ray.tune.experiment import Trial
     from collections.abc import Callable
+
+    from ray.tune.experiment import Trial
 
 _T = TypeVar("_T")
 

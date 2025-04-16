@@ -3,7 +3,7 @@ import logging
 import colorlog
 
 
-def nicer_logging(logger: logging.Logger | str, level: int | str | None = None):
+def nice_logger(logger: logging.Logger | str, level: int | str | None = None):
     """Modifies the logger to have a colored formatter and set the level."""
     if isinstance(logger, str):
         logger = logging.getLogger(logger)

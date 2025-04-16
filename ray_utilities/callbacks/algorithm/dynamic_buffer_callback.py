@@ -178,8 +178,8 @@ def make_dynamic_buffer_callback(func: UpdateFunction) -> type[DynamicBufferUpda
 
 if __name__ == "__main__":
     # simulate Increase
-    from ray_utilities import nicer_logging
-    nicer_logging(logger, "DEBUG")
+    from ray_utilities import nice_logger
+    nice_logger(logger, "DEBUG")
     global_step = 0
     dynamic_buffer = True
     dynamic_batch = True
