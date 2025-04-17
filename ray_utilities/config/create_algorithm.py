@@ -112,7 +112,7 @@ def create_algorithm_config(
     )
     config.learners(
         # for fractional GPUs, you should always set num_learners to 0 or 1
-        num_learners=0 if args["parallel"] else 0,
+        num_learners=1 if args["parallel"] else 0,
         num_cpus_per_learner=0 if args["test"] and args["num_jobs"] < 2 else 1,
         num_gpus_per_learner=1 if args["gpu"] else 0,
     )

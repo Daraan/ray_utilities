@@ -102,11 +102,13 @@ class DefaultLoggingArgParser(Tap):
     comet: OnlineLoggingOption = False
     comment: Optional[str] = None
     tags: list[str] = []  # noqa: RUF012
+    log_all: bool = False
+    """Log all metrics and do not reduce them to the most important ones"""
 
     @property
     def use_comet_offline(self) -> bool:
         return self.comet and self.comet.lower().startswith("offline")
-    
+
     def __setstate__(self, d: dict[str, Any]) -> None:
         d.pop("use_comet_offline", None)  # do not set property
         return super().__setstate__(d)

@@ -54,15 +54,15 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-ParserType = TypeVar("ParserType", bound="DefaultArgumentParser")
-Parser: TypeAlias = "argparse.ArgumentParser | ParserType"
-NamespaceType: TypeAlias = "argparse.Namespace | ParserType"  # Generic
+ParserType_co = TypeVar("ParserType_co", bound="DefaultArgumentParser", covariant=True)
+Parser: TypeAlias = "argparse.ArgumentParser | ParserType_co"
+NamespaceType: TypeAlias = "argparse.Namespace | ParserType_co"  # Generic
 
 _ConfigType_co = TypeVar("_ConfigType_co", bound="AlgorithmConfig", covariant=True, default="AlgorithmConfig")
 _AlgorithmType_co = TypeVar("_AlgorithmType_co", bound="Algorithm", covariant=True, default="PPO")
 
 
-class ExperimentSetupBase(ABC, Generic[ParserType, _ConfigType_co, _AlgorithmType_co]):
+class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _AlgorithmType_co]):
     """
     Methods:
     - create_parser
@@ -121,7 +121,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType, _ConfigType_co, _AlgorithmTyp
         init_param_space: bool = True,
         init_trainable: bool = True,
     ):
-        self.parser: Parser[ParserType]
+        self.parser: Parser[ParserType_co]
         self.parser = self.create_parser()
         self.args = self.parse_args(args)
         if init_config:
@@ -137,11 +137,11 @@ class ExperimentSetupBase(ABC, Generic[ParserType, _ConfigType_co, _AlgorithmTyp
 
     # region Argument Parsing
 
-    def create_parser(self) -> Parser[ParserType]:
+    def create_parser(self) -> Parser[ParserType_co]:
         self.parser = DefaultArgumentParser()
         return self.parser
 
-    def postprocess_args(self, args: NamespaceType[ParserType]) -> NamespaceType[ParserType]:
+    def postprocess_args(self, args: NamespaceType[ParserType_co]) -> NamespaceType[ParserType_co]:
         """
         Post-process the arguments.
 
@@ -153,17 +153,17 @@ class ExperimentSetupBase(ABC, Generic[ParserType, _ConfigType_co, _AlgorithmTyp
         args.env_type = env_name
         return args
 
-    def args_to_dict(self, args: NamespaceType[ParserType]) -> dict[str, Any]:
+    def args_to_dict(self, args: NamespaceType[ParserType_co]) -> dict[str, Any]:
         if isinstance(args, Tap):
             return {k: getattr(args, k) for k in args.class_variables}
         return vars(args).copy()
 
-    def get_args(self) -> NamespaceType[ParserType]:
+    def get_args(self) -> NamespaceType[ParserType_co]:
         if not self.args:
             self.args = self.parse_args()
         return self.args
 
-    def parse_args(self, args: Sequence[str] | None = None) -> NamespaceType[ParserType]:
+    def parse_args(self, args: Sequence[str] | None = None) -> NamespaceType[ParserType_co]:
         """
         Raises:
             ValueError: If parse_args is called twice without recreating the parser.
@@ -222,7 +222,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType, _ConfigType_co, _AlgorithmTyp
     # endregion
     # region hparams
 
-    def clean_args_to_hparams(self, args: Optional[NamespaceType[ParserType]] = None) -> dict[str, Any]:
+    def clean_args_to_hparams(self, args: Optional[NamespaceType[ParserType_co]] = None) -> dict[str, Any]:
         args = args or self.get_args()
         upload_args = remove_ignored_args(args, remove=(*LOG_IGNORE_ARGS, "process_number"))
         return upload_args
@@ -293,7 +293,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType, _ConfigType_co, _AlgorithmTyp
 
     @classmethod
     @abstractmethod
-    def _config_from_args(cls, args: ParserType | argparse.Namespace) -> _ConfigType_co:
+    def _config_from_args(cls, args: ParserType_co | argparse.Namespace) -> _ConfigType_co:
         """
         Create an algorithm configuration; similar to `create_config` but as a `classmethod`.
 
@@ -324,7 +324,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType, _ConfigType_co, _AlgorithmTyp
 
     @final
     @classmethod
-    def config_from_args(cls, args: NamespaceType[ParserType]) -> _ConfigType_co:
+    def config_from_args(cls, args: NamespaceType[ParserType_co]) -> _ConfigType_co:
         """
         Create an algorithm configuration; similar to `create_config` but as a `classmethod`.
 
@@ -424,7 +424,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType, _ConfigType_co, _AlgorithmTyp
 
     # region Tuner
 
-    def create_tuner(self: ExperimentSetupBase[ParserType, _ConfigType_co]) -> tune.Tuner:
+    def create_tuner(self: ExperimentSetupBase[ParserType_co, _ConfigType_co]) -> tune.Tuner:
         return TunerSetup(setup=self).create_tuner()
 
     # endregion
@@ -473,7 +473,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType, _ConfigType_co, _AlgorithmTyp
 
     @classmethod
     @abstractmethod
-    def _get_callbacks_from_args(cls, args: NamespaceType[ParserType]) -> list[type[RLlibCallback]]:
+    def _get_callbacks_from_args(cls, args: NamespaceType[ParserType_co]) -> list[type[RLlibCallback]]:
         ...
 
     def _get_callbacks(self) -> list[type[RLlibCallback]]:

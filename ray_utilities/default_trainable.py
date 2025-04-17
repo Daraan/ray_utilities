@@ -166,7 +166,7 @@ def default_trainable(
         result = cast("StrictAlgorithmReturnData", algo.train())
 
         # Reduce to key-metrics
-        metrics = create_log_metrics(result, discrete_eval=discrete_eval)
+        metrics = create_log_metrics(result, discrete_eval=discrete_eval, log_all=args["log_all"])
         # Possibly use if train.get_context().get_local/global_rank() == 0 to save videos
         # Unknown if should save video here and clean from metrics or save in a callback later is faster.
 

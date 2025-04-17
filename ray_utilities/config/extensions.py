@@ -5,8 +5,6 @@ from ray_utilities.callbacks.algorithm.dynamic_buffer_callback import DynamicBuf
 
 from typing import TYPE_CHECKING
 
-from .experiment_base import ExperimentSetupBase, NamespaceType, ParserType, _ConfigType_co, _AlgorithmType_co
-
 if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray_utilities.config.typed_argument_parser import OptionalExtenionsArgs

@@ -111,7 +111,13 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         save_checkpoints: bool = False,
         # Note: maybe want to log these in an algorithm debugger
         exclude_metrics: Optional[Iterable[str]] = None,
-        log_to_other: Optional[Iterable[str]] = ("comment", "cli_args/comment"),
+        # NOTE: maintain/sync in _tuner_callbacks_setup.py
+        log_to_other: Optional[Iterable[str]] = (
+            "comment",
+            "cli_args/comment",
+            "evaluation/env_runners/environments/seeds",
+            "env_runners/environments/seeds",
+        ),
         log_cli_args: bool = True,
         video_keys: Iterable[tuple[str, ...]] = DEFAULT_VIDEO_DICT_KEYS,  # NOTE: stored as string not list of keys
         log_pip_packages: bool = False,
@@ -156,10 +162,22 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         """Keys that are not logged at all"""
         self._to_other.extend(log_to_other or [])
         self._cli_args = " ".join(sys.argv[1:]) if log_cli_args else None
-        self._log_only_once = [*self._to_exclude, *self._to_system]  # + all config values; but flat keys!
+        self._log_only_once = [
+            *self._to_exclude,
+            *self._to_system,
+            # NOTE: These are NOT logged on log_trial_start and might not be logged on_trial_result
+            # Do not add them here!
+            # "env_runners/environments/seeds",
+            # "evaluation/env_runners/environments/seeds",
+        ]  # + all config values; but flat keys!
+        if (
+            "env_runners/environments/seeds" in self._log_only_once
+            or "evaluation/env_runners/environments/seeds" in self._log_only_once
+        ):
+            _LOGGER.warning("environment seeds are not logged, remove from log_only_once")
         if "training_iteration" in self._log_only_once:
             self._log_only_once.remove("training_iteration")
-            _LOGGER.warning("training_iteration must be in the results to log it")
+            _LOGGER.debug("training_iteration must be in the results to log it, not removing it")
         self._log_pip_packages = log_pip_packages and not experiment_kwargs.get("log_env_details", False)  # noqa: RUF056
         """If log_env_details is True pip packages are already logged."""
 
@@ -259,7 +277,11 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
                 for k, v in flat_result.items()
                 if k not in self._flat_video_keys and (not isinstance(v, float) or not math.isnan(v))
             }  # type: ignore[assignment]
-
+        # These are only once a list of int, after reduce this list is empty:
+        if not log_result.get("env_runners/environments/seeds", True):
+            del log_result["env_runners/environments/seeds"]
+        if not log_result.get("evaluation/env_runners/environments/seeds", True):
+            del log_result["evaluation/env_runners/environments/seeds"]
         # Cannot remove this
         log_result["training_iteration"] = step
         # Log normal metrics and parameters

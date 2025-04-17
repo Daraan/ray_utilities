@@ -115,9 +115,9 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
         )
 
     def create_tuner(self) -> tune.Tuner:
-        ressource_requirements = PPO.default_resource_request(self._setup.config)
-        logger.info("Default resource per trial: %s", ressource_requirements)
-        trainable = tune.with_resources(self._setup.trainable, ressource_requirements)
+        resource_requirements = PPO.default_resource_request(self._setup.config)
+        logger.info("Default resource per trial: %s", resource_requirements.bundles)
+        trainable = tune.with_resources(self._setup.trainable, resource_requirements)
         # functools.update_wrapper(trainable, self._setup.trainable)
         trainable.__name__ = self._setup.trainable.__name__
         return tune.Tuner(

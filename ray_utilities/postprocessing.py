@@ -1,10 +1,9 @@
 from __future__ import annotations
+
 # pyright: enableExperimentalFeatures=true
 # ruff: noqa: PLC0415  # imports at top level of file; safe import time if not needed.
-
 import logging
 import math
-
 from functools import partial, wraps
 from typing import (
     TYPE_CHECKING,
@@ -34,6 +33,7 @@ from ray_utilities.constants import (
     EPISODE_BEST_VIDEO,
     EPISODE_WORST_VIDEO,
 )
+from ray_utilities.misc import deep_update
 from ray_utilities.temp_dir import TEMP_DIR_PATH
 from ray_utilities.typing.trainable_return import TrainableReturnData
 from ray_utilities.video.numpy_to_video import create_temp_video
@@ -228,6 +228,9 @@ def save_videos(
                     # Set VideoPath
                     value["video_path"] = create_temp_video(value["video"], dir=dir)
                 elif not isinstance(value, (str, dict)):
+                    if isinstance(value, list) and len(value) == 0:
+                        _logger.warning("Empty video list %s - skipping to save video", key)
+                        continue
                     # No VideoMetricsDict present and not yet a video
                     _logger.warning(
                         "Overwritting video with path. Consider moving the video to a subkey %s : {'video': video}", key
@@ -282,7 +285,11 @@ def _old_strip_metadata_from_flat_metrics(result: dict[str, Any]) -> dict[str, A
 
 
 def create_log_metrics(
-    result: StrictAlgorithmReturnData, *, save_video=False, discrete_eval: bool = False
+    result: StrictAlgorithmReturnData,
+    *,
+    save_video=False,
+    discrete_eval: bool = False,
+    log_all: bool = False,
 ) -> LogMetricsDict:
     """
     Filters the result of the Algorithm training step to only keep the relevant metrics.
@@ -292,6 +299,7 @@ def create_log_metrics(
         save_video: If True the video will be saved to a temporary directory
             A new key "video_path" will be added to the video dict, or if the video is a numpy array
             the array will be replaced by the path.
+        log_all: If True will not reduce the metrics
     """
     # NOTE: The csv logger will only log keys that are present in the first result,
     #       i.e. the videos will not be logged if they are added later; but overtwise everytime!
@@ -374,8 +382,19 @@ def create_log_metrics(
             check_if_video(evaluation_videos_worst, EPISODE_WORST_VIDEO)
         if save_video:
             save_videos(metrics)
-    return metrics
-
+    if not log_all:
+        return metrics
+    merged_result = deep_update(result, metrics)  # type: ignore[return-value]
+    # clean videos
+    if EVALUATION_RESULTS in result:
+        if not evaluation_videos_best:  # pyright: ignore[reportPossiblyUnboundVariable]
+            merged_result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(EPISODE_BEST_VIDEO, None)
+        if not evaluation_videos_worst:  # pyright: ignore[reportPossiblyUnboundVariable]
+            merged_result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(EPISODE_WORST_VIDEO, None)
+        if not discrete_eval:
+            merged_result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(EPISODE_BEST_VIDEO, None)
+            merged_result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(EPISODE_WORST_VIDEO, None)
+    return merged_result
 
 def update_running_reward(new_reward: float, reward_array: list[float]) -> float:
     if not math.isnan(new_reward):

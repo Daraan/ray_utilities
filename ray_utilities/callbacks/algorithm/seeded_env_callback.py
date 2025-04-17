@@ -89,7 +89,7 @@ class SeedEnvsCallback(DefaultCallbacks):
         # NOTE: Could log seeds in metrics_logger
         if metrics_logger:
             metrics_logger.log_value(
-                ("env_runners", "environments", "seeds"), tuple(seeds.tolist()), clear_on_reduce=False, reduce=None
+                ("environments", "seeds"), tuple(seeds.tolist()), clear_on_reduce=True, reduce=None
             )
 
     def __call__(self, **kwargs):

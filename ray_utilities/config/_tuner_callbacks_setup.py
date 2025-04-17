@@ -165,7 +165,14 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             auto_histogram_activation_logging=False,  # Default False
             # Custom keywords of Adv Callback
             exclude_metrics=self.EXCLUDE_METRICS,
-            log_to_other=("comment", "cli_args/comment", "cli_args/test", "cli_args/num_jobs"),
+            log_to_other=(
+                "comment",
+                "cli_args/comment",
+                "cli_args/test",
+                "cli_args/num_jobs",
+                "evaluation/env_runners/environments/seeds",
+                "env_runners/environments/seeds",
+            ),
             log_cli_args=True,
             log_pip_packages=True,  # only relevant if log_env_details=False
         )

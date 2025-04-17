@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 import functools
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from ray.experimental import tqdm_ray
 from tqdm import tqdm
@@ -48,3 +48,18 @@ def get_trainable_name(trainable: Callable) -> str:
 def is_pbar(pbar: Iterable[_T]) -> TypeIs[tqdm_ray.tqdm | tqdm[_T]]:
     """TypeIs-guard for tqdm or tqdm_ray.tqdm."""
     return isinstance(pbar, (tqdm_ray.tqdm, tqdm))
+
+
+def deep_update(mapping: dict[str, Any], *updating_mappings: dict[str, Any]) -> dict[str, Any]:
+    """
+    Taken from pydantic:
+    https://github.com/pydantic/pydantic/blob/main/pydantic/_internal/_utils.py
+    """
+    updated_mapping = mapping.copy()
+    for updating_mapping in updating_mappings:
+        for k, v in updating_mapping.items():
+            if k in updated_mapping and isinstance(updated_mapping[k], dict) and isinstance(v, dict):
+                updated_mapping[k] = deep_update(updated_mapping[k], v)
+            else:
+                updated_mapping[k] = v
+    return updated_mapping
