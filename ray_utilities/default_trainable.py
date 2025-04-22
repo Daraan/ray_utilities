@@ -17,7 +17,7 @@ from typing_extensions import TypeAliasType
 
 from ray_utilities.callbacks.progress_bar import update_pbar
 from ray_utilities.config.experiment_base import ExperimentSetupBase
-from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+from ray_utilities.config.typed_argument_parser import LOG_STATS, DefaultArgumentParser
 from ray_utilities.constants import EVALUATED_THIS_STEP
 from ray_utilities.environment import seed_environments_for_config
 from ray_utilities.misc import is_pbar
@@ -166,7 +166,7 @@ def default_trainable(
         result = cast("StrictAlgorithmReturnData", algo.train())
 
         # Reduce to key-metrics
-        metrics = create_log_metrics(result, discrete_eval=discrete_eval, log_all=args["log_all"])
+        metrics = create_log_metrics(result, discrete_eval=discrete_eval, log_stats=args[LOG_STATS])
         # Possibly use if train.get_context().get_local/global_rank() == 0 to save videos
         # Unknown if should save video here and clean from metrics or save in a callback later is faster.
 

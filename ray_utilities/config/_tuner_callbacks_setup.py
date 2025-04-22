@@ -41,11 +41,11 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
     EXCLUDE_METRICS = (
         "time_since_restore",
         "iterations_since_restore",
-        "timestamp",
-        "learners",
-        "timers",
-        "num_agent_steps_sampled_lifetime",
-        "fault_tolerance",
+        #"timestamp",  # autofilled
+        #"num_agent_steps_sampled_lifetime",
+        #"learners", # NEW: filtered by log_stats
+        #"timers",
+        # "fault_tolerance",
         # "training_iteration", #  needed for the callback
     )
 
@@ -96,10 +96,10 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
                 *self.EXCLUDE_METRICS,
                 "cli_args/test",
                 "cli_args/num_jobs",
-                "learners",
-                "timers",
-                "num_agent_steps_sampled_lifetime",
-                "fault_tolerance",
+                #"learners",
+                #"timers",
+                #"num_agent_steps_sampled_lifetime",
+                #"fault_tolerance",
             ],
             upload_checkpoints=False,
             save_code=False,  # Code diff

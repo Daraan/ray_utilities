@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Literal, TypeAlias, TypeGuard
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, TypeGuard
 
 from typing_extensions import Never, NotRequired, Required, TypedDict
 
@@ -38,8 +38,8 @@ class _WarnVideosToEnvRunners(TypedDict):
 
 class _LogMetricsEnvRunnersResultsDict(TypedDict):
     episode_return_mean: float
-    epioode_return_max: NotRequired[float]
-    epioode_return_min: NotRequired[float]
+    episode_return_max: NotRequired[float]
+    episode_return_min: NotRequired[float]
 
 
 class _LogMetricsEvalEnvRunnersResultsDict(_LogMetricsEnvRunnersResultsDict, total=False):
@@ -69,7 +69,10 @@ class LogMetricsDict(TypedDict):
     """The number of times train.report() has been called"""
 
     done: bool
-
+    timers: NotRequired[dict[str, float | dict[str, Any]]]
+    fault_tolerance: NotRequired[Any]
+    env_runner_group: NotRequired[Any]
+    num_env_steps_sampled_lifetime_throughput: NotRequired[int]
 
 class AutoExtendedLogMetricsDict(LogMetricsDict):
     """

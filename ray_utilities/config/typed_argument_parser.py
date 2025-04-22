@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, get_args
 
 from tap import Tap
 from typing_extensions import Literal
@@ -28,6 +28,7 @@ class _DefaultSetupArgumentParser(Tap):
         self.add_argument("-env", "--env_type")
         self.add_argument("-e", "--episodes")
         self.add_argument("-s", "--seed", default=None, type=int)
+        #self.add_argument("--test", nargs="*", const=True, default=False)
 
 
 class DefaultResourceArgParser(Tap):
@@ -95,6 +96,8 @@ class DefaultEnvironmentArgParser(Tap):
 OnlineLoggingOption = Literal["offline", "offline+upload", "online", "off", False]
 """off -> NO LOGGING; offline -> offline logging but no upload"""
 
+LogStatsChoices = Literal["minimal", "more", "timers", "learners", "timers+learners", "most", "all"]
+LOG_STATS = "log_stats"
 
 class DefaultLoggingArgParser(Tap):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
@@ -102,7 +105,7 @@ class DefaultLoggingArgParser(Tap):
     comet: OnlineLoggingOption = False
     comment: Optional[str] = None
     tags: list[str] = []  # noqa: RUF012
-    log_all: bool = False
+    log_stats: LogStatsChoices = "minimal"
     """Log all metrics and do not reduce them to the most important ones"""
 
     @property
@@ -125,7 +128,7 @@ class DefaultLoggingArgParser(Tap):
     def configure(self) -> None:
         super().configure()
         self.add_argument("--log_level")
-        logger_choices: list[OnlineLoggingOption] = ["offline", "offline+upload", "online", "off"]
+        logger_choices: tuple[OnlineLoggingOption] = get_args(OnlineLoggingOption)
         self.add_argument(
             "--wandb",
             "-wb",
@@ -145,6 +148,9 @@ class DefaultLoggingArgParser(Tap):
         )
         self.add_argument("--comment", "-c", type=str, default=None)
         self.add_argument("--tags", nargs="+", default=[])
+        self.add_argument(
+            "--" + LOG_STATS, nargs="?", const="more", default="minimal", choices=get_args(LogStatsChoices)
+        )
 
 
 class DefaultExtraArgs(Tap):

@@ -20,11 +20,29 @@ from typing import (
 import numpy as np
 from ray.air.integrations.comet import CometLoggerCallback
 from ray.rllib.utils.metrics import (
+    ALL_MODULES,  # pyright: ignore[reportPrivateImportUsage]
+    #CONNECTOR_TIMERS,  # subkey of env_to_module_connector
+    ENV_RESET_TIMER,
     ENV_RUNNER_RESULTS,
+    ENV_STEP_TIMER,
+    ENV_TO_MODULE_CONNECTOR,
+    ENV_TO_MODULE_SUM_EPISODES_LENGTH_IN,
+    ENV_TO_MODULE_SUM_EPISODES_LENGTH_OUT,
+    EPISODE_DURATION_SEC_MEAN,
     EPISODE_RETURN_MAX,
     EPISODE_RETURN_MEAN,
     EPISODE_RETURN_MIN,
     EVALUATION_RESULTS,
+    LEARNER_CONNECTOR,
+    LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_IN,
+    LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_OUT,
+    LEARNER_RESULTS,
+    MODULE_TO_ENV_CONNECTOR,
+    RLMODULE_INFERENCE_TIMER,
+    SAMPLE_TIMER,  # OldAPI
+    TIME_BETWEEN_SAMPLING,
+    TIMERS,
+    WEIGHTS_SEQ_NO,  # Sequence Number of weights currently used. Increased +1 per update.
 )
 from typing_extensions import TypeVar
 
@@ -43,6 +61,7 @@ if TYPE_CHECKING:
 
     from typing_extensions import TypeForm
 
+    from ray_utilities.config.typed_argument_parser import LogStatsChoices
     from ray_utilities.typing import LogMetricsDict, StrictAlgorithmReturnData
     from ray_utilities.typing.algorithm_return import EvaluationResultsDict
     from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict
@@ -289,7 +308,7 @@ def create_log_metrics(
     *,
     save_video=False,
     discrete_eval: bool = False,
-    log_all: bool = False,
+    log_stats: LogStatsChoices = "minimal",
 ) -> LogMetricsDict:
     """
     Filters the result of the Algorithm training step to only keep the relevant metrics.
@@ -299,7 +318,7 @@ def create_log_metrics(
         save_video: If True the video will be saved to a temporary directory
             A new key "video_path" will be added to the video dict, or if the video is a numpy array
             the array will be replaced by the path.
-        log_all: If True will not reduce the metrics
+        log_metrics: Define how much the metrics should be reduced.
     """
     # NOTE: The csv logger will only log keys that are present in the first result,
     #       i.e. the videos will not be logged if they are added later; but overtwise everytime!
@@ -382,7 +401,7 @@ def create_log_metrics(
             check_if_video(evaluation_videos_worst, EPISODE_WORST_VIDEO)
         if save_video:
             save_videos(metrics)
-    if not log_all:
+    if log_stats == "minimal":
         return metrics
     merged_result = deep_update(result, metrics)  # type: ignore[return-value]
     # clean videos
@@ -394,7 +413,109 @@ def create_log_metrics(
         if not discrete_eval:
             merged_result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(EPISODE_BEST_VIDEO, None)
             merged_result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(EPISODE_WORST_VIDEO, None)
-    return merged_result
+    merged_result = _reorganize_connector_logs(merged_result)
+    merged_result = _reorganize_timer_logs(merged_result)
+    if log_stats == "all":
+        return merged_result  # type: ignore[return-value]
+    # Remove other unwanted metrics
+    # log_stats in ("more", "timers", "learners", "timers+learners", "most")
+    # Additional Keys:
+    # {'date', 'num_env_steps_sampled_lifetime', 'config', 'node_ip', 'hostname',
+    # 'iterations_since_restore', 'timestamp', 'time_this_iter_s', 'pid', 'time_since_restore',
+    # 'time_total_s', 'num_training_step_calls_per_iteration', 'trial_id'}
+    # Remove System stats:
+    if log_stats != "most":
+        for k in (
+            #"time_since_restore",  # moved to timers
+            "iterations_since_restore",
+            #"node_ip",  # autofilled
+            #"hostname",  # autofilled
+            #"pid",  # autofilled
+            #"date",
+            # "timestamp",  # autofilled
+            # "time_this_iter_s",  # will be re-added
+            # "time_total_s",  # will be re-added
+            "num_env_steps_sampled_lifetime",
+            "num_training_step_calls_per_iteration",  #  if using algo.train more often before logging
+        ):
+            merged_result.pop(k)
+        merged_result[TIMERS].pop("time_since_restore")
+
+    merged_result.pop("fault_tolerance")
+    merged_result.pop("env_runner_group")
+    merged_result.pop("num_env_steps_sampled_lifetime_throughput")
+    # merged_result[ENV_RUNNER_RESULTS].pop("num_healthy_workers", )
+    # merged_result[ENV_RUNNER_RESULTS].pop("num_remote_worker_restarts", None)
+    merged_result[ENV_RUNNER_RESULTS].pop(ENV_TO_MODULE_SUM_EPISODES_LENGTH_IN)
+    merged_result[ENV_RUNNER_RESULTS].pop(ENV_TO_MODULE_SUM_EPISODES_LENGTH_OUT)
+    merged_result[ENV_RUNNER_RESULTS].pop(WEIGHTS_SEQ_NO)
+    if EVALUATION_RESULTS in result:
+        merged_result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop("num_env_steps_sampled_lifetime_throughput", None)
+        merged_result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(ENV_TO_MODULE_SUM_EPISODES_LENGTH_IN)
+        merged_result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(ENV_TO_MODULE_SUM_EPISODES_LENGTH_OUT)
+        merged_result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(WEIGHTS_SEQ_NO)
+        merged_result[EVALUATION_RESULTS].pop("num_healthy_workers", None)
+        merged_result[EVALUATION_RESULTS].pop("num_remote_worker_restarts", None)
+        merged_result[EVALUATION_RESULTS].pop("actor_manager_num_outstanding_async_reqs", None)
+    # most currently equivalent to timers+learners
+    if "timers" not in log_stats and log_stats != "most":  # timers and timers+learners
+        merged_result.pop(TIMERS)
+    if "learners" not in log_stats and log_stats != "most":  # learners and timers+learners
+        merged_result.pop("learners", None)
+    else:
+        merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_IN)
+        merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_OUT)
+        merged_result[LEARNER_RESULTS][ALL_MODULES].pop("num_env_steps_trained_lifetime_throughput")
+    return merged_result  # type: ignore[return-value]
+
+def _reorganize_connector_logs(results: dict[str, dict[str, Any | dict[str, Any]]]):
+    """Move timer results listed in env_runner to the timers key"""
+    results[TIMERS][ENV_TO_MODULE_CONNECTOR] = results[ENV_RUNNER_RESULTS].pop(ENV_TO_MODULE_CONNECTOR)
+    results[TIMERS][MODULE_TO_ENV_CONNECTOR] = results[ENV_RUNNER_RESULTS].pop(MODULE_TO_ENV_CONNECTOR)
+    results[TIMERS][RLMODULE_INFERENCE_TIMER] = results[ENV_RUNNER_RESULTS].pop(RLMODULE_INFERENCE_TIMER)
+    results[TIMERS][ENV_RESET_TIMER] = results[ENV_RUNNER_RESULTS].pop(ENV_RESET_TIMER)
+    results[TIMERS][ENV_STEP_TIMER] = results[ENV_RUNNER_RESULTS].pop(ENV_STEP_TIMER)
+    results[TIMERS][LEARNER_CONNECTOR] = results[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR)
+    results[TIMERS][LEARNER_CONNECTOR].update(results[TIMERS][LEARNER_CONNECTOR].pop(TIMERS))
+    if EVALUATION_RESULTS in results and results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(ENV_TO_MODULE_CONNECTOR):
+        evaluation_timers: dict[str, Any] = results[TIMERS].setdefault(EVALUATION_RESULTS, {})
+        evaluation_timers[ENV_TO_MODULE_CONNECTOR] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(
+            ENV_TO_MODULE_CONNECTOR
+        )
+        evaluation_timers[MODULE_TO_ENV_CONNECTOR] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(
+            MODULE_TO_ENV_CONNECTOR
+        )
+        evaluation_timers[RLMODULE_INFERENCE_TIMER] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(
+            RLMODULE_INFERENCE_TIMER
+        )
+        evaluation_timers[ENV_STEP_TIMER] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(ENV_STEP_TIMER)
+        evaluation_timers[ENV_RESET_TIMER] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(ENV_RESET_TIMER)
+    return results
+
+def _reorganize_timer_logs(results: dict[str, dict[str, Any | dict[str, Any]]]):
+    results[TIMERS]["time_since_restore"] = results.pop("time_since_restore")
+    # Keep always
+    # results[TIMERS]["time_total_s"] = results.pop("time_total_s")
+    # results[TIMERS]["time_this_iter_s"] = results["time_this_iter_s"] # autofilled
+    results[TIMERS].setdefault(ENV_RUNNER_RESULTS, {})
+    results[TIMERS][ENV_RUNNER_RESULTS][EPISODE_DURATION_SEC_MEAN] = results[ENV_RUNNER_RESULTS].pop(EPISODE_DURATION_SEC_MEAN)
+    try:
+        results[TIMERS][ENV_RUNNER_RESULTS][TIME_BETWEEN_SAMPLING] = results[ENV_RUNNER_RESULTS].pop(TIME_BETWEEN_SAMPLING)
+    except KeyError:
+        pass # second step onward
+    results[TIMERS][ENV_RUNNER_RESULTS][SAMPLE_TIMER] = results[ENV_RUNNER_RESULTS].pop(SAMPLE_TIMER)
+    if EVALUATION_RESULTS in results and len(results[EVALUATION_RESULTS]) > 1:
+        evaluation_timers: dict[str, Any] = results[TIMERS].setdefault(EVALUATION_RESULTS, {})
+        assert EVALUATION_RESULTS not in evaluation_timers
+        evaluation_timers[ENV_RUNNER_RESULTS] = {}
+        evaluation_timers[ENV_RUNNER_RESULTS][EPISODE_DURATION_SEC_MEAN] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(EPISODE_DURATION_SEC_MEAN)
+        # step 2+; else only mean=nan
+        evaluation_timers[ENV_RUNNER_RESULTS][SAMPLE_TIMER] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(SAMPLE_TIMER)
+        try:
+            evaluation_timers[ENV_RUNNER_RESULTS][TIME_BETWEEN_SAMPLING] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(TIME_BETWEEN_SAMPLING)
+        except KeyError:
+            pass # second evaluation onward
+    return results
 
 def update_running_reward(new_reward: float, reward_array: list[float]) -> float:
     if not math.isnan(new_reward):
