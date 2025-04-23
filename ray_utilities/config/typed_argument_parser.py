@@ -18,9 +18,6 @@ class _DefaultSetupArgumentParser(Tap):
     env_type: str = "cart"
     """Environment to run on"""
 
-    episodes: int = 1000
-    """How many episodes"""
-
     iterations: int | Literal["auto"] = 1000  # NOTE: Overwritten by Extra
     """
     How many iterations to run.
@@ -40,14 +37,13 @@ class _DefaultSetupArgumentParser(Tap):
         super().configure()
         self.add_argument("-a", "--agent_type")
         self.add_argument("-env", "--env_type")
-        self.add_argument("-e", "--episodes")
         self.add_argument("--seed", default=None, type=int)
         # self.add_argument("--test", nargs="*", const=True, default=False)
         self.add_argument("--iterations", "-it", default="auto", type=_auto_int_transform)
         self.add_argument("--total_steps", "-ts", default="auto", type=_auto_int_transform)
 
 class RLlibArgumentParser(Tap):
-    train_batch_size_per_learner: int = 4096  # batch size that ray samples
+    train_batch_size_per_learner: int = 2048  # batch size that ray samples
     minibatch_size: int = 128
     """Minibatch size used for backpropagation/optimization"""
 

@@ -55,13 +55,13 @@ def episode_iterator(args: dict[str, Any], hparams: dict[Any, Any], *, use_pbar:
 
 
 def episode_iterator(args: dict[str, Any], hparams: dict[str, Any], *, use_pbar: bool = True) -> tqdm_ray.tqdm | range:
-    """Creates an iterator for `args["episodes"]`
+    """Creates an iterator for `args["iterations"]`
 
     Will create a `tqdm` if `use_pbar` is True, otherwise returns a range object.
     """
     if use_pbar:
-        return tqdm_ray.tqdm(range(args["episodes"]), position=hparams.get("process_number", None))
-    return range(args["episodes"])
+        return tqdm_ray.tqdm(range(args["iterations"]), position=hparams.get("process_number", None))
+    return range(args["iterations"])
 
 
 def create_default_trainable(
