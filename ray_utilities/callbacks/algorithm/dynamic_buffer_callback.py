@@ -126,7 +126,7 @@ class DynamicBufferUpdate(DefaultCallbacks):
         assert algorithm.config.minibatch_size is not None
         n_steps = algorithm.config.train_batch_size_per_learner
         if algorithm.config.learner_config_dict["dynamic_buffer"]:
-            n_steps = max(16, n_steps // 8)
+            n_steps = max(16, n_steps // 8)  # TODO: 8 is hardcoded
         self._initial_steps = n_steps
         logger.debug("Initial rollout size for DynamicBuffer %s", self._initial_steps)
         # legacy only

@@ -24,6 +24,13 @@ class DiscreteEvalRewardMetrics(TypedDict):
     mean: float
     roll: NotRequired[float]
 
+def _unit_division(amount: int) -> tuple[int, str]:
+    """Divides the amount by 1_000_000 or 1_000 and returns the unit."""
+    if amount > 1_000_000:
+        return amount // 1_000_000, "M"
+    if amount > 1_000:
+        return amount // 1_000, "K"
+    return amount, ""
 
 def update_pbar(
     pbar: "tqdm_ray.tqdm | tqdm",
@@ -31,6 +38,8 @@ def update_pbar(
     eval_results: EvalRewardMetrics,
     train_results: Optional[TrainRewardMetrics] = None,
     discrete_eval_results: Optional[DiscreteEvalRewardMetrics] = None,
+    current_step: Optional[int] = None,
+    total_steps: Optional[int] = None,
 ):
     try:
         if train_results:
@@ -50,6 +59,15 @@ def update_pbar(
         lines += [f"Eval R {key}: {value:>6.1f}" for key, value in eval_results.items()]
         if discrete_eval_results:
             lines += [f"Disc Eval R {key}: {value:>6.1f}" for key, value in discrete_eval_results.items()]
+        if current_step is not None:
+            current_step, step_unit = _unit_division(current_step)
+            step_count = f"Step {current_step:>3d}{step_unit}"
+            if total_steps is not None:
+                total_steps, total_step_unit = _unit_division(total_steps)
+                step_count += f"/{total_steps}{total_step_unit}"
+            else:
+                step_count += "/?"
+            lines.append(step_count)
         description = " |".join(lines)
     except KeyError as e:
         description = ""

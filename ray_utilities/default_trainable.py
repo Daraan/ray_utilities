@@ -12,6 +12,7 @@ from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
     EPISODE_RETURN_MEAN,
     EVALUATION_RESULTS,
+    NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
 from typing_extensions import TypeAliasType
 
@@ -161,6 +162,7 @@ def default_trainable(
     disc_eval_mean = None
     disc_running_eval_reward = None
     pbar = episode_iterator(args, hparams, use_pbar=use_pbar)
+    total_steps = args.get("total_steps", None)
     for _episode in pbar:
         # Train and get results
         result = cast("StrictAlgorithmReturnData", algo.train())
@@ -225,6 +227,8 @@ def default_trainable(
                 if disc_eval_mean is not None and disc_running_eval_reward
                 else None
             ),
+            total_steps=total_steps,
+            current_step=result[ENV_RUNNER_RESULTS].get(NUM_ENV_STEPS_SAMPLED_LIFETIME)
         )
     final_results = cast("TrainableReturnData", metrics)
     if "trial_id" not in final_results:

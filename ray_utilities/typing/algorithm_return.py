@@ -24,6 +24,7 @@ class EnvRunnersResultsDict(TypedDict, closed=False):
     episode_return_mean: float
     episode_return_max: float
     episode_return_min: float
+    num_env_steps_sampled_lifetime: NotRequired[int]
 
 
 if _PEP_728_AVAILABLE or TYPE_CHECKING:

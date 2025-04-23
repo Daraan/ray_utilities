@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Optional, get_args
 
 from tap import Tap
 from typing_extensions import Literal
 
+from ray_utilities.dynamic_buffer_update import calculate_total_steps
+
+def _auto_int_transform(x):
+    return int(x) if x != "auto" else x
 
 class _DefaultSetupArgumentParser(Tap):
     agent_type: str
@@ -15,6 +20,15 @@ class _DefaultSetupArgumentParser(Tap):
 
     episodes: int = 1000
     """How many episodes"""
+
+    iterations: int | Literal["auto"] = 1000  # NOTE: Overwritten by Extra
+    """
+    How many iterations to run.
+
+    An iteration consists of *n* iterations over the PPO batch, each further
+    divided into minibatches of size `minibatch_size`.
+    """
+    total_steps: int | Literal["auto"] = 1_000_000  # NOTE: Overwritten by Extra
 
     seed: int | None = None
     test: bool = False
@@ -27,9 +41,24 @@ class _DefaultSetupArgumentParser(Tap):
         self.add_argument("-a", "--agent_type")
         self.add_argument("-env", "--env_type")
         self.add_argument("-e", "--episodes")
-        self.add_argument("-s", "--seed", default=None, type=int)
-        #self.add_argument("--test", nargs="*", const=True, default=False)
+        self.add_argument("--seed", default=None, type=int)
+        # self.add_argument("--test", nargs="*", const=True, default=False)
+        self.add_argument("--iterations", "-it", default="auto", type=_auto_int_transform)
+        self.add_argument("--total_steps", "-ts", default="auto", type=_auto_int_transform)
 
+class RLlibArgumentParser(Tap):
+    train_batch_size_per_learner: int = 4096  # batch size that ray samples
+    minibatch_size: int = 128
+    """Minibatch size used for backpropagation/optimization"""
+
+    def configure(self) -> None:
+        super().configure()
+        self.add_argument(
+            "--batch_size",
+            dest="train_batch_size_per_learner",
+            type=int,
+            required=False,
+        )
 
 class DefaultResourceArgParser(Tap):
     num_jobs: int = 5
@@ -160,19 +189,51 @@ class DefaultExtraArgs(Tap):
         super().configure()
         self.add_argument("--extra", help="extra arguments", nargs="+")
 
-class OptionalExtenionsArgs(Tap):
+class OptionalExtenionsArgs(RLlibArgumentParser):
     dynamic_buffer: bool = False
     """Use DynamicBufferCallback"""
     # static_batch: bool = True
 
+    iterations: int | Literal["auto"] = "auto"
+    total_steps: int | Literal["auto"] = "auto"
+    _total_steps_default: int = 1_000_000
+
+    def process_args(self) -> None:
+        super().process_args()
+        increases = 8
+        if self.iterations == "auto":  # for testing reduce this number
+            if self.dynamic_buffer:  # TODO: should orient on batch_size
+                # TODO: Should be implemented by the choosen Callback method
+                low = -math.floor((increases-1) / 2)
+                up = math.ceil((increases+1) / 2)
+                exponents = list(range(low, up))
+                batch_sizes = [2**i * self.train_batch_size_per_learner for i in exponents]
+                avg_batch_sizes = sum(batch_sizes) / len(exponents)
+                iterations = math.ceil(self._total_steps_default / avg_batch_sizes)
+            else:
+                iterations = math.ceil(self._total_steps_default / self.train_batch_size_per_learner)
+        else:
+            iterations = self.iterations
+        if self.total_steps == "auto":
+            self.total_steps = calculate_total_steps(
+                training_iterations=iterations,
+                initial_steps=self.train_batch_size_per_learner,
+                dynamic_buffer=self.dynamic_buffer,
+                increases=8,
+            )
+            if self.iterations == "auto" and self.total_steps < self._total_steps_default:
+                iterations += 1
+                self.total_steps += batch_sizes[-1] if self.dynamic_buffer else self.train_batch_size_per_learner  # pyright: ignore[reportPossiblyUnboundVariable]
+        self.iterations = iterations
 
 class DefaultArgumentParser(
+    OptionalExtenionsArgs,  # Needs to be before _DefaultSetupArgumentParser
+    RLlibArgumentParser,
     _DefaultSetupArgumentParser,
     DefaultResourceArgParser,
     DefaultEnvironmentArgParser,
     DefaultLoggingArgParser,
     DefaultExtraArgs,
-    OptionalExtenionsArgs,
 ):
     def configure(self) -> None:
         return super().configure()

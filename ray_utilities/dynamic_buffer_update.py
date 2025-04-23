@@ -1,3 +1,4 @@
+import math
 import numpy as np
 from typing import Protocol
 
@@ -44,6 +45,36 @@ def update_buffer_and_rollout_size(
     batch_size = int(args.n_envs * n_steps)  # XXX: Get rid of n_envs; samples_per_step
     # n_iterations = args.total_steps // batch_size
     # eval_freq = max(args.eval_freq // batch_size, 1)
-    #logger.debug("updating buffer after step %d / %s to %s. Initial size: %s", global_step, args.total_steps, batch_size, initial_steps)
+    # logger.debug("updating buffer after step %d / %s to %s. Initial size: %s", global_step, args.total_steps, batch_size, initial_steps)
 
     return batch_size, accumulate_gradients_every, n_steps
+
+
+def calculate_total_steps(*, training_iterations: int, initial_steps: int, dynamic_buffer:bool, increases: int = 8):
+    """
+    Attention:
+        Initial steps should be config.train_batch_size_per_learner without prior modifications.
+
+    TODO:
+        This should be calculated via the Callback Method that implements the buffer size increase
+    """
+    if dynamic_buffer:
+        initial_steps = max(16, initial_steps // increases)
+        step_ranges: list[int] = [initial_steps * (2 ** i) for i in range(increases)]
+        iterations_per_increase = max(1, math.floor(training_iterations / increases))
+        amount_steps_per_increase = [
+            step_ranges[i] * iterations_per_increase for i in range(increases)
+        ]
+    else:
+        step_ranges = [initial_steps] * increases
+        iterations_per_increase = training_iterations / increases
+        amount_steps_per_increase = [initial_steps * iterations_per_increase] * increases  # sum is int
+    total_steps: int = int(sum(amount_steps_per_increase))
+    logger.debug(
+        "Total steps calculated: %d. Step ranges are %s, with %d iterations in between. Steps at each level: %s",
+        total_steps,
+        step_ranges,
+        iterations_per_increase,
+        amount_steps_per_increase,
+    )
+    return total_steps
