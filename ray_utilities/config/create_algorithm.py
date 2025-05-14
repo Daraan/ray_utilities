@@ -139,6 +139,11 @@ def create_algorithm_config(
         # access it with the property `AlgorithmConfig.total_train_batch_size`.
         train_batch_size_per_learner=32,
         grad_clip=0.5,
+        learner_config_dict={
+            "dynamic_buffer": args["dynamic_buffer"],
+            "dynamic_batch": not args["static_batch"],
+            "total_steps": args["total_steps"],
+        },
     )
     try:
         cast("PPOConfig", config).training(
