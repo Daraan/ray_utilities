@@ -32,6 +32,7 @@ def _split_seed(seed: _IntOrNone, n=2) -> tuple[_IntOrNone, ...]:
     gen = random.Random(seed)
     return tuple(gen.randrange(2**32) for _ in range(n))  # pyright: ignore[reportReturnType]
 
+
 def seed_everything(env, seed: _IntOrNone, *, torch_manual=False, torch_deterministic=None) -> _IntOrNone:
     """
     Args:

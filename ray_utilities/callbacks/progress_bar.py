@@ -24,6 +24,7 @@ class DiscreteEvalRewardMetrics(TypedDict):
     mean: float
     roll: NotRequired[float]
 
+
 def _unit_division(amount: int) -> tuple[int, str]:
     """Divides the amount by 1_000_000 or 1_000 and returns the unit."""
     if amount > 1_000_000:
@@ -31,6 +32,7 @@ def _unit_division(amount: int) -> tuple[int, str]:
     if amount > 1_000:
         return amount // 1_000, "K"
     return amount, ""
+
 
 def update_pbar(
     pbar: "tqdm_ray.tqdm | tqdm",

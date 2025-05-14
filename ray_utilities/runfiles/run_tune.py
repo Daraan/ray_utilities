@@ -58,8 +58,11 @@ def run_tune(
         print(f"-- FULL TEST MODE running {func_name} --")
         logger.info("-- FULL TEST MODE --")
         import ray.tune.search.sample
+
         # Sample the parameters when not entering via tune
-        params = {k: v.sample() if isinstance(v, ray.tune.search.sample.Domain) else v for k, v in setup.param_space.items()}
+        params = {
+            k: v.sample() if isinstance(v, ray.tune.search.sample.Domain) else v for k, v in setup.param_space.items()
+        }
         setup.param_space.update(params)
         # Possibly set RAY_DEBUG=legacy
         if test_mode_func:

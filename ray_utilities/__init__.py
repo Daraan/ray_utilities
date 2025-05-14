@@ -40,6 +40,7 @@ __all__ = [
     "trial_name_creator",
 ]
 
+
 def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, Any]]:
     nested_metrics = metrics.copy()
     for key_orig, v in metrics.items():

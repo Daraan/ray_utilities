@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     _P = ParamSpec("_P")
     _R = TypeVar("_R")
 
+
 def type_grad_and_value(func: Callable[_P, _R]) -> Callable[_P, tuple[_R, tuple[Any, ...]]]:
     """
     jax.grad_and_value also returns the gradients of the function in an extra tuple

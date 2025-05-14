@@ -473,8 +473,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
 
     @classmethod
     @abstractmethod
-    def _get_callbacks_from_args(cls, args: NamespaceType[ParserType_co]) -> list[type[RLlibCallback]]:
-        ...
+    def _get_callbacks_from_args(cls, args: NamespaceType[ParserType_co]) -> list[type[RLlibCallback]]: ...
 
     def _get_callbacks(self) -> list[type[RLlibCallback]]:
         """

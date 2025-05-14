@@ -11,6 +11,7 @@ from ray_utilities.dynamic_buffer_update import calculate_total_steps
 def _auto_int_transform(x):
     return int(x) if x != "auto" else x
 
+
 class _DefaultSetupArgumentParser(Tap):
     agent_type: str
     """Agent Architecture"""
@@ -42,6 +43,7 @@ class _DefaultSetupArgumentParser(Tap):
         self.add_argument("--iterations", "-it", default="auto", type=_auto_int_transform)
         self.add_argument("--total_steps", "-ts", default="auto", type=_auto_int_transform)
 
+
 class RLlibArgumentParser(Tap):
     train_batch_size_per_learner: int = 2048  # batch size that ray samples
     minibatch_size: int = 128
@@ -55,6 +57,7 @@ class RLlibArgumentParser(Tap):
             type=int,
             required=False,
         )
+
 
 class DefaultResourceArgParser(Tap):
     num_jobs: int = 5
@@ -124,6 +127,7 @@ OnlineLoggingOption = Literal["offline", "offline+upload", "online", "off", Fals
 LogStatsChoices = Literal["minimal", "more", "timers", "learners", "timers+learners", "most", "all"]
 LOG_STATS = "log_stats"
 
+
 class DefaultLoggingArgParser(Tap):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     wandb: OnlineLoggingOption = False
@@ -184,6 +188,7 @@ class DefaultExtraArgs(Tap):
     def configure(self) -> None:
         super().configure()
         self.add_argument("--extra", help="extra arguments", nargs="+")
+
 
 class OptionalExtenionsArgs(RLlibArgumentParser):
     dynamic_buffer: bool = False

@@ -11,7 +11,6 @@ if TYPE_CHECKING:
 
 
 class SetupWithDynamicBuffer:
-
     @classmethod
     def _get_callbacks_from_args(cls, args: OptionalExtenionsArgs | argparse.Namespace) -> list[type[RLlibCallback]]:
         # When used as a mixin, can call the parent; might be None for ExperimentSetupBase

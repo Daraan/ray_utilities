@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 from ray.rllib.utils.numpy import SMALL_NUMBER
 
+
 def explained_variance(y: jax.Array, pred: jax.Array) -> jax.Array:
     """
     Code taken from from ray.rllib.utils.torch_utils import explained_variance

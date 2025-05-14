@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
     from typing_extensions import TypeIs
 
+
 def _is_vector_env(env) -> TypeIs[gym.vector.VectorEnv]:
     """Check if the environment is a vectorized environment."""
     return hasattr(env, "num_envs")
@@ -22,7 +23,9 @@ def _is_async(env) -> TypeIs[gym.vector.AsyncVectorEnv]:
     """Check if the environment is a vectorized environment."""
     return hasattr(env, "set_attr")
 
+
 logger = logging.getLogger(__name__)
+
 
 class SeedEnvsCallback(DefaultCallbacks):
     """
@@ -105,6 +108,8 @@ def make_seeded_env_callback(env_seed_: int | None) -> type[SeedEnvsCallback]:
     """Create a callback that seeds the environment."""
     if env_seed_ is None:
         logger.info("Using None as env_seed, this will create non-reproducible runs. The callback is deactivated.")
+
     class FixedSeedEnvsCallback(SeedEnvsCallback):
         env_seed = env_seed_
+
     return FixedSeedEnvsCallback

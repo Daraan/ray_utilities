@@ -17,8 +17,11 @@ if TYPE_CHECKING:
 
 _T = TypeVar("_T")
 
+
 def trial_name_creator(trial: Trial) -> str:
-    start_time = datetime.datetime.fromtimestamp(trial.run_metadata.start_time or RAY_UTILITIES_INITIALIZATION_TIMESTAMP)
+    start_time = datetime.datetime.fromtimestamp(
+        trial.run_metadata.start_time or RAY_UTILITIES_INITIALIZATION_TIMESTAMP
+    )
     start_time_str = start_time.strftime("%Y-%m-%d_%H:%M")
     module = trial.config["module"]
     if module is None:

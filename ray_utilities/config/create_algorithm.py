@@ -28,6 +28,7 @@ _ModelConfig = TypeVar("_ModelConfig", bound="None | dict | Any")
 
 logger = logging.getLogger(__name__)
 
+
 def create_algorithm_config(
     args: dict[str, Any] | NamespaceType[DefaultArgumentParser],
     env_type: Optional[str | gym.Env] = None,

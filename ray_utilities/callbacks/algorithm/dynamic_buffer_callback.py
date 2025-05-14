@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 class UpdateFunction(Protocol):
     def __call__(
         self,
@@ -25,8 +26,8 @@ class UpdateFunction(Protocol):
         metrics_logger: Optional[MetricsLogger] = None,
         *,
         global_step: int,
-    ) -> None:
-        ...
+    ) -> None: ...
+
 
 class DynamicBufferUpdate(DefaultCallbacks):
     """
@@ -54,15 +55,17 @@ class DynamicBufferUpdate(DefaultCallbacks):
             algorithm.env_runner_group.foreach_env_runner(update)  # pyright: ignore[reportPossiblyUnboundVariable]
         if update_learner and algorithm.learner_group:
             algorithm.learner_group.foreach_learner(update)  # pyright: ignore[reportPossiblyUnboundVariable]
+        # TODO: Also change evaluation interval to be slower/faster at start/end
 
     def _calculate_buffer_and_batch_size(
         self, algorithm: "Algorithm", metrics_logger: Optional[MetricsLogger], *, global_step: int
     ) -> None:
         assert algorithm.config
+        assert metrics_logger
         # Need to modify algorithm.config.train_batch_size_per_learner
         args = self._UpdateArgs(
             n_envs=1,
-            total_steps=1_000_000,  # episodes/training_steps (-e) x steps_per_episode
+            total_steps=algorithm.config.learner_config_dict["total_steps"],
             # batch_size (4096) * epochs (20) * episodes (100) =
             static_batch=not algorithm.config.learner_config_dict["dynamic_batch"],
             dynamic_buffer=algorithm.config.learner_config_dict["dynamic_buffer"],
@@ -74,14 +77,34 @@ class DynamicBufferUpdate(DefaultCallbacks):
             accumulate_gradients_every_initial=1,
             initial_steps=self._initial_steps,  # train_batch_size_per_learner // 8
         )
+        if self._training_iterations % 4 == 0:
+            logger.debug(
+                "Step %s & Iteration %s: batch size %s, n_steps %s",
+                global_step,
+                self._training_iterations,
+                batch_size,
+                n_steps,
+            )
         if batch_size != self._batch_size_old:
-            logger.debug("Batch size changed from %s to %s", self._batch_size_old, batch_size)
+            logger.debug(
+                "Batch size changed from %s to %s at iteration %s - step %s",
+                self._batch_size_old,
+                batch_size,
+                metrics_logger.peek("training_iteration", default=self._training_iterations),
+                global_step,
+            )
             self._batch_size_old = batch_size
             assert n_steps == batch_size
             # Both are currently the same!
             # object.__setattr__(algorihm.config, "_train_batch_size_per_learner", n_steps)
         if n_steps != self._n_steps_old:
-            logger.debug("Rollout size changed from %s to %s", self._n_steps_old, n_steps)
+            logger.debug(
+                "Rollout size changed from %s to %s at iteration %s - step %s",
+                self._n_steps_old,
+                n_steps,
+                metrics_logger.peek("training_iteration", default=self._training_iterations),
+                global_step,
+            )
             self._n_steps_old = n_steps
             assert algorithm.config
             # HACK algorithm.config is FROZEN
@@ -113,6 +136,7 @@ class DynamicBufferUpdate(DefaultCallbacks):
         self._batch_size_old: int = None
         self._n_steps_old: int = None
         self._accumulate_gradients_every_old: int = None
+        self._planned_current_step: int = None
 
     def on_algorithm_init(
         self,
@@ -132,6 +156,11 @@ class DynamicBufferUpdate(DefaultCallbacks):
         # legacy only
         self._accumulate_gradients_every_initial = 1
         self._initial_minibatch_size = algorithm.config.minibatch_size
+        self._training_iterations = metrics_logger.peek("training_iteration", default=0) if metrics_logger else 0
+        self._planned_current_step = (
+            self._get_global_step(metrics_logger) if metrics_logger and metrics_logger.stats else 0
+        )
+
         # stats is empty initially
         if metrics_logger and metrics_logger.stats:
             logger.debug("Algorithm initialized with stats already present")
@@ -147,7 +176,11 @@ class DynamicBufferUpdate(DefaultCallbacks):
         result: dict,
         **kwargs,
     ) -> None:
-        self._updater(algorithm, metrics_logger, global_step=self._get_global_step(metrics_logger))  # pyright: ignore[reportArgumentType]
+        self._training_iterations += 1
+        self._planned_current_step += algorithm.config.total_train_batch_size
+        assert self._planned_current_step <= self._get_global_step(metrics_logger)
+        self._updater(algorithm, metrics_logger, global_step=self._planned_current_step)  # pyright: ignore[reportArgumentType]
+
     # num_module_steps_trained', 'num_module_steps_trained_lifetime'
 
     def on_checkpoint_loaded(
@@ -164,12 +197,13 @@ class DynamicBufferUpdate(DefaultCallbacks):
         # other possible keys are num_module_steps_sampled_lifetime/default_policy
         # or num_agent_steps_sampled_lifetime/default_agent
         gs = metrics_logger.stats["env_runners"]["num_env_steps_sampled_lifetime"].peek()
-        logger.debug("Global step %s", gs)
+        # logger.debug("Global step %s", gs)
         return gs
 
 
 def make_dynamic_buffer_callback(func: UpdateFunction) -> type[DynamicBufferUpdate]:
     """Create a callback that seeds the environment."""
+
     class CustomDynamicBufferUpdate(DynamicBufferUpdate):
         _calculate_buffer_and_batch_size = func
 
@@ -179,13 +213,23 @@ def make_dynamic_buffer_callback(func: UpdateFunction) -> type[DynamicBufferUpda
 if __name__ == "__main__":
     # simulate Increase
     from ray_utilities import nice_logger
+    from ray_utilities.dynamic_buffer_update import calculate_total_steps
+
     nice_logger(logger, "DEBUG")
     global_step = 0
     dynamic_buffer = True
     dynamic_batch = True
-    total_steps = 1_000_000
+    iterations = 340
+    total_steps = "auto"  # 1_000_000
+    # Test
+    total_steps = calculate_total_steps(
+        training_iterations=iterations,
+        batch_size=2048,
+        dynamic_buffer=dynamic_buffer,
+        increases=8,
+    )
     n_envs = 1
-    n_steps = 512
+    n_steps = 2048 // 8
     initial_steps = n_steps
     batch_size = n_envs * n_steps
     n_steps_old = None

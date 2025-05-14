@@ -74,6 +74,7 @@ class LogMetricsDict(TypedDict):
     env_runner_group: NotRequired[Any]
     num_env_steps_sampled_lifetime_throughput: NotRequired[int]
 
+
 class AutoExtendedLogMetricsDict(LogMetricsDict):
     """
     Auto filled in keys after train.report.

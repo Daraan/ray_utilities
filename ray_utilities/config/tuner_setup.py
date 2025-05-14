@@ -30,6 +30,7 @@ ParserTypeT = TypeVar("ParserTypeT", bound="DefaultArgumentParser")
 
 logger = logging.getLogger(__name__)
 
+
 class _TunerSetupBase(Protocol):
     eval_metric: ClassVar[str]
     eval_metric_order: ClassVar[Literal["max", "min"]]

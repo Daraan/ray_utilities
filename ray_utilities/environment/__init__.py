@@ -29,6 +29,7 @@ env_short_names = {
 
 _logger = logging.getLogger(__name__)
 
+
 def parse_env_name(name: str) -> str:
     return env_short_names.get(name, name)
 
@@ -40,6 +41,7 @@ def create_env(name: str, **kwargs) -> gym.Env:
 
 
 _seed_counter = 0
+
 
 @deprecated("in favor of callback")
 def env_creator_with_seed(config: EnvContext):
@@ -107,6 +109,7 @@ def create_env_for_config(config: AlgorithmConfig, env_spec: str | gym.Env):
         assert not TYPE_CHECKING or config.env
         init_env = gym.make(config.env.unwrapped.spec.id)  # pyright: ignore[reportOptionalMemberAccess]
     return init_env
+
 
 def seed_environments_for_config(config: AlgorithmConfig, env_seed: int | None):
     """

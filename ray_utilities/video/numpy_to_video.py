@@ -35,7 +35,7 @@ def numpy_to_video(
     if video.shape[-1] not in (1, 3):
         assert video.shape[-3] in (1, 3)  # (L, C, H, W)
         # For CV2, the channel should be the last dimension
-        video = video.transpose(0, 2, 3, 1) # (L, H, W, C)
+        video = video.transpose(0, 2, 3, 1)  # (L, H, W, C)
     _length, frame_height, frame_width, _colors = video.shape
 
     fourcc = cv2.VideoWriter_fourcc(*"avc1")  # type: ignore[attr-defined]

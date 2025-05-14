@@ -21,7 +21,7 @@ import numpy as np
 from ray.air.integrations.comet import CometLoggerCallback
 from ray.rllib.utils.metrics import (
     ALL_MODULES,  # pyright: ignore[reportPrivateImportUsage]
-    #CONNECTOR_TIMERS,  # subkey of env_to_module_connector
+    # CONNECTOR_TIMERS,  # subkey of env_to_module_connector
     ENV_RESET_TIMER,
     ENV_RUNNER_RESULTS,
     ENV_STEP_TIMER,
@@ -426,12 +426,12 @@ def create_log_metrics(
     # Remove System stats:
     if log_stats != "most":
         for k in (
-            #"time_since_restore",  # moved to timers
+            # "time_since_restore",  # moved to timers
             "iterations_since_restore",
-            #"node_ip",  # autofilled
-            #"hostname",  # autofilled
-            #"pid",  # autofilled
-            #"date",
+            # "node_ip",  # autofilled
+            # "hostname",  # autofilled
+            # "pid",  # autofilled
+            # "date",
             # "timestamp",  # autofilled
             # "time_this_iter_s",  # will be re-added
             # "time_total_s",  # will be re-added
@@ -468,6 +468,7 @@ def create_log_metrics(
         merged_result[LEARNER_RESULTS][ALL_MODULES].pop("num_env_steps_trained_lifetime_throughput")
     return merged_result  # type: ignore[return-value]
 
+
 def _reorganize_connector_logs(results: dict[str, dict[str, Any | dict[str, Any]]]):
     """Move timer results listed in env_runner to the timers key"""
     results[TIMERS][ENV_TO_MODULE_CONNECTOR] = results[ENV_RUNNER_RESULTS].pop(ENV_TO_MODULE_CONNECTOR)
@@ -492,30 +493,42 @@ def _reorganize_connector_logs(results: dict[str, dict[str, Any | dict[str, Any]
         evaluation_timers[ENV_RESET_TIMER] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(ENV_RESET_TIMER)
     return results
 
+
 def _reorganize_timer_logs(results: dict[str, dict[str, Any | dict[str, Any]]]):
     results[TIMERS]["time_since_restore"] = results.pop("time_since_restore")
     # Keep always
     # results[TIMERS]["time_total_s"] = results.pop("time_total_s")
     # results[TIMERS]["time_this_iter_s"] = results["time_this_iter_s"] # autofilled
     results[TIMERS].setdefault(ENV_RUNNER_RESULTS, {})
-    results[TIMERS][ENV_RUNNER_RESULTS][EPISODE_DURATION_SEC_MEAN] = results[ENV_RUNNER_RESULTS].pop(EPISODE_DURATION_SEC_MEAN)
+    results[TIMERS][ENV_RUNNER_RESULTS][EPISODE_DURATION_SEC_MEAN] = results[ENV_RUNNER_RESULTS].pop(
+        EPISODE_DURATION_SEC_MEAN
+    )
     try:
-        results[TIMERS][ENV_RUNNER_RESULTS][TIME_BETWEEN_SAMPLING] = results[ENV_RUNNER_RESULTS].pop(TIME_BETWEEN_SAMPLING)
+        results[TIMERS][ENV_RUNNER_RESULTS][TIME_BETWEEN_SAMPLING] = results[ENV_RUNNER_RESULTS].pop(
+            TIME_BETWEEN_SAMPLING
+        )
     except KeyError:
-        pass # second step onward
+        pass  # second step onward
     results[TIMERS][ENV_RUNNER_RESULTS][SAMPLE_TIMER] = results[ENV_RUNNER_RESULTS].pop(SAMPLE_TIMER)
     if EVALUATION_RESULTS in results and len(results[EVALUATION_RESULTS]) > 1:
         evaluation_timers: dict[str, Any] = results[TIMERS].setdefault(EVALUATION_RESULTS, {})
         assert EVALUATION_RESULTS not in evaluation_timers
         evaluation_timers[ENV_RUNNER_RESULTS] = {}
-        evaluation_timers[ENV_RUNNER_RESULTS][EPISODE_DURATION_SEC_MEAN] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(EPISODE_DURATION_SEC_MEAN)
+        evaluation_timers[ENV_RUNNER_RESULTS][EPISODE_DURATION_SEC_MEAN] = results[EVALUATION_RESULTS][
+            ENV_RUNNER_RESULTS
+        ].pop(EPISODE_DURATION_SEC_MEAN)
         # step 2+; else only mean=nan
-        evaluation_timers[ENV_RUNNER_RESULTS][SAMPLE_TIMER] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(SAMPLE_TIMER)
+        evaluation_timers[ENV_RUNNER_RESULTS][SAMPLE_TIMER] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(
+            SAMPLE_TIMER
+        )
         try:
-            evaluation_timers[ENV_RUNNER_RESULTS][TIME_BETWEEN_SAMPLING] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(TIME_BETWEEN_SAMPLING)
+            evaluation_timers[ENV_RUNNER_RESULTS][TIME_BETWEEN_SAMPLING] = results[EVALUATION_RESULTS][
+                ENV_RUNNER_RESULTS
+            ].pop(TIME_BETWEEN_SAMPLING)
         except KeyError:
-            pass # second evaluation onward
+            pass  # second evaluation onward
     return results
+
 
 def update_running_reward(new_reward: float, reward_array: list[float]) -> float:
     if not math.isnan(new_reward):

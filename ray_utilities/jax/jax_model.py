@@ -49,7 +49,6 @@ class BaseModel(Model):
 
 
 class FlaxRLModel(Generic[ModelType, ConfigType], BaseModel):
-
     def __call__(self, input_dict: dict, *, parameters, **kwargs) -> chex.Array:
         return self._forward(input_dict, parameters=parameters, **kwargs)
 

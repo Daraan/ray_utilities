@@ -28,7 +28,7 @@ class JaxModule(RLModule):
         self.states: StateDict | Any = {}  # set before super; RLModule.__init__ will call setup
         super().__init__(*args, **kwargs)
 
-    def get_state(self, *args, inference_only: bool=False, **kwargs) -> StateDict:  # noqa: ARG002
+    def get_state(self, *args, inference_only: bool = False, **kwargs) -> StateDict:  # noqa: ARG002
         # TODO: could return less than the full state if not inference_only; i.e. do not return the critic
         return self.states
 
