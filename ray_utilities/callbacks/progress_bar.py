@@ -27,9 +27,9 @@ class DiscreteEvalRewardMetrics(TypedDict):
 
 def _unit_division(amount: int) -> tuple[int, str]:
     """Divides the amount by 1_000_000 or 1_000 and returns the unit."""
-    if amount > 1_000_000:
+    if amount >= 1_000_000:
         return amount // 1_000_000, "M"
-    if amount > 1_000:
+    if amount >= 1_000:
         return amount // 1_000, "K"
     return amount, ""
 
@@ -53,14 +53,14 @@ def update_pbar(
                 train_results = train_results.copy()
                 train_results.pop("max")
             lines = [
-                f"Train R {key}: {value:>6.1f}" if key != "max" else f"Train R {key}: {value:>4.0f}"
+                f"Train {key}: {value:>5.1f}" if key != "max" else f"Train {key}: {value:>4.0f}"
                 for key, value in train_results.items()
             ]
         else:
             lines = []
-        lines += [f"Eval R {key}: {value:>6.1f}" for key, value in eval_results.items()]
+        lines += [f"Eval {key}: {value:>5.1f}" for key, value in eval_results.items()]
         if discrete_eval_results:
-            lines += [f"Disc Eval R {key}: {value:>6.1f}" for key, value in discrete_eval_results.items()]
+            lines += [f"Disc Eval {key}: {value:>5.1f}" for key, value in discrete_eval_results.items()]
         if current_step is not None:
             current_step, step_unit = _unit_division(current_step)
             step_count = f"Step {current_step:>3d}{step_unit}"
