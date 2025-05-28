@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from .typed_argument_parser import DefaultArgumentParser
+import logging
+from typing import TYPE_CHECKING, Optional
+
 from .experiment_base import ExperimentSetupBase
 from .tuner_setup import TunerSetup
-from typing import TYPE_CHECKING
-import logging
+from .typed_argument_parser import DefaultArgumentParser
 
 if TYPE_CHECKING:
-    from typing import Callable, Any
+    from typing import Any, Callable
+
     from ray.rllib.algorithms import AlgorithmConfig
     from ray.rllib.callbacks.callbacks import RLlibCallback
 
@@ -17,9 +19,10 @@ logger = logging.getLogger(__name__)
 
 def add_callbacks_to_config(
     config: AlgorithmConfig,
-    callbacks: type[RLlibCallback]
+    callbacks: Optional[type[RLlibCallback]
     | list[type[RLlibCallback]]
-    | dict[str, Callable[..., Any] | list[Callable[..., Any]]],
+    | dict[str, Callable[..., Any] | list[Callable[..., Any]]]] = None,
+    **kwargs,
 ):
     """
     Add the callbacks to the config.
@@ -28,6 +31,10 @@ def add_callbacks_to_config(
         config: The config to add the callback to.
         callback: The callback to add to the config.
     """
+    if callbacks is not None and kwargs:
+        raise ValueError("Specify either 'callbacks' or keyword arguments, not both.")
+    if callbacks is None:
+        callbacks = kwargs
     if not callbacks:
         return
     if isinstance(callbacks, dict):

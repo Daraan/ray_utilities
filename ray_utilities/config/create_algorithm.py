@@ -12,7 +12,9 @@ from ray.tune import logger as tune_logger
 
 from ray_utilities.callbacks.algorithm.discrete_eval_callback import DiscreteEvalCallback
 from ray_utilities.callbacks.algorithm.env_render_callback import make_render_callback
+from ray_utilities.callbacks.algorithm.exact_sampling_callback import exact_sampling_callback
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback, make_seeded_env_callback
+from ray_utilities.config import add_callbacks_to_config
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import AlgorithmConfig
@@ -206,11 +208,18 @@ def create_algorithm_config(
             explore=False,
         ),
     )
-    callbacks: list[type[DefaultCallbacks]] = [DiscreteEvalCallback] if discrete_eval else []
+    # Stateless callbacks
+    if True or exact_sampling:  # TODO: make a setting
+        add_callbacks_to_config(config, on_sample_end=exact_sampling_callback)
+    # Statefull callbacks
+    callbacks: list[type[DefaultCallbacks]] = []
+    if discrete_eval:
+        callbacks.append(DiscreteEvalCallback)
     if args["env_seeding_strategy"] == "sequential":
         # Must set this in the trainable with seed_environments_for_config(config, run_seed)
         logger.info(
-            "Using sequential env seed strategy, call seed_environments_for_config(config, run_seed) with a sampled seed for the trial."
+            "Using sequential env seed strategy, "
+            "call seed_environments_for_config(config, run_seed) with a sampled seed for the trial."
         )
     elif args["env_seeding_strategy"] == "same":
         make_seeded_env_callback(args["seed"])
@@ -221,12 +230,17 @@ def create_algorithm_config(
 
     if callbacks:
         if len(callbacks) == 1:
-            callback = callbacks[0]
+            callback_class = callbacks[0]
         else:
-            callback = make_multi_callbacks(callbacks)
+            callback_class = callbacks
+        if False:
+            # OLD API
+            multi_callback = make_multi_callbacks(callback_class)
             # Necessary patch for new_api, cannot use this callback with new API
-            callback.on_episode_created = DefaultCallbacks.on_episode_created
-        config.callbacks(callbacks_class=callback)
+            multi_callback.on_episode_created = DefaultCallbacks.on_episode_created
+            config.callbacks(callbacks_class=multi_callback)
+        else:
+            config.callbacks(callbacks_class=callback_class)
 
     config.reporting(
         keep_per_episode_custom_metrics=True,  # If True calculate max min mean
