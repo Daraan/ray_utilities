@@ -246,7 +246,7 @@ class OptionalExtenionsArgs(RLlibArgumentParser):
             )
             # TODO: real_total_steps should be used for the pbar; but it should not be used to update self.total_steps
             # this would change the calculation again!
-            breakpoint()
+            # breakpoint()
             # This should only be one extra step
             while self.iterations == "auto" and self.total_steps < self._total_steps_default:
                 iterations += 1

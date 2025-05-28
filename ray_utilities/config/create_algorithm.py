@@ -77,6 +77,9 @@ def create_algorithm_config(
         config.environment(env_spec, env_config=env_config)
     else:
         config.environment(env_spec)
+    if args["test"]:
+        # increase time in case of debugging the sampler
+        config.env_runners(sample_timeout_s=1000)
     try:
         config.env_runners(
             # experimental
