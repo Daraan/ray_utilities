@@ -318,7 +318,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
                 framework="torch",  # or "tf2"; "jax" not supported
                 discrete_eval=False,
             )
-            cls.add_callbacks_to_config(config, cls._get_callbacks_from_args(args))
+            add_callbacks_to_config(config, cls._get_callbacks_from_args(args))
             ```
         """
 
@@ -498,25 +498,6 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
         self._retrieved_callbacks = True
         return self._get_callbacks()
 
-    @staticmethod
-    def add_callbacks_to_config(config: AlgorithmConfig, callbacks: type[RLlibCallback] | list[type[RLlibCallback]]):
-        """
-        Add the callbacks to the config.
-
-        Args:
-            config: The config to add the callback to.
-            callback: The callback to add to the config.
-        """
-        if not isinstance(callbacks, (list, tuple)):
-            callbacks = [callbacks]
-        if isinstance(config.callbacks_class, list):
-            config.callbacks_class.extend(callbacks)
-        elif getattr(config.callbacks_class, "IS_CALLBACK_CONTAINER", False):
-            # Deprecated Multi callback
-            config.callbacks_class._callback_list.extend(callbacks)  # type: ignore[attr-defined]
-        else:
-            # Newer API
-            config.callbacks(callbacks_class=[config.callbacks_class, *callbacks])
 
     # endregion
 
