@@ -24,7 +24,8 @@ class EnvRunnersResultsDict(TypedDict, closed=False):
     episode_return_mean: float
     episode_return_max: float
     episode_return_min: float
-    num_env_steps_sampled_lifetime: NotRequired[int]
+    num_env_steps_sampled_lifetime: int
+    """Amount of sampling steps taken for the training of the agent"""
 
 
 if _PEP_728_AVAILABLE or TYPE_CHECKING:

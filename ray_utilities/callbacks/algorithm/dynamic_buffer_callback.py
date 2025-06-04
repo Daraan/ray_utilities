@@ -179,7 +179,12 @@ class DynamicBufferUpdate(DefaultCallbacks):
         self._training_iterations += 1
         self._planned_current_step += algorithm.config.total_train_batch_size
         assert self._planned_current_step <= self._get_global_step(metrics_logger)
+        # Safer way to get correct steps:
         self._updater(algorithm, metrics_logger, global_step=self._planned_current_step)  # pyright: ignore[reportArgumentType]
+        # Exact way to update steps:
+        # self._updater(
+        #    algorithm, metrics_logger, global_step=self._get_global_step(metrics_logger)
+        # )
 
     # num_module_steps_trained', 'num_module_steps_trained_lifetime'
 

@@ -230,6 +230,7 @@ def default_trainable(
             total_steps=total_steps,
             current_step=result[ENV_RUNNER_RESULTS].get(NUM_ENV_STEPS_SAMPLED_LIFETIME),
         )
+        breakpoint()
     final_results = cast("TrainableReturnData", metrics)
     if "trial_id" not in final_results:
         final_results["trial_id"] = result["trial_id"]

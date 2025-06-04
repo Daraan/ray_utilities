@@ -67,6 +67,8 @@ select = [
   "PLR2044",  # empty comment
 
   "TRY",
+
+  "TID251", # banned API, options see below, avoid import from downstream packages
 ]
 ignore = [
   "D203", "D205",
@@ -109,6 +111,11 @@ extend-generics = [
     "ray_utilities.config.experiment_base.ExperimentSetupBase",
     "ray_utilities.jax.jax_model.FlaxRLModel",
 ]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# during dev/refactoring phase make sure not to import from downstream packages
+"SYMPOL".msg = "Import from downstream packages; missing refactoring."
+"rllib_port".msg = "Import from downstream packages; missing refactoring."
 
 [tool.isort]
 split_on_trailing_comma = true

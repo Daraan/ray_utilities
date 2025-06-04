@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any, Optional, get_args
 
 from tap import Tap
 from typing_extensions import Literal
 
-from ray_utilities.dynamic_buffer_update import calculate_total_steps
+from ray_utilities.dynamic_buffer_update import (
+    _test_iterations,
+    calculate_iterations,
+    calculate_total_steps,
+    dynamic_batch_sizes,
+)
+
+logger = logging.getLogger(__name__)
+
 
 def _auto_int_transform(x):
     return int(x) if x != "auto" else x
@@ -203,29 +212,54 @@ class OptionalExtenionsArgs(RLlibArgumentParser):
         super().process_args()
         increases = 8
         if self.iterations == "auto":  # for testing reduce this number
-            if self.dynamic_buffer:  # TODO: should orient on batch_size
-                # TODO: Should be implemented by the choosen Callback method
-                low = -math.floor((increases-1) / 2)
-                up = math.ceil((increases+1) / 2)
-                exponents = list(range(low, up))
-                batch_sizes = [2**i * self.train_batch_size_per_learner for i in exponents]
-                avg_batch_sizes = sum(batch_sizes) / len(exponents)
-                iterations = math.ceil(self._total_steps_default / avg_batch_sizes)
-            else:
-                iterations = math.ceil(self._total_steps_default / self.train_batch_size_per_learner)
+            iterations = calculate_iterations(
+                dynamic_buffer=self.dynamic_buffer,
+                batch_size=self.train_batch_size_per_learner,
+                total_steps=self._total_steps_default if self.total_steps == "auto" else self.total_steps,
+                increases=increases,
+            )
+            iterations_corrected, _real_total_steps = _test_iterations(
+                iterations,
+                self._total_steps_default if self.total_steps == "auto" else self.total_steps,
+                dynamic_batch_sizes(self.train_batch_size_per_learner, increases=8),
+                dynamic_buffer=self.dynamic_buffer,
+                dynamic_batch=True,
+            )
+            logger.debug("Correcting iterations from %d to %d", iterations, iterations_corrected)
+            iterations = iterations_corrected
         else:
             iterations = self.iterations
         if self.total_steps == "auto":
             self.total_steps = calculate_total_steps(
                 training_iterations=iterations,
-                initial_steps=self.train_batch_size_per_learner,
+                batch_size=self.train_batch_size_per_learner,
                 dynamic_buffer=self.dynamic_buffer,
                 increases=8,
             )
-            if self.iterations == "auto" and self.total_steps < self._total_steps_default:
+            _iterations_corrected, real_total_steps = _test_iterations(
+                iterations,
+                self.total_steps,
+                dynamic_batch_sizes(self.train_batch_size_per_learner, increases=8),
+                dynamic_buffer=self.dynamic_buffer,
+                dynamic_batch=True,
+                return_correct="total_steps",
+            )
+            # TODO: real_total_steps should be used for the pbar; but it should not be used to update self.total_steps
+            # this would change the calculation again!
+            # breakpoint()
+            # This should only be one extra step
+            while self.iterations == "auto" and self.total_steps < self._total_steps_default:
                 iterations += 1
-                self.total_steps += batch_sizes[-1] if self.dynamic_buffer else self.train_batch_size_per_learner  # pyright: ignore[reportPossiblyUnboundVariable]
+                self.total_steps += (
+                    dynamic_batch_sizes(self.train_batch_size_per_learner, increases=8)[-1]
+                    if self.dynamic_buffer
+                    else self.train_batch_size_per_learner
+                )  # pyright: ignore[reportPossiblyUnboundVariable]
+            if self.iterations == "auto":  # do not mess with the actual calculation
+                self.total_steps = self._total_steps_default
+            logger.info("The expected amount of steps is %d, target is %d", real_total_steps, self.total_steps)
         self.iterations = iterations
+
 
 class DefaultArgumentParser(
     OptionalExtenionsArgs,  # Needs to be before _DefaultSetupArgumentParser

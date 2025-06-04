@@ -40,6 +40,7 @@ class _LogMetricsEnvRunnersResultsDict(TypedDict):
     episode_return_mean: float
     episode_return_max: NotRequired[float]
     episode_return_min: NotRequired[float]
+    num_env_steps_sampled_lifetime: NotRequired[int]
 
 
 class _LogMetricsEvalEnvRunnersResultsDict(_LogMetricsEnvRunnersResultsDict, total=False):

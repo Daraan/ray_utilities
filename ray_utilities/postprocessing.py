@@ -38,6 +38,7 @@ from ray.rllib.utils.metrics import (
     LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_OUT,
     LEARNER_RESULTS,
     MODULE_TO_ENV_CONNECTOR,
+    NUM_ENV_STEPS_SAMPLED_LIFETIME,
     RLMODULE_INFERENCE_TIMER,
     SAMPLE_TIMER,  # OldAPI
     TIME_BETWEEN_SAMPLING,
@@ -77,6 +78,8 @@ RESULTS_TO_KEEP: set[tuple[str, ...]] = {
     ("comment",),
     ("trial_id",),
     ("training_iteration",),
+    # Steps taken
+    (ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME),
 }
 RESULTS_TO_KEEP.update((key,) for key in CometLoggerCallback._other_results)
 RESULTS_TO_KEEP.update((key,) for key in CometLoggerCallback._system_results)
@@ -339,7 +342,8 @@ def create_log_metrics(
             EPISODE_RETURN_MEAN: result[ENV_RUNNER_RESULTS].get(
                 EPISODE_RETURN_MEAN,
                 float("nan"),
-            )
+            ),
+            NUM_ENV_STEPS_SAMPLED_LIFETIME: result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME],
         },
         EVALUATION_RESULTS: {
             ENV_RUNNER_RESULTS: {
@@ -427,6 +431,7 @@ def create_log_metrics(
     if log_stats != "most":
         for k in (
             # "time_since_restore",  # moved to timers
+            "num_training_step_calls_per_iteration",  #  if using algo.train more often before logging
             "iterations_since_restore",
             # "node_ip",  # autofilled
             # "hostname",  # autofilled
@@ -435,8 +440,7 @@ def create_log_metrics(
             # "timestamp",  # autofilled
             # "time_this_iter_s",  # will be re-added
             # "time_total_s",  # will be re-added
-            "num_env_steps_sampled_lifetime",
-            "num_training_step_calls_per_iteration",  #  if using algo.train more often before logging
+            # "num_env_steps_sampled_lifetime",  # WANT TO KEEP to log vs steps sampled
         ):
             merged_result.pop(k)
         merged_result[TIMERS].pop("time_since_restore")
