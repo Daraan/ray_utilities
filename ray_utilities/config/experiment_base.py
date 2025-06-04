@@ -498,7 +498,6 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
         self._retrieved_callbacks = True
         return self._get_callbacks()
 
-
     # endregion
 
     # Currently cannot use TypeForm[type[TypedDict]] as it is not included in the typing spec.

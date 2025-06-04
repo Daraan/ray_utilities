@@ -27,6 +27,11 @@ def exact_sampling_callback(
     worker: Optional["EnvRunner"] = None,
     **kwargs,
 ) -> None:
+    if env_runner.config.in_evaluation:
+        # We do not care about trimming in evaluation; further during evaluation (with evaluation_config)
+        # the rollout_fragment_length is 1 *episode* if evaluation_duration_unit == "episodes"
+        # otherwise it evaluation_duration / self.evaluation_num_env_runners
+        return
     total_samples = sum(len(sae) for sae in samples)
     exact_timesteps = env_runner.config.get_rollout_fragment_length(env_runner.worker_index) * env_runner.num_envs
     if total_samples > exact_timesteps:
@@ -45,7 +50,7 @@ def exact_sampling_callback(
     )
 
 
-@deprecated("old api, no need for statefull class")
+@deprecated("old api, no need for stateful class")
 class ExactSamplingCallback(DefaultCallbacks):
     """Reduces the samples of the env_runners to an exact number of samples"""
 

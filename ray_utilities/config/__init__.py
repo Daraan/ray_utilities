@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 
 def add_callbacks_to_config(
     config: AlgorithmConfig,
-    callbacks: Optional[type[RLlibCallback]
-    | list[type[RLlibCallback]]
-    | dict[str, Callable[..., Any] | list[Callable[..., Any]]]] = None,
+    callbacks: Optional[
+        type[RLlibCallback] | list[type[RLlibCallback]] | dict[str, Callable[..., Any] | list[Callable[..., Any]]]
+    ] = None,
     **kwargs,
 ):
     """

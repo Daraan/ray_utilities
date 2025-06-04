@@ -1,12 +1,16 @@
 import importlib.metadata
 from collections.abc import Callable
-from typing import Any, Literal, TypeVar, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 import typing_extensions
 from packaging.version import Version
+from typing_extensions import TypeAliasType
 
 if TYPE_CHECKING:
-    from ray.rllib.algorithms import AlgorithmConfig, Algorithm
+    import gymnasium as gym
+    from gymnasium.envs.registration import EnvSpec as _EnvSpec
+    from gymnax.environments import environment as environment_gymnax
+    from ray.rllib.algorithms import Algorithm, AlgorithmConfig
 
 _PEP_728_AVAILABLE = getattr(typing_extensions, "_PEP_728_IMPLEMENTED", False) or Version(
     importlib.metadata.version("typing-extensions")
@@ -52,3 +56,6 @@ _ESB_co = TypeVar("_ESB_co", bound="ExperimentSetupBase[Any, AlgorithmConfig, Al
 TestModeCallable = typing_extensions.TypeAliasType(
     "TestModeCallable", Callable[[FunctionalTrainable, _ESB_co], TrainableReturnData], type_params=(_ESB_co,)
 )
+
+EnvSpec = TypeAliasType("EnvSpec", "str | _EnvSpec")
+EnvType = TypeAliasType("EnvType", "gym.Env | environment_gymnax.Environment | gym.vector.VectorEnv")
