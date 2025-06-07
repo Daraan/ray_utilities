@@ -1,24 +1,39 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Generic, Mapping
 
 from ray.rllib.core.models.base import ACTOR, CRITIC, ENCODER_OUT
-from typing_extensions import TypedDict, NotRequired
+from typing_extensions import NotRequired, TypeAliasType, TypedDict, TypeVar
 
 if TYPE_CHECKING:
+    import chex
     from ray.rllib.utils.typing import TensorType
 
 logger = logging.getLogger(__name__)
 
-
-class EncoderOut(TypedDict):
-    actor: TensorType
-    critic: NotRequired[TensorType]
+_TensorT = TypeVar("_TensorT", bound="TensorType | chex.Array", default="TensorType")
 
 
-class ActorCriticEncoderOutput(TypedDict):
-    encoder_out: EncoderOut
+# needed for extra_items
+# pyright: enableExperimentalFeatures=true
+class BatchDict(TypedDict, Generic[_TensorT], extra_items="_TensorT"):
+    """Keys correspond to ray.rllib.core.columns.Columns"""
+
+    action_dist_inputs: _TensorT
+    action_logp: _TensorT
+
+
+Batch = TypeAliasType("Batch", BatchDict[_TensorT] | Mapping[str, "_TensorT"], type_params=(_TensorT,))
+
+
+class EncoderOut(TypedDict, Generic[_TensorT]):
+    actor: Batch[_TensorT]
+    critic: NotRequired[Batch[_TensorT]]
+
+
+class ActorCriticEncoderOutput(TypedDict, Generic[_TensorT]):
+    encoder_out: EncoderOut[_TensorT]
 
 
 # Test implemented values
@@ -31,4 +46,4 @@ if ACTOR not in EncoderOut.__required_keys__:
 if CRITIC not in EncoderOut.__optional_keys__:
     _bad_keys.append(CRITIC)
 if _bad_keys:
-    logger.warning("Keys %s have changed in RLlib; this module needs an update", _bad_keys)
+    logger.error("Keys %s have changed in RLlib; this module %s needs an update", _bad_keys, __name__)

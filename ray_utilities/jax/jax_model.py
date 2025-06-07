@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import abc
 import logging
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Generic, Mapping, Protocol, runtime_checkable
@@ -10,14 +11,16 @@ from typing_extensions import TypeVar
 
 if TYPE_CHECKING:
     # TODO: move to submodule
-    from sympol import Indices
     import chex
     import flax.linen as nn
+    import jax.numpy as jnp
     from flax.training.train_state import TrainState
-    from ray.rllib.utils.typing import TensorType
     from flax.typing import FrozenVariableDict
+    from ray.rllib.utils.typing import TensorType
 
     from config_types.params_types import GeneralParams
+    from ray_utilities.typing.model_return import Batch
+    from sympol import Indices
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +29,11 @@ ModelType = TypeVar("ModelType", bound="nn.Module", default="nn.Module")
 
 
 class BaseModel(Model):
-    def __call__(self, *args, **kwargs) -> TensorType:
-        return self._forward(*args, **kwargs)
+    def __call__(self, input_dict: dict[str, Any], *args, **kwargs) -> TensorType:
+        return self._forward(input_dict, *args, **kwargs)  # type: ignore # wrong in rllib
+
+    @abc.abstractmethod
+    def _forward(self, input_dict: dict, *, parameters, **kwargs) -> jax.Array: ...  # pyright: ignore[reportIncompatibleMethodOverride]
 
     def get_num_parameters(self) -> tuple[int, int]:
         # Unknown
@@ -49,7 +55,7 @@ class BaseModel(Model):
 
 
 class FlaxRLModel(Generic[ModelType, ConfigType], BaseModel):
-    def __call__(self, input_dict: dict, *, parameters, **kwargs) -> chex.Array:
+    def __call__(self, input_dict: Batch, *, parameters, **kwargs) -> jax.Array:
         return self._forward(input_dict, parameters=parameters, **kwargs)
 
     @abstractmethod
@@ -62,9 +68,11 @@ class FlaxRLModel(Generic[ModelType, ConfigType], BaseModel):
         super().__init__(config=config)  # pyright: ignore[reportArgumentType]  # ModelConfig
         self.model: ModelType = self._setup_model(**kwargs)
 
-    def _forward(self, input_dict: dict, *, parameters, **kwargs) -> TensorType:
+    def _forward(self, input_dict: Batch, *, parameters, **kwargs) -> jax.Array:
+        # NOTE: Ray's return type-hint is a dict, however this is often not true and rather an array.
         out = self.model.apply(parameters, input_dict["obs"], **kwargs)
-        return out
+        # Returns a single output if mutable=False (default), otherwise a tuple
+        return out  # type: ignore
 
     @abstractmethod
     def init_state(self, *args, **kwargs) -> TrainState: ...
@@ -75,7 +83,7 @@ class PureJaxModelProtocol(Protocol):
     # TODO: maybe generalize args
     def apply(
         self,
-        params: FrozenVariableDict,
+        params: FrozenVariableDict | Mapping,
         inputs: chex.Array,
         indices: FrozenVariableDict | dict | Mapping,
         **kwargs: Any,
@@ -98,17 +106,27 @@ class JaxRLModel(BaseModel):
             super().__init__(config=config, **kwargs)
 
     @abstractmethod
-    def init_state(self, rng: chex.PRNGKey, sample: TensorType | chex.Array) -> TrainState:
-        pass
+    def init_state(self, rng: chex.PRNGKey, sample: TensorType | chex.Array) -> TrainState: ...
 
-    def _forward(self, input_dict: dict, *, parameters, indices, **kwargs) -> dict | TensorType:
-        return self.model.apply(
-            params=parameters,
-            inputs=input_dict["obs"],
-            indices=indices,
-            **kwargs,
-        )
+    def _forward(
+        self,
+        input_dict: Batch[jnp.ndarray],
+        *,
+        parameters: FrozenVariableDict | Mapping,
+        indices: FrozenVariableDict | dict | Mapping,
+        **kwargs,  # noqa: ARG002
+    ) -> jax.Array:
+        # kwargs might contain t: #timesteps when exploring
+        # NOTE: current pyright error is likely a bug
+        return self.model.apply(params=parameters, inputs=input_dict["obs"], indices=indices)  #  pyright: ignore[reportReturnType]
 
-    def __call__(self, input_dict: dict, *, parameters, indices, **kwargs):
+    def __call__(
+        self,
+        input_dict: Batch[jax.Array],
+        *,
+        parameters: FrozenVariableDict | Mapping,
+        indices: FrozenVariableDict | dict | Mapping,
+        **kwargs,
+    ) -> jax.Array:
         # This is a dummy method to do checked forward passes.
         return self._forward(input_dict, parameters=parameters, indices=indices, **kwargs)
