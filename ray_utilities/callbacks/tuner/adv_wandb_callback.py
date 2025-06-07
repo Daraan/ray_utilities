@@ -101,6 +101,7 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
                     parent_dir[keys[-1]] = video_dict = cast("VideoMetricsDict", parent_dir[keys[-1]]).copy()  # pyright: ignore[reportTypedDictNotRequiredAccess]  # fmt: skip
                     # IMPORTANT use absolute path as local path is a ray session!
                     video_dict["video"] = Video(os.path.abspath(video_dict.pop("video_path")), format="mp4")  # type: ignore[assignment]
+
         return metrics  # type: ignore[return-value]
 
     def log_trial_result(

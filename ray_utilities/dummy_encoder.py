@@ -9,7 +9,7 @@ from ray.rllib.core.models.configs import ActorCriticEncoderConfig
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ray_utilities.typing.model_return import ActorCriticEncoderOutput
+    from ray_utilities.typing.model_return import ActorCriticEncoderOutput, Batch
 
 
 class DummyActorCriticEncoder(ActorCriticEncoder):
@@ -21,9 +21,9 @@ class DummyActorCriticEncoder(ActorCriticEncoder):
         super(ActorCriticEncoder, self).__init__(config)
         self.config: ActorCriticEncoderConfig
 
-    def _forward(self, inputs: dict, **kwargs) -> ActorCriticEncoderOutput:  # noqa: ARG002 # type: ignore[override]
-        return {  # type: ignore[return-type]
-            ENCODER_OUT: {
+    def _forward(self, inputs: Batch, **kwargs) -> ActorCriticEncoderOutput:  # noqa: ARG002  # pyright: ignore[reportIncompatibleMethodOverride]
+        return {
+            ENCODER_OUT: {  # type: ignore[return-type]
                 ACTOR: inputs,
                 # Add critic from value network
                 **({} if self.config.inference_only else {CRITIC: inputs}),

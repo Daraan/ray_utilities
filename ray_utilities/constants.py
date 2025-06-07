@@ -95,3 +95,11 @@ RAY_NEW_API_STACK_ENABLED = RAY_VERSION >= Version("2.40.0")
 See Also:
     https://docs.ray.io/en/latest/rllib/new-api-stack-migration-guide.html
 """
+
+NUM_ENV_STEPS_PASSED_TO_LEARNER = "num_env_steps_passed_to_learner"
+"""When using exact sampling the key for the logger to log the number of environment steps actually 
+passed to the learner."""
+
+NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME = "num_env_steps_passed_to_learner_lifetime"
+"""When using exact sampling the key for the logger to log the number of environment steps actually
+passed to the learner over the lifetime of the algorithm."""

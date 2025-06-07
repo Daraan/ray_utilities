@@ -148,6 +148,7 @@ def create_algorithm_config(
             "dynamic_buffer": args["dynamic_buffer"],
             "dynamic_batch": not args["static_batch"],
             "total_steps": args["total_steps"],
+            "remove_masked_samples": True,  # args["remove_masked_samples"],
         },
     )
     try:

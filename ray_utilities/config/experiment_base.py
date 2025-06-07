@@ -278,6 +278,12 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
         # Overwrite if config_from_args is not sufficient.
         return self.config_from_args(self.args)
 
+    def _learner_config_dict_defaults(self):
+        """Sets values in the learner_config_dict that are used in this packages if not already set."""
+        assert self.config, "Config not defined yet, call create_config first."
+        self.config.learner_config_dict.setdefault("_debug_connectors", False)
+        self.config.learner_config_dict.setdefault("remove_masked_samples", False)
+
     @final
     def create_config(self) -> _ConfigType_co:
         """
@@ -287,6 +293,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
             Do not overwrite this method. Overwrite _create_config / config_from_args instead.
         """
         self.config = self._create_config()
+        self._learner_config_dict_defaults()
         type(self)._check_callbacks_requested()  # classmethod!
         type(self)._retrieved_callbacks = False  # Reset for next call
         return self.config
