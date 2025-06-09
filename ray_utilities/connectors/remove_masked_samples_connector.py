@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from ray.rllib.connectors.connector_v2 import ConnectorV2
 from ray.rllib.core.columns import Columns
-from ray.rllib.utils.metrics import ALL_MODULES
+from ray.rllib.utils.metrics import ALL_MODULES  # pyright: ignore[reportPrivateImportUsage]
 from ray.rllib.utils.postprocessing.episodes import remove_last_ts_from_episodes_and_restore_truncateds
 
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
@@ -39,16 +39,17 @@ class RemoveMaskedSamplesConnector(ConnectorV2):
 
     @staticmethod
     def _log_and_increase_module_steps(
-        metrics: MetricsLogger,
+        metrics: Optional[MetricsLogger],
         module_id: ModuleID,
         module_batch: dict[str, Any],
         num_steps: int,
     ) -> int:
         module_steps = len(module_batch[Columns.OBS])
-        metrics.log_value(
-            (module_id, NUM_ENV_STEPS_PASSED_TO_LEARNER), module_steps, reduce="sum", clear_on_reduce=True
-        )
-        metrics.log_value((module_id, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), module_steps, reduce="sum")
+        if metrics:
+            metrics.log_value(
+                (module_id, NUM_ENV_STEPS_PASSED_TO_LEARNER), module_steps, reduce="sum", clear_on_reduce=True
+            )
+            metrics.log_value((module_id, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), module_steps, reduce="sum")
         return num_steps + module_steps
 
     def __call__(
@@ -56,7 +57,7 @@ class RemoveMaskedSamplesConnector(ConnectorV2):
         *,
         batch: dict[ModuleID, dict[str, Any]],
         episodes: list[EpisodeType],
-        metrics: MetricsLogger,
+        metrics: Optional[MetricsLogger] = None,
         **kwargs,
     ) -> Any:
         # Fix batch length by removing samples that are masked out.
@@ -83,6 +84,9 @@ class RemoveMaskedSamplesConnector(ConnectorV2):
             orig_truncateds=[False]
             * len(episodes),  # TODO: check in later training if potentially batch.truncated can be used here
         )
-        metrics.log_value((ALL_MODULES, NUM_ENV_STEPS_PASSED_TO_LEARNER), num_steps, reduce="sum", clear_on_reduce=True)
-        metrics.log_value((ALL_MODULES, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), num_steps, reduce="sum")
+        if metrics:
+            metrics.log_value(
+                (ALL_MODULES, NUM_ENV_STEPS_PASSED_TO_LEARNER), num_steps, reduce="sum", clear_on_reduce=True
+            )
+            metrics.log_value((ALL_MODULES, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), num_steps, reduce="sum")
         return batch

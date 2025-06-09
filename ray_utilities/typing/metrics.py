@@ -73,11 +73,27 @@ class LogMetricsDict(TypedDict):
     training_iteration: int
     """The number of times train.report() has been called"""
 
+    current_step: int
+    """
+    The current step in the training process, usually the number of environment steps sampled.
+    
+    For exact sampling use:
+    - "learners/(__all_modules__ | default_policy)/num_env_steps_passed_to_learner_lifetime"
+      Requires: ``RemoveMaskedSamplesConnector`` (+ ``exact_sampling_callback`` at best)
+    - "env_runners/num_env_steps_sampled_lifetime"
+      Requires: ``exact_sampling_callback``
+
+    Otherwise use:
+        env_runners/num_env_steps_sampled_lifetime
+    """
+
     done: bool
     timers: NotRequired[dict[str, float | dict[str, Any]]]
     fault_tolerance: NotRequired[Any]
     env_runner_group: NotRequired[Any]
-    num_env_steps_sampled_lifetime_throughput: NotRequired[int]
+    num_env_steps_sampled_lifetime: NotRequired[int]
+    num_env_steps_sampled_lifetime_throughput: NotRequired[float]
+    """Mean time in seconds between two logging calls to num_env_steps_sampled_lifetime"""
 
 
 class AutoExtendedLogMetricsDict(LogMetricsDict):

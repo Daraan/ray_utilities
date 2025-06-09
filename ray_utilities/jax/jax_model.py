@@ -140,6 +140,7 @@ class JaxRLModel(BaseModel):
 
 
 if TYPE_CHECKING:
+
     class FlaxTypedModule(nn.Module):
         # Module with typed apply method.
 

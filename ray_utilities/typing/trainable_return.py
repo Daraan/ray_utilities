@@ -16,5 +16,6 @@ class TrainableReturnData(_NotRequiredEnvRunners, total=False, closed=False):
     evaluation: Required[_LogMetricsEvaluationResultsDict]
     training_iteration: int
     done: Required[bool]
+    current_step: Required[int]
     comment: str
     trial_id: int | str

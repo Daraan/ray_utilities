@@ -39,6 +39,7 @@ from ray.rllib.utils.metrics import (
     LEARNER_RESULTS,
     MODULE_TO_ENV_CONNECTOR,
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
+    NUM_ENV_STEPS_TRAINED_LIFETIME,
     RLMODULE_INFERENCE_TIMER,
     SAMPLE_TIMER,  # OldAPI
     TIME_BETWEEN_SAMPLING,
@@ -51,6 +52,7 @@ from ray_utilities.constants import (
     DEFAULT_VIDEO_DICT_KEYS,
     EPISODE_BEST_VIDEO,
     EPISODE_WORST_VIDEO,
+    NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
 )
 from ray_utilities.misc import deep_update
 from ray_utilities.temp_dir import TEMP_DIR_PATH
@@ -337,6 +339,12 @@ def create_log_metrics(
         eval_mean = float("nan")
         disc_eval_mean = float("nan")
 
+    current_step = result[LEARNER_RESULTS][ALL_MODULES].get(
+        NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
+        result[ENV_RUNNER_RESULTS].get(
+            NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]
+        ),
+    )
     metrics: LogMetricsDict = {
         ENV_RUNNER_RESULTS: {
             EPISODE_RETURN_MEAN: result[ENV_RUNNER_RESULTS].get(
@@ -352,6 +360,7 @@ def create_log_metrics(
         },
         "training_iteration": result["training_iteration"],
         "done": result["done"],
+        "current_step": current_step,
     }
     if discrete_eval:
         metrics[EVALUATION_RESULTS]["discrete"] = {
@@ -440,21 +449,21 @@ def create_log_metrics(
             # "timestamp",  # autofilled
             # "time_this_iter_s",  # will be re-added
             # "time_total_s",  # will be re-added
-            # "num_env_steps_sampled_lifetime",  # WANT TO KEEP to log vs steps sampled
+            "num_env_steps_sampled_lifetime",  # superseded by current_step
         ):
             merged_result.pop(k)
         merged_result[TIMERS].pop("time_since_restore")
 
     merged_result.pop("fault_tolerance")
     merged_result.pop("env_runner_group")
-    merged_result.pop("num_env_steps_sampled_lifetime_throughput")
+    merged_result.pop(NUM_ENV_STEPS_SAMPLED_LIFETIME + "_throughput")
     # merged_result[ENV_RUNNER_RESULTS].pop("num_healthy_workers", )
     # merged_result[ENV_RUNNER_RESULTS].pop("num_remote_worker_restarts", None)
     merged_result[ENV_RUNNER_RESULTS].pop(ENV_TO_MODULE_SUM_EPISODES_LENGTH_IN)
     merged_result[ENV_RUNNER_RESULTS].pop(ENV_TO_MODULE_SUM_EPISODES_LENGTH_OUT)
     merged_result[ENV_RUNNER_RESULTS].pop(WEIGHTS_SEQ_NO)
     if EVALUATION_RESULTS in result:
-        merged_result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop("num_env_steps_sampled_lifetime_throughput", None)
+        merged_result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(NUM_ENV_STEPS_SAMPLED_LIFETIME + "_throughput", None)
         merged_result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(ENV_TO_MODULE_SUM_EPISODES_LENGTH_IN)
         merged_result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(ENV_TO_MODULE_SUM_EPISODES_LENGTH_OUT)
         merged_result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(WEIGHTS_SEQ_NO)
@@ -469,7 +478,7 @@ def create_log_metrics(
     else:
         merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_IN)
         merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_OUT)
-        merged_result[LEARNER_RESULTS][ALL_MODULES].pop("num_env_steps_trained_lifetime_throughput")
+        merged_result[LEARNER_RESULTS][ALL_MODULES].pop(NUM_ENV_STEPS_TRAINED_LIFETIME + "_throughput")
     return merged_result  # type: ignore[return-value]
 
 

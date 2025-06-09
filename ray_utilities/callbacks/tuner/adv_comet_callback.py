@@ -301,7 +301,7 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
 
                 # Already a saved video:
                 if (video_path_key := video_key.replace("/video", "/video_path")) in flat_result:
-                    video = cast(str, flat_result[video_path_key])
+                    video = cast("str", flat_result[video_path_key])
                     logging.getLogger("comet_ml").debug("Logging video from %s", video)
 
                 metadata = {
