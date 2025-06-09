@@ -3,19 +3,21 @@ from __future__ import annotations
 import abc
 import logging
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Generic, Mapping, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, Mapping, Protocol, overload, runtime_checkable
 
+import flax.linen as nn
 import jax
+from flax.typing import FrozenVariableDict
 from ray.rllib.core.models.base import Model
 from typing_extensions import TypeVar
 
 if TYPE_CHECKING:
     # TODO: move to submodule
     import chex
-    import flax.linen as nn
     import jax.numpy as jnp
+    from flax.core.scope import CollectionFilter
     from flax.training.train_state import TrainState
-    from flax.typing import FrozenVariableDict
+    from flax.typing import FrozenVariableDict, PRNGKey, RNGSequences, VariableDict
     from ray.rllib.utils.typing import TensorType
 
     from config_types.params_types import GeneralParams
@@ -25,7 +27,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 ConfigType = TypeVar("ConfigType", bound="GeneralParams", default="GeneralParams")
-ModelType = TypeVar("ModelType", bound="nn.Module", default="nn.Module")
+ModelType = TypeVar("ModelType", bound="nn.Module", default="nn.Module | FlaxTypedModule")
 
 
 class BaseModel(Model):
@@ -71,6 +73,11 @@ class FlaxRLModel(Generic[ModelType, ConfigType], BaseModel):
     def _forward(self, input_dict: Batch, *, parameters, **kwargs) -> jax.Array:
         # NOTE: Ray's return type-hint is a dict, however this is often not true and rather an array.
         out = self.model.apply(parameters, input_dict["obs"], **kwargs)
+        if kwargs.get("mutable"):
+            try:
+                out, _aux = out
+            except ValueError:
+                pass
         # Returns a single output if mutable=False (default), otherwise a tuple
         return out  # type: ignore
 
@@ -130,3 +137,53 @@ class JaxRLModel(BaseModel):
     ) -> jax.Array:
         # This is a dummy method to do checked forward passes.
         return self._forward(input_dict, parameters=parameters, indices=indices, **kwargs)
+
+
+if TYPE_CHECKING:
+    class FlaxTypedModule(nn.Module):
+        # Module with typed apply method.
+
+        if TYPE_CHECKING:
+
+            @overload
+            def apply(
+                self,
+                variables: VariableDict,
+                *args,
+                rngs: PRNGKey | RNGSequences | None = None,
+                method: Callable[..., Any] | str | None = None,
+                mutable: Literal[False] = False,
+                capture_intermediates: bool | Callable[["nn.Module", str], bool] = False,
+                **kwargs,
+            ) -> jax.Array:
+                """Applies the model to the input data."""
+                ...
+
+            @overload
+            def apply(
+                self,
+                variables: VariableDict,
+                *args,
+                rngs: PRNGKey | RNGSequences | None = None,
+                method: Callable[..., Any] | str | None = None,
+                mutable: CollectionFilter,
+                capture_intermediates: bool | Callable[["nn.Module", str], bool] = False,
+                **kwargs,
+            ) -> tuple[jax.Array, FrozenVariableDict | dict[str, Any]]:
+                """Applies the model to the input data."""
+                ...
+
+            def apply(
+                self,
+                variables: VariableDict,
+                *args,
+                rngs: PRNGKey | RNGSequences | None = None,
+                method: Callable[..., Any] | str | None = None,
+                mutable: CollectionFilter = False,
+                capture_intermediates: bool | Callable[["nn.Module", str], bool] = False,
+                **kwargs,
+            ) -> jax.Array | tuple[jax.Array, FrozenVariableDict | dict[str, Any]]:
+                """Applies the model to the input data."""
+                ...
+else:
+    FlaxTypedModule = nn.Module
