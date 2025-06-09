@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from typing_extensions import Never, NotRequired, Required, TypedDict
+from typing_extensions import Never, NotRequired, ReadOnly, Required, TypedDict
 
 from . import _PEP_728_AVAILABLE, ExtraItems
 
@@ -87,12 +87,35 @@ class _NotRequiredEnvRunners(TypedDict, total=False, closed=False):
     env_runners: NotRequired[EnvRunnersResultsDict]
 
 
+class _LearnerResults(TypedDict, extra_items=ReadOnly["int | float | _LearnerResults"]): ...
+
+
+class LearnerAllModulesDict(_LearnerResults):
+    num_env_steps_passed_to_learner: NotRequired[int]
+    """Key added by exact_sampling_callback"""
+    num_env_steps_passed_to_learner_lifetime: NotRequired[int]
+    """Key added by exact_sampling_callback"""
+
+
+class LearnerModuleDict(_LearnerResults):
+    num_env_steps_passed_to_learner: NotRequired[int]
+    """Key added by exact_sampling_callback"""
+    num_env_steps_passed_to_learner_lifetime: NotRequired[int]
+    """Key added by exact_sampling_callback"""
+
+
+class LearnersMetricsDict(_LearnerResults):
+    __all_modules__: LearnerAllModulesDict
+    default_policy: LearnerModuleDict
+
+
 if _PEP_728_AVAILABLE or TYPE_CHECKING:
 
     class _AlgoReturnDataWithoutEnvRunners(TypedDict, total=False, extra_items=ExtraItems):
         done: Required[bool]
         evaluation: EvaluationResultsDict
         env_runners: Required[EnvRunnersResultsDict] | NotRequired[EnvRunnersResultsDict]
+        learners: Required[LearnersMetricsDict]
         # Present in rllib results
         training_iteration: Required[int]
         """The number of times train.report() has been called"""
@@ -103,7 +126,6 @@ if _PEP_728_AVAILABLE or TYPE_CHECKING:
         trial_id: Required[int | str]
         episodes_total: int
         episodes_this_iter: int
-        learners: dict[str, dict[str, float | int]]
 
         # Times
         timers: dict[str, float]

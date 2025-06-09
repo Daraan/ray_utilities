@@ -1,3 +1,10 @@
+"""
+Type definitions for postprocessing metrics.
+
+For algorithm return data, see `ray_utilities.typing.algorithm_return`
+"""
+
+# pyright: enableExperimentalFeatures=true
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, TypeGuard
@@ -5,9 +12,6 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, TypeGuard
 from typing_extensions import Never, NotRequired, Required, TypedDict
 
 from .algorithm_return import EvaluationResultsDict, _EvaluationNoDiscreteDict
-
-# pyright: enableExperimentalFeatures=true
-
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
