@@ -108,7 +108,7 @@ class DebugConnector(ConnectorV2):
                 metrics,
             )
         self._logger.debug("DebugConnector called with batch: %s", batch)
-        breakpoint()
+        breakpoint()  # noqa: T100
         return batch
 
 
