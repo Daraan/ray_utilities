@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-from ray.rllib.core.models.base import ActorCriticEncoder
-
-from ray.rllib.core.models.base import ACTOR, CRITIC, ENCODER_OUT
-
-from ray.rllib.core.models.configs import ActorCriticEncoderConfig
-
 from typing import TYPE_CHECKING
+
+from ray.rllib.core.models.base import ACTOR, CRITIC, ENCODER_OUT, ActorCriticEncoder
+from ray.rllib.core.models.configs import ActorCriticEncoderConfig
 
 if TYPE_CHECKING:
     from ray_utilities.typing.model_return import ActorCriticEncoderOutput, Batch

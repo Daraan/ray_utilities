@@ -1,18 +1,12 @@
 from __future__ import annotations
 
 import logging
-import math
 from typing import Any, Optional, get_args
 
 from tap import Tap
 from typing_extensions import Literal
 
-from ray_utilities.dynamic_buffer_update import (
-    _test_iterations,
-    calculate_iterations,
-    calculate_total_steps,
-    dynamic_batch_sizes,
-)
+from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, split_timestep_budget
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +29,7 @@ class _DefaultSetupArgumentParser(Tap):
     An iteration consists of *n* iterations over the PPO batch, each further
     divided into minibatches of size `minibatch_size`.
     """
-    total_steps: int | Literal["auto"] = 1_000_000  # NOTE: Overwritten by Extra
+    total_steps: int = 1_000_000  # NOTE: Overwritten by Extra
 
     seed: int | None = None
     test: bool = False
@@ -205,59 +199,38 @@ class OptionalExtenionsArgs(RLlibArgumentParser):
     # static_batch: bool = True
 
     iterations: int | Literal["auto"] = "auto"
-    total_steps: int | Literal["auto"] = "auto"
-    _total_steps_default: int = 1_000_000
+    total_steps: int = 1_000_000
+    min_step_size: int = 32
+    """min_dynamic_buffer_size"""
+    max_step_size: int = 8192
+    """max_dynamic_buffer_size"""
+    total_steps_are_lower_bound: bool = True
+    """
+    If True, the total_steps are a lower bound, independently of dynamic_buffer are they adjusted to
+    be divisible by max_step_size and min_step_size. In case of a dynamic buffer, this results in
+    evenly distributed fractions of the total_steps size for each dynamic batch size.
+    """
 
     def process_args(self) -> None:
         super().process_args()
-        increases = 8
+        budget = split_timestep_budget(
+            total_steps=self.total_steps,
+            min_size=self.min_step_size,
+            max_size=self.max_step_size,
+            assure_even=self.total_steps_are_lower_bound,
+        )
+        self.total_steps = budget["total_steps"]
         if self.iterations == "auto":  # for testing reduce this number
             iterations = calculate_iterations(
                 dynamic_buffer=self.dynamic_buffer,
                 batch_size=self.train_batch_size_per_learner,
-                total_steps=self._total_steps_default if self.total_steps == "auto" else self.total_steps,
-                increases=increases,
+                total_steps=self.total_steps,
+                assure_even=self.total_steps_are_lower_bound,
+                min_size=self.min_step_size,
+                max_size=self.max_step_size,
             )
-            iterations_corrected, _real_total_steps = _test_iterations(
-                iterations,
-                self._total_steps_default if self.total_steps == "auto" else self.total_steps,
-                dynamic_batch_sizes(self.train_batch_size_per_learner, increases=8),
-                dynamic_buffer=self.dynamic_buffer,
-                dynamic_batch=True,
-            )
-            logger.debug("Correcting iterations from %d to %d", iterations, iterations_corrected)
-            iterations = iterations_corrected
         else:
             iterations = self.iterations
-        if self.total_steps == "auto":
-            self.total_steps = calculate_total_steps(
-                training_iterations=iterations,
-                batch_size=self.train_batch_size_per_learner,
-                dynamic_buffer=self.dynamic_buffer,
-                increases=8,
-            )
-            _iterations_corrected, real_total_steps = _test_iterations(
-                iterations,
-                self.total_steps,
-                dynamic_batch_sizes(self.train_batch_size_per_learner, increases=8),
-                dynamic_buffer=self.dynamic_buffer,
-                dynamic_batch=True,
-                return_correct="total_steps",
-            )
-            # TODO: real_total_steps should be used for the pbar; but it should not be used to update self.total_steps
-            # this would change the calculation again!
-            # breakpoint()
-            # This should only be one extra step
-            while self.iterations == "auto" and self.total_steps < self._total_steps_default:
-                iterations += 1
-                self.total_steps += (
-                    dynamic_batch_sizes(self.train_batch_size_per_learner, increases=8)[-1]
-                    if self.dynamic_buffer
-                    else self.train_batch_size_per_learner
-                )  # pyright: ignore[reportPossiblyUnboundVariable]
-            if self.iterations == "auto":  # do not mess with the actual calculation
-                self.total_steps = self._total_steps_default
-            logger.info("The expected amount of steps is %d, target is %d", real_total_steps, self.total_steps)
         self.iterations = iterations
 
 

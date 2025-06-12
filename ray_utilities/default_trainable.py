@@ -21,7 +21,7 @@ from typing_extensions import TypeAliasType
 from ray_utilities.callbacks.progress_bar import update_pbar
 from ray_utilities.config.experiment_base import ExperimentSetupBase
 from ray_utilities.config.typed_argument_parser import LOG_STATS, DefaultArgumentParser
-from ray_utilities.constants import EVALUATED_THIS_STEP, NUM_ENV_STEPS_PASSED_TO_LEARNER
+from ray_utilities.constants import EVALUATED_THIS_STEP, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.environment import seed_environments_for_config
 from ray_utilities.misc import is_pbar
 from ray_utilities.postprocessing import (
@@ -211,9 +211,9 @@ def default_trainable(
         if not is_pbar(pbar):
             continue
         # requires exact_sampling_callback to be set in the results, otherwise fallback
-        current_steps = result[LEARNER_RESULTS][ALL_MODULES].get(NUM_ENV_STEPS_PASSED_TO_LEARNER)
-        if current_steps is None:
-            current_steps = result[ENV_RUNNER_RESULTS].get(NUM_ENV_STEPS_SAMPLED_LIFETIME)
+        current_step = result[LEARNER_RESULTS][ALL_MODULES].get(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)
+        if current_step is None:
+            current_step = result[ENV_RUNNER_RESULTS].get(NUM_ENV_STEPS_SAMPLED_LIFETIME)
         update_pbar(
             pbar,
             train_results={
@@ -234,7 +234,7 @@ def default_trainable(
                 else None
             ),
             total_steps=total_steps,
-            current_step=result[ENV_RUNNER_RESULTS].get(NUM_ENV_STEPS_SAMPLED_LIFETIME),
+            current_step=current_step,
         )
     final_results = cast("TrainableReturnData", metrics)
     if "trial_id" not in final_results:
