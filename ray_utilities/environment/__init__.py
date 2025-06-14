@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING
-from typing_extensions import deprecated
 
 import gymnasium as gym
 import numpy as np
 from ray.tune.registry import register_env
-
-from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback, make_seeded_env_callback
+from typing_extensions import deprecated
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import AlgorithmConfig
@@ -109,40 +107,3 @@ def create_env_for_config(config: AlgorithmConfig, env_spec: str | gym.Env):
         assert not TYPE_CHECKING or config.env
         init_env = gym.make(config.env.unwrapped.spec.id)  # pyright: ignore[reportOptionalMemberAccess]
     return init_env
-
-
-def seed_environments_for_config(config: AlgorithmConfig, env_seed: int | None):
-    """
-    Adds/replaces a common deterministic seeding that is used to seed all environments created when this config is build.
-
-    Choose One:
-    - Same environment seeding across trials:
-        seed_environments_for_config(config, constant_seed)
-    - Different, but deterministic, seeding across trials:
-        seed_environments_for_config(config, run_seed)
-    """
-    seed_envs_cb = make_seeded_env_callback(env_seed)
-    # NOTE: Needs NEW API
-    if config.callbacks_on_environment_created:
-        if callable(config.callbacks_on_environment_created):
-            config.callbacks(on_environment_created=[config.callbacks_on_environment_created, seed_envs_cb])
-        else:  # assume another iterable
-            try:
-                l_before = len(config.callbacks_on_environment_created)
-            except (TypeError, Exception):  # Some iterable without len?
-                l_before = None
-            config.callbacks(
-                on_environment_created=[
-                    *(
-                        cb
-                        for cb in config.callbacks_on_environment_created
-                        if not isinstance(cb, SeedEnvsCallback)
-                        or (isinstance(cb, type) and issubclass(cb, SeedEnvsCallback))
-                    ),
-                    seed_envs_cb,
-                ]
-            )
-            if l_before == len(config.callbacks_on_environment_created):
-                _logger.info("A SeedEnvsCallback was replaced by calling seed_environments_for_config.")
-    else:
-        config.callbacks(on_environment_created=seed_envs_cb)

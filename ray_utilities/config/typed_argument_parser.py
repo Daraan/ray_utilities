@@ -11,7 +11,7 @@ from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterati
 logger = logging.getLogger(__name__)
 
 
-def _auto_int_transform(x):
+def _auto_int_transform(x) -> int | Literal["auto"]:
     return int(x) if x != "auto" else x
 
 
@@ -44,7 +44,7 @@ class _DefaultSetupArgumentParser(Tap):
         self.add_argument("--seed", default=None, type=int)
         # self.add_argument("--test", nargs="*", const=True, default=False)
         self.add_argument("--iterations", "-it", default="auto", type=_auto_int_transform)
-        self.add_argument("--total_steps", "-ts", default="auto", type=_auto_int_transform)
+        self.add_argument("--total_steps", "-ts")
 
 
 class RLlibArgumentParser(Tap):
@@ -193,7 +193,7 @@ class DefaultExtraArgs(Tap):
         self.add_argument("--extra", help="extra arguments", nargs="+")
 
 
-class OptionalExtenionsArgs(RLlibArgumentParser):
+class OptionalExtensionsArgs(RLlibArgumentParser):
     dynamic_buffer: bool = False
     """Use DynamicBufferCallback"""
     # static_batch: bool = True
@@ -235,7 +235,7 @@ class OptionalExtenionsArgs(RLlibArgumentParser):
 
 
 class DefaultArgumentParser(
-    OptionalExtenionsArgs,  # Needs to be before _DefaultSetupArgumentParser
+    OptionalExtensionsArgs,  # Needs to be before _DefaultSetupArgumentParser
     RLlibArgumentParser,
     _DefaultSetupArgumentParser,
     DefaultResourceArgParser,

@@ -19,10 +19,11 @@ from ray.rllib.utils.metrics import (
 from typing_extensions import TypeAliasType
 
 from ray_utilities.callbacks.progress_bar import update_pbar
+from ray_utilities.config import seed_environments_for_config
 from ray_utilities.config.experiment_base import ExperimentSetupBase
 from ray_utilities.config.typed_argument_parser import LOG_STATS, DefaultArgumentParser
 from ray_utilities.constants import EVALUATED_THIS_STEP, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
-from ray_utilities.environment import seed_environments_for_config
+from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_steps
 from ray_utilities.misc import is_pbar
 from ray_utilities.postprocessing import (
     create_log_metrics,
@@ -64,6 +65,33 @@ def episode_iterator(args: dict[str, Any], hparams: dict[str, Any], *, use_pbar:
     if use_pbar:
         return tqdm_ray.tqdm(range(args["iterations"]), position=hparams.get("process_number", None))
     return range(args["iterations"])
+
+
+def get_total_steps(args: dict[str, Any], config: "AlgorithmConfig") -> int | None:
+    return (
+        args.get("total_steps", None)
+        if args["iterations"] == "auto"
+        else calculate_steps(
+            args["iterations"],
+            total_steps_default=args["total_steps"],
+            min_step_size=args["min_step_size"],
+            max_step_size=args["max_step_size"],
+        )
+        if args["dynamic_buffer"]
+        else (
+            config.train_batch_size_per_learner
+            * max(1, config.num_learners)  # pyright: ignore[reportArgumentType]
+            * args["iterations"]
+        )
+    )
+
+
+def get_current_step(result: StrictAlgorithmReturnData) -> int:
+    # requires exact_sampling_callback to be set in the results, otherwise fallback
+    current_step = result[LEARNER_RESULTS][ALL_MODULES].get(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)
+    if current_step is None:
+        return result[ENV_RUNNER_RESULTS].get(NUM_ENV_STEPS_SAMPLED_LIFETIME)
+    return current_step
 
 
 def create_default_trainable(
@@ -125,12 +153,7 @@ def default_trainable(
     elif setup_class:
         args = hparams["cli_args"]
         # TODO: this should use the parameters from the search space
-        # env_seed only for DDTSetup currently
-        try:
-            config = setup_class.config_from_args(args, env_seed=hparams.get("env_seed"))  # pyright: ignore[reportCallIssue]
-        except TypeError:
-            logger.debug("Setup class %s does not support 'env_seed'. Extend config_from_args", setup_class)
-            config = setup_class.config_from_args(args)
+        config = setup_class.config_from_args(args)
     else:
         raise ValueError("Either setup or setup_class must be provided.")
 
@@ -139,7 +162,7 @@ def default_trainable(
     if (run_seed := hparams.get("run_seed", None)) is not None:
         logger.debug("Using run_seed for config.seed %s", run_seed)
         config.debugging(seed=run_seed)
-    # Seeded environments
+    # Seeded environments - sequential seeds have to be set here, run_seed comes from Tuner
     if args["env_seeding_strategy"] == "sequential":
         seed_environments_for_config(config, run_seed)
     elif args["env_seeding_strategy"] == "same":
@@ -164,7 +187,6 @@ def default_trainable(
     disc_eval_mean = None
     disc_running_eval_reward = None
     pbar = episode_iterator(args, hparams, use_pbar=use_pbar)
-    total_steps = args.get("total_steps", None)
     for _episode in pbar:
         # Train and get results
         result = cast("StrictAlgorithmReturnData", algo.train())
@@ -210,10 +232,6 @@ def default_trainable(
         # Update progress bar
         if not is_pbar(pbar):
             continue
-        # requires exact_sampling_callback to be set in the results, otherwise fallback
-        current_step = result[LEARNER_RESULTS][ALL_MODULES].get(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)
-        if current_step is None:
-            current_step = result[ENV_RUNNER_RESULTS].get(NUM_ENV_STEPS_SAMPLED_LIFETIME)
         update_pbar(
             pbar,
             train_results={
@@ -233,8 +251,8 @@ def default_trainable(
                 if disc_eval_mean is not None and disc_running_eval_reward
                 else None
             ),
-            total_steps=total_steps,
-            current_step=current_step,
+            total_steps=get_total_steps(args, config),
+            current_step=get_current_step(result),
         )
     final_results = cast("TrainableReturnData", metrics)
     if "trial_id" not in final_results:

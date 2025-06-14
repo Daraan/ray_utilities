@@ -294,8 +294,10 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
         """
         self.config = self._create_config()
         self._learner_config_dict_defaults()
-        type(self)._check_callbacks_requested()  # classmethod!
-        type(self)._retrieved_callbacks = False  # Reset for next call
+        # classmethod, but _retrieved_callbacks might be set on instance
+        self._check_callbacks_requested.__func__(self)  # pyright: ignore[reportFunctionMemberAccess]
+        self._retrieved_callbacks = False  # Reset for next call
+        type(self)._retrieved_callbacks = False
         return self.config
 
     @classmethod
@@ -472,8 +474,10 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
             return True
         logger.warning(
             "Callbacks for the Setup class %s have not been retrieved after creating the config. "
+            "It is recommended to call `get_callbacks_from_args` inside the `config_from_args` method "
+            "to support potential mixins that have their own callbacks. "
             "This may result in missing callbacks in the experiment.",
-            cls.__name__,
+            cls,
             stacklevel=3,
         )
         return False
@@ -481,6 +485,19 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
     @classmethod
     @abstractmethod
     def _get_callbacks_from_args(cls, args: NamespaceType[ParserType_co]) -> list[type[RLlibCallback]]: ...
+
+    @final
+    @classmethod
+    def get_callbacks_from_args(cls, args: NamespaceType[ParserType_co]) -> list[type[RLlibCallback]]:
+        """
+        Returns a list of callbacks to be used with the experiment.
+
+        Attention:
+            Do not overwrite this method.
+            Overwrite _get_callbacks_from_args is not sufficient.
+        """
+        cls._retrieved_callbacks = True  # Unsafe, set on class, clear on config_from_args
+        return cls._get_callbacks_from_args(args)
 
     def _get_callbacks(self) -> list[type[RLlibCallback]]:
         """
@@ -500,7 +517,9 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
         """
         Returns a list of callbacks to be used with the experiment.
 
-        Do not overwrite this method. Overwrite _get_callbacks instead.
+        Attention:
+            Do not overwrite this method.
+            Overwrite _get_callbacks instead if _get_callbacks_from_args is not sufficient.
         """
         self._retrieved_callbacks = True
         return self._get_callbacks()

@@ -19,7 +19,9 @@ else:
 logger = logging.getLogger(__name__)
 
 MIN_DYNAMIC_BATCH_SIZE = 16
-MAX_DYNAMIC_BATCH_SIZE = 8192
+MAX_DYNAMIC_BATCH_SIZE = 16384
+_MIN_DEFAULT_BATCH_SIZE = 32
+_MAX_DEFAULT_BATCH_SIZE = 8192
 
 
 class UpdateNStepsArgs(Protocol):
@@ -35,7 +37,7 @@ def update_buffer_and_rollout_size(
     *,
     initial_steps: int,
     global_step: int,
-    num_increases: int = 8,
+    num_increase_factors: int = 8,
     accumulate_gradients_every_initial: int,
 ):
     """
@@ -44,15 +46,20 @@ def update_buffer_and_rollout_size(
     Afterwards create Rollout with `n_steps`
     `if args.dynamic_buffer or not args.static_batch:` recalculate
     Then if n_steps != n_steps_old: -> create rollout
+
+    Attention:
+        The default value of num_increase_factors=8, does not match with the default values of
+        min_size=32 and max_size=8192 in the other functions of this module, as those result in
+        9 different values; use num_increase_factors=9 to match the other functions.
     """
     # increase_index = global_step // (args.total_steps//sum(increase_factor_list))
     if global_step + 1 > args.total_steps:
         global_step = args.total_steps  # prevent explosion; limit factor to 128
     increase_factor = int(
-        2 ** (np.ceil((((global_step + 1) * num_increases) / (1 + args.total_steps))) - 1)
+        2 ** (np.ceil((((global_step + 1) * num_increase_factors) / (1 + args.total_steps))) - 1)
     )  # int(increase_factor_list_long[increase_index])
     increase_factor_batch = int(
-        2 ** (np.ceil((((global_step + 1) * num_increases) / (1 + args.total_steps))) - 1)
+        2 ** (np.ceil((((global_step + 1) * num_increase_factors) / (1 + args.total_steps))) - 1)
     )  # int(increase_factor_list_long[increase_index])
     if args.dynamic_buffer:
         n_steps = initial_steps * increase_factor
@@ -87,8 +94,8 @@ class SplitBudgetReturnDict(TypedDict):
 def split_timestep_budget(
     total_steps: int = 1_000_000,
     *,
-    min_size: int = 128,
-    max_size: int = MAX_DYNAMIC_BATCH_SIZE,
+    min_size: int = _MIN_DEFAULT_BATCH_SIZE,
+    max_size: int = _MAX_DEFAULT_BATCH_SIZE,
     assure_even: bool = True,
 ) -> SplitBudgetReturnDict:
     """
@@ -153,8 +160,8 @@ def calculate_iterations(
     dynamic_buffer: Literal[False],
     batch_size: int,
     total_steps: int = 1_000_000,
-    min_size: int = MIN_DYNAMIC_BATCH_SIZE,
-    max_size: int = MAX_DYNAMIC_BATCH_SIZE,
+    min_size: int = _MIN_DEFAULT_BATCH_SIZE,
+    max_size: int = _MAX_DEFAULT_BATCH_SIZE,
     assure_even: bool = True,
 ) -> int: ...
 
@@ -165,8 +172,8 @@ def calculate_iterations(
     dynamic_buffer: Literal[True],
     batch_size: Optional[int] = None,
     total_steps: int = 1_000_000,
-    min_size: int = MIN_DYNAMIC_BATCH_SIZE,
-    max_size: int = MAX_DYNAMIC_BATCH_SIZE,
+    min_size: int = 32,
+    max_size: int = 8192,
     assure_even: bool = True,
 ) -> int: ...
 
@@ -176,8 +183,8 @@ def calculate_iterations(
     dynamic_buffer: bool,
     batch_size: Optional[int] = None,
     total_steps: int = 1_000_000,
-    min_size: int = MIN_DYNAMIC_BATCH_SIZE,
-    max_size: int = MAX_DYNAMIC_BATCH_SIZE,
+    min_size: int = _MIN_DEFAULT_BATCH_SIZE,
+    max_size: int = _MAX_DEFAULT_BATCH_SIZE,
     assure_even: bool = True,
 ) -> int:
     """
@@ -213,3 +220,33 @@ def calculate_iterations(
         return math.ceil(budget["total_steps"] / batch_size)  # pyright: ignore[reportOperatorIssue]
     iterations = sum(budget["iterations_per_step_size"])
     return iterations
+
+
+def calculate_steps(iterations, *, total_steps_default: int = 1_000_000, min_step_size: int, max_step_size: int) -> int:
+    """
+    This calculates the number of steps taken when limiting the number of iterations.
+
+    Use when passing --iterations to calcualte the correct value for the progress bar.
+    Args:
+        iterations: The number of iterations to limit the steps to.
+        total_steps_default: The default total number of steps to use for the complete budget.
+        min_step_size: The minimum step size to use for the budget.
+        max_step_size: The maximum step size to use for the budget.
+    """
+    budget = split_timestep_budget(
+        total_steps=total_steps_default,
+        min_size=min_step_size,
+        max_size=max_step_size,
+        assure_even=True,
+    )
+    iterations_left = iterations
+    steps_taken = 0
+    for i, step_size in enumerate(budget["step_sizes"]):
+        steps_taken += step_size * min(iterations_left, budget["iterations_per_step_size"][i])
+        iterations_left -= budget["iterations_per_step_size"][i]
+        if iterations_left <= 0:
+            break
+    else:
+        # iterations > budget["total_iterations"]
+        steps_taken += iterations_left * budget["step_sizes"][-1]
+    return steps_taken

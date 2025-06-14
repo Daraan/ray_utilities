@@ -65,7 +65,7 @@ class DynamicBufferUpdate(DynamicHyperparameterCallback):
             global_step=global_step,
             accumulate_gradients_every_initial=1,
             initial_steps=self._budget["step_sizes"][0],
-            num_increases=len(self._budget["step_sizes"]),
+            num_increase_factors=len(self._budget["step_sizes"]),
         )
         # TEST:
         step_index = 0
@@ -291,7 +291,7 @@ if __name__ == "__main__":
             global_step=global_step,
             accumulate_gradients_every_initial=1,
             initial_steps=initial_steps,
-            num_increases=len(budget["step_sizes"]),
+            num_increase_factors=len(budget["step_sizes"]),
         )
         if n_steps_old != n_steps:
             n_steps_old = n_steps
