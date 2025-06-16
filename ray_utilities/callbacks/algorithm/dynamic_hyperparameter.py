@@ -53,6 +53,11 @@ class DynamicHyperparameterCallback(DefaultCallbacks, abc.ABC):
         Env Runners and Learners have their own copy of the algorithm's configuration
         that need to be updated separately.
         """
+        # Warn if config does not have this attr:
+        if not hasattr(algorithm.config, key):
+            logger.warning(
+                "Algorithm config does not have attribute '%s' that is about to be set. Is it perhaps misspelled", key
+            )
         object.__setattr__(algorithm.config, key, value)  # necessary hack for frozen objects.
         if update_env_runners or update_learner:
             update = partial(cls._update_worker, key=key, value=value)
@@ -74,24 +79,17 @@ class DynamicHyperparameterCallback(DefaultCallbacks, abc.ABC):
         # logger.debug("Global step %s", gs)
         return gs
 
-    def __init__(
-        self, update_function: UpdateFunction, hyperparameter_name: str, *, initial_value: Optional[Any] = None
-    ):
+    def __init__(self, update_function: UpdateFunction, hyperparameter_name: str):
         self._updater = update_function
         self.hyperparameter_name: Final[str] = hyperparameter_name
-        self._initial_value: Final[Optional[Any]] = initial_value
+
+    @classmethod
+    def create_callback_class(cls, func: UpdateFunction, hyperparameter_name: str, **kwargs) -> partial[Self]:
+        return partial(cls, update_function=func, hyperparameter_name=hyperparameter_name, **kwargs)
 
     def change_update_function(self, update_function: UpdateFunction) -> None:
         """Change the updater function."""
         self._updater = update_function
-
-    @classmethod
-    def create_callback_class(
-        cls, func: UpdateFunction, hyperparameter_name: str, *, initial_value: Optional[Any] = None, **kwargs
-    ) -> partial[Self]:
-        return partial(
-            cls, update_function=func, hyperparameter_name=hyperparameter_name, initial_value=initial_value, **kwargs
-        )
 
     @abc.abstractmethod
     def on_algorithm_init(

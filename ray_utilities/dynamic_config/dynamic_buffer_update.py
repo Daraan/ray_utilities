@@ -250,3 +250,26 @@ def calculate_steps(iterations, *, total_steps_default: int = 1_000_000, min_ste
         # iterations > budget["total_iterations"]
         steps_taken += iterations_left * budget["step_sizes"][-1]
     return steps_taken
+
+
+def get_dynamic_evaluation_intervals(
+    step_sizes: list[int], *, batch_size, eval_freq: int, take_root: bool = True
+) -> list[int]:
+    """
+    Calculate the number of steps between evaluations based on the budget and evaluation frequency.
+
+    If take_root is True, the square root of the iterations between evaluations is taken to reduce the frequency
+    especially for small step sizes.
+
+    Args:
+        step_sizes: A list of step sizes to use for the calculation.
+        batch_size: The non-dynamic batch size to use for the calculation.
+        eval_freq: The evaluation frequency, i.e., how often to evaluate the model.
+            Corresponds to config.evaluation_interval.
+        take_root: If True, take the square root of the iterations between evaluations to reduce the frequency.
+    """
+    steps_between_evaluations = eval_freq * batch_size
+    iterations_between = np.divide(steps_between_evaluations, step_sizes)
+    if take_root:
+        iterations_between = np.sqrt(iterations_between)
+    return [max(1, int(i)) for i in iterations_between]

@@ -5,9 +5,11 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
+
 from ray_utilities.callbacks.algorithm.dynamic_hyperparameter import DynamicHyperparameterCallback, UpdateFunction
 from ray_utilities.dynamic_config.dynamic_buffer_update import (
     UpdateNStepsArgs,
+    get_dynamic_evaluation_intervals,
     split_timestep_budget,
     update_buffer_and_rollout_size,
 )
@@ -79,6 +81,7 @@ class DynamicBufferUpdate(DynamicHyperparameterCallback):
             if global_step < iterations:
                 break
         assert env_steps == self._budget["step_sizes"][step_index]
+        # Log current behavior
         if self._training_iterations % 4 == 0:
             logger.debug(
                 "Step %s & Iteration %s: batch size %s, env_steps %s",
@@ -87,27 +90,29 @@ class DynamicBufferUpdate(DynamicHyperparameterCallback):
                 batch_size,
                 env_steps,
             )
-        if batch_size != self._batch_size_old:
+        # Batch Size
+        if batch_size != self._batch_size_current:
             logger.debug(
                 "Batch size changed from %s to %s at iteration %s - step %s",
-                self._batch_size_old,
+                self._batch_size_current,
                 batch_size,
                 metrics_logger.peek("training_iteration", default=self._training_iterations),
                 global_step,
             )
-            self._batch_size_old = batch_size
+            self._batch_size_current = batch_size
             assert env_steps == batch_size
-            # Both are currently the same!
-            # object.__setattr__(algorihm.config, "_train_batch_size_per_learner", n_steps)
-        if env_steps != self._n_steps_old:
+            # TODO: Both are currently the same, batch size should likely be minibatch size.
+            # object.__setattr__(algorithm.config, "_train_batch_size_per_learner", n_steps)
+        # Rollout Size
+        if env_steps != self._env_steps_current:
             logger.debug(
                 "Rollout size changed from %s to %s at iteration %s - step %s",
-                self._n_steps_old,
+                self._env_steps_current,
                 env_steps,
                 metrics_logger.peek("training_iteration", default=self._training_iterations),
                 global_step,
             )
-            self._n_steps_old = env_steps
+            self._env_steps_current = env_steps
             assert algorithm.config
             # HACK algorithm.config is FROZEN
             # algorihm.config.train_batch_size_per_learner = n_steps
@@ -120,13 +125,41 @@ class DynamicBufferUpdate(DynamicHyperparameterCallback):
                 logger.debug("Resetting minibatch_size to %s", self._initial_minibatch_size)
                 self._update_algorithm(algorithm, key="minibatch_size", value=self._initial_minibatch_size)
 
+            # Change evaluation interval
+            new_eval_interval = self._evaluation_intervals.get(env_steps, None)
+            if new_eval_interval is None:
+                logger.error(
+                    "No evaluation interval for %s steps in %s. Expected a value in the dictionary.",
+                    env_steps,
+                    self._evaluation_intervals,
+                )
+                # do not change it
+            elif algorithm.config.evaluation_interval != new_eval_interval:
+                logger.debug(
+                    "Evaluation interval changed from %s to %s at iteration %s - step %s",
+                    algorithm.config.evaluation_interval,
+                    new_eval_interval,
+                    metrics_logger.peek("training_iteration", default=self._training_iterations),
+                    global_step,
+                )
+                # Likely do not need to update learners and env runners here.
+                self._update_algorithm(
+                    algorithm,
+                    key="evaluation_interval",
+                    value=new_eval_interval,
+                    update_learner=False,
+                    update_env_runners=False,
+                )
+
         # maybe need to also adjust epochs -> cycled over, same amount of minibatches until rollout > batch_size;
         # then whole rollout is consumed
         # theoretically also increase minibatch size.
 
         # In legacy batch_size = int(args.n_envs * n_steps)
 
-    def __init__(self, update_func: UpdateFunction | None = None, learner_config_dict: dict[Any, Any] | None = None):
+    def __init__(
+        self, update_function: UpdateFunction | None = None, learner_config_dict: dict[Any, Any] | None = None
+    ):
         """
 
         Args:
@@ -134,16 +167,13 @@ class DynamicBufferUpdate(DynamicHyperparameterCallback):
             learner_config_dict: Configuration dictionary for the learner. At best this is the same object as
                 `algorithm.config.learner_config_dict` to ensure that the values are updated correctly.
         """
-        if update_func is not None:
-            self._updater: UpdateFunction = update_func
-        else:
-            self._updater = self._calculate_buffer_and_batch_size
+        super().__init__(update_function or self._calculate_buffer_and_batch_size, "TBA - DynamicBufferUpdate")
+        # Set on algorithm init
         self._accumulate_gradients_every_initial: int = None
         self._initial_minibatch_size: int = None
-
-        self._batch_size_old: int = None
-        self._n_steps_old: int = None
-        self._accumulate_gradients_every_old: int = None
+        self._batch_size_current: int = None
+        self._env_steps_current: int = None
+        self._accumulate_gradients_every_current: int = None
         self._planned_current_step: int = None
         if learner_config_dict:
             if "total_steps" not in learner_config_dict:
@@ -195,7 +225,32 @@ class DynamicBufferUpdate(DynamicHyperparameterCallback):
             assert budget == self._budget
         self._budget = budget
         logger.debug("Initial rollout size for DynamicBuffer %s", self._budget["step_sizes"][0])
-
+        self._evaluation_intervals: dict[int, int] = dict(
+            zip(
+                self._budget["step_sizes"],
+                (
+                    get_dynamic_evaluation_intervals(
+                        self._budget["step_sizes"],
+                        eval_freq=algorithm.config.evaluation_interval,
+                        batch_size=algorithm.config.train_batch_size_per_learner,
+                        take_root=True,
+                    )
+                    # 0 for no evaluation
+                    if algorithm.config.evaluation_interval
+                    else [0] * len(self._budget["step_sizes"])
+                ),
+            )
+        )
+        for step_size, iterations in zip(self._budget["step_sizes"], self._budget["iterations_per_step_size"]):
+            if iterations <= 2 and self._evaluation_intervals[step_size] > 1:
+                # when doing not many iterations between step changes, assure that the evaluation interval is at least 1
+                logger.debug(
+                    "Setting evaluation interval for %s steps to 1, because iterations are %s",
+                    step_size,
+                    iterations,
+                )
+                self._evaluation_intervals[step_size] = 1
+        logger.info("Dynamic evaluation intervals: %s", self._evaluation_intervals)
         # legacy only
         self._accumulate_gradients_every_initial = 1
         self._initial_minibatch_size = algorithm.config.minibatch_size
@@ -223,7 +278,16 @@ class DynamicBufferUpdate(DynamicHyperparameterCallback):
         self._training_iterations += 1
         self._planned_current_step += algorithm.config.total_train_batch_size  # pyright: ignore[reportOptionalMemberAccess]
         assert metrics_logger
-        assert self._planned_current_step <= self._get_global_step(metrics_logger)
+        # logger.debug("Expected step: %d, reported step: %d", self._planned_current_step, self._get_global_step(metrics_logger))
+        if self._planned_current_step != self._get_global_step(metrics_logger):
+            logger.error(
+                "Expected step %d (%d + %d) but got %d instead. "
+                "Expected step should at least be smaller but not larger.",
+                self._planned_current_step,
+                self._planned_current_step - algorithm.config.total_train_batch_size,  # pyright: ignore[reportOptionalMemberAccess]
+                algorithm.config.total_train_batch_size,  # pyright: ignore[reportOptionalMemberAccess]
+                self._get_global_step(metrics_logger),
+            )
         # Safer way to get correct steps:
         self._updater(algorithm, metrics_logger, global_step=self._planned_current_step)  # pyright: ignore[reportArgumentType]
         # Exact way to update steps:
@@ -247,7 +311,7 @@ def make_dynamic_buffer_callback(func: UpdateFunction) -> type[DynamicBufferUpda
     """Create a callback that seeds the environment."""
 
     class CustomDynamicBufferUpdate(DynamicBufferUpdate):
-        _calculate_buffer_and_batch_size = func
+        _calculate_buffer_and_batch_size = func  # type: ignore[assignment]
 
     return CustomDynamicBufferUpdate
 

@@ -327,7 +327,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
                 framework="torch",  # or "tf2"; "jax" not supported
                 discrete_eval=False,
             )
-            add_callbacks_to_config(config, cls._get_callbacks_from_args(args))
+            add_callbacks_to_config(config, cls.get_callbacks_from_args(args))
             ```
         """
 

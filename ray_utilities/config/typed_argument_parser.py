@@ -211,6 +211,14 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
     evenly distributed fractions of the total_steps size for each dynamic batch size.
     """
 
+    exact_sampling: bool = True
+    """
+    Wether to add the exact_sampling_callback to the AlgorithmConfig.
+
+    Rllib's default behavior might sample a minor amount of more steps than required for the batch_size.
+    For exactness this callback will trim the sampled data to the exact batch size.
+    """
+
     def process_args(self) -> None:
         super().process_args()
         budget = split_timestep_budget(
@@ -219,6 +227,7 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
             max_size=self.max_step_size,
             assure_even=self.total_steps_are_lower_bound,
         )
+        # eval_intervals = get_dynamic_evaluation_intervals(budget["step_sizes"], batch_size=self.train_batch_size_per_learner, eval_freq=4)
         self.total_steps = budget["total_steps"]
         if self.iterations == "auto":  # for testing reduce this number
             iterations = calculate_iterations(

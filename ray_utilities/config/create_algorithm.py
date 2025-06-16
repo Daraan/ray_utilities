@@ -212,7 +212,7 @@ def create_algorithm_config(
         ),
     )
     # Stateless callbacks
-    if True or exact_sampling:  # TODO: make a setting
+    if args["exact_sampling"]:
         add_callbacks_to_config(config, on_sample_end=exact_sampling_callback)
     # Statefull callbacks
     callbacks: list[type[DefaultCallbacks]] = []
