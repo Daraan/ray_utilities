@@ -76,7 +76,7 @@ class LogMetricsDict(TypedDict):
     current_step: int
     """
     The current step in the training process, usually the number of environment steps sampled.
-    
+
     For exact sampling use:
     - "learners/(__all_modules__ | default_policy)/num_env_steps_passed_to_learner_lifetime"
       Requires: ``RemoveMaskedSamplesConnector`` (+ ``exact_sampling_callback`` at best)

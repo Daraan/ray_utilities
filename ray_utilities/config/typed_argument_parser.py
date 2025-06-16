@@ -196,7 +196,9 @@ class DefaultExtraArgs(Tap):
 class OptionalExtensionsArgs(RLlibArgumentParser):
     dynamic_buffer: bool = False
     """Use DynamicBufferCallback"""
-    # static_batch: bool = True
+
+    dynamic_batch: bool = False
+    """Use dynamic batch"""
 
     iterations: int | Literal["auto"] = "auto"
     total_steps: int = 1_000_000
@@ -204,19 +206,29 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
     """min_dynamic_buffer_size"""
     max_step_size: int = 8192
     """max_dynamic_buffer_size"""
-    total_steps_are_lower_bound: bool = True
+
+    use_exact_total_steps: bool = False
     """
     If True, the total_steps are a lower bound, independently of dynamic_buffer are they adjusted to
     be divisible by max_step_size and min_step_size. In case of a dynamic buffer, this results in
     evenly distributed fractions of the total_steps size for each dynamic batch size.
     """
 
-    exact_sampling: bool = True
+    no_exact_sampling: bool = False
     """
-    Wether to add the exact_sampling_callback to the AlgorithmConfig.
+    Set to not add the exact_sampling_callback to the AlgorithmConfig.
 
-    Rllib's default behavior might sample a minor amount of more steps than required for the batch_size.
+    If this is True this is Rllib's default behavior which might sample a minor amount of more steps
+    than required for the batch_size.
     For exactness this callback will trim the sampled data to the exact batch size.
+    """
+
+    keep_masked_samples: bool = False
+    """
+    Wether to not add the RemoveMaskedSamplesConnector to the AlgorithmConfig.
+
+    Set to True to enable RLlibs's default behavior which inserts masked samples into the learner 
+    that do not contribute to the loss.
     """
 
     def process_args(self) -> None:
@@ -225,7 +237,7 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
             total_steps=self.total_steps,
             min_size=self.min_step_size,
             max_size=self.max_step_size,
-            assure_even=self.total_steps_are_lower_bound,
+            assure_even=self.use_exact_total_steps,
         )
         # eval_intervals = get_dynamic_evaluation_intervals(budget["step_sizes"], batch_size=self.train_batch_size_per_learner, eval_freq=4)
         self.total_steps = budget["total_steps"]
@@ -234,7 +246,7 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
                 dynamic_buffer=self.dynamic_buffer,
                 batch_size=self.train_batch_size_per_learner,
                 total_steps=self.total_steps,
-                assure_even=self.total_steps_are_lower_bound,
+                assure_even=self.use_exact_total_steps,
                 min_size=self.min_step_size,
                 max_size=self.max_step_size,
             )

@@ -8,17 +8,17 @@ from ray import train, tune
 from ray.rllib.algorithms.ppo import PPO
 from typing_extensions import TypeVar
 
-from ray_utilities.misc import trial_name_creator
 from ray_utilities.config._tuner_callbacks_setup import TunerCallbackSetup
 from ray_utilities.constants import CLI_REPORTER_PARAMETER_COLUMNS, DISC_EVAL_METRIC_RETURN_MEAN
+from ray_utilities.misc import trial_name_creator
 
 if TYPE_CHECKING:
     from ray.air.config import RunConfig as RunConfigV1
-    from ray.rllib.algorithms import AlgorithmConfig
+    from ray.rllib.algorithms import Algorithm, AlgorithmConfig
     from ray.tune.experiment import Trial
 
-    from ray_utilities.config.experiment_base import ExperimentSetupBase
     from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+    from ray_utilities.setup.experiment_base import ExperimentSetupBase
 
 __all__ = [
     "TunerSetup",
@@ -27,6 +27,7 @@ __all__ = [
 
 ConfigTypeT = TypeVar("ConfigTypeT", bound="AlgorithmConfig")
 ParserTypeT = TypeVar("ParserTypeT", bound="DefaultArgumentParser")
+_AlgorithmType_co = TypeVar("_AlgorithmType_co", bound="Algorithm", covariant=True)
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
     def __init__(
         self,
         *,
-        setup: ExperimentSetupBase[ParserTypeT, ConfigTypeT],
+        setup: ExperimentSetupBase[ParserTypeT, ConfigTypeT, _AlgorithmType_co],
         extra_tags: Optional[list[str]] = None,
     ):
         self._setup = setup
@@ -100,7 +101,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             log_to_file=False,  # True for hydra like logging to files; or (stoud, stderr.log) files
             # JSON, CSV, and Tensorboard loggers are created automatically by Tune
             # to disable set TUNE_DISABLE_AUTO_CALLBACK_LOGGERS environment variable to "1"
-            callbacks=callbacks,
+            callbacks=callbacks,  # type: ignore[reportArgumentType] # Ray New Train Interface!
             # Use fail_fast for during debugging/testing to stop all experiments
             failure_config=FailureConfig(fail_fast=True),
             checkpoint_config=CheckpointConfig(

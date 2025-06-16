@@ -25,11 +25,10 @@ from typing_extensions import TypeVar
 
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.comet import CometArchiveTracker
+from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.environment import create_env
 from ray_utilities.misc import get_trainable_name
-
-from .tuner_setup import TunerSetup
-from .typed_argument_parser import DefaultArgumentParser
+from ray_utilities.setup.tuner_setup import TunerSetup
 
 if TYPE_CHECKING:
     import argparse
@@ -433,7 +432,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
 
     # region Tuner
 
-    def create_tuner(self: ExperimentSetupBase[ParserType_co, _ConfigType_co]) -> tune.Tuner:
+    def create_tuner(self: ExperimentSetupBase[ParserType_co, _ConfigType_co, _AlgorithmType_co]) -> tune.Tuner:
         return TunerSetup(setup=self).create_tuner()
 
     # endregion

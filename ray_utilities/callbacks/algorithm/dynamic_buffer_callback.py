@@ -47,13 +47,6 @@ class DynamicBufferUpdate(DynamicHyperparameterCallback):
         assert metrics_logger
         # Need to modify algorithm.config.train_batch_size_per_learner
         learner_config_dict = algorithm.config.learner_config_dict
-        args = self._UpdateArgs(
-            n_envs=1,
-            total_steps=learner_config_dict["total_steps"],
-            # batch_size (4096) * epochs (20) * episodes (100) =
-            static_batch=not learner_config_dict["dynamic_batch"],
-            dynamic_buffer=learner_config_dict["dynamic_buffer"],
-        )
         assert self._budget
         # budget = split_timestep_budget(
         #    total_steps=args.total_steps,
@@ -63,11 +56,14 @@ class DynamicBufferUpdate(DynamicHyperparameterCallback):
         # )
         # these are Stats objects
         batch_size, _accumulate_gradients_every, env_steps = update_buffer_and_rollout_size(
-            args,
+            total_steps=learner_config_dict["total_steps"],  # test if budget total_steps is fine as well
+            dynamic_buffer=learner_config_dict["dynamic_buffer"],
+            dynamic_batch=learner_config_dict["dynamic_batch"],
             global_step=global_step,
             accumulate_gradients_every_initial=1,
             initial_steps=self._budget["step_sizes"][0],
             num_increase_factors=len(self._budget["step_sizes"]),
+            n_envs=1,
         )
         # TEST:
         step_index = 0
@@ -341,21 +337,17 @@ if __name__ == "__main__":
     # batch_size = n_envs * n_steps
     n_steps_old = None
 
-    args = DynamicBufferUpdate._UpdateArgs(
-        n_envs=1,
-        total_steps=total_steps,
-        static_batch=not dynamic_batch,
-        dynamic_buffer=dynamic_buffer,
-    )
-
     while global_step < total_steps:
         global_step += n_steps
         batch_size, _, n_steps = update_buffer_and_rollout_size(
-            args,
+            total_steps=total_steps,
+            dynamic_buffer=dynamic_buffer,
+            dynamic_batch=dynamic_batch,
             global_step=global_step,
             accumulate_gradients_every_initial=1,
             initial_steps=initial_steps,
             num_increase_factors=len(budget["step_sizes"]),
+            n_envs=1,
         )
         if n_steps_old != n_steps:
             n_steps_old = n_steps

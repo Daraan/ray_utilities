@@ -20,7 +20,6 @@ from typing_extensions import TypeAliasType
 
 from ray_utilities.callbacks.progress_bar import update_pbar
 from ray_utilities.config import seed_environments_for_config
-from ray_utilities.config.experiment_base import ExperimentSetupBase
 from ray_utilities.config.typed_argument_parser import LOG_STATS, DefaultArgumentParser
 from ray_utilities.constants import EVALUATED_THIS_STEP, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_steps
@@ -33,6 +32,7 @@ from ray_utilities.postprocessing import (
 from ray_utilities.postprocessing import (
     verify_return as verify_return_type,
 )
+from ray_utilities.setup.experiment_base import ExperimentSetupBase
 from ray_utilities.typing import TrainableReturnData
 
 if TYPE_CHECKING:

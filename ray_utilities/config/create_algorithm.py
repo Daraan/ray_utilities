@@ -15,13 +15,16 @@ from ray_utilities.callbacks.algorithm.env_render_callback import make_render_ca
 from ray_utilities.callbacks.algorithm.exact_sampling_callback import exact_sampling_callback
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback, make_seeded_env_callback
 from ray_utilities.config import add_callbacks_to_config
+from ray_utilities.learners import mix_learners
+from ray_utilities.learners.leaner_with_debug_connector import LearnerWithDebugConnectors
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import AlgorithmConfig
+    from ray.rllib.core.learner import Learner
     from ray.rllib.core.models.catalog import Catalog
 
-    from ray_utilities.config.experiment_base import NamespaceType
     from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+    from ray_utilities.setup.experiment_base import NamespaceType
     from ray_utilities.typing.generic_rl_module import CatalogWithConfig, RLModuleWithConfig
 
 _ConfigType = TypeVar("_ConfigType", bound="AlgorithmConfig")
@@ -37,8 +40,9 @@ def create_algorithm_config(
     env_seed: Optional[int] = None,
     *,
     new_api: Optional[bool] = True,
-    module_class: type[RLModule | RLModuleWithConfig[_ModelConfig]],
-    catalog_class: type[Catalog | CatalogWithConfig[_ModelConfig]],
+    module_class: Optional[type[RLModule | RLModuleWithConfig[_ModelConfig]]],
+    catalog_class: Optional[type[Catalog | CatalogWithConfig[_ModelConfig]]],
+    learner_class: Optional[type["Learner"]] = None,
     model_config: dict[str, Any] | _ModelConfig,
     config_class: type[_ConfigType] = PPOConfig,
     framework: Literal["torch", "tf2"],
@@ -51,7 +55,8 @@ def create_algorithm_config(
         args: Arguments for the algorithm
         env_type: Environment type
         env_seed: Environment seed
-        module_class: RLModule class used for the algorithm
+        module_class: RLModule class used for the algorithm.
+            Not recommended to be None must be updated in that case manually afterwards.
         catalog_class: Catalog used with the `module_class`
         model_config: Configuration dict describing the torch/tf implemented model, by the module_class
         config_class: Config class of the Algorithm, defaults to PPOConfig
@@ -122,8 +127,16 @@ def create_algorithm_config(
         num_cpus_per_learner=0 if args["test"] and args["num_jobs"] < 2 else 1,
         num_gpus_per_learner=1 if args["gpu"] else 0,
     )
-
     config.framework(framework)
+    learner_mix: list[type[Learner]] = [learner_class or config.learner_class]
+    if not args.get("keep_masked_samples", False):
+        from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
+
+        learner_mix.insert(0, RemoveMaskedSamplesLearner)
+    if False:  # NOTE: Must always be the first in the mix
+        learner_mix.insert(0, LearnerWithDebugConnectors)
+    if len(learner_mix) > 1:
+        config.training(learner_class=mix_learners(learner_mix))
     config.training(
         gamma=0.99,
         # with a growing number of Learners and to increase the learning rate as follows:
@@ -146,9 +159,9 @@ def create_algorithm_config(
         grad_clip=0.5,
         learner_config_dict={
             "dynamic_buffer": args["dynamic_buffer"],
-            "dynamic_batch": not args["static_batch"],
+            "dynamic_batch": args["dynamic_batch"],
             "total_steps": args["total_steps"],
-            "remove_masked_samples": True,  # args["remove_masked_samples"],
+            "remove_masked_samples": not args["keep_masked_samples"],
             "min_dynamic_buffer_size": args["min_step_size"],
             "max_dynamic_buffer_size": args["max_step_size"],
         },
@@ -212,7 +225,7 @@ def create_algorithm_config(
         ),
     )
     # Stateless callbacks
-    if args["exact_sampling"]:
+    if not args["no_exact_sampling"]:
         add_callbacks_to_config(config, on_sample_end=exact_sampling_callback)
     # Statefull callbacks
     callbacks: list[type[DefaultCallbacks]] = []

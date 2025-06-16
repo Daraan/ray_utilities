@@ -13,10 +13,10 @@ from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallb
 
 if TYPE_CHECKING:
     from ray.air.integrations.wandb import WandbLoggerCallback
-    from ray.rllib.algorithms import AlgorithmConfig
+    from ray.rllib.algorithms import Algorithm, AlgorithmConfig
     from ray.tune import Callback
 
-    from ray_utilities.config.experiment_base import (
+    from ray_utilities.setup.experiment_base import (
         DefaultArgumentParser,
         ExperimentSetupBase,
     )
@@ -33,6 +33,7 @@ __all__ = [
 
 ConfigTypeT = TypeVar("ConfigTypeT", bound="AlgorithmConfig")
 ParserTypeT = TypeVar("ParserTypeT", bound="DefaultArgumentParser")
+_AlgorithmType_co = TypeVar("_AlgorithmType_co", bound="Algorithm", covariant=True)
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,12 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         # "training_iteration", #  needed for the callback
     )
 
-    def __init__(self, *, setup: ExperimentSetupBase[ParserTypeT, ConfigTypeT], extra_tags: Optional[list[str]] = None):
+    def __init__(
+        self,
+        *,
+        setup: ExperimentSetupBase[ParserTypeT, ConfigTypeT, _AlgorithmType_co],
+        extra_tags: Optional[list[str]] = None,
+    ):
         self._setup = setup
         self._extra_tags = extra_tags
 

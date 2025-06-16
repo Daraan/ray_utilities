@@ -26,7 +26,7 @@ from .metrics import FlatLogMetricsDict, LogMetricsDict
 from .trainable_return import TrainableReturnData
 
 if typing_extensions.TYPE_CHECKING:
-    from ray_utilities.config.experiment_base import ExperimentSetupBase
+    from ray_utilities.setup.experiment_base import ExperimentSetupBase
 
 __all__ = [
     "AlgorithmReturnData",

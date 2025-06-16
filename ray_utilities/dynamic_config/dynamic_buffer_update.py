@@ -33,8 +33,11 @@ class UpdateNStepsArgs(Protocol):
 
 # NOTE: SYMPOL keeps a copy of this function in the repo (standalone)
 def update_buffer_and_rollout_size(
-    args: UpdateNStepsArgs,
     *,
+    total_steps: int,
+    dynamic_buffer: bool,
+    dynamic_batch: bool,
+    n_envs: int = 1,
     initial_steps: int,
     global_step: int,
     num_increase_factors: int = 8,
@@ -53,24 +56,24 @@ def update_buffer_and_rollout_size(
         9 different values; use num_increase_factors=9 to match the other functions.
     """
     # increase_index = global_step // (args.total_steps//sum(increase_factor_list))
-    if global_step + 1 > args.total_steps:
-        global_step = args.total_steps  # prevent explosion; limit factor to 128
+    if global_step + 1 > total_steps:
+        global_step = total_steps  # prevent explosion; limit factor to 128
     increase_factor = int(
-        2 ** (np.ceil((((global_step + 1) * num_increase_factors) / (1 + args.total_steps))) - 1)
+        2 ** (np.ceil((((global_step + 1) * num_increase_factors) / (1 + total_steps))) - 1)
     )  # int(increase_factor_list_long[increase_index])
     increase_factor_batch = int(
-        2 ** (np.ceil((((global_step + 1) * num_increase_factors) / (1 + args.total_steps))) - 1)
+        2 ** (np.ceil((((global_step + 1) * num_increase_factors) / (1 + total_steps))) - 1)
     )  # int(increase_factor_list_long[increase_index])
-    if args.dynamic_buffer:
+    if dynamic_buffer:
         n_steps = initial_steps * increase_factor
     else:
         n_steps = initial_steps
-    if not args.static_batch:
+    if dynamic_batch:
         accumulate_gradients_every = int(accumulate_gradients_every_initial * increase_factor_batch)
     else:
         accumulate_gradients_every = int(accumulate_gradients_every_initial)
     # DYNAMIC_BATCH_SIZE
-    batch_size = int(args.n_envs * n_steps)  # XXX: Get rid of n_envs; samples_per_step
+    batch_size = int(n_envs * n_steps)  # XXX: Get rid of n_envs; samples_per_step
     # n_iterations = args.total_steps // batch_size
     # eval_freq = max(args.eval_freq // batch_size, 1)
     # logger.debug("updating buffer after step %d / %s to %s. Initial size: %s", global_step, args.total_steps, batch_size, initial_steps)

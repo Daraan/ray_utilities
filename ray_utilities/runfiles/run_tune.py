@@ -11,7 +11,8 @@ if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
     from ray.tune.result_grid import ResultGrid
 
-    from ray_utilities.config import DefaultArgumentParser, ExperimentSetupBase
+    from ray_utilities.config import DefaultArgumentParser
+    from ray_utilities.setup import ExperimentSetupBase
     from ray_utilities.typing import TestModeCallable
     from ray_utilities.typing.trainable_return import TrainableReturnData
 
