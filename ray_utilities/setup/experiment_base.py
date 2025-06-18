@@ -137,7 +137,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
     # region Argument Parsing
 
     def create_parser(self) -> Parser[ParserType_co]:
-        self.parser = DefaultArgumentParser()
+        self.parser = DefaultArgumentParser(allow_abbrev=False)
         return self.parser
 
     def postprocess_args(self, args: NamespaceType[ParserType_co]) -> NamespaceType[ParserType_co]:
@@ -282,6 +282,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
         assert self.config, "Config not defined yet, call create_config first."
         self.config.learner_config_dict.setdefault("_debug_connectors", False)
         self.config.learner_config_dict.setdefault("remove_masked_samples", False)
+        self.config.learner_config_dict.setdefault("accumulate_gradients_every", 1)
 
     @final
     def create_config(self) -> _ConfigType_co:

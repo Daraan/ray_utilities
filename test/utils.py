@@ -11,6 +11,7 @@ import jax
 import jax.numpy as jnp
 import numpy.testing as npt
 import tree
+from contextlib import nullcontext
 from typing_extensions import NotRequired, Required, get_origin, get_type_hints
 
 from ray_utilities.config import DefaultArgumentParser
@@ -18,17 +19,29 @@ from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 
 if TYPE_CHECKING:
     import chex
+    from jaxlib.xla_extension import pytree  # pyright: ignore[reportMissingModuleSource] pyi file
+
+    LeafType = pytree.SequenceKey | pytree.DictKey | pytree.GetAttrKey
     from flax.training.train_state import TrainState
 
 args_train_no_tuner = mock.patch.object(
     sys, "argv", ["file.py", "--a", "NA", "--no-render_env", "-J", "1", "-it", "2", "-np"]
 )
-clean_args = mock.patch.object(sys, "argv", ["file.py", "--a", "NA"])
+clean_args = mock.patch.object(sys, "argv", ["file.py", "-a", "NA"])
 """Use when comparing to CLIArgs"""
 
 
 def patch_args(*args):
-    return mock.patch.object(sys, "argv", ["file.py", "--a", "NA", *args])
+    patch = [
+        "file.py",
+        *(("-a", "no_actor_provided by patch_args") if ("-a" not in args and "--actor_type" not in args) else ()),
+        *args,
+    ]
+    return mock.patch.object(
+        sys,
+        "argv",
+        patch,
+    )
 
 
 def get_explicit_required_keys(cls):
@@ -45,6 +58,14 @@ def get_required_keys(cls):
 
 def get_optional_keys(cls):
     return cls.__optional__keys - get_explicit_required_keys(cls)
+
+
+NOT_FOUND = object()
+
+
+def get_leafpath_value(leaf: LeafType):
+    """Returns the path value of a leaf, could be index (list), key (dict), or name (attribute)."""
+    return getattr(leaf, "name", getattr(leaf, "key", getattr(leaf, "idx", NOT_FOUND)))
 
 
 class SetupDefaults(unittest.TestCase):
@@ -70,6 +91,34 @@ class SetupDefaults(unittest.TestCase):
         self._ACTION_DIM: int = self._ACTION_SPACE.n  # type: ignore[attr-defined]
         self._OBS_DIM: int = self._OBSERVATION_SPACE.shape[0]  # pyright: ignore[reportOptionalSubscript]
 
+    def util_test_tree_equivalence(
+        self,
+        tree1: TrainState | Any,
+        tree2: TrainState | Any,
+        ignore_leaves: Collection[str] = (),
+        msg: str = "",
+        attr_checked: str = "",
+        use_subtests: bool = False,
+    ):
+        leaves1 = jax.tree.leaves_with_path(tree1)
+        leaves2 = jax.tree.leaves_with_path(tree2)
+        # flat1 = tree.flatten(val1)
+        # flat_params2 = tree.flatten(val2)
+        tree.assert_same_structure(leaves1, leaves2)
+        path1: jax.tree_util.KeyPath
+        leaf: LeafType
+        for (path1, val1), (path2, val2) in zip(leaves1, leaves2):
+            with self.subTest(msg=msg, attr=attr_checked, path=path1) if use_subtests else nullcontext():
+                self.assertEqual(path1, path2, msg)
+                if path1:  # empty tuple for top-level attributes
+                    leaf = path1[-1]
+                    leaf_name = get_leafpath_value(leaf)
+                    if leaf_name in ignore_leaves:
+                        continue
+                npt.assert_array_equal(
+                    val1, val2, err_msg=f"Attribute '{attr_checked}.{path1}' not equal in both states {msg}"
+                )
+
     def util_test_state_equivalence(
         self,
         state1: TrainState | Any,
@@ -77,6 +126,7 @@ class SetupDefaults(unittest.TestCase):
         msg="",
         *,
         ignore: Collection[str] = (),
+        ignore_leaves: Collection[str] = (),
     ):
         """Check if two states are equivalent."""
         # Check if the parameters and indices are equal
@@ -84,21 +134,23 @@ class SetupDefaults(unittest.TestCase):
             ignore = {ignore}
         else:
             ignore = set(ignore)
+        if isinstance(ignore_leaves, str):
+            ignore_leaves = {ignore_leaves}
+        else:
+            ignore_leaves = set(ignore_leaves)
 
         for attr in ["params", "indices", "grad_accum", "opt_state"]:
             if attr in ignore:
                 continue
             with self.subTest(msg=msg, attr=attr):
-                val1 = getattr(state1, attr, None)
-                val2 = getattr(state2, attr, None)
-                self.assertEqual(val1 is not None, val2 is not None, f"Attribute {attr} not found in both states {msg}")
-                if val1 is None and val2 is None:
+                attr1 = getattr(state1, attr, None)
+                attr2 = getattr(state2, attr, None)
+                self.assertEqual(
+                    attr1 is not None, attr2 is not None, f"Attribute {attr} not found in both states {msg}"
+                )
+                if attr1 is None and attr2 is None:
                     continue
-                flat1 = tree.flatten(val1)
-                flat_params2 = tree.flatten(val2)
-                tree.assert_same_structure(flat1, flat_params2)
-                for p1, p2 in zip(flat1, flat_params2):
-                    npt.assert_array_equal(p1, p2, err_msg=f"Attribute '{attr}' not equal in both states {msg}")
+                self.util_test_tree_equivalence(attr1, attr2, ignore_leaves=ignore_leaves, msg=msg, attr_checked=attr)
 
         # Check if the other attributes are equal
         for attr in set(dir(state1) + dir(state2)) - ignore:
@@ -111,18 +163,19 @@ class SetupDefaults(unittest.TestCase):
                 "tx",
                 "replace",
             ]:
-                val1 = getattr(state1, attr, None)
-                val2 = getattr(state2, attr, None)
+                attr1 = getattr(state1, attr, None)
+                attr2 = getattr(state2, attr, None)
                 self.assertEqual(
-                    val1 is not None, val2 is not None, f"Attribute '{attr}' not found in both states {msg}"
+                    attr1 is not None, attr2 is not None, f"Attribute '{attr}' not found in both states {msg}"
                 )
-                comp = val1 == val2
+                comp = attr1 == attr2
                 if isinstance(comp, bool):
-                    self.assertTrue(comp, f"Attribute '{attr}' not equal in both states: {val1}\n!=\n{val2}\n{msg}")
+                    self.assertTrue(comp, f"Attribute '{attr}' not equal in both states: {attr1}\n!=\n{attr2}\n{msg}")
                 else:
                     self.assertTrue(
-                        comp.all(), f"Attribute '{attr}' not equal in both states: {val1}\n!=\n{val2}\n{msg}"
+                        comp.all(), f"Attribute '{attr}' not equal in both states: {attr1}\n!=\n{attr2}\n{msg}"
                     )
+
         # NOTE: Apply gradients modifies state
 
 

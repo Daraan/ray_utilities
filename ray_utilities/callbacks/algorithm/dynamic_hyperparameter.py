@@ -43,6 +43,10 @@ class DynamicHyperparameterCallback(GetGlobalStepMixin, DefaultCallbacks, abc.AB
         """
         object.__setattr__(env_runner.config, key, value)
 
+    @staticmethod
+    def _update_worker_learner_config(env_runner: EnvRunner | Learner, *args, update: dict[str, Any]):  # noqa: ARG004
+        env_runner.config.learner_config_dict.update(update)
+
     @classmethod
     def _update_algorithm(
         cls, algorithm: "Algorithm", *, key: str, value: Any, update_env_runners=True, update_learner=True
@@ -65,7 +69,28 @@ class DynamicHyperparameterCallback(GetGlobalStepMixin, DefaultCallbacks, abc.AB
             algorithm.env_runner_group.foreach_env_runner(update)  # pyright: ignore[reportPossiblyUnboundVariable]
         if update_learner and algorithm.learner_group:
             algorithm.learner_group.foreach_learner(update)  # pyright: ignore[reportPossiblyUnboundVariable]
-        # TODO: Also change evaluation interval to be slower/faster at start/end when using dynamic buffer/batch
+
+    @classmethod
+    def _update_learner_config(
+        cls, algorithm: "Algorithm", *, key: str | None = None, value: Any = None, update_env_runners=True, **kwargs
+    ) -> None:
+        """
+        Update the algorithm's configuration and optionally the environment runners and learner as well.
+        Env Runners and Learners have their own copy of the algorithm's configuration
+        that need to be updated separately.
+        """
+        # Warn if config does not have this attr:
+        assert algorithm.config
+        if (key is None and (not kwargs or value is None)) or (key is not None and (kwargs or value is None)):
+            raise ValueError("Either kwargs or key and value must be provided, but not both.")
+        if key:
+            kwargs = {key: value}
+        algorithm.config.learner_config_dict.update(kwargs)
+        update = partial(cls._update_worker_learner_config, update=kwargs)
+        if update_env_runners and algorithm.env_runner_group:
+            algorithm.env_runner_group.foreach_env_runner(update)  # pyright: ignore[reportPossiblyUnboundVariable]
+        if algorithm.learner_group:
+            algorithm.learner_group.foreach_learner(update)  # pyright: ignore[reportPossiblyUnboundVariable]
 
     def __init__(self, update_function: UpdateFunction, hyperparameter_name: str):
         self._updater = update_function

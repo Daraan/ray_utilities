@@ -164,6 +164,8 @@ def create_algorithm_config(
             "remove_masked_samples": not args["keep_masked_samples"],
             "min_dynamic_buffer_size": args["min_step_size"],
             "max_dynamic_buffer_size": args["max_step_size"],
+            "accumulate_gradients_every": args["accumulate_gradients_every"],
+            "smooth_accumulated_gradients": args["smooth_accumulated_gradients"],
         },
     )
     try:
@@ -235,7 +237,7 @@ def create_algorithm_config(
         # Must set this in the trainable with seed_environments_for_config(config, run_seed)
         logger.info(
             "Using sequential env seed strategy, "
-            "call seed_environments_for_config(config, run_seed) with a sampled seed for the trial."
+            "Remember to call seed_environments_for_config(config, run_seed) with a seed acquired from the trial."
         )
     elif args["env_seeding_strategy"] == "same":
         make_seeded_env_callback(args["seed"])

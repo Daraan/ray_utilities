@@ -1,16 +1,17 @@
 import sys
 
+from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradientAccumulation
 from ray_utilities.callbacks.algorithm.dynamic_buffer_callback import DynamicBufferUpdate
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
 from ray_utilities.callbacks.algorithm.exact_sampling_callback import exact_sampling_callback
 from ray_utilities.connectors.remove_masked_samples_connector import RemoveMaskedSamplesConnector
 from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
-from ray_utilities.test.utils import SetupDefaults, patch_args
+from .utils import SetupDefaults, patch_args
 
 
-@patch_args()
 class TestExtensionsAdded(SetupDefaults):
+    @patch_args()
     def test_patch_args(self):
         with patch_args("--no_exact_sampling"):
             self.assertIn(
@@ -19,6 +20,7 @@ class TestExtensionsAdded(SetupDefaults):
                 "Expected --no_exact_sampling to be in sys.argv when patch_args is used.",
             )
 
+    @patch_args()
     def test_exact_sampling_callback_added(self):
         setup = AlgorithmSetup()
         self.assertFalse(setup.args.no_exact_sampling)
@@ -36,6 +38,7 @@ class TestExtensionsAdded(SetupDefaults):
                 "Expected no_exact_sampling to be False when --no_exact_sampling is not set.",
             )
 
+    @patch_args()
     def test_remove_masked_samples_added(self):
         setup = AlgorithmSetup()
         setup.config.environment(observation_space=self._OBSERVATION_SPACE, action_space=self._ACTION_SPACE)
@@ -73,6 +76,7 @@ class TestExtensionsAdded(SetupDefaults):
                     any(isinstance(connector, RemoveMaskedSamplesConnector) for connector in learner._learner_connector)
                 )
 
+    @patch_args()
     def test_dynamic_buffer_added(self):
         setup = AlgorithmSetup()
         self.assertFalse(setup.args.dynamic_buffer)
@@ -106,11 +110,41 @@ class TestExtensionsAdded(SetupDefaults):
                 )
             )
 
-    def test_dynamic_batch(self):
-        ...
-        # In symbol by using gradient accumulation - here we can only modify minibatch size
-        # or decouple rollout and what is passed to the learner - however same attribute.
+    @patch_args()
+    def test_dynamic_batch_added(self):
+        setup = AlgorithmSetup()
+        self.assertFalse(setup.args.dynamic_buffer)
+        self.assertFalse(
+            setup.config.callbacks_class is DynamicGradientAccumulation
+            or (
+                isinstance(setup.config.callbacks_class, type)
+                and issubclass(setup.config.callbacks_class, DynamicGradientAccumulation)
+            )
+            or (
+                isinstance(setup.config.callbacks_class, (list, tuple))
+                and DynamicGradientAccumulation in setup.config.callbacks_class
+            )
+        )
 
+        with patch_args("--dynamic_batch"):
+            setup = AlgorithmSetup()
+            self.assertTrue(
+                setup.args.dynamic_batch,
+                "Expected dynamic_batch to be True when --dynamic_batch is set.",
+            )
+            self.assertTrue(
+                setup.config.callbacks_class is DynamicGradientAccumulation
+                or (
+                    isinstance(setup.config.callbacks_class, type)
+                    and issubclass(setup.config.callbacks_class, DynamicGradientAccumulation)
+                )
+                or (
+                    isinstance(setup.config.callbacks_class, (list, tuple))
+                    and DynamicGradientAccumulation in setup.config.callbacks_class
+                )
+            )
+
+    @patch_args()
     def test_dynamic_eval_interval_added(self):
         # Check DynamicEvalInterval is not added by default
         setup = AlgorithmSetup()

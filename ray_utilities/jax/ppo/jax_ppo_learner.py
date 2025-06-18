@@ -335,7 +335,7 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
                 states[module_id]["actor"].grad_accum,  # TODO: Fix interface TrainState with grad_accum
             )
             if "legacy" is True:  # legacy code steps likely wrong apply_gradient is called at least once or twice.
-                jax.debug.print("Actor step start (legacy): {}", states[module_id]["actor"].step)
+                # jax.debug.print("Actor step start (legacy): {}", states[module_id]["actor"].step)
                 actor_state = states[module_id]["actor"].apply_gradients(grads=actor_grads)
 
                 def update_fn(actor_state=actor_state, actor_grad_accum=actor_grad_accum):
@@ -347,11 +347,11 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
                     )
                     return new_state
 
-                jax.debug.print(
-                    "Actor state step (legacy): {}, accumulate_gradients_every={}",
-                    actor_state.step,
-                    accumulate_gradients_every,
-                )
+                # jax.debug.print(
+                #     "Actor state step (legacy): {}, accumulate_gradients_every={}",
+                #     actor_state.step,
+                #     accumulate_gradients_every,
+                # )
                 actor_state = jax.lax.cond(
                     # NOTE: should do a + 1 to not update at step 0 - however the apply above sets it to 1 at this point
                     actor_state.step % accumulate_gradients_every
@@ -363,7 +363,7 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
                     ),
                     None,
                 )
-                jax.debug.print("Actor step after (legacy): {}", actor_state.step)
+                # jax.debug.print("Actor step after (legacy): {}", actor_state.step)
             else:
 
                 def apply_fn(accum_grads_and_state: tuple[Any, TrainState]):
@@ -377,7 +377,6 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
                     return state.replace(grad_accum=accum_grads, step=state.step + 1)
 
                 actor_state: TrainState = states[module_id]["actor"]
-                jax.debug.print("Actor step start: {}", states[module_id]["actor"].step)
 
                 # Use lax.cond to decide what to do
                 actor_state = jax.lax.cond(
@@ -387,7 +386,6 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
                     accumulate_only_fn,
                     operand=(actor_grad_accum, actor_state),
                 )
-                jax.debug.print("Actor step after: {}", actor_state.step)
             states[module_id]["actor"] = actor_state
         return states
 

@@ -1,8 +1,9 @@
 """NOTE: Experimental, not tested yet."""
+
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import PPOTorchLearner
 from ray.rllib.utils.annotations import override
@@ -35,7 +36,7 @@ class PPOTorchLearnerWithGradientAccumulation(PPOTorchLearner):
         self._step_count += 1
         if (
             update_gradients_this_step := self._step_count
-            % self.config.learner_config_dict["accumulate_gradients_every"]
+            % (accumulate_gradients_every := self.config.learner_config_dict["accumulate_gradients_every"])
             == 0
         ):
             _logger.debug("Updating gradients for step %s", self._step_count)
@@ -60,7 +61,13 @@ class PPOTorchLearnerWithGradientAccumulation(PPOTorchLearner):
 
         total_loss.backward()
         if update_gradients_this_step:
-            grads = {pid: p.grad for pid, p in self._params.items()}  # pyright: ignore[reportAttributeAccessIssue]
+            if self.config.learner_config_dict["smooth_accumulated_gradients"] and accumulate_gradients_every != 1:
+                grads = {
+                    pid: p.grad / accumulate_gradients_every if p.grad is not None else p.grad
+                    for pid, p in self._params.items()
+                }
+            else:
+                grads = {pid: p.grad for pid, p in self._params.items()}
         else:
             return {}
 
@@ -71,3 +78,10 @@ class PPOTorchLearnerWithGradientAccumulation(PPOTorchLearner):
         if self._step_count % self.config.learner_config_dict["accumulate_gradients_every"] == 0:
             # Calls optimizer.step(), scaler.step() and update if applicable
             super().apply_gradients(gradients_dict)
+
+    def after_gradient_based_update(self, *, timesteps: dict[str, Any]) -> None:
+        # TODO: Discuss: Scheduler is updated based on non-exact sampled timesteps.
+        # if self._step_count % self.config.learner_config_dict["accumulate_gradients_every"] == 0:
+        # Updates KL coefficients, and LR Schedulers; if doing this every step batch_size
+        # accumulation is not exact to multipling batch size - but should be minor influence if any.
+        super().after_gradient_based_update(timesteps=timesteps)

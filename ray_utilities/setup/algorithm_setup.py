@@ -7,7 +7,7 @@ from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 from ray_utilities.config import DefaultArgumentParser, add_callbacks_to_config
 from ray_utilities.config.create_algorithm import create_algorithm_config
 from ray_utilities.setup import ExperimentSetupBase
-from ray_utilities.setup.extensions import SetupWithDynamicBuffer
+from ray_utilities.setup.extensions import SetupWithDynamicBatchSize, SetupWithDynamicBuffer
 
 if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
@@ -15,7 +15,9 @@ if TYPE_CHECKING:
     from ray_utilities.typing import TrainableReturnData
 
 
-class AlgorithmSetup(SetupWithDynamicBuffer, ExperimentSetupBase[DefaultArgumentParser, AlgorithmConfig]):
+class AlgorithmSetup(
+    SetupWithDynamicBuffer, SetupWithDynamicBatchSize, ExperimentSetupBase[DefaultArgumentParser, AlgorithmConfig]
+):
     """
     Base class for algorithm setup in Ray RLlib experiments.
 
