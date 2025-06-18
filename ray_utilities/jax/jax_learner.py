@@ -46,7 +46,6 @@ class JaxLearner(Learner):
         # Should use learner config
         # TODO
         # possible use config["accumulate_grad_batches"]
-        self._accumulate_gradients_every: int = config.learner_config_dict["accumulate_gradients_every"]
         self._accumulate_gradients_every_initial: int = config.learner_config_dict["accumulate_gradients_every"]
         # XXX Possibly do not keep them and access via self.module!
         self._states: dict[ModuleID, JaxStateDict | Mapping[str, Any]] = {}
