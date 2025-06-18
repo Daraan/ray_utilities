@@ -31,6 +31,17 @@ class UpdateNStepsArgs(Protocol):
     static_batch: bool
 
 
+def calculate_stepwise_exp_increase(
+    *,
+    total_steps: int,
+    global_step: int,
+    num_increase_factors: int = 8,
+) -> int:
+    if global_step + 1 > total_steps:
+        global_step = total_steps  # prevent explosion; limit factor to 128
+    return int(2 ** (np.ceil((((global_step + 1) * num_increase_factors) / (1 + total_steps))) - 1))
+
+
 # NOTE: SYMPOL keeps a copy of this function in the repo (standalone)
 def update_buffer_and_rollout_size(
     *,
@@ -55,33 +66,26 @@ def update_buffer_and_rollout_size(
         min_size=32 and max_size=8192 in the other functions of this module, as those result in
         9 different values; use num_increase_factors=9 to match the other functions.
     """
-    # increase_index = global_step // (args.total_steps//sum(increase_factor_list))
-    if global_step + 1 > total_steps:
-        global_step = total_steps  # prevent explosion; limit factor to 128
-    increase_factor = int(
-        2 ** (np.ceil((((global_step + 1) * num_increase_factors) / (1 + total_steps))) - 1)
-    )  # int(increase_factor_list_long[increase_index])
-    increase_factor_batch = int(
-        2 ** (np.ceil((((global_step + 1) * num_increase_factors) / (1 + total_steps))) - 1)
-    )  # int(increase_factor_list_long[increase_index])
+    increase_factor = calculate_stepwise_exp_increase(
+        total_steps=total_steps, global_step=global_step, num_increase_factors=num_increase_factors
+    )
+    increase_factor_batch = calculate_stepwise_exp_increase(
+        total_steps=total_steps, global_step=global_step, num_increase_factors=num_increase_factors
+    )
     if dynamic_buffer:
-        n_steps = initial_steps * increase_factor
+        env_steps = initial_steps * increase_factor
     else:
-        n_steps = initial_steps
+        env_steps = initial_steps
     if dynamic_batch:
         accumulate_gradients_every = int(accumulate_gradients_every_initial * increase_factor_batch)
     else:
         accumulate_gradients_every = int(accumulate_gradients_every_initial)
     # DYNAMIC_BATCH_SIZE
-    batch_size = int(n_envs * n_steps)  # XXX: Get rid of n_envs; samples_per_step
-    # n_iterations = args.total_steps // batch_size
-    # eval_freq = max(args.eval_freq // batch_size, 1)
-    # logger.debug("updating buffer after step %d / %s to %s. Initial size: %s", global_step, args.total_steps, batch_size, initial_steps)
-
+    batch_size = int(n_envs * env_steps)  # XXX: Get rid of n_envs; samples_per_step
     return (
         min(MAX_DYNAMIC_BATCH_SIZE, max(MIN_DYNAMIC_BATCH_SIZE, batch_size)),
         accumulate_gradients_every,
-        min(MAX_DYNAMIC_BATCH_SIZE, max(MIN_DYNAMIC_BATCH_SIZE, n_steps)),
+        min(MAX_DYNAMIC_BATCH_SIZE, max(MIN_DYNAMIC_BATCH_SIZE, env_steps)),
     )
 
 

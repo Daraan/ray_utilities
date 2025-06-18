@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ray_utilities.callbacks.algorithm.dynamic_buffer_callback import DynamicBufferUpdate
+from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
 
 from typing import TYPE_CHECKING
 
@@ -19,4 +20,6 @@ class SetupWithDynamicBuffer:
             callbacks = []
         if args.dynamic_buffer:
             callbacks.append(DynamicBufferUpdate)
+            if all(not issubclass(cb, DynamicEvalInterval) for cb in callbacks):
+                callbacks.append(DynamicEvalInterval)
         return callbacks

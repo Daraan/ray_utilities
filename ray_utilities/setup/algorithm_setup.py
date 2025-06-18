@@ -4,9 +4,10 @@ from typing import TYPE_CHECKING
 
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
-from ray_utilities.config import DefaultArgumentParser
+from ray_utilities.config import DefaultArgumentParser, add_callbacks_to_config
 from ray_utilities.config.create_algorithm import create_algorithm_config
 from ray_utilities.setup import ExperimentSetupBase
+from ray_utilities.setup.extensions import SetupWithDynamicBuffer
 
 if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
     from ray_utilities.typing import TrainableReturnData
 
 
-class AlgorithmSetup(ExperimentSetupBase[DefaultArgumentParser, AlgorithmConfig]):
+class AlgorithmSetup(SetupWithDynamicBuffer, ExperimentSetupBase[DefaultArgumentParser, AlgorithmConfig]):
     """
     Base class for algorithm setup in Ray RLlib experiments.
 
@@ -23,6 +24,8 @@ class AlgorithmSetup(ExperimentSetupBase[DefaultArgumentParser, AlgorithmConfig]
 
     Most basic complete ExperimentSetupBase
     """
+
+    PROJECT = "Unnamed Project"
 
     @property
     def group_name(self) -> str:
@@ -45,7 +48,6 @@ class AlgorithmSetup(ExperimentSetupBase[DefaultArgumentParser, AlgorithmConfig]
 
     @classmethod
     def _config_from_args(cls, args):
-        """calls create_algorithm_config"""
         config, _module_spec = create_algorithm_config(
             args=args,
             module_class=None,
@@ -53,11 +55,12 @@ class AlgorithmSetup(ExperimentSetupBase[DefaultArgumentParser, AlgorithmConfig]
             model_config=None,
             framework="torch",
         )
+        add_callbacks_to_config(config, cls.get_callbacks_from_args(args))
         return config
 
     @classmethod
-    def _get_callbacks_from_args(cls, args) -> list[type[RLlibCallback]]:  # noqa: ARG003
-        return []
+    def _get_callbacks_from_args(cls, args) -> list[type[RLlibCallback]]:
+        return super()._get_callbacks_from_args(args)
 
 
 if TYPE_CHECKING:  # check ABC

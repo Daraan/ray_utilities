@@ -346,6 +346,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
                 algo: AlgorithmConfig = Setup.config_from_args(args)
         """
         config = cls._config_from_args(args)
+        # callbacks should be added in _config_from_args; but might be easier done here
         cls._check_callbacks_requested()
         # do not reset as we also check in create_config
         return config

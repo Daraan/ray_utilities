@@ -6,10 +6,9 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol
 
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
-from ray.rllib.utils.metrics import LEARNER_RESULTS, ALL_MODULES  # pyright: ignore[reportPrivateImportUsage]
 from typing_extensions import Self
 
-from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
+from ray_utilities.callbacks.algorithm.callback_mixins import GetGlobalStepMixin
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms.algorithm import Algorithm
@@ -32,7 +31,7 @@ class UpdateFunction(Protocol):
     ) -> None: ...
 
 
-class DynamicHyperparameterCallback(DefaultCallbacks, abc.ABC):
+class DynamicHyperparameterCallback(GetGlobalStepMixin, DefaultCallbacks, abc.ABC):
     @staticmethod
     def _update_worker(env_runner: EnvRunner | Learner, *args, key: str, value: Any):  # noqa: ARG004
         """
@@ -58,6 +57,7 @@ class DynamicHyperparameterCallback(DefaultCallbacks, abc.ABC):
             logger.warning(
                 "Algorithm config does not have attribute '%s' that is about to be set. Is it perhaps misspelled", key
             )
+        # HACK algorithm.config is FROZEN
         object.__setattr__(algorithm.config, key, value)  # necessary hack for frozen objects.
         if update_env_runners or update_learner:
             update = partial(cls._update_worker, key=key, value=value)
@@ -66,18 +66,6 @@ class DynamicHyperparameterCallback(DefaultCallbacks, abc.ABC):
         if update_learner and algorithm.learner_group:
             algorithm.learner_group.foreach_learner(update)  # pyright: ignore[reportPossiblyUnboundVariable]
         # TODO: Also change evaluation interval to be slower/faster at start/end when using dynamic buffer/batch
-
-    @staticmethod
-    def _get_global_step(metrics_logger: MetricsLogger) -> int:
-        # other possible keys are num_module_steps_sampled_lifetime/default_policy
-        # or num_agent_steps_sampled_lifetime/default_agent
-        gs = metrics_logger.stats[LEARNER_RESULTS][ALL_MODULES][
-            NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
-        ].peek()  # NOTE: Custom key
-        # otherwise:
-        # gs = metrics_logger.stats[ENV_RUNNERS][NUM_ENV_STEPS_SAMPLED_LIFETIME"].peek()
-        # logger.debug("Global step %s", gs)
-        return gs
 
     def __init__(self, update_function: UpdateFunction, hyperparameter_name: str):
         self._updater = update_function
@@ -105,17 +93,32 @@ class DynamicHyperparameterCallback(DefaultCallbacks, abc.ABC):
                 "Metrics logger is None in on_algorithm_init. "
                 "This may lead to incorrect global step handling when loading checkpoints."
             )
+            gs = 0
+        elif metrics_logger.stats:
+            # Likely this is not the case and we call updater with 0
+            logger.debug("Algorithm initialized with stats already present")
+            gs = 0
+        else:
+            gs = self._get_global_step(metrics_logger)
         self._updater(
             algorithm,
             metrics_logger,
-            global_step=self._get_global_step(metrics_logger) if metrics_logger else 0,
+            global_step=gs,
         )
 
     def on_checkpoint_loaded(
         self,
         *,
-        algorithm: "Algorithm",
+        algorithm: Algorithm,
+        metrics_logger: Optional[MetricsLogger] = None,
         **kwargs,
     ) -> None:
+        """
+        Attention:
+            When using the StepCounterMixin - which this class does not -
+            also call _set_step_counter_on_checkpoint_loaded in an overridden method.
+        """
         # NOTE: Likely no metrics_logger here.
-        self._updater(algorithm, None, global_step="???")
+        assert metrics_logger
+        gs = self._get_global_step(metrics_logger=metrics_logger)
+        self._updater(algorithm, None, global_step="???" or gs)
