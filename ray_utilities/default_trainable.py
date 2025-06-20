@@ -264,7 +264,6 @@ def default_trainable(
     if args.get("comment"):
         final_results["comment"] = args["comment"]
 
-    # Postprocess results and return
     try:
         reduced_results = filter_metrics(
             final_results,
@@ -277,6 +276,8 @@ def default_trainable(
             ],
             cast_to="TrainableReturnData",
         )  # if not args["test"] else [(LEARNER_RESULTS,)])
+    except KeyboardInterrupt:
+        raise
     except Exception:
         logger.exception("Failed to reduce results")
         return final_results

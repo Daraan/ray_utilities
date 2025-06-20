@@ -66,6 +66,9 @@ class DefaultResourceArgParser(Tap):
     num_jobs: int = 5
     """Trials to run in parallel"""
 
+    num_samples: int
+    """Number of samples to run in parallel, if None, same as num_jobs"""
+
     gpu: bool = False
 
     parallel: bool = False
@@ -77,12 +80,18 @@ class DefaultResourceArgParser(Tap):
     This is similar to num_jobs=1, but one might skip the Tuner setup.
     """
 
+    def process_args(self) -> None:
+        super().process_args()
+        if self.num_samples is None:  # pyright: ignore[reportUnnecessaryComparison]
+            self.num_samples = self.num_jobs
+
     def configure(self) -> None:
         super().configure()
         self.add_argument("-J", "--num_jobs")
         self.add_argument("-gpu", "--gpu")
         self.add_argument("-mp", "--parallel")
         self.add_argument("-np", "--not_parallel")
+        self.add_argument("--num_samples", "-n", type=int, default=None)
 
 
 class DefaultEnvironmentArgParser(Tap):
@@ -269,9 +278,14 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
         self.iterations = iterations
 
 
+class OptunaArgumentParser(Tap):
+    optimize_config: bool = False  # legacy argument name; possible replace with --tune later
+
+
 class DefaultArgumentParser(
     OptionalExtensionsArgs,  # Needs to be before _DefaultSetupArgumentParser
     RLlibArgumentParser,
+    OptunaArgumentParser,
     _DefaultSetupArgumentParser,
     DefaultResourceArgParser,
     DefaultEnvironmentArgParser,

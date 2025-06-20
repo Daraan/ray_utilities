@@ -334,7 +334,7 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
                 actor_grads,
                 states[module_id]["actor"].grad_accum,  # TODO: Fix interface TrainState with grad_accum
             )
-            if "legacy" is True:  # legacy code steps likely wrong apply_gradient is called at least once or twice.
+            if "legacy" == "code":  # legacy code steps likely wrong apply_gradient is called at least once or twice.
                 # jax.debug.print("Actor step start (legacy): {}", states[module_id]["actor"].step)
                 actor_state = states[module_id]["actor"].apply_gradients(grads=actor_grads)
 

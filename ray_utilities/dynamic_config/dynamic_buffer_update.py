@@ -24,13 +24,6 @@ _MIN_DEFAULT_BATCH_SIZE = 32
 _MAX_DEFAULT_BATCH_SIZE = 8192
 
 
-class UpdateNStepsArgs(Protocol):
-    total_steps: int
-    n_envs: int
-    dynamic_buffer: bool
-    static_batch: bool
-
-
 def calculate_stepwise_exp_increase(
     *,
     total_steps: int,

@@ -9,8 +9,13 @@ from ray.rllib.algorithms.ppo import PPO
 from typing_extensions import TypeVar
 
 from ray_utilities.config._tuner_callbacks_setup import TunerCallbackSetup
-from ray_utilities.constants import CLI_REPORTER_PARAMETER_COLUMNS, DISC_EVAL_METRIC_RETURN_MEAN
+from ray_utilities.constants import (
+    CLI_REPORTER_PARAMETER_COLUMNS,
+    DISC_EVAL_METRIC_RETURN_MEAN,
+    EVAL_METRIC_RETURN_MEAN,
+)
 from ray_utilities.misc import trial_name_creator
+from ray_utilities.setup.optuna_setup import create_search_algo
 
 if TYPE_CHECKING:
     from ray.air.config import RunConfig as RunConfigV1
@@ -64,13 +69,24 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
         return self._setup.project_name
 
     def create_tune_config(self) -> tune.TuneConfig:
+        if getattr(self._setup.args, "resume", False):
+            tune.ResumeConfig  # TODO
         return tune.TuneConfig(
-            num_samples=1 if self._setup.args.not_parallel else self._setup.args.num_jobs,
-            # metric=
-            #    (EVALUATION_RESULTS + "/" + ENV_RUNNER_RESULTS + "/" + EPISODE_RETURN_MEAN
-            #     if config.evaluation_interval else ENV_RUNNER_RESULTS + "/" + EPISODE_RETURN_MEAN),
+            num_samples=1 if self._setup.args.not_parallel else self._setup.args.num_samples,
+            metric=EVAL_METRIC_RETURN_MEAN,
+            search_alg=(
+                create_search_algo(
+                    study_name=self.get_experiment_name(),
+                    seed=self._setup.args.seed,
+                    metric=EVAL_METRIC_RETURN_MEAN,
+                    mode="max",
+                )  # TODO: metric
+                if self._setup.args.optimize_config
+                else None
+            ),
             mode="max",
             trial_name_creator=trial_name_creator,
+            max_concurrent_trials=None if self._setup.args.not_parallel else self._setup.args.num_jobs,
         )
 
     @overload
@@ -94,6 +110,11 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             RunConfig = train.RunConfig
             FailureConfig = train.FailureConfig
             CheckpointConfig = train.CheckpointConfig
+        if TYPE_CHECKING:
+            from ray.air.config import RunConfig  # noqa: TC004
+
+            FailureConfig = tune.FailureConfig
+            CheckpointConfig = tune.CheckpointConfig
         return RunConfig(
             # Trial artifacts are uploaded periodically to this directory
             storage_path=Path("../outputs/experiments").resolve(),  # pyright: ignore[reportArgumentType]
