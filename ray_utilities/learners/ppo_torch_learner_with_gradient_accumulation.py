@@ -61,7 +61,10 @@ class PPOTorchLearnerWithGradientAccumulation(PPOTorchLearner):
 
         total_loss.backward()
         if update_gradients_this_step:
-            if self.config.learner_config_dict["smooth_accumulated_gradients"] and accumulate_gradients_every != 1:
+            # PPO loss is a mean, should divide by the number of accumulated batches.
+            # TODO: When changing accumulate_gradients_every dynamically to 1 and accumulation did not happen yet,
+            #      then not dividing by the amount of accumulated batches is not correct.
+            if accumulate_gradients_every != 1:
                 grads = {
                     pid: p.grad / accumulate_gradients_every if p.grad is not None else p.grad
                     for pid, p in self._params.items()

@@ -246,14 +246,6 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
     The accumulated gradients will be averaged before backpropagation.
     """
 
-    smooth_accumulated_gradients: bool = False
-    """
-    Wether sum the accumulated gradients or divide them by the number of accumulation steps.
-
-    TODO:
-        Could likely use a GradScaler here.
-    """
-
     def process_args(self) -> None:
         super().process_args()
         budget = split_timestep_budget(

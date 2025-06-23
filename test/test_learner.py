@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 
 class TestLearners(SetupDefaults):
-    @patch_args("-a", "mlp", "--accumulate_gradients_every", "2", "--smooth_accumulated_gradients")
+    @patch_args("-a", "mlp", "--accumulate_gradients_every", "2")
     def test_ppo_torch_learner_with_gradient_accumulation(self):
         setup = AlgorithmSetup()
         # NOTE: Need RemoveMaskedSamplesLearner to assure only one epoch is done
