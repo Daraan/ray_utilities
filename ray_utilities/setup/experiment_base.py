@@ -125,6 +125,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
         self.args = self.parse_args(args)
         if init_config:
             self.config: _ConfigType_co = self.create_config()
+        self._set_dynamic_parameters_to_tune()
         if init_param_space:
             self.param_space = self.create_param_space()
         if init_trainable:
@@ -234,6 +235,33 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
         params = self.create_param_space()
         return {k: v.sample() if isinstance(v, ray.tune.search.sample.Domain) else v for k, v in params.items()}
 
+    def _set_dynamic_parameters_to_tune(self):
+        """Call before calling `super().create_param_space()` when making use of self.args.tune"""
+        if self.args.tune is False:
+            self._dynamic_parameters_to_tune: list[str | Any] = []
+            return
+        if not hasattr(self, "_dynamic_parameters_to_tune"):
+            self._dynamic_parameters_to_tune = self.args.tune.copy()
+
+    def _check_tune_arguments_resolved(self):
+        if not self.args.tune:
+            return
+        if not hasattr(self, "_dynamic_parameters_to_tune"):
+            logger.warning("_dynamic_parameters_to_tune not set")
+            return
+        add_all = "all" in self._dynamic_parameters_to_tune
+        if add_all:
+            if len(self._dynamic_parameters_to_tune) > 1 or len(self.args.tune) > 1:
+                raise ValueError("Cannot use 'all' with other tune parameters.", self._dynamic_parameters_to_tune)
+            self._dynamic_parameters_to_tune.clear()
+        if len(self._dynamic_parameters_to_tune) > 0:
+            logger.warning(
+                "Unused dynamic tuning parameters: %s "
+                "Call self._set_dynamic_parameters_to_tune() and remove parameters from self._dynamic_parameters_to_tune "
+                "before calling super().create_param_space().",
+                self._dynamic_parameters_to_tune,
+            )
+
     def create_param_space(self) -> dict[str, Any]:
         """
         Create a dict to upload as hyperparameters and pass as first argument to the trainable
@@ -241,6 +269,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
         Attention:
             This function must set the `param_space` attribute
         """
+        self._check_tune_arguments_resolved()
         module_spec = self.get_module_spec(copy=False)
         if module_spec:
             module = module_spec.module_class.__name__ if module_spec.module_class is not None else "UNDEFINED"
@@ -263,10 +292,11 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
 
         # Other args not shown in the CLI
         # NOTE: This is None when the Old API / no module_spec is used!
-        param_space["model_config"] = module_spec and module_spec.model_config
+        param_space["model_config"] = module_spec and module_spec.model_config  # NOTE: Currently unused
         # Log CLI args as hyperparameters
         param_space["cli_args"] = self.clean_args_to_hparams(self.args)
         self.param_space = param_space
+        del self._dynamic_parameters_to_tune
         return param_space
 
     # endregion
@@ -485,7 +515,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, _ConfigType_co, _Algorithm
 
     @classmethod
     @abstractmethod
-    def _get_callbacks_from_args(cls, args: NamespaceType[ParserType_co]) -> list[type[RLlibCallback]]: ...
+    def _get_callbacks_from_args(cls, args: NamespaceType[ParserType_co]) -> list[type[RLlibCallback]]:
+        return []  # this can be can be called; return a list
 
     @final
     @classmethod

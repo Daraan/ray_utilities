@@ -30,5 +30,5 @@ class TestTuner(SetupDefaults):
             optuna_setup = AlgorithmSetup()
             optuna_setup.config.training(num_epochs=2, train_batch_size_per_learner=64, minibatch_size=64)
             optuna_setup.config.evaluation(evaluation_interval=1)  # else eval metric not in dict
-            results = run_tune(optuna_setup)
+            _results = run_tune(optuna_setup)
             # NOTE: This can be OK even if runs fail!

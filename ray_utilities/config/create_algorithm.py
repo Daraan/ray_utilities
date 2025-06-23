@@ -155,7 +155,7 @@ def create_algorithm_config(
         # The total effective batch size is then
         # `num_learners` x `train_batch_size_per_learner` and you can
         # access it with the property `AlgorithmConfig.total_train_batch_size`.
-        train_batch_size_per_learner=32,
+        train_batch_size_per_learner=args["train_batch_size_per_learner"],
         grad_clip=0.5,
         learner_config_dict={
             "dynamic_buffer": args["dynamic_buffer"],
@@ -165,7 +165,6 @@ def create_algorithm_config(
             "min_dynamic_buffer_size": args["min_step_size"],
             "max_dynamic_buffer_size": args["max_step_size"],
             "accumulate_gradients_every": args["accumulate_gradients_every"],
-            "smooth_accumulated_gradients": args["smooth_accumulated_gradients"],
         },
     )
     try:

@@ -76,6 +76,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             metric=EVAL_METRIC_RETURN_MEAN,
             search_alg=(
                 create_search_algo(
+                    hparams=self._setup.param_space,
                     study_name=self.get_experiment_name(),
                     seed=self._setup.args.seed,
                     metric=EVAL_METRIC_RETURN_MEAN,

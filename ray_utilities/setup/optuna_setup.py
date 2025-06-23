@@ -2,9 +2,10 @@
 See Also:
     https://docs.ray.io/en/latest/tune/examples/optuna_example.html
 """
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from ray.tune.search.optuna import OptunaSearch
 
@@ -54,6 +55,7 @@ def __example_conditional_search_space(trial: optuna.Trial) -> Optional[dict[str
 def create_search_algo(
     study_name: str,
     *,
+    hparams: Optional[dict[str, Any | dict[Literal["grid_search"], Any]]],
     metric=EVAL_METRIC_RETURN_MEAN,  # flattened key
     mode: str | list[str] | None = "max",
     initial_params: Optional[list[dict[str, Any]]] = None,
@@ -81,7 +83,22 @@ def create_search_algo(
         max_concurrent: Maximum number of trials at the same time.
         initial_params: Initial parameters to start the search with.
     """
+    grid_values = {}
+    if hparams:
+        grid_values = {k: v["grid_search"] for k, v in hparams.items() if isinstance(v, dict) and "grid_search" in v}
+    if grid_values:
+        sampler = optuna.samplers.GridSampler(grid_values)
+        # TODO: This covers grid but what if I want TPESampler as well?
+    else:
+        sampler = None
     algo = OptunaSearch(
-        study_name=study_name, points_to_evaluate=initial_params, mode=mode, metric=metric, storage=storage, seed=seed
+        study_name=study_name,
+        points_to_evaluate=initial_params,
+        mode=mode,
+        metric=metric,
+        storage=storage,
+        seed=seed,
+        sampler=sampler if grid_values else None,
     )
+    # when using grid search need to use a grid sampler here
     return algo

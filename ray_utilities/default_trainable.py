@@ -127,23 +127,12 @@ def create_default_trainable(
     return wraps(default_trainable)(trainable)
 
 
-def default_trainable(
-    hparams,
-    *,
-    use_pbar: bool = True,
-    discrete_eval: bool = False,
+def get_args_and_config(
+    hparams: dict,
     setup: Optional[DefaultExperimentSetup] = None,
     setup_class: Optional[type[DefaultExperimentSetup]] = None,
-    disable_report: bool = False,
-) -> TrainableReturnData:
-    """
-    Args:
-        hparams: The hyperparameters selected for the trial from the search space from ray tune.
-            Should include an `args` key with the parsed arguments.
-
-    Attention:
-        Best practice is to not refer to any objects from outer scope in the training_function
-    """
+) -> tuple[dict[str, Any] | Any, AlgorithmConfig]:
+    """Constructs the args and config from the given hparams, setup or setup_class."""
     # region setup config
     if setup:
         # TODO: Use hparams
@@ -156,7 +145,6 @@ def default_trainable(
         config = setup_class.config_from_args(args)
     else:
         raise ValueError("Either setup or setup_class must be provided.")
-
     # endregion
     # region seeding
     if (run_seed := hparams.get("run_seed", None)) is not None:
@@ -172,6 +160,31 @@ def default_trainable(
     else:
         seed_environments_for_config(config, None)
     # endregion
+    return args, config
+
+
+def default_trainable(
+    hparams: dict[str, Any],
+    *,
+    use_pbar: bool = True,
+    discrete_eval: bool = False,
+    setup: Optional[DefaultExperimentSetup] = None,
+    setup_class: Optional[type[DefaultExperimentSetup]] = None,
+    disable_report: bool = False,
+) -> TrainableReturnData:
+    """
+    Args:
+        hparams: The hyperparameters selected for the trial from the search space from ray tune.
+            Should include an `args` key with the parsed arguments.
+
+    Attention:
+        Best practice is to not refer to any objects from outer scope in the training_function
+    """
+    args, config = get_args_and_config(
+        hparams,
+        setup=setup,
+        setup_class=setup_class,
+    )
     try:
         # new API
         algo = config.build_algo()

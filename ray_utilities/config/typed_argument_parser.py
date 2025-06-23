@@ -270,8 +270,33 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
         self.iterations = iterations
 
 
+def _parse_tune_choices(
+    value: str | Literal[False],
+) -> Literal["batch_size", "rollout_size", "all", False]:
+    return value  # type: ignore[return-value]
+
+
 class OptunaArgumentParser(Tap):
     optimize_config: bool = False  # legacy argument name; possible replace with --tune later
+    tune: list[Literal["batch_size", "rollout_size", "all"]] | Literal[False] = False
+    """List of dynamic parameters to be tuned"""
+
+    def configure(self) -> None:
+        super().configure()
+        self.add_argument(
+            "--tune", nargs="+", default=False, choices=["batch_size", "rollout_size", "all"], type=_parse_tune_choices
+        )
+
+    def process_args(self) -> None:
+        super().process_args()
+        if self.optimize_config and not self.tune:
+            logger.warning(
+                "The `--optimize_config` argument is deprecated. When using a non-legacy setup, "
+                "use `--tune param1 param2 ...` to specify parameters to tune."
+            )
+            return
+        if self.tune:
+            self.optimize_config = True
 
 
 class DefaultArgumentParser(
