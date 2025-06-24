@@ -5,14 +5,12 @@ See Also:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import Any, Literal, Optional
 
 from ray.tune.search.optuna import OptunaSearch
 
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
-
-if TYPE_CHECKING:
-    import optuna
+import optuna
 
 
 def __example_conditional_search_space(trial: optuna.Trial) -> Optional[dict[str, Any]]:

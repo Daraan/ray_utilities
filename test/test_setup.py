@@ -1,8 +1,12 @@
+import argparse
+
+import typing_extensions as te
+
+from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger
-import typing_extensions as te
+
 from .utils import SetupDefaults, patch_args
-from ray_utilities.config import DefaultArgumentParser
 
 
 class TestSetupClasses(SetupDefaults):
@@ -26,6 +30,12 @@ class TestSetupClasses(SetupDefaults):
 
     def test_dynamic_param_spaces(self):
         # Test warning and failure
+        with patch_args("--tune", "dynamic_buffer"):
+            # error is deeper, need to catch outer SystemExit and check context/cause
+            with self.assertRaises(SystemExit) as context:
+                AlgorithmSetup().create_param_space()
+            self.assertIsInstance(context.exception.__context__, argparse.ArgumentError)
+            self.assertIn("invalid choice: 'dynamic_buffer'", context.exception.__context__.message)  # type: ignore
         with patch_args("--tune", "all", "rollout_size"):
             with self.assertRaisesRegex(ValueError, "Cannot use 'all' with other tune parameters"):
                 AlgorithmSetup().create_param_space()
@@ -45,17 +55,36 @@ class TestSetupClasses(SetupDefaults):
         self.assertIn("rollout_size", th_lists)
         self.assertNotIn("all", th_lists)
         for param in th_lists:
-            with patch_args("--tune", param), self.assertNoLogs(logger, level="WARNING"):
+            with (
+                patch_args(
+                    "--tune", param,
+                    "--num_jobs", "1",
+                    "--total_steps", "10",
+                    "-it", "2",
+                    "--num_samples", "16",
+                )  # ,
+                # self.assertNoLogs(logger, level="WARNING"),
+            ):  # fmt: skip
                 if param == "batch_size":  # shortcut name
                     param = "train_batch_size_per_learner"  # noqa: PLW2901
                 setup = AlgorithmSetup()
                 param_space = setup.create_param_space()
                 self.assertIn(param, param_space)
                 self.assertIsNotNone(param_space[param])  # dict with list
+                if "grid_search" in param_space[param]:
+                    grid = param_space[param]["grid_search"]
+                else:
+                    grid = []
 
-                def fake_trainable(params):
-                    return params
+                def fake_trainable(params, param=param):
+                    return {"evaluation/env_runners/episode_return_mean": 42, "param_value": params[param]}
 
-                setup.create_trainable = lambda _self: fake_trainable  # type: ignore
+                setup.trainable = fake_trainable  # type: ignore
                 tuner = setup.create_tuner()
-                tuner.fit()
+                result_grid = tuner.fit()
+                evaluated_params = [r.metrics["param_value"] for r in result_grid]  # pyright: ignore[reportOptionalSubscript]
+                self.assertEqual(
+                    len(set(evaluated_params)),
+                    len(grid),
+                    f"Evaluated params do not match grid: {evaluated_params} != {grid}",
+                )

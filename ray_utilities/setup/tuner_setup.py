@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, ClassVar, Literal, Optional, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Literal, Optional, Protocol, cast, overload
 
 from ray import train, tune
 from ray.rllib.algorithms.ppo import PPO
+from ray.tune.search.optuna import OptunaSearch
 from typing_extensions import TypeVar
 
 from ray_utilities.config._tuner_callbacks_setup import TunerCallbackSetup
@@ -20,10 +21,12 @@ from ray_utilities.setup.optuna_setup import create_search_algo
 if TYPE_CHECKING:
     from ray.air.config import RunConfig as RunConfigV1
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
+    from ray.tune.execution.placement_groups import PlacementGroupFactory
     from ray.tune.experiment import Trial
 
     from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import ExperimentSetupBase
+
 
 __all__ = [
     "TunerSetup",
@@ -133,15 +136,39 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             ),
         )
 
+    @staticmethod
+    def _grid_search_to_normal_search_space(
+        param_space: dict[str, Any | dict[Literal["grid_search"], Any]] | None = None,
+    ) -> dict[str, Any]:
+        if param_space is None:
+            return {}
+        return {
+            k: tune.choice(v["grid_search"]) if isinstance(v, dict) and "grid_search" in v else v
+            for k, v in param_space.items()
+        }
+
     def create_tuner(self) -> tune.Tuner:
         resource_requirements = PPO.default_resource_request(self._setup.config)
+        resource_requirements = cast(
+            "PlacementGroupFactory", resource_requirements
+        )  # Resources return value is deprecated
         logger.info("Default resource per trial: %s", resource_requirements.bundles)
         trainable = tune.with_resources(self._setup.trainable, resource_requirements)
         # functools.update_wrapper(trainable, self._setup.trainable)
         trainable.__name__ = self._setup.trainable.__name__
+        tune_config = self.create_tune_config()
+        if isinstance(tune_config.search_alg, OptunaSearch) and any(
+            isinstance(v, dict) and "grid_search" in v for v in self._setup.param_space.values()
+        ):
+            # Cannot use grid_search with OptunaSearch, need to provide a search space without grid_search
+            # Grid search must be added as a GridSampler in the search_alg
+            param_space = self._grid_search_to_normal_search_space(self._setup.param_space)
+        else:
+            param_space = self._setup.param_space
+
         return tune.Tuner(
             trainable=trainable,  # Updated to use the modified trainable with resource requirements
-            param_space=self._setup.param_space,
-            tune_config=self.create_tune_config(),
+            param_space=param_space,  # TODO: Likely Remove when using space of OptunaSearch
+            tune_config=tune_config,
             run_config=self.create_run_config(self.create_callbacks()),
         )
