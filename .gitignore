@@ -50,6 +50,8 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+test/.ckpt*
+**/Unnamed Project/
 
 # Translations
 *.mo

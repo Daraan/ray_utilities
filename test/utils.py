@@ -82,6 +82,8 @@ class SetupDefaults(unittest.TestCase):
         )
         self._DEFAULT_NAMESPACE = DefaultArgumentParser()
         self._DEFAULT_SETUP = AlgorithmSetup()
+        self._DEFAULT_SETUP_LOW_RES = AlgorithmSetup()
+        self._DEFAULT_SETUP_LOW_RES.config.training(train_batch_size_per_learner=128, minibatch_size=64, num_epochs=2).env_runners(num_env_runners=0, num_envs_per_env_runner=1, num_cpus_per_env_runner=0).learners(num_learners=0, num_cpus_per_learner=0)
         self._INPUT_LENGTH = env.observation_space.shape[0]  # pyright: ignore[reportOptionalSubscript]
         self._DEFAULT_INPUT = jnp.arange(self._INPUT_LENGTH * 2).reshape((2, self._INPUT_LENGTH))
         self._DEFAULT_BATCH: dict[str, chex.Array] = MappingProxyType({"obs": self._DEFAULT_INPUT})  # pyright: ignore[reportAttributeAccessIssue]
@@ -184,6 +186,8 @@ class DisableBreakpointsForGUI(unittest.TestCase):
         super().__init__(*args, **kwargs)
         if {"-v", "test*.py"} & set(sys.argv):
             print("disable breakpoint")
-            mock.patch("builtins.breakpoint").start()
+            self._disabled_breakpoints = mock.patch("builtins.breakpoint")
+            self._disabled_breakpoints.start()
         else:
+            self._disabled_breakpoints = mock.patch("builtins.breakpoint")
             print("enable breakpoint")
