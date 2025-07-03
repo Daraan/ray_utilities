@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
+from ray.rllib.algorithms.ppo import PPOConfig
 
-from ray_utilities.config import DefaultArgumentParser, add_callbacks_to_config
+from ray_utilities.config import add_callbacks_to_config
 from ray_utilities.config.create_algorithm import create_algorithm_config
-from ray_utilities.setup import ExperimentSetupBase
+from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType, ExperimentSetupBase, ParserType
 from ray_utilities.setup.extensions import SetupWithDynamicBatchSize, SetupWithDynamicBuffer
 
 if TYPE_CHECKING:
@@ -16,7 +16,9 @@ if TYPE_CHECKING:
 
 
 class AlgorithmSetup(
-    SetupWithDynamicBuffer, SetupWithDynamicBatchSize, ExperimentSetupBase[DefaultArgumentParser, AlgorithmConfig]
+    SetupWithDynamicBuffer[ParserType, ConfigType, AlgorithmType_co],
+    SetupWithDynamicBatchSize[ParserType, ConfigType, AlgorithmType_co],
+    ExperimentSetupBase[ParserType, ConfigType, AlgorithmType_co],
 ):
     """
     Base class for algorithm setup in Ray RLlib experiments.
@@ -28,6 +30,8 @@ class AlgorithmSetup(
     """
 
     PROJECT = "Unnamed Project"
+    # FIXME: Need at least PPO to run_tune
+    config_class: type[ConfigType] = PPOConfig  # evaluate the forward ref of ConfigType.__default__
 
     @property
     def group_name(self) -> str:
@@ -49,13 +53,14 @@ class AlgorithmSetup(
         return trainable
 
     @classmethod
-    def _config_from_args(cls, args):
+    def _config_from_args(cls, args) -> ConfigType:
         config, _module_spec = create_algorithm_config(
             args=args,
             module_class=None,
             catalog_class=None,
             model_config=None,
             framework="torch",
+            config_class=cls.config_class,
         )
         add_callbacks_to_config(config, cls.get_callbacks_from_args(args))
         return config

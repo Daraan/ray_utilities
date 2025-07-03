@@ -23,7 +23,7 @@ def trial_name_creator(trial: Trial) -> str:
         trial.run_metadata.start_time or RAY_UTILITIES_INITIALIZATION_TIMESTAMP
     )
     start_time_str = start_time.strftime("%Y-%m-%d_%H:%M")
-    module = trial.config["module"]
+    module = trial.config.get("module", None)
     if module is None:
         module = trial.config["cli_args"]["agent_type"]
     fields = [
