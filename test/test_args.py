@@ -7,7 +7,7 @@ from ray_utilities.callbacks.algorithm.exact_sampling_callback import exact_samp
 from ray_utilities.connectors.remove_masked_samples_connector import RemoveMaskedSamplesConnector
 from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
-from .utils import SetupDefaults, patch_args
+from ray_utilities.testing_utils import SetupDefaults, patch_args
 
 
 class TestExtensionsAdded(SetupDefaults):

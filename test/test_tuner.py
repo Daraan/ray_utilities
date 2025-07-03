@@ -10,9 +10,8 @@ from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.runfiles import run_tune
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner
+from ray_utilities.testing_utils import SetupDefaults, patch_args
 from ray_utilities.typing.trainable_return import TrainableReturnData
-
-from .utils import SetupDefaults, patch_args
 
 logger = __import__("logging").getLogger(__name__)
 

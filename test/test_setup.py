@@ -4,6 +4,7 @@ import argparse
 import os
 import tempfile
 import time
+import unittest
 from typing import TYPE_CHECKING
 
 import ray
@@ -21,15 +22,7 @@ from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger
-
-try:
-    from .utils import DisableBreakpointsForGUI, SetupDefaults, patch_args
-except ImportError:
-    if not TYPE_CHECKING:
-        from utils import DisableBreakpointsForGUI, SetupDefaults, patch_args  # type: ignore
-    else:
-        from .utils import DisableBreakpointsForGUI, SetupDefaults, patch_args
-
+from ray_utilities.testing_utils import DisableBreakpointsForGUI, SetupDefaults, patch_args
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
@@ -135,6 +128,74 @@ class TestAlgorithm(DisableBreakpointsForGUI, SetupDefaults):
         super().tearDownClass()
         ray.shutdown()
 
+    @unittest.skip("Fix first: Ray moves checkpoint need to load from different location")
+    def test_stopper_with_checkpoint(self):
+        from copy import deepcopy
+
+        setup = deepcopy(self._DEFAULT_SETUP_LOW_RES)
+        config = setup.config
+        setup.args.num_jobs = 1
+        setup.args.num_samples = 1
+
+        def fake_trainable(params):
+            algo = config.build_algo()
+            for i in range(10):
+                result = algo.train()
+                logger.info(
+                    "Iteration %s: Sampled Lifetime: %s", i, result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]
+                )
+                print("iteration", i, "Sampled Lifetime", result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME])
+                time.sleep(0.2)
+                # algo.save_checkpoint(tempdir1)
+                if i == 2:
+                    tune.report(
+                        {"evaluation/env_runners/episode_return_mean": i} | result,
+                        checkpoint=tune.Checkpoint.from_directory(tempdir1),
+                    )
+                else:
+                    tune.report(
+                        {"evaluation/env_runners/episode_return_mean": i} | result,
+                        checkpoint=None,
+                    )
+
+        setup.trainable = fake_trainable  # type: ignore
+        tuner = setup.create_tuner()
+        # With stopper should only iterate 4 times:
+        assert tuner._local_tuner
+        tuner._local_tuner._run_config.stop = {NUM_ENV_STEPS_SAMPLED_LIFETIME: 512}
+        with tempfile.TemporaryDirectory(prefix=".ckpt_") as tempdir1:
+            result_grid = tuner.fit()
+            time.sleep(1)
+            print("Training ended.")
+            checkpoint = result_grid[0].checkpoint
+            assert checkpoint
+            # Problem ray moves checkpoint to new location
+            tempdir = checkpoint.to_directory(tempdir1)
+            algo_restored = config.build_algo().from_checkpoint(tempdir)
+            assert algo_restored.metrics
+            self.assertNotEqual(
+                algo_restored.metrics.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)), 0
+            )
+
+    def clean_timer_logs(self, result: dict):
+        """
+        Cleans the timer logs from the env_runners_dict.
+        This is useful to compare results without the timer logs.
+        """
+        env_runners_dict = result["env_runners"]
+        for key in list(result.keys()):
+            if key.startswith("timers/"):
+                del env_runners_dict[key]
+        del env_runners_dict["module_to_env_connector"]
+        del env_runners_dict["env_to_module_connector"]
+        del env_runners_dict["episode_duration_sec_mean"]
+        del result["env_runners"]["env_reset_timer"]
+        del result["env_runners"]["env_step_timer"]
+        del result["env_runners"]["rlmodule_inference_timer"]
+        del result["env_runners"]["sample"]
+        env_runners_dict.pop("num_env_steps_sampled_lifetime_throughput", None)
+        # result["env_runners"]["time_between_sampling"]
+        return result
 
     def _test_checkpoint_values(self, result1, result2):
         env_runner1 = result1
@@ -387,6 +448,8 @@ class TestAlgorithm(DisableBreakpointsForGUI, SetupDefaults):
             results["env_runners"][1]["step_3"],
         )
         # because _throughput values results are not equal in structure (only after 2 steps)
+        # self.maxDiff = 40_000
+        # breakpoint()
         # self.assertDictEqual(results["env_runners"][0]["step_3"], results["env_runners"][1]["step_3"])
 
 

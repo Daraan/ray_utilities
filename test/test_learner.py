@@ -1,10 +1,10 @@
+from typing import TYPE_CHECKING
+
 from ray_utilities.learners import mix_learners
 from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import PPOTorchLearnerWithGradientAccumulation
-from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
-from .utils import patch_args, SetupDefaults
-
-from typing import TYPE_CHECKING
+from ray_utilities.setup.algorithm_setup import AlgorithmSetup
+from ray_utilities.testing_utils import SetupDefaults, patch_args
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms.ppo.torch.default_ppo_torch_rl_module import DefaultPPOTorchRLModule
