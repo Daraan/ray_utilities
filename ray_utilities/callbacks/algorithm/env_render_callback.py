@@ -257,7 +257,10 @@ class AdvEnvRenderCallback(DefaultCallbacks):
         # Better than the best or worse than worst Episode thus far?
         if episode_return > self.best_episode_and_return[1] or episode_return < self.worst_episode_and_return[1]:
             # Pull all images from the temp. data of the episode.
-            images = episode.get_temporary_timestep_data("render_images")
+            try:
+                images = episode.get_temporary_timestep_data("render_images")  # pyright: ignore[reportCallIssue]
+            except (ValueError, TypeError):  # deprecated in 2.47+
+                images = episode.custom_data.get("render_images", [])
             # `images` is now a list of 3D ndarrays
 
             # Create a video from the images by simply stacking them AND

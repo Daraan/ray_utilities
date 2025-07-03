@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import sys
 import unittest
+from contextlib import nullcontext
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Collection
 from unittest import mock
@@ -11,9 +13,7 @@ import jax
 import jax.numpy as jnp
 import numpy.testing as npt
 import tree
-from contextlib import nullcontext
 from typing_extensions import NotRequired, Required, get_origin, get_type_hints
-
 
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
@@ -211,7 +211,7 @@ class SetupDefaults(DisableLoggers):
 class DisableBreakpointsForGUI(unittest.TestCase):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        if {"-v", "test*.py"} & set(sys.argv):
+        if {"-v", "test*.py"} & set(sys.argv) and not int(os.environ.get("KEEP_BREAKPOINTS", "0")):
             print("disable breakpoint")
             self._disabled_breakpoints = mock.patch("builtins.breakpoint")
             self._disabled_breakpoints.start()

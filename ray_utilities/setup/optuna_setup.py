@@ -25,10 +25,8 @@ See Also:
         tune_config=tune.TuneConfig(
             search_alg=search,
         ),
-        run_config=tune.RunConfig(
-            stop=stopper
-        ),
-        param_space=compatible_param_space
+        run_config=tune.RunConfig(stop=stopper),
+        param_space=compatible_param_space,
     )
 """
 
