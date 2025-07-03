@@ -3,7 +3,7 @@ See Also:
     https://docs.ray.io/en/latest/tune/examples/optuna_example.html
 
 
-.. testcode::
+.. code-block:: python
 
     param_space = {
         "x": tune.grid_search([1, 2, 3]),  # not compatible with OptunaSearch
@@ -14,18 +14,17 @@ See Also:
         hparams=param_space,
         metric=EVAL_METRIC_RETURN_MEAN,  # flattened key
         mode="max",
-        initial_params=None,
         storage=None,
-        seed=None,  # making it required for now to get reproducible results
-        pruner=None,
-        # evaluated_rewards=None,  # experimental feature
+        seed=None,  # required
+        pruner=None,  # pass your own Pruner or True for MedianPruner
+        # Accepts all other kwargs of OptunaSearch
     )
     compatible_param_space = clean_grid_search_for_optuna(param_space)
     tuner = tune.Tuner(
         objective,
         tune_config=tune.TuneConfig(
             search_alg=search,
-        )
+        ),
         run_config=tune.RunConfig(
             stop=stopper
         ),
@@ -134,8 +133,9 @@ def create_search_algo(
     mode: str | list[str] | None = "max",
     initial_params: Optional[list[dict[str, Any]]] = None,
     storage: Optional[optuna.storages.BaseStorage] = None,
-    seed: int | None,  # making it required for now to get reproducible results
+    seed: int | None,
     pruner: optuna.pruners.BasePruner | Literal[True],
+    **kwargs,
     # evaluated_rewards: Optional[list[float]] = None,  # experimental feature
 ) -> tuple[OptunaSearchWithPruner, Stopper]: ...
 
@@ -149,8 +149,9 @@ def create_search_algo(
     mode: str | list[str] | None = "max",
     initial_params: Optional[list[dict[str, Any]]] = None,
     storage: Optional[optuna.storages.BaseStorage] = None,
-    seed: int | None,  # making it required for now to get reproducible results
+    seed: int | None,
     pruner: Literal[False] = False,
+    **kwargs,
     # evaluated_rewards: Optional[list[float]] = None,  # experimental feature
 ) -> tuple[OptunaSearch, None]: ...
 
@@ -163,8 +164,9 @@ def create_search_algo(
     mode: str | list[str] | None = "max",
     initial_params: Optional[list[dict[str, Any]]] = None,
     storage: Optional[optuna.storages.BaseStorage] = None,
-    seed: int | None,  # making it required for now to get reproducible results
+    seed: int | None,
     pruner: optuna.pruners.BasePruner | bool = False,
+    **kwargs,
     # evaluated_rewards: Optional[list[float]] = None,  # experimental feature
 ) -> tuple[OptunaSearch | OptunaSearchWithPruner, Optional[Stopper]]:
     """
@@ -207,6 +209,7 @@ def create_search_algo(
         initial_params: Initial parameters to start the search with.
         pruner: If True, uses a MedianPruner, if a pruner is passed, it will be used.
             Otherwise the default of ray's `OptunaSearch` is used.
+        kwargs: Forwarded to OptunaSearch, for example `evaluated_rewards`.
     """
     grid_values = {}
     if hparams:
@@ -226,6 +229,7 @@ def create_search_algo(
             storage=storage,
             seed=seed,
             sampler=sampler if grid_values else None,
+            **kwargs,
         )
         stopper = None
         return searcher, stopper
