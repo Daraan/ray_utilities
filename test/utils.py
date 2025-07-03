@@ -14,6 +14,7 @@ import tree
 from contextlib import nullcontext
 from typing_extensions import NotRequired, Required, get_origin, get_type_hints
 
+
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 
@@ -68,9 +69,30 @@ def get_leafpath_value(leaf: LeafType):
     return getattr(leaf, "name", getattr(leaf, "key", getattr(leaf, "idx", NOT_FOUND)))
 
 
-class SetupDefaults(unittest.TestCase):
+class DisableLoggers(unittest.TestCase):
+    """Disable loggers for tests, so they do not interfere with the output."""
+
+    def enable_loggers(self):
+        """Enable loggers after disabling them in setUp."""
+        self._disable_loggers.stop()
+        self._mock_env.stop()
+
+    def setUp(self):
+        super().setUp()
+        self._mock_env = mock.patch.dict("os.environ", {"TUNE_DISABLE_AUTO_CALLBACK_LOGGERS": "1"})
+        self._mock_env.start()
+        self._disable_loggers = mock.patch("ray_utilities.callbacks.tuner.create_tuner_callbacks", return_value=[])
+        self._disable_loggers.start()
+
+    def tearDown(self):
+        super().tearDown()
+        self.enable_loggers()
+
+
+class SetupDefaults(DisableLoggers):
     @clean_args
     def setUp(self):
+        super().setUp()
         print("Remember to enable/disable justMyCode('\"debugpy.debugJustMyCode\": false,') in the settings")
         env = gym.make("CartPole-v1")
 
