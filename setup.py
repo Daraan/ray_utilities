@@ -16,5 +16,6 @@ setup(
         "optuna",
         "dotenv",
         "torch",
+        "jax",
     ],
 )
