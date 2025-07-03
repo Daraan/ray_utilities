@@ -16,13 +16,14 @@ from ray_utilities.constants import (
     EVAL_METRIC_RETURN_MEAN,
 )
 from ray_utilities.misc import trial_name_creator
-from ray_utilities.setup.optuna_setup import create_search_algo
+from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner, create_search_algo
 
 if TYPE_CHECKING:
     from ray.air.config import RunConfig as RunConfigV1
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
     from ray.tune.execution.placement_groups import PlacementGroupFactory
     from ray.tune.experiment import Trial
+    from ray.tune.stopper import Stopper
 
     from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import ExperimentSetupBase
@@ -67,6 +68,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
     ):
         self._setup = setup
         super().__init__(setup=setup, extra_tags=extra_tags)
+        self._stopper: Optional[OptunaSearchWithPruner | Stopper | Literal["not_set"]] = "not_set"
 
     def get_experiment_name(self) -> str:
         return self._setup.project_name
@@ -74,20 +76,23 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
     def create_tune_config(self) -> tune.TuneConfig:
         if getattr(self._setup.args, "resume", False):
             tune.ResumeConfig  # TODO
+        if self._setup.args.optimize_config:
+            searcher, stopper = create_search_algo(
+                hparams=self._setup.param_space,
+                study_name=self.get_experiment_name(),
+                seed=self._setup.args.seed,
+                metric=EVAL_METRIC_RETURN_MEAN,
+                mode="max",
+                pruner=self._setup.args.optimize_config,
+            )  # TODO: metric
+            self._stopper = stopper
+        else:
+            searcher = None
+            self._stopper = None
         return tune.TuneConfig(
             num_samples=1 if self._setup.args.not_parallel else self._setup.args.num_samples,
             metric=EVAL_METRIC_RETURN_MEAN,
-            search_alg=(
-                create_search_algo(
-                    hparams=self._setup.param_space,
-                    study_name=self.get_experiment_name(),
-                    seed=self._setup.args.seed,
-                    metric=EVAL_METRIC_RETURN_MEAN,
-                    mode="max",
-                )  # TODO: metric
-                if self._setup.args.optimize_config
-                else None
-            ),
+            search_alg=searcher,
             mode="max",
             trial_name_creator=trial_name_creator,
             max_concurrent_trials=None if self._setup.args.not_parallel else self._setup.args.num_jobs,
@@ -119,6 +124,14 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
 
             FailureConfig = tune.FailureConfig
             CheckpointConfig = tune.CheckpointConfig
+        if self._stopper == "not_set":
+            if self._setup.args.optimize_config:
+                logger.warning(
+                    "When using --optimize-config, `create_tune_config` should be called first to set up the stopper."
+                )
+            stopper = None
+        else:
+            stopper: OptunaSearchWithPruner | Stopper | None = self._stopper
         return RunConfig(
             # Trial artifacts are uploaded periodically to this directory
             storage_path=Path("../outputs/experiments").resolve(),  # pyright: ignore[reportArgumentType]
@@ -134,6 +147,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
                 checkpoint_score_order="max",
                 checkpoint_score_attribute=self.eval_metric,
             ),
+            stop=stopper,
         )
 
     @staticmethod

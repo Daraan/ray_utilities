@@ -78,15 +78,15 @@ class DisableLoggers(unittest.TestCase):
         self._mock_env.stop()
 
     def setUp(self):
-        super().setUp()
         self._mock_env = mock.patch.dict("os.environ", {"TUNE_DISABLE_AUTO_CALLBACK_LOGGERS": "1"})
         self._mock_env.start()
         self._disable_loggers = mock.patch("ray_utilities.callbacks.tuner.create_tuner_callbacks", return_value=[])
         self._disable_loggers.start()
+        super().setUp()
 
     def tearDown(self):
-        super().tearDown()
         self.enable_loggers()
+        super().tearDown()
 
 
 class SetupDefaults(DisableLoggers):
@@ -105,7 +105,11 @@ class SetupDefaults(DisableLoggers):
         self._DEFAULT_NAMESPACE = DefaultArgumentParser()
         self._DEFAULT_SETUP = AlgorithmSetup()
         self._DEFAULT_SETUP_LOW_RES = AlgorithmSetup()
-        self._DEFAULT_SETUP_LOW_RES.config.training(train_batch_size_per_learner=128, minibatch_size=64, num_epochs=2).env_runners(num_env_runners=0, num_envs_per_env_runner=1, num_cpus_per_env_runner=0).learners(num_learners=0, num_cpus_per_learner=0)
+        self._DEFAULT_SETUP_LOW_RES.config.training(
+            train_batch_size_per_learner=128, minibatch_size=64, num_epochs=2
+        ).env_runners(num_env_runners=0, num_envs_per_env_runner=1, num_cpus_per_env_runner=0).learners(
+            num_learners=0, num_cpus_per_learner=0
+        )
         self._INPUT_LENGTH = env.observation_space.shape[0]  # pyright: ignore[reportOptionalSubscript]
         self._DEFAULT_INPUT = jnp.arange(self._INPUT_LENGTH * 2).reshape((2, self._INPUT_LENGTH))
         self._DEFAULT_BATCH: dict[str, chex.Array] = MappingProxyType({"obs": self._DEFAULT_INPUT})  # pyright: ignore[reportAttributeAccessIssue]

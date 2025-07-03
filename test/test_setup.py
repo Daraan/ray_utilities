@@ -113,9 +113,7 @@ class TestSetupClasses(SetupDefaults):
                 setup.trainable = fake_trainable  # type: ignore
                 tuner = setup.create_tuner()
                 result_grid = tuner.fit()
-                evaluated_params = [
-                    r.metrics["param_value"] for r in result_grid  # pyright: ignore[reportOptionalSubscript]
-                ]
+                evaluated_params = [r.metrics["param_value"] for r in result_grid]  # pyright: ignore[reportOptionalSubscript]
                 # Check that all grid search values were evaluated
                 self.assertEqual(
                     len(set(evaluated_params)),
@@ -130,8 +128,8 @@ ENV_STEPS_PER_ITERATION = 10
 class TestAlgorithm(DisableBreakpointsForGUI, SetupDefaults):
     @classmethod
     def setUpClass(cls):
+        ray.init(include_dashboard=False, ignore_reinit_error=True)
         super().setUpClass()
-        ray.init(include_dashboard=False)
 
     @classmethod
     def tearDownClass(cls):
@@ -152,6 +150,7 @@ class TestAlgorithm(DisableBreakpointsForGUI, SetupDefaults):
         )
         self.assertEqual(env_runner1[NUM_ENV_STEPS_SAMPLED_LIFETIME], env_runner2[NUM_ENV_STEPS_SAMPLED_LIFETIME])
         # This would be amazing, but does not look possible:
+
     #        self.assertEqual(env_runner1[EPISODE_RETURN_MEAN], env_runner2[EPISODE_RETURN_MEAN])
 
     def test_checkpointing_native(self):
@@ -374,7 +373,7 @@ class TestAlgorithm(DisableBreakpointsForGUI, SetupDefaults):
             algo0,
             algo1,
             metrics=[
-                #NUM_ENV_STEPS_SAMPLED_LIFETIME,
+                # NUM_ENV_STEPS_SAMPLED_LIFETIME,
                 NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
             ],
         )
