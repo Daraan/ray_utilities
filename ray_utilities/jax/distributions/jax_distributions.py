@@ -73,7 +73,7 @@ class SupportsLogitsMixin(RllibDistribution):
 class _EntropyArgCorrector(RllibDistribution):
     def entropy(self, **kwargs) -> TensorType:
         return cast(
-            DistraxDistribution,
+            "DistraxDistribution",
             self._dist,  # type: ignore[attr-defined]
         ).entropy(**kwargs)
 
@@ -293,9 +293,9 @@ class MultiDistribution(RLlibToJaxDistribution):
         self._original_struct = child_distribution_struct
         self._flat_child_distributions: Sequence[RLlibToJaxDistribution] = tree.flatten(child_distribution_struct)
 
-    def _get_jax_distribution(self, *args, **kwargs):
+    def _get_jax_distribution(self, *args, **kwargs) -> None:  # noqa: ARG002
         self._dist: None
-        return None
+        return None  # noqa
 
     def rsample(
         self,
@@ -311,7 +311,7 @@ class MultiDistribution(RLlibToJaxDistribution):
         rsamples = tree.unflatten_as(self._original_struct, rsamples)
         return rsamples
 
-    def logp(self, value, **kwargs) -> TensorType:
+    def logp(self, value, **kwargs) -> TensorType:  # noqa: ARG002
         # Single tensor input (all merged).
         if isinstance(value, (jax.Array, np.ndarray)):
             split_indices = []

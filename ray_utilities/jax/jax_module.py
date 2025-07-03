@@ -55,8 +55,8 @@ class JaxModule(RLModule):
 
     def get_state(  # pyright: ignore[reportIncompatibleMethodOverride]
         self,
-        *args,
-        inference_only: bool = False,
+        *args,  # noqa: ARG002
+        inference_only: bool = False,  # noqa: ARG002
         **kwargs,  # noqa: ARG002
     ) -> JaxStateDict | StateDict | JaxActorCriticStateDict:
         # TODO: could return less than the full state if not inference_only; i.e. do not return the critic

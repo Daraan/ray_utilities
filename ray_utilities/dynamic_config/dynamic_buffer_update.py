@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import TYPE_CHECKING, Callable, Literal, Optional, Protocol, TypedDict, overload
+from typing import TYPE_CHECKING, Callable, Literal, Optional, TypedDict, overload
 
 import numpy as np
 

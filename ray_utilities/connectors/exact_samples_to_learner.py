@@ -1,7 +1,9 @@
+# It might not be possible to implement this class
+# type: ignore
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, deprecated
 
 from ray.rllib.connectors.connector_v2 import ConnectorV2
 from typing_extensions import Self
@@ -10,14 +12,14 @@ if TYPE_CHECKING:
     from ray.rllib.core.rl_module.multi_rl_module import MultiRLModule
     from ray.rllib.core.rl_module.rl_module import RLModule
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
-    from ray.rllib.utils.spaces.space_utils import BatchedNdArray
-    from ray.rllib.utils.typing import AgentID, EpisodeType, ModuleID, StateDict
+    from ray.rllib.utils.typing import EpisodeType
 
 __all__ = ["ExactSamplesConnector"]
 
 logger = logging.getLogger(__name__)
 
 
+@deprecated("Likely does not work as no config is available here")
 class ExactSamplesConnector(ConnectorV2):
     @classmethod
     def creator(
@@ -42,17 +44,15 @@ class ExactSamplesConnector(ConnectorV2):
         rl_module: RLModule | MultiRLModule,
         batch: dict[str, Any],
         episodes: list[EpisodeType],
-        explore: Optional[bool] = None,
-        shared_data: Optional[dict] = None,
+        shared_data: Optional[dict] = None,  # noqa: ARG002
         metrics: Optional[MetricsLogger] = None,
-        **kwargs,
+        **kwargs,  # noqa: ARG002
     ) -> Any:
-        rl_module.config
-        breakpoint()
+        # FIXME: Problem have no access to a config here, rl_module.config is deprecated or not sufficient
+        _config_deprecated = rl_module.config
+        _config_not_available = metrics.peek("config")  # config not yet logged.
         logger.debug("ExactSamplesConnector called with batch")
         total_samples = sum(len(sae) for sae in episodes)
-        config = metrics.peek("config")
-        # FIXME: Problem have no access to a config here, rl_module.config is deprecated or not sufficient
         exact_timesteps = ...
         if total_samples > exact_timesteps:
             diff = total_samples - exact_timesteps

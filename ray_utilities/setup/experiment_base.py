@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AlgorithmType_co",
-    "ConfigType",
+    "ConfigType_co",
     "DefaultArgumentParser",
     "ExperimentSetupBase",
     "NamespaceType",
@@ -59,11 +59,11 @@ ParserType = TypeVar("ParserType", bound="DefaultArgumentParser", default="Defau
 Parser: TypeAlias = "argparse.ArgumentParser | ParserType"
 NamespaceType: TypeAlias = "argparse.Namespace | ParserType"  # Generic, formerly union with , prefer duck-type
 
-ConfigType = TypeVar("ConfigType", bound="AlgorithmConfig", default="AlgorithmConfig")
+ConfigType_co = TypeVar("ConfigType_co", bound="AlgorithmConfig", covariant=True, default="AlgorithmConfig")
 AlgorithmType_co = TypeVar("AlgorithmType_co", bound="Algorithm", covariant=True, default="PPO")
 
 
-class ExperimentSetupBase(ABC, Generic[ParserType, ConfigType, AlgorithmType_co]):
+class ExperimentSetupBase(ABC, Generic[ParserType, ConfigType_co, AlgorithmType_co]):
     """
     Methods:
     - create_parser
@@ -126,7 +126,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType, ConfigType, AlgorithmType_co]
         self.parser = self.create_parser()
         self.args = self.parse_args(args)
         if init_config:
-            self.config: ConfigType = self.create_config()
+            self.config: ConfigType_co = self.create_config()
         self._set_dynamic_parameters_to_tune()
         if init_param_space:
             self.param_space = self.create_param_space()
@@ -259,8 +259,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType, ConfigType, AlgorithmType_co]
         if len(self._dynamic_parameters_to_tune) > 0:
             logger.warning(
                 "Unused dynamic tuning parameters: %s "
-                "Call self._set_dynamic_parameters_to_tune() and remove parameters from self._dynamic_parameters_to_tune "
-                "before calling super().create_param_space().",
+                "Call self._set_dynamic_parameters_to_tune() and remove parameters "
+                "from self._dynamic_parameters_to_tune before calling super().create_param_space().",
                 self._dynamic_parameters_to_tune,
             )
 
@@ -317,7 +317,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType, ConfigType, AlgorithmType_co]
         self.config.learner_config_dict.setdefault("accumulate_gradients_every", 1)
 
     @final
-    def create_config(self) -> ConfigType:
+    def create_config(self) -> ConfigType_co:
         """
         Creates the config for the experiment.
 
@@ -334,7 +334,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType, ConfigType, AlgorithmType_co]
 
     @classmethod
     @abstractmethod
-    def _config_from_args(cls, args: ParserType | argparse.Namespace) -> ConfigType:
+    def _config_from_args(cls, args: ParserType | argparse.Namespace) -> ConfigType_co:
         """
         Create an algorithm configuration; similar to `create_config` but as a `classmethod`.
 
@@ -365,7 +365,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType, ConfigType, AlgorithmType_co]
 
     @final
     @classmethod
-    def config_from_args(cls, args: NamespaceType[ParserType]) -> ConfigType:
+    def config_from_args(cls, args: NamespaceType[ParserType]) -> ConfigType_co:
         """
         Create an algorithm configuration; similar to `create_config` but as a `classmethod`.
 
@@ -431,7 +431,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType, ConfigType, AlgorithmType_co]
         env: Optional[EnvType] = None,
         spaces: Optional[dict[str, gym.Space]] = None,
         inference_only: Optional[bool] = None,
-    ) -> tuple[ConfigType, RLModuleSpec]:
+    ) -> tuple[ConfigType_co, RLModuleSpec]:
         """
         Creates the config and module spec for the experiment.
 
@@ -466,7 +466,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType, ConfigType, AlgorithmType_co]
 
     # region Tuner
 
-    def create_tuner(self: ExperimentSetupBase[ParserType, ConfigType, AlgorithmType_co]) -> tune.Tuner:
+    def create_tuner(self: ExperimentSetupBase[ParserType, ConfigType_co, AlgorithmType_co]) -> tune.Tuner:
         return TunerSetup(setup=self).create_tuner()
 
     # endregion

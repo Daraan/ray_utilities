@@ -26,6 +26,8 @@ The default env-to-module connector pipeline is:
 
 """
 
+# ruff: noqa: ARG001
+
 from __future__ import annotations
 
 import logging
@@ -49,7 +51,7 @@ def _default_env_to_module_without_numpy(
     device=None,
     *,
     algo: AlgorithmConfig,
-    debug=False,  # noqa: ARG001
+    debug=False,
 ) -> list[ConnectorV2]:
     """Default pipleine without NumpyToTensor conversion.
 

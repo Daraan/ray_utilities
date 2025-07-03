@@ -65,8 +65,11 @@ class TestOptunaTuner(SetupDefaults):
 
     def test_pruning(self):
         """
-        Test might fail due to bad luck, low numbers first then high, remember Optuna might not prune the first 10 trials.
-        Reduce num_jobs or adjust seed and test again.
+        Test might fail due to bad luck, low numbers first then high.
+
+        Note:
+            Remember Optuna might not prune the first 10 trials.
+            Reduce num_jobs or adjust seed and test again.
         """
         with patch_args("--optimize_config", "--num_samples", "20", "--num_jobs", "4", "--seed", "42"):
 

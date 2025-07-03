@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ray.rllib.algorithms.ppo import PPOConfig
+from ray.rllib.algorithms.ppo import PPO, PPOConfig
+from typing_extensions import TypeVar
 
 from ray_utilities.config import add_callbacks_to_config
 from ray_utilities.config.create_algorithm import create_algorithm_config
-from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType, ExperimentSetupBase, ParserType
+from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType
 from ray_utilities.setup.extensions import SetupWithDynamicBatchSize, SetupWithDynamicBuffer
 
 if TYPE_CHECKING:
@@ -14,11 +15,13 @@ if TYPE_CHECKING:
 
     from ray_utilities.typing import TrainableReturnData
 
+__all__ = ["AlgorithmSetup", "AlgorithmType_co", "ConfigType_co", "PPOSetup", "ParserType"]
+
 
 class AlgorithmSetup(
-    SetupWithDynamicBuffer[ParserType, ConfigType, AlgorithmType_co],
-    SetupWithDynamicBatchSize[ParserType, ConfigType, AlgorithmType_co],
-    ExperimentSetupBase[ParserType, ConfigType, AlgorithmType_co],
+    SetupWithDynamicBuffer[ParserType, ConfigType_co, AlgorithmType_co],
+    SetupWithDynamicBatchSize[ParserType, ConfigType_co, AlgorithmType_co],
+    ExperimentSetupBase[ParserType, ConfigType_co, AlgorithmType_co],
 ):
     """
     Base class for algorithm setup in Ray RLlib experiments.
@@ -31,7 +34,7 @@ class AlgorithmSetup(
 
     PROJECT = "Unnamed Project"
     # FIXME: Need at least PPO to run_tune
-    config_class: type[ConfigType] = PPOConfig  # evaluate the forward ref of ConfigType.__default__
+    config_class: type[ConfigType_co] = PPOConfig  # evaluate the forward ref of ConfigType.__default__
 
     @property
     def group_name(self) -> str:
@@ -53,7 +56,7 @@ class AlgorithmSetup(
         return trainable
 
     @classmethod
-    def _config_from_args(cls, args) -> ConfigType:
+    def _config_from_args(cls, args) -> ConfigType_co:
         config, _module_spec = create_algorithm_config(
             args=args,
             module_class=None,
@@ -62,12 +65,26 @@ class AlgorithmSetup(
             framework="torch",
             config_class=cls.config_class,
         )
+        config.evaluation(evaluation_interval=1)  # required to not fail on the cheap default trainable
         add_callbacks_to_config(config, cls.get_callbacks_from_args(args))
         return config
 
     @classmethod
     def _get_callbacks_from_args(cls, args) -> list[type[RLlibCallback]]:
         return super()._get_callbacks_from_args(args)
+
+
+_PPO_Config_co = TypeVar("_PPO_Config_co", bound=PPOConfig, covariant=True, default=PPOConfig)
+_PPO_Algorithm_co = TypeVar("_PPO_Algorithm_co", bound="PPO", covariant=True, default="PPO")
+
+
+class PPOSetup(AlgorithmSetup[ParserType, _PPO_Config_co, _PPO_Algorithm_co]):
+    """
+    A specific setup for PPO algorithms.
+    This class can be extended to customize PPO configurations and callbacks.
+    """
+
+    config_class: type[_PPO_Config_co] = PPOConfig
 
 
 if TYPE_CHECKING:  # check ABC

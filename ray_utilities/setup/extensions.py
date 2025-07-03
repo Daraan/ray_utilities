@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradientAccumulation
 from ray_utilities.callbacks.algorithm.dynamic_buffer_callback import DynamicBufferUpdate
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
-from ray_utilities.setup.experiment_base import ExperimentSetupBase, ParserType, AlgorithmType_co, ConfigType
+from ray_utilities.setup.experiment_base import ExperimentSetupBase, ParserType, AlgorithmType_co, ConfigType_co
 
 if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
@@ -14,10 +14,10 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
-class SetupForDynamicTuning(ExperimentSetupBase[ParserType, ConfigType, AlgorithmType_co]): ...
+class SetupForDynamicTuning(ExperimentSetupBase[ParserType, ConfigType_co, AlgorithmType_co]): ...
 
 
-class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType, ConfigType, AlgorithmType_co]):
+class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType, ConfigType_co, AlgorithmType_co]):
     @classmethod
     def _get_callbacks_from_args(cls, args) -> list[type[RLlibCallback]]:
         # Can call the parent; might be None for ExperimentSetupBase
@@ -49,7 +49,7 @@ class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType, ConfigType, Algor
         return param_space
 
 
-class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType, ConfigType, AlgorithmType_co]):
+class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType, ConfigType_co, AlgorithmType_co]):
     @classmethod
     def _get_callbacks_from_args(cls, args) -> list[type[RLlibCallback]]:
         # When used as a mixin, can call the parent; might be None for ExperimentSetupBase

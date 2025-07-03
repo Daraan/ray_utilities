@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from abc import abstractmethod
 import logging
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence
+from abc import abstractmethod
+from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -12,11 +11,8 @@ from ray.rllib.core.learner.tf.tf_learner import TfLearner
 from ray.rllib.core.learner.torch.torch_learner import TorchLearner
 from ray.rllib.policy.sample_batch import MultiAgentBatch
 
-from ray_utilities.jax.jax_module import JaxStateDict, JaxActorCriticStateDict
-from utils.utils import ActorTrainState
-
 if TYPE_CHECKING:
-    from collections.abc import Hashable
+    from collections.abc import Hashable, Mapping
 
     from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
     from ray.rllib.algorithms.ppo.ppo import PPOConfig
@@ -24,8 +20,9 @@ if TYPE_CHECKING:
     from ray.rllib.core.rl_module.rl_module import RLModule, RLModuleSpec
     from ray.rllib.utils.typing import ModuleID, Optimizer, Param, ParamDict, TensorType
 
-    from ray_utilities.jax.jax_module import JaxModule
-    from rllib_port.core.sympol_module import SympolPPOModule
+    from ray_utilities.jax.jax_module import JaxActorCriticStateDict, JaxModule, JaxStateDict
+    from rllib_port.core.sympol_module import SympolPPOModule  # FIXME: Uses downstream
+    from utils.utils import ActorTrainState
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +136,7 @@ class JaxLearner(Learner):
         logger.warning("_get_global_norm_function called which is not fully implemented")
         return super(JaxLearner)._get_global_norm_function()
 
-    def _get_tensor_variable(self, value: Any, dtype: Any = None, trainable: bool = False) -> TensorType:
+    def _get_tensor_variable(self, value: Any, dtype: Any = None, trainable: bool = False) -> TensorType:  # noqa
         # TODO: is kl_coeffs a variable that is learned?
         logger.warning("_get_tensor_variable called which is not fully implemented", stacklevel=2)
         if 0:

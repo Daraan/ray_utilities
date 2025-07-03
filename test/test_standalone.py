@@ -71,7 +71,7 @@ class TestAlgorithm(unittest.TestCase):
         config.reporting(metrics_num_episodes_for_smoothing=1, keep_per_episode_custom_metrics=True)  # no smoothing
         config.environment(env="CartPole-v1")
 
-        def log_custom_metric(metrics_logger: MetricsLogger, **kwargs):
+        def log_custom_metric(metrics_logger: MetricsLogger, **kwargs):  # noqa: ARG001
             # Track env steps in a second metric from a callback
             metrics_logger.log_value(
                 NUM_ENV_STEPS_IN_CALLBACK_LIFETIME,

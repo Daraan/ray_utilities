@@ -117,6 +117,10 @@ extend-generics = [
 "SYMPOL".msg = "Import from downstream packages; missing refactoring."
 "rllib_port".msg = "Import from downstream packages; missing refactoring."
 
+[tool.ruff.lint.per-file-ignores]
+"test/**/*.py" = ["ARG"]
+"ray_utilities/callbacks/**/*.py" = ["ARG"]
+
 [tool.isort]
 split_on_trailing_comma = true
 include_trailing_comma = true

@@ -236,7 +236,7 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
     """
     Wether to not add the RemoveMaskedSamplesConnector to the AlgorithmConfig.
 
-    Set to True to enable RLlibs's default behavior which inserts masked samples into the learner 
+    Set to True to enable RLlibs's default behavior which inserts masked samples into the learner
     that do not contribute to the loss.
     """
 

@@ -12,7 +12,7 @@ from ray.rllib.core.models.base import ACTOR, CRITIC, ENCODER_OUT
 from ray_utilities.jax.jax_module import JaxActorCriticEncoder, JaxModule, JaxActorCriticStateDict
 
 if TYPE_CHECKING:
-    from ray.rllib.utils.typing import StateDict, TensorType
+    from ray.rllib.utils.typing import TensorType
 
     from ray_utilities.jax.jax_model import FlaxRLModel, JaxRLModel
 
@@ -96,7 +96,7 @@ class JaxPPOModule(DefaultPPORLModule, JaxModule):
         *,
         parameters: Optional[
             Mapping[str, Any]
-        ] = None,  # XXX For GaeIn the Connector pipeline setting this to None; however it may not be omitted for gradient computation
+        ] = None,  # XXX For GaeIn the Connector pipeline setting this to None; however it may not be omitted for gradient computation  # noqa: E501
     ) -> TensorType:
         """Computes the value estimates given `batch`.
 

@@ -126,6 +126,7 @@ class SetupDefaults(DisableLoggers):
         ignore_leaves: Collection[str] = (),
         msg: str = "",
         attr_checked: str = "",
+        *,
         use_subtests: bool = False,
     ):
         leaves1 = jax.tree.leaves_with_path(tree1)

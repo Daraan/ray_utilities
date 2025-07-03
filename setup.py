@@ -1,8 +1,9 @@
 from setuptools import find_packages, setup
 
+# TODO: make some installations optional
 setup(
     name=r"ray_utilities",
-    version="0.0.4",
+    version="0.0.5",
     package_dir={"ray_utilities": "ray_utilities"},
     packages=find_packages(),
     include=["ray_utilities*"],
@@ -10,6 +11,7 @@ setup(
         "ray[tuner,rllib]",
         "typed-argument-parser",
         "tqdm",
+        "colorlog",
         "opencv-python",
         "comet_ml",
         "wandb",

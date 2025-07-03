@@ -97,7 +97,7 @@ See Also:
 """
 
 NUM_ENV_STEPS_PASSED_TO_LEARNER = "num_env_steps_passed_to_learner"
-"""When using exact sampling the key for the logger to log the number of environment steps actually 
+"""When using exact sampling the key for the logger to log the number of environment steps actually
 passed to the learner."""
 
 NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME = "num_env_steps_passed_to_learner_lifetime"

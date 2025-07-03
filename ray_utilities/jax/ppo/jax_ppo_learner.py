@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# some of ray's TypeAlias are not detected as such
+# pyright: reportInvalidTypeForm=warning
+
 import logging
 from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
@@ -237,7 +240,7 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
         *,
         accumulate_gradients_every: int,  # possibly make book and static
     ) -> tuple[Mapping[ModuleID, JaxActorCriticStateDict], tuple[Any, dict[ModuleID, chex.Numeric], dict[str, Any]]]:
-        # TODO: Could make accumulate_gradients_every a bool -> two different jax-compilations, BUT only when not taking mean
+        # TODO: Could make accumulate_gradients_every a bool -> two different jax-compilations, BUT only when not taking mean  # noqa: E501
         parameters = self._get_state_parameters(states)
         gradients: dict[ModuleID, dict[Literal["actor", "critic"], Any]]
         (_all_losses_combined, (fwd_out, loss_per_module_do_not_use, compute_loss_aux)), (gradients,) = (
@@ -266,7 +269,7 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
             curr_kl_coeffs[module_id] = self.curr_kl_coeffs_per_module[module_id]
         return curr_entropy_coeffs, curr_kl_coeffs
 
-    def _update(self, batch: dict[str, Any] | SampleBatch, **kwargs) -> tuple[Any, Any, Any]:
+    def _update(self, batch: dict[str, Any] | SampleBatch, **kwargs) -> tuple[Any, Any, Any]:  # noqa: ARG002
         """
         NOTE: The amount of processed data is minibatch_size * epochs
 

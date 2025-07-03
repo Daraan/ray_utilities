@@ -13,7 +13,6 @@ from ray import tune
 from ray.rllib.algorithms.ppo import PPO, PPOConfig
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
-    EPISODE_RETURN_MEAN,
     NUM_ENV_STEPS_SAMPLED,
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
@@ -277,13 +276,15 @@ class TestAlgorithm(DisableBreakpointsForGUI, SetupDefaults):
                         self.assertEqual(
                             result_algo_0_step2[ENV_RUNNER_RESULTS][metric],
                             result_algo0_step2_restored[ENV_RUNNER_RESULTS][metric],
-                            f"Restored num_env_runners=0: {metric} does not match expected value {ENV_STEPS_PER_ITERATION * 2}",
+                            f"Restored num_env_runners=0: {metric} does not match expected value "
+                            f"{ENV_STEPS_PER_ITERATION * 2}",
                         )
                     with self.subTest("From checkpoint: env_runners=1 - Step 2"):
                         self.assertEqual(
                             result_algo_1_step2[ENV_RUNNER_RESULTS][metric],
                             result_algo1_step2_restored[ENV_RUNNER_RESULTS][metric],
-                            f"Restored num_env_runners=1: {metric} does not match expected value {ENV_STEPS_PER_ITERATION * 2}",
+                            f"Restored num_env_runners=1: {metric} does not match expected value "
+                            f"{ENV_STEPS_PER_ITERATION * 2}",
                         )
             # Test after restoring a second time
             # Load Restored from step 2
@@ -295,12 +296,14 @@ class TestAlgorithm(DisableBreakpointsForGUI, SetupDefaults):
                     self.assertEqual(
                         algo_0_restored_x2.metrics.peek((ENV_RUNNER_RESULTS, metric)),
                         ENV_STEPS_PER_ITERATION * 2,
-                        f"Restored x2 num_env_runners=0: {metric} does not match expected value {ENV_STEPS_PER_ITERATION * 2}",
+                        f"Restored x2 num_env_runners=0: {metric} does not match expected value "
+                        f"{ENV_STEPS_PER_ITERATION * 2}",
                     )
                     self.assertEqual(
                         algo_1_restored_x2.metrics.peek((ENV_RUNNER_RESULTS, metric)),
                         ENV_STEPS_PER_ITERATION * 2,
-                        f"Restored x2 num_env_runners=1: {metric} does not match expected value {ENV_STEPS_PER_ITERATION * 2}",
+                        f"Restored x2 num_env_runners=1: {metric} does not match expected value "
+                        f"{ENV_STEPS_PER_ITERATION * 2}",
                     )
             # Step 3 from restored
             result_algo0_step3_restored = algo_0_runner_restored.step()
@@ -333,7 +336,8 @@ class TestAlgorithm(DisableBreakpointsForGUI, SetupDefaults):
                         self.assertEqual(
                             result_algo_1_step3[ENV_RUNNER_RESULTS][metric],
                             result_algo1_step3_restored_x2[ENV_RUNNER_RESULTS][metric],
-                            f"Restored num_env_runners=1: {metric} does not match expected value {ENV_STEPS_PER_ITERATION * 3}",
+                            f"Restored num_env_runners=1: {metric} does not match expected value "
+                            f"{ENV_STEPS_PER_ITERATION * 3}",
                         )
         return {
             "env_runners": {
