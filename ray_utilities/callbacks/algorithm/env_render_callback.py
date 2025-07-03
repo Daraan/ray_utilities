@@ -223,7 +223,13 @@ class AdvEnvRenderCallback(DefaultCallbacks):
         # See below:
         # `on_episode_end()`: We compile the video and maybe store it).
         # `on_sample_end()` We log the best and worst video to the `MetricsLogger`.
-        episode.add_temporary_timestep_data("render_images", image)
+        try:
+            episode.add_temporary_timestep_data("render_images", image)  # pyright: ignore[reportCallIssue]
+        except (ValueError, TypeError):  # deprecated in 2.47+
+            if "render_images" not in episode.custom_data:
+                episode.custom_data["render_images"] = []
+            episode.custom_data["render_images"].append(image)
+
 
     def on_episode_end(  # pyright: ignore[reportIncompatibleMethodOverride]
         self,

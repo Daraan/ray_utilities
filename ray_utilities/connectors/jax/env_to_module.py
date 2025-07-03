@@ -43,7 +43,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _default_env_to_module_without_numpy(env: EnvType, *, algo: AlgorithmConfig, debug=False) -> list[ConnectorV2]:  # noqa: ARG001
+def _default_env_to_module_without_numpy(
+    env: EnvType, spaces=None, device=None, *, algo: AlgorithmConfig, debug=False  # noqa: ARG001
+) -> list[ConnectorV2]:
     """Default pipleine without NumpyToTensor conversion.
 
     [
