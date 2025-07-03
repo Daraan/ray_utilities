@@ -44,7 +44,12 @@ logger = logging.getLogger(__name__)
 
 
 def _default_env_to_module_without_numpy(
-    env: EnvType, spaces=None, device=None, *, algo: AlgorithmConfig, debug=False  # noqa: ARG001
+    env: EnvType,
+    spaces=None,
+    device=None,
+    *,
+    algo: AlgorithmConfig,
+    debug=False,  # noqa: ARG001
 ) -> list[ConnectorV2]:
     """Default pipleine without NumpyToTensor conversion.
 

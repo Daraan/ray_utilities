@@ -230,7 +230,6 @@ class AdvEnvRenderCallback(DefaultCallbacks):
                 episode.custom_data["render_images"] = []
             episode.custom_data["render_images"].append(image)
 
-
     def on_episode_end(  # pyright: ignore[reportIncompatibleMethodOverride]
         self,
         *,
