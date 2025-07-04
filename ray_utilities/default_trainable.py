@@ -185,11 +185,27 @@ def default_trainable(
         setup=setup,
         setup_class=setup_class,
     )
-    try:
-        # new API
-        algo = config.build_algo()
-    except AttributeError:
-        algo = config.build()
+    if not args["from_checkpoint"]:
+        try:
+            # new API
+            algo = config.build_algo()
+        except AttributeError:
+            algo = config.build()
+    # Load from checkpoint
+    elif checkpoint_loader := (setup or setup_class):
+        algo = checkpoint_loader.algorithm_from_checkpoint(args["from_checkpoint"])
+        if config.algo_class is not None and not isinstance(algo, config.algo_class):
+            logger.warning(
+                "Loaded algorithm from checkpoint is not of the expected type %s, got %s. "
+                "Check your setup class %s.algo_class.",
+                config.algo_class,
+                type(algo),
+                type(setup) if setup is not None else setup_class,
+            )
+    else:
+        # Should not happen, is covered by checks in get_args_and_config
+        logger.warning("No setup or setup_class provided, using default PPOSetup. ")
+        algo = cast("Algorithm", config.algo_class).from_checkpoint(args["from_checkpoint"])
 
     running_reward_updater = create_running_reward_updater()
     running_eval_reward_updater = create_running_reward_updater()

@@ -7,7 +7,7 @@ from typing_extensions import TypeVar
 
 from ray_utilities.config import add_callbacks_to_config
 from ray_utilities.config.create_algorithm import create_algorithm_config
-from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType
+from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
 from ray_utilities.setup.extensions import SetupWithDynamicBatchSize, SetupWithDynamicBuffer
 
 if TYPE_CHECKING:
@@ -15,13 +15,13 @@ if TYPE_CHECKING:
 
     from ray_utilities.typing import TrainableReturnData
 
-__all__ = ["AlgorithmSetup", "AlgorithmType_co", "ConfigType_co", "PPOSetup", "ParserType"]
+__all__ = ["AlgorithmSetup", "AlgorithmType_co", "ConfigType_co", "PPOSetup", "ParserType_co"]
 
 
 class AlgorithmSetup(
-    SetupWithDynamicBuffer[ParserType, ConfigType_co, AlgorithmType_co],
-    SetupWithDynamicBatchSize[ParserType, ConfigType_co, AlgorithmType_co],
-    ExperimentSetupBase[ParserType, ConfigType_co, AlgorithmType_co],
+    SetupWithDynamicBuffer[ParserType_co, ConfigType_co, AlgorithmType_co],
+    SetupWithDynamicBatchSize[ParserType_co, ConfigType_co, AlgorithmType_co],
+    ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co],
 ):
     """
     Base class for algorithm setup in Ray RLlib experiments.
@@ -33,8 +33,9 @@ class AlgorithmSetup(
     """
 
     PROJECT = "Unnamed Project"
-    # FIXME: Need at least PPO to run_tune
+    # FIXME: Need at least PPO to use run_tune with this class
     config_class: type[ConfigType_co] = PPOConfig  # evaluate the forward ref of ConfigType.__default__
+    algo_class: type[AlgorithmType_co] = PPO
 
     @property
     def group_name(self) -> str:
@@ -74,17 +75,14 @@ class AlgorithmSetup(
         return super()._get_callbacks_from_args(args)
 
 
-_PPO_Config_co = TypeVar("_PPO_Config_co", bound=PPOConfig, covariant=True, default=PPOConfig)
-_PPO_Algorithm_co = TypeVar("_PPO_Algorithm_co", bound="PPO", covariant=True, default="PPO")
-
-
-class PPOSetup(AlgorithmSetup[ParserType, _PPO_Config_co, _PPO_Algorithm_co]):
+class PPOSetup(AlgorithmSetup[ParserType_co, "PPOConfig", "PPO"]):
     """
     A specific setup for PPO algorithms.
     This class can be extended to customize PPO configurations and callbacks.
     """
 
-    config_class: type[_PPO_Config_co] = PPOConfig
+    config_class = PPOConfig
+    algo_class = PPO
 
 
 if TYPE_CHECKING:  # check ABC

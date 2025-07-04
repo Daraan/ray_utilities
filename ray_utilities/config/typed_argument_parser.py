@@ -52,6 +52,8 @@ class RLlibArgumentParser(Tap):
     minibatch_size: int = 128
     """Minibatch size used for backpropagation/optimization"""
 
+    from_checkpoint: Optional[str] = None
+
     def configure(self) -> None:
         super().configure()
         self.add_argument(
@@ -59,6 +61,10 @@ class RLlibArgumentParser(Tap):
             dest="train_batch_size_per_learner",
             type=int,
             required=False,
+        )
+
+        self.add_argument(
+            "--from_checkpoint", "-cp", "-load", default=None, type=str, help="Path to the checkpoint to load from."
         )
 
 
