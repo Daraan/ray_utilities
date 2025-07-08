@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
-from typing_extensions import Required
+from typing_extensions import NotRequired, Required, TypedDict
 
 from .algorithm_return import _NotRequiredEnvRunners
 
@@ -13,9 +13,35 @@ if TYPE_CHECKING:
 
 
 class TrainableReturnData(_NotRequiredEnvRunners, total=False, closed=False):
+    """The return type of the trainable's step method."""
+
     evaluation: Required[_LogMetricsEvaluationResultsDict]
     training_iteration: int
     done: Required[bool]
     current_step: Required[int]
     comment: str
     trial_id: int | str
+
+# Further
+
+class RewardsDict(TypedDict):
+    """A dictionary containing the rewards for the current training step."""
+
+    running_reward: float
+    running_eval_reward: float
+    eval_mean: float
+    disc_eval_reward: NotRequired[float]
+    disc_eval_mean: NotRequired[float]
+    disc_running_eval_reward: NotRequired[float]
+
+_Updater = Callable[[float], float]
+
+class RewardUpdaters(TypedDict, extra_items=_Updater):
+    """A dictionary containing the reward updaters for the current training step."""
+
+    # The keys are the names of the reward updaters, and the values are the functions that update the rewards.
+    # The functions take a float as input and return a float.
+
+    running_reward: _Updater
+    eval_reward: _Updater
+    disc_eval_reward: NotRequired[_Updater]

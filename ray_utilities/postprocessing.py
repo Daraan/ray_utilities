@@ -551,6 +551,11 @@ def update_running_reward(new_reward: float, reward_array: list[float]) -> float
 
 
 def create_running_reward_updater() -> Callable[[float], float]:
+    """
+    Creates a partial function that updates the running reward.
+
+    The partial function is stateful in their reward_array, which is initialized as an empty list.
+    """
     return partial(update_running_reward, reward_array=[])
 
 
