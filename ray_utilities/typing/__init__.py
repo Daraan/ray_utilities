@@ -23,7 +23,7 @@ ExtraItems = Any  # float | int | str | bool | None | dict[str, "_ExtraItems"] |
 # ruff: noqa: E402
 from .algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
 from .metrics import FlatLogMetricsDict, LogMetricsDict
-from .trainable_return import TrainableReturnData
+from .trainable_return import TrainableReturnData, RewardsDict, RewardUpdaters
 
 if typing_extensions.TYPE_CHECKING:
     from ray_utilities.setup.experiment_base import ExperimentSetupBase
@@ -34,6 +34,8 @@ __all__ = [
     "FlatLogMetricsDict",
     "FunctionalTrainable",
     "LogMetricsDict",
+    "RewardUpdaters",
+    "RewardsDict",
     "StrictAlgorithmReturnData",
     "TestModeCallable",
     "TrainableReturnData",

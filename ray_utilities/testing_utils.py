@@ -12,6 +12,7 @@ import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import numpy.testing as npt
+import ray
 import tree
 from typing_extensions import NotRequired, Required, get_origin, get_type_hints
 
@@ -89,35 +90,25 @@ class DisableLoggers(unittest.TestCase):
         super().tearDown()
 
 
-class SetupDefaults(DisableLoggers):
-    @clean_args
-    def setUp(self):
-        super().setUp()
-        print("Remember to enable/disable justMyCode('\"debugpy.debugJustMyCode\": false,') in the settings")
-        env = gym.make("CartPole-v1")
+class InitRay(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        """Initialize Ray for the test class."""
+        if not ray.is_initialized():
+            ray.init(
+                include_dashboard=False,
+                ignore_reinit_error=True,
+            )
+        super().setUpClass()
 
-        self._OBSERVATION_SPACE = env.observation_space
-        self._ACTION_SPACE = env.action_space
+    @classmethod
+    def tearDownClass(cls):
+        """Shutdown Ray after the test class."""
+        if ray.is_initialized():
+            ray.shutdown()
+        super().tearDownClass()
 
-        self._DEFAULT_CONFIG_DICT: MappingProxyType[str, Any] = MappingProxyType(
-            DefaultArgumentParser().parse_args().as_dict()
-        )
-        self._DEFAULT_NAMESPACE = DefaultArgumentParser()
-        self._DEFAULT_SETUP = AlgorithmSetup()
-        self._DEFAULT_SETUP_LOW_RES = AlgorithmSetup()
-        self._DEFAULT_SETUP_LOW_RES.config.training(
-            train_batch_size_per_learner=128, minibatch_size=64, num_epochs=2
-        ).env_runners(num_env_runners=0, num_envs_per_env_runner=1, num_cpus_per_env_runner=0).learners(
-            num_learners=0, num_cpus_per_learner=0
-        )
-        self._INPUT_LENGTH = env.observation_space.shape[0]  # pyright: ignore[reportOptionalSubscript]
-        self._DEFAULT_INPUT = jnp.arange(self._INPUT_LENGTH * 2).reshape((2, self._INPUT_LENGTH))
-        self._DEFAULT_BATCH: dict[str, chex.Array] = MappingProxyType({"obs": self._DEFAULT_INPUT})  # pyright: ignore[reportAttributeAccessIssue]
-        self._ENV_SAMPLE = jnp.arange(self._INPUT_LENGTH)
-        model_key = jax.random.PRNGKey(self._DEFAULT_CONFIG_DICT["seed"] or 2)
-        self._RANDOM_KEY, self._ACTOR_KEY, self._CRITIC_KEY = jax.random.split(model_key, 3)
-        self._ACTION_DIM: int = self._ACTION_SPACE.n  # type: ignore[attr-defined]
-        self._OBS_DIM: int = self._OBSERVATION_SPACE.shape[0]  # pyright: ignore[reportOptionalSubscript]
+class TestHelpers(unittest.TestCase):
 
     def util_test_tree_equivalence(
         self,
@@ -206,9 +197,39 @@ class SetupDefaults(DisableLoggers):
                     )
 
         # NOTE: Apply gradients modifies state
+class SetupDefaults(TestHelpers, DisableLoggers):
+    @clean_args
+    def setUp(self):
+        super().setUp()
+        print("Remember to enable/disable justMyCode('\"debugpy.debugJustMyCode\": false,') in the settings")
+        env = gym.make("CartPole-v1")
+
+        self._OBSERVATION_SPACE = env.observation_space
+        self._ACTION_SPACE = env.action_space
+
+        self._DEFAULT_CONFIG_DICT: MappingProxyType[str, Any] = MappingProxyType(
+            DefaultArgumentParser().parse_args().as_dict()
+        )
+        self._DEFAULT_NAMESPACE = DefaultArgumentParser()
+        self._DEFAULT_SETUP = AlgorithmSetup()
+        self._DEFAULT_SETUP_LOW_RES = AlgorithmSetup()
+        self._DEFAULT_SETUP_LOW_RES.config.training(
+            train_batch_size_per_learner=128, minibatch_size=64, num_epochs=2
+        ).env_runners(num_env_runners=0, num_envs_per_env_runner=1, num_cpus_per_env_runner=0).learners(
+            num_learners=0, num_cpus_per_learner=0
+        )
+        self._INPUT_LENGTH = env.observation_space.shape[0]  # pyright: ignore[reportOptionalSubscript]
+        self._DEFAULT_INPUT = jnp.arange(self._INPUT_LENGTH * 2).reshape((2, self._INPUT_LENGTH))
+        self._DEFAULT_BATCH: dict[str, chex.Array] = MappingProxyType({"obs": self._DEFAULT_INPUT})  # pyright: ignore[reportAttributeAccessIssue]
+        self._ENV_SAMPLE = jnp.arange(self._INPUT_LENGTH)
+        model_key = jax.random.PRNGKey(self._DEFAULT_CONFIG_DICT["seed"] or 2)
+        self._RANDOM_KEY, self._ACTOR_KEY, self._CRITIC_KEY = jax.random.split(model_key, 3)
+        self._ACTION_DIM: int = self._ACTION_SPACE.n  # type: ignore[attr-defined]
+        self._OBS_DIM: int = self._OBSERVATION_SPACE.shape[0]  # pyright: ignore[reportOptionalSubscript]
 
 
-class DisableBreakpointsForGUI(unittest.TestCase):
+
+class DisableGUIBreakpoints(unittest.TestCase):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         if {"-v", "test*.py"} & set(sys.argv) and not int(os.environ.get("KEEP_BREAKPOINTS", "0")):

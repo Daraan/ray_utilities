@@ -10,13 +10,13 @@ from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.runfiles import run_tune
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner
-from ray_utilities.testing_utils import SetupDefaults, patch_args
+from ray_utilities.testing_utils import InitRay, SetupDefaults, patch_args
 from ray_utilities.typing.trainable_return import TrainableReturnData
 
 logger = __import__("logging").getLogger(__name__)
 
 
-class TestTuner(SetupDefaults):
+class TestTuner(InitRay, SetupDefaults):
     def test_tuner_setup(self):
         with patch_args("--optimize_config", "--num_samples", "1"):
             optuna_setup = AlgorithmSetup()

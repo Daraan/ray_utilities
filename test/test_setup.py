@@ -22,7 +22,7 @@ from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger
-from ray_utilities.testing_utils import DisableBreakpointsForGUI, SetupDefaults, patch_args
+from ray_utilities.testing_utils import DisableGUIBreakpoints, InitRay, SetupDefaults, patch_args
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
@@ -117,17 +117,7 @@ class TestSetupClasses(SetupDefaults):
 ENV_STEPS_PER_ITERATION = 10
 
 
-class TestAlgorithm(DisableBreakpointsForGUI, SetupDefaults):
-    @classmethod
-    def setUpClass(cls):
-        ray.init(include_dashboard=False, ignore_reinit_error=True)
-        super().setUpClass()
-
-    @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-        ray.shutdown()
-
+class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
     @unittest.skip("Fix first: Ray moves checkpoint need to load from different location")
     def test_stopper_with_checkpoint(self):
         from copy import deepcopy

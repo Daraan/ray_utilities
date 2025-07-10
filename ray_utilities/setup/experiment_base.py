@@ -3,6 +3,7 @@ from __future__ import annotations
 # pyright: enableExperimentalFeatures=true
 import logging
 from abc import ABC, abstractmethod
+from types import SimpleNamespace
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -22,7 +23,7 @@ import ray
 from ray import tune
 from ray.rllib.core.rl_module import MultiRLModuleSpec
 from tap.tap import Tap
-from typing_extensions import TypeVar
+from typing_extensions import Self, TypeVar
 
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.comet import CometArchiveTracker
@@ -103,6 +104,12 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     _retrieved_callbacks = False
 
+    parse_known_only: ClassVar[bool] = True
+    """If True does not fail on unrecognized arguments, will print a warning instead"""
+
+    _fixed_argv: ClassVar[list[str] | None] = None
+    """When using remote (no sys.args available) and checkpoints fix the args to the time of creation"""
+
     @property
     def project_name(self) -> str:
         """Name for the output folder, wandb project, and comet workspace."""
@@ -134,10 +141,12 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         init_config: bool = True,
         init_param_space: bool = True,
         init_trainable: bool = True,
+        parse_args: bool = True,
     ):
         self.parser: Parser[ParserType_co]
         self.parser = self.create_parser()
-        self.args = self.parse_args(args)
+        if parse_args:
+            self.args = self.parse_args(args or self._fixed_argv, known_only=self.parse_known_only)
         if init_config:
             self.config: ConfigType_co = self.create_config()
         self._set_dynamic_parameters_to_tune()
@@ -168,24 +177,48 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         args.env_type = env_name
         return args
 
-    def args_to_dict(self, args: NamespaceType[ParserType_co]) -> dict[str, Any]:
+    def args_to_dict(self, args: Optional[NamespaceType[ParserType_co] | dict[str, Any]] = None) -> dict[str, Any]:
+        if args is None:
+            args = self.args
         if isinstance(args, Tap):
             return {k: getattr(args, k) for k in args.class_variables}
+        if isinstance(args, dict):
+            return args.copy()
         return vars(args).copy()
 
     def get_args(self) -> NamespaceType[ParserType_co]:
+        """Get the parsed arguments or parse them if not already done."""
         if not self.args:
-            self.args = self.parse_args()
+            self.args = self.parse_args(known_only=self.parse_known_only)
         return self.args
 
-    def parse_args(self, args: Sequence[str] | None = None) -> NamespaceType[ParserType_co]:
+    def parse_args(self, args: Sequence[str] | None = None, *, known_only: bool | None = None) -> NamespaceType[ParserType_co]:
         """
         Raises:
             ValueError: If parse_args is called twice without recreating the parser.
         """
+        if known_only is None:
+            known_only = self.parse_known_only
         if not self.parser:
             self.parser = self.create_parser()
-        parsed = self.parser.parse_args(args)
+        try:
+            # If Tap parser or compatible
+            self.parser = cast("ParserType_co", self.parser)
+            parsed = self.parser.parse_args(args, known_only=known_only)
+            extra_args = self.parser.extra_args
+        except TypeError as e:
+            if "'known_only' is an invalid invalid keyword" not in str(e):
+                raise
+            if known_only:
+                parsed, extra_args = self.parser.parse_known_args(args)
+            else:
+                parsed = self.parser.parse_args(args)
+                extra_args = None
+        if extra_args:
+            logger.warning(
+                "The following arguments were not recognized by the parser: %s.",
+                extra_args,
+            )
         self.args = self.postprocess_args(parsed)
         return self.args
 
@@ -285,7 +318,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             This function must set the `param_space` attribute
         """
         self._check_tune_arguments_resolved()
-        module_spec = self.get_module_spec(copy=False)
+        module_spec = self._get_module_spec(copy=False)
         if module_spec:
             module = module_spec.module_class.__name__ if module_spec.module_class is not None else "UNDEFINED"
         else:
@@ -447,10 +480,10 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             return self.config.build()  # type: ignore[return-type]
 
     @overload
-    def get_module_spec(self, *, copy: Literal[False]) -> RLModuleSpec | None: ...
+    def _get_module_spec(self, *, copy: Literal[False]) -> RLModuleSpec | None: ...
 
     @overload
-    def get_module_spec(
+    def _get_module_spec(
         self,
         *,
         copy: Literal[True],
@@ -459,7 +492,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         inference_only: Optional[bool] = None,
     ) -> RLModuleSpec: ...
 
-    def get_module_spec(
+    def _get_module_spec(
         self,
         *,
         copy: bool,
@@ -612,6 +645,35 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         return self._get_callbacks()
 
     # endregion
+
+    def save(self):
+        data = {
+            "args": SimpleNamespace(**self.args_to_dict()),
+            "config": self.config,
+            "param_space": self.param_space,
+            "class" : type(self),
+            #"trainable": self.trainable,
+        }
+        return data
+
+    def from_saved(self, data: dict[str, Any]) -> Self:
+        # TODO: Why not a classmethod again?
+        #new = cls(init_config=False, init_param_space=False, init_trainable=True, parse_args=False)
+        self.args = data["args"]
+        self.config = data["config"]
+        self.param_space = data["param_space"]
+        return self
+
+    @classmethod
+    @final
+    def typed(cls) -> type[Self]:
+        """
+        Dummy method that returns the class itself, but with type parameters bound.
+
+        This is useful for type checking and IDE support when using it with
+        DefaultTrainable.define(Setup.typed) or similar methods that require a class as an argument.
+        """
+        return cls
 
     # Currently cannot use TypeForm[type[TypedDict]] as it is not included in the typing spec.
     # @property

@@ -16,7 +16,7 @@ def _auto_int_transform(x) -> int | Literal["auto"]:
 
 
 class _DefaultSetupArgumentParser(Tap):
-    agent_type: str
+    agent_type: str = "mlp"
     """Agent Architecture"""
 
     env_type: str = "cart"
