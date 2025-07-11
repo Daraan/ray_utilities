@@ -131,5 +131,6 @@ def create_default_trainable(
     )
     if verify_return:
         from ray_utilities.typing import TrainableReturnData
+
         return verify_return_type(TrainableReturnData)(trainable)
     return wraps(default_trainable)(trainable)

@@ -108,8 +108,8 @@ class InitRay(unittest.TestCase):
             ray.shutdown()
         super().tearDownClass()
 
-class TestHelpers(unittest.TestCase):
 
+class TestHelpers(unittest.TestCase):
     def util_test_tree_equivalence(
         self,
         tree1: TrainState | Any,
@@ -197,6 +197,8 @@ class TestHelpers(unittest.TestCase):
                     )
 
         # NOTE: Apply gradients modifies state
+
+
 class SetupDefaults(TestHelpers, DisableLoggers):
     @clean_args
     def setUp(self):
@@ -226,7 +228,6 @@ class SetupDefaults(TestHelpers, DisableLoggers):
         self._RANDOM_KEY, self._ACTOR_KEY, self._CRITIC_KEY = jax.random.split(model_key, 3)
         self._ACTION_DIM: int = self._ACTION_SPACE.n  # type: ignore[attr-defined]
         self._OBS_DIM: int = self._OBSERVATION_SPACE.shape[0]  # pyright: ignore[reportOptionalSubscript]
-
 
 
 class DisableGUIBreakpoints(unittest.TestCase):

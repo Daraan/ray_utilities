@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, Optional, cast, overload
 
 from ray import tune
@@ -27,7 +28,6 @@ from ray_utilities.postprocessing import (
 )
 
 if TYPE_CHECKING:
-
     from ray_utilities.typing import RewardsDict, TrainableReturnData
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
 
@@ -98,7 +98,7 @@ def get_args_and_config(
     elif setup_class:
         args = hparams["cli_args"]
         # TODO: this should use the parameters from the search space
-        config = setup_class.config_from_args(args)
+        config = setup_class.config_from_args(SimpleNamespace(**args))
     else:
         raise ValueError("Either setup or setup_class must be provided.")
     # endregion
@@ -123,6 +123,7 @@ def setup_trainable(
     hparams: dict[str, Any],
     setup: Optional["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"] = None,
     setup_class: Optional[type["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"]] = None,
+    overwrite_config: Optional[ConfigType_co | dict[str, Any]] = None,
 ) -> tuple[dict[str, Any] | Any, "ConfigType_co", "AlgorithmType_co", "RewardUpdaters"]:
     """
     Sets up the trainable by getting the args and config from the given hparams, setup or setup_class.
@@ -147,10 +148,14 @@ def setup_trainable(
         setup=setup,
         setup_class=setup_class,
     )
+    if overwrite_config:
+        if isinstance(overwrite_config, AlgorithmConfig):
+            overwrite_config = overwrite_config.to_dict()
+        config = config.update_from_dict(overwrite_config)
     if not args["from_checkpoint"]:
         try:
-            # new API
-            algo = config.build_algo()
+            # new API; Note: copies config!
+            algo = config.build_algo(use_copy=True)  # copy=True is default; maybe use False
         except AttributeError:
             algo = config.build()
     # Load from checkpoint
@@ -175,10 +180,11 @@ def setup_trainable(
     }
     return (
         args,
-        config,
+        config,  # NOTE: a copy of algo.config
         algo,  # pyright: ignore[reportReturnType]
         reward_updaters,
     )
+
 
 def training_step(
     algo: Algorithm,
@@ -262,7 +268,3 @@ def get_total_steps(args: dict[str, Any], config: "AlgorithmConfig") -> int | No
             * args["iterations"]
         )
     )
-
-
-
-

@@ -31,4 +31,4 @@ jobs:
     - name: Test with pytest
       # Disable checkpoint tests until Ray's issues with checkpoint loading is solved
       run: |
-        pytest -k "not standalone and not checkpoint"
+        pytest -k "not standalone and not TestAlgorithm"

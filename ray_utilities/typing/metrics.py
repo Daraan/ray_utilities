@@ -142,9 +142,11 @@ FlatLogMetricsDict = TypedDict(
 
 # region TypeGuards
 
+
 def has_video_key(
     dir: dict | _LogMetricsEvalEnvRunnersResultsDict, video_key: Literal["episode_videos_best", "episode_videos_worst"]
 ) -> TypeGuard[_LogMetricsEvalEnvRunnersResultsDict]:
     return video_key in dir
+
 
 # endregion TypeGuards

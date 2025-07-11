@@ -22,7 +22,9 @@ class TrainableReturnData(_NotRequiredEnvRunners, total=False, closed=False):
     comment: str
     trial_id: int | str
 
+
 # Further
+
 
 class RewardsDict(TypedDict):
     """A dictionary containing the rewards for the current training step."""
@@ -34,7 +36,9 @@ class RewardsDict(TypedDict):
     disc_eval_mean: NotRequired[float]
     disc_running_eval_reward: NotRequired[float]
 
+
 _Updater = Callable[[float], float]
+
 
 class RewardUpdaters(TypedDict, extra_items=_Updater):
     """A dictionary containing the reward updaters for the current training step."""

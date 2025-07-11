@@ -10,12 +10,12 @@ from tqdm import tqdm
 from typing_extensions import NotRequired
 
 if TYPE_CHECKING:
-
     from ray_utilities import StrictAlgorithmReturnData
     from ray_utilities.typing import LogMetricsDict, RewardsDict
 
 
 logger = logging.getLogger(__name__)
+
 
 class TrainRewardMetrics(TypedDict, total=False):
     mean: float
@@ -41,6 +41,7 @@ def _unit_division(amount: int) -> tuple[int, str]:
         return amount // 1_000, "K"
     return amount, ""
 
+
 @overload
 def update_pbar(
     pbar: "tqdm_ray.tqdm | tqdm",
@@ -52,16 +53,18 @@ def update_pbar(
     total_steps: Optional[int] = None,
 ) -> None: ...
 
+
 @overload
 def update_pbar(
     pbar: "tqdm_ray.tqdm | tqdm",
     *,
     rewards: RewardsDict,
     metrics: LogMetricsDict,
-    result: StrictAlgorithmReturnData ,
+    result: StrictAlgorithmReturnData,
     current_step: Optional[int] = None,
     total_steps: Optional[int] = None,
 ) -> None: ...
+
 
 @overload
 def update_pbar(
@@ -71,6 +74,7 @@ def update_pbar(
     current_step: Optional[int] = None,
     total_steps: Optional[int] = None,
 ) -> None: ...
+
 
 def update_pbar(
     pbar: "tqdm_ray.tqdm | tqdm",
@@ -93,10 +97,7 @@ def update_pbar(
         }
     if rewards:
         if eval_results is not None:
-            logger.warning(
-                "Both eval_results and rewards are provided. "
-                "Using eval_results for evaluation metrics."
-            )
+            logger.warning("Both eval_results and rewards are provided. Using eval_results for evaluation metrics.")
         else:
             eval_results = {
                 "mean": rewards["eval_mean"],
@@ -168,6 +169,7 @@ def save_pbar_state(pbar: "tqdm", iteration: Optional[int] = None) -> TqdmState:
 @overload
 def save_pbar_state(pbar: "tqdm_ray.tqdm", iteration: Optional[int] = None) -> RayTqdmState: ...
 
+
 def save_pbar_state(
     pbar: "tqdm_ray.tqdm | tqdm | range", iteration: Optional[int] = None
 ) -> tuple[int, int | None] | RayTqdmState | tuple[int, int, int]:
@@ -181,15 +183,18 @@ def save_pbar_state(
         logger.error(
             "Progress bar n (%d) does not match the provided iteration (%d). "
             "Saving the progress bar state with the current n value.",
-            pbar.n, iteration
+            pbar.n,
+            iteration,
         )
     return (pbar.n, pbar.total)
 
+
 def restore_pbar(state: TqdmState | RayTqdmState | RangeState) -> "tqdm_ray.tqdm | tqdm | range":
     """Restores the progress bar from a saved state, returns a new object"""
-    if isinstance(state, dict): # ray tqdm state
-        pbar = tqdm_ray.tqdm(range(state["x"], state["total"]))
+    if isinstance(state, dict):  # ray tqdm state
+        pbar = tqdm_ray.tqdm(range(state["x"], state["total"]), total=state["total"])
         pbar._unit = state["unit"]
+        pbar._x = state["x"]
         return pbar
     if len(state) > 2:  # range state
         return range(*state)

@@ -192,7 +192,9 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             self.args = self.parse_args(known_only=self.parse_known_only)
         return self.args
 
-    def parse_args(self, args: Sequence[str] | None = None, *, known_only: bool | None = None) -> NamespaceType[ParserType_co]:
+    def parse_args(
+        self, args: Sequence[str] | None = None, *, known_only: bool | None = None
+    ) -> NamespaceType[ParserType_co]:
         """
         Raises:
             ValueError: If parse_args is called twice without recreating the parser.
@@ -651,14 +653,14 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             "args": SimpleNamespace(**self.args_to_dict()),
             "config": self.config,
             "param_space": self.param_space,
-            "class" : type(self),
-            #"trainable": self.trainable,
+            "setup_class": type(self),
+            # "trainable": self.trainable,
         }
         return data
 
     def from_saved(self, data: dict[str, Any]) -> Self:
         # TODO: Why not a classmethod again?
-        #new = cls(init_config=False, init_param_space=False, init_trainable=True, parse_args=False)
+        # new = cls(init_config=False, init_param_space=False, init_trainable=True, parse_args=False)
         self.args = data["args"]
         self.config = data["config"]
         self.param_space = data["param_space"]
