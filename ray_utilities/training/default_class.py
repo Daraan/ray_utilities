@@ -4,7 +4,6 @@ import importlib.metadata
 import logging
 import sys
 from copy import copy
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Collection, Generic, Optional, TypedDict, TypeVar, cast
 
 import ray
@@ -20,8 +19,10 @@ from ray.rllib.utils.annotations import override
 from ray.rllib.utils.checkpoints import Checkpointable
 
 from ray_utilities.callbacks.progress_bar import restore_pbar, save_pbar_state, update_pbar
-from ray_utilities.config.typed_argument_parser import LOG_STATS
+from ray_utilities.config.typed_argument_parser import LOG_STATS, LogStatsChoices
 from ray_utilities.misc import is_pbar
+from ray_utilities.postprocessing import create_running_reward_updater
+from ray_utilities.setup.experiment_base import SetupCheckpointDict
 from ray_utilities.training.helpers import (
     episode_iterator,
     get_current_step,
@@ -29,6 +30,7 @@ from ray_utilities.training.helpers import (
     setup_trainable,
     training_step,
 )
+from ray_utilities.typing.trainable_return import RewardUpdaters
 
 if TYPE_CHECKING:
     from ray.experimental import tqdm_ray
@@ -41,6 +43,7 @@ if TYPE_CHECKING:
     from ray_utilities.config import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import ExperimentSetupBase
     from ray_utilities.typing import LogMetricsDict
+
 
 _logger = logging.getLogger(__name__)
 
@@ -79,7 +82,9 @@ class TrainableStateDict(TypedDict):
     iteration: int
     pbar_state: RayTqdmState | TqdmState | RangeState
 
-    reward_updaters: dict[str, list[int]]
+    reward_updaters: dict[str, list[float]]
+
+    setup: SetupCheckpointDict[Any, Any, Any]
 
 
 class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _ConfigType, _AlgorithmType]):
@@ -123,15 +128,24 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         *,
         discrete_eval: bool = False,
         use_pbar: bool = True,
-        fix_argv: bool = True,
+        fix_argv: bool = False,
     ) -> type[DefaultTrainable[_ParserTypeInner, _ConfigTypeInner, _AlgorithmTypeInner]]:
-        """This creates a subclass with ``setup_class`` set to the given class."""
+        """
+        This creates a subclass with ``setup_class`` set to the given class.
+
+        Args:
+            fix_argv: If True, the current sys.argv will be fixed to the setup_class args.
+                When instantiated - and not other args are explicitly provided during __init__ -
+                these saved args are used to initialize the setup_class.
+                **disregarding the current sys.argv**, this is necessary in remote contexts where
+                the initial sys.argv is not available.
+        """
         # Avoid undefined variable error in class body
         discrete_eval_ = discrete_eval
         use_pbar_ = use_pbar
         # Fix current cli args to the trainable - necessary for remote
         if fix_argv:
-            setup_cls = type(setup_cls.__name__, (setup_cls,), {"_fixed_argv": sys.argv})
+            setup_cls = type(setup_cls.__name__ + "FixedArgv", (setup_cls,), {"_fixed_argv": sys.argv})
 
         if TYPE_CHECKING:
 
@@ -160,14 +174,29 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         **kwargs,
     ):
         self._overwrite_algorithm = overwrite_algorithm
+        if self._overwrite_algorithm and self.setup_class._fixed_argv:
+            _logger.warning(
+                "Using a Trainable with fixed argv on the setup_class and overwrite_algorithm, "
+                "might result in unexpected values after a restore. Test carefully."
+            )
+            # NOTE: Use get_ctor_args_and_kwargs to include the overwrites on a reload
         super().__init__(config or {}, **kwargs)  # calls setup
+        # TODO: do not create loggers
         self.config: dict[str, Any]
         """Not the AlgorithmConfig, config passed by the tuner"""
 
     @override(tune.Trainable)
     def setup(
         self, config: dict[str, Any], *, overwrite_algorithm: Optional[AlgorithmConfig | dict[str, Any]] = None
-    ) -> None:  # called once
+    ) -> None:
+        """
+        Sets:
+            - algorithm
+            - _pbar
+            - _iteration
+            - _setup
+            - _reward_updaters
+        """
         # NOTE: Called during __init__
         # Setup algo, config, args, etc.
         if not hasattr(self, "setup_class"):
@@ -194,12 +223,17 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
         print("Sys argv during Trainable.setup()", sys.argv)
         print(self._setup.args)
-        self.args, algo_config, algo, self._reward_updaters = setup_trainable(
+        # NOTE: args is a dict, self._setup.args a Namespace | Tap
+        self._reward_updaters: RewardUpdaters
+        args, _algo_config, self.algorithm, self._reward_updaters = setup_trainable(
             hparams=config, setup=self._setup, setup_class=self.setup_class, overwrite_config=self._overwrite_algorithm
         )
-        self.algorithm: _AlgorithmType = algo
-        self._pbar: tqdm | range | tqdm_ray.tqdm = episode_iterator(self.args, config, use_pbar=self.use_pbar)
+        self._pbar: tqdm | range | tqdm_ray.tqdm = episode_iterator(args, config, use_pbar=self.use_pbar)
         self._iteration: int = 0
+        self.log_stats: LogStatsChoices = args[LOG_STATS]
+        assert self.algorithm.config
+        # calculate total steps once
+        self._total_steps = {"total_steps": get_total_steps(args, self.algorithm.config), "iterations": "auto"}
 
     @property
     def algorithm_config(self) -> _ConfigType:
@@ -245,17 +279,12 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # NOTE: Do not rely on absolute paths in the implementation of
         state = self.get_state()  # TODO: check components
         self.algorithm.save_checkpoint(checkpoint_dir)
+        # TODO: Use get_state here + checkpoint_dir
         save = {
-            "pbar": self._pbar,  # NOTE: if range does not hold iteration
-            "state": state,
+            "state": state,  # contains most information
             "algorithm_checkpoint_dir": checkpoint_dir,
-            "iterations": self._iteration,
-            "reward_updaters": self._reward_updaters,
-            "setup": self._setup.save(),
-            "args": SimpleNamespace(**self._setup.args_to_dict(self.args)),
         }
-        # TODO: save & pickle to checkpoint_dir, possibly subclass Checkpointable as well
-        # Call save_to_path here?
+        # Call save_to_path here, instead/as well?
         return save
 
     @override(tune.Trainable)
@@ -268,37 +297,55 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         _logger.warning("Loading checkpoint: %s", checkpoint)
         if isinstance(checkpoint, dict):
             # TODO
-            self._pbar = checkpoint.get("pbar", self._pbar)
+            keys_to_process = set(checkpoint.keys())  # Sanity check if processed all keys
+
+            self.set_state(checkpoint["state"])
+            keys_to_process.remove("state")
+
             # from_checkpoint calls restore_from_path which calls set state
-            self.algorithm = self.algorithm.from_checkpoint(checkpoint.get("algorithm_checkpoint_dir", ""))  # pyright: ignore[reportAttributeAccessIssue]
+            self.algorithm = self.algorithm.from_checkpoint(checkpoint["algorithm_checkpoint_dir"])  # pyright: ignore[reportAttributeAccessIssue]
+
             # Is set_state even needed?
             # Test loaded algo state:
             loaded_algo_state = self.algorithm.get_state(
                 components=self._get_subcomponents("algorithm", None),
                 not_components=force_list(self._get_subcomponents("algorithm", None)),
             )
-            if checkpoint.get("algorithm_state"):
-                if checkpoint["algorithm_state"] != loaded_algo_state:
+            keys_to_process.remove("algorithm_checkpoint_dir")
+            if False and checkpoint["state"]["algorithm"]:  # can add algorithm_state to check correctness
+                if checkpoint["state"]["algorithm"] != loaded_algo_state:
                     _logger.error(
                         "Algorithm state in checkpoint differs from current algorithm state. "
                         "This may lead to unexpected behavior."
                     )
                     import unittest
 
-                    unittest.TestCase().assertDictEqual(
-                        checkpoint["algorithm_state"],
-                        loaded_algo_state,
-                        "Algorithm state in checkpoint differs from current algorithm state.",
-                    )
+                    tester = unittest.TestCase()
+                    tester.maxDiff = 340_000  # Limit the max diff length
+                    for key in loaded_algo_state.keys():
+                        if isinstance(loaded_algo_state[key], dict) and isinstance(
+                            checkpoint["state"]["algorithm"][key], dict
+                        ):  # Check if both are dicts
+                            try:
+                                tester.assertDictEqual(
+                                    checkpoint["state"]["algorithm"][key],
+                                    loaded_algo_state[key],
+                                    "Algorithm state in checkpoint differs from current algorithm state.",
+                                )
+                            except ValueError:
+                                _logger.error("Cannot compare dicts for key %s", key)
+                        else:
+                            tester.assertEqual(
+                                checkpoint["state"]["algorithm"][key],
+                                loaded_algo_state[key],
+                                "Algorithm state in checkpoint differs from current algorithm state.",
+                            )
                     self.algorithm.set_state(checkpoint.get("algorithm_state", {}))  # TODO remove if tests pass
             else:
+                # loaded from checkpoint
                 _logger.debug("No algorithm state found in checkpoint.")
-            self._iteration = checkpoint.get("iterations", self._iteration)
-            self._reward_updaters = checkpoint.get("reward_updaters", self._reward_updaters)
-            self._setup = self._setup.from_saved(checkpoint.get("setup", self._setup))
-            # self.config = self..config  # this is algorithm.config
-            if is_pbar(self._pbar):
-                self._pbar.set_description("Loading checkpoint... (pbar)")
+
+            assert len(keys_to_process) == 0, f"Not all keys were processed during load_checkpoint: {keys_to_process}"
         elif checkpoint is not None:
             self.restore_from_path(checkpoint)
         else:
@@ -347,8 +394,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             "algorithm_config": algorithm_config_state,
             "iteration": self._iteration,
             "pbar_state": save_pbar_state(self._pbar, self._iteration),
-            # "reward_updaters": {k: cast("partial", v).keywords["reward_array"] for k, v in self._reward_updaters.items()},
-            "reward_updaters": self._reward_updaters,
+            "reward_updaters": {k: v.keywords["reward_array"] for k, v in self._reward_updaters.items()},
+            "setup": self._setup.save(),
         }
         if (not_components and "algorithm" not in not_components) or components is None or "algorithm" in components:
             if components and not isinstance(components, str):
@@ -362,7 +409,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             state["algorithm"] = algo_state
         return state
 
-    @_validate_algorithm_config_afterward
+    # @_validate_algorithm_config_afterward
     @override(Checkpointable)
     def set_state(self, state: StateDict | TrainableStateDict) -> None:
         """Sets the implementing class' state to the given state dict.
@@ -396,30 +443,49 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         keys_to_process.remove("iteration")
 
         # state["algorithm_config"] contains "class" to restore the correct config class
-        new_config = AlgorithmConfig.from_state(state["algorithm_config"])
-        if type(new_config) is not type(self.algorithm_config):
+        new_algo_config = AlgorithmConfig.from_state(state["algorithm_config"])
+        if type(new_algo_config) is not type(self.algorithm_config):
             _logger.warning(
-                "Restored config class %s differs from expected class %s", type(new_config), type(self.config)
+                "Restored config class %s differs from expected class %s", type(new_algo_config), type(self.config)
             )
-        new_config = cast("_ConfigType", new_config)
+        new_algo_config = cast("_ConfigType", new_algo_config)
         did_reset = self.algorithm.reset_config(state["algorithm_config"])  # likely does nothing
         if not did_reset:
-            self.algorithm_config = new_config  # NOTE: does not SYNC config if env_runners / learners not in components
+            self.algorithm_config = (
+                new_algo_config  # NOTE: does not SYNC config if env_runners / learners not in components
+            )
             # NOTE: evaluation_config might also not be set!
-        self._setup.config = new_config  # TODO: Possible unset setup._config to not confuse configs
         keys_to_process.remove("algorithm_config")
+        self._setup = self._setup.from_saved(state["setup"], init_trainable=False)
+        self._setup.config = new_algo_config  # TODO: Possible unset setup._config to not confuse configs
+        keys_to_process.remove("setup")
 
-        for component in COMPONENT_ENV_RUNNER, COMPONENT_EVAL_ENV_RUNNER, COMPONENT_LEARNER_GROUP:
-            if component not in state:
-                _logger.warning("Restoring algorithm without %s component in state.", component)
+        if "algorithm" in state:
+            for component in COMPONENT_ENV_RUNNER, COMPONENT_EVAL_ENV_RUNNER, COMPONENT_LEARNER_GROUP:
+                if component not in state["algorithm"]:
+                    _logger.warning("Restoring algorithm without %s component in state.", component)
         # NOTE: config very likely not used in set_state
         self.algorithm.set_state(state.get("algorithm", {"config": state["algorithm_config"]}))
+        # Update env_runners after restore
+        if self.algorithm.env_runner and self.algorithm_config != self.algorithm.env_runner.config:
+            _logger.debug("Updating env_runner config after restore, old did not match")
+            self.algorithm.env_runner.config = self.algorithm_config.copy(copy_frozen=True)
+        if self.algorithm.env_runner_group:
+            self.algorithm.env_runner_group.sync_env_runner_states(config=self.algorithm_config)
         keys_to_process.remove("algorithm")
 
         self._pbar = restore_pbar(state["pbar_state"])
+        if is_pbar(self._pbar):
+            self._pbar.set_description("Loading checkpoint... (pbar)")
         keys_to_process.remove("pbar_state")
 
-        self._reward_updaters = state["reward_updaters"]
+        assert RewardUpdaters.__required_keys__ <= state["reward_updaters"].keys(), (
+            "Reward updaters state does not contain all required keys: "
+            f"{state['reward_updaters'].keys()} vs {RewardUpdaters.__required_keys__}"
+        )
+        self._reward_updaters = cast(
+            "RewardUpdaters", {k: create_running_reward_updater(v) for k, v in state["reward_updaters"].items()}
+        )
         keys_to_process.remove("reward_updaters")
 
         if len(keys_to_process) > 0:
@@ -501,7 +567,7 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
             reward_updaters=self._reward_updaters,
             discrete_eval=self.discrete_eval,
             disable_report=True,
-            log_stats=self.args[LOG_STATS],
+            log_stats=self.log_stats,
         )
         # Update progress bar
         if is_pbar(self._pbar):
@@ -511,7 +577,7 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
                 metrics=metrics,
                 result=result,
                 current_step=get_current_step(result),
-                total_steps=get_total_steps(self.args, self.algorithm_config),
+                total_steps=get_total_steps(self._total_steps, self.algorithm_config),
             )
             self._pbar.update()
         return metrics

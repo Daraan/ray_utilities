@@ -28,12 +28,17 @@ from ray_utilities.postprocessing import (
 )
 
 if TYPE_CHECKING:
-    from ray_utilities.typing import RewardsDict, TrainableReturnData
-    from ray.rllib.algorithms import Algorithm, AlgorithmConfig
+    from ray.rllib.algorithms import Algorithm
 
     from ray_utilities.config.typed_argument_parser import DefaultArgumentParser, LogStatsChoices
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
-    from ray_utilities.typing import LogMetricsDict, RewardUpdaters, StrictAlgorithmReturnData
+    from ray_utilities.typing import (
+        LogMetricsDict,
+        RewardsDict,
+        RewardUpdaters,
+        StrictAlgorithmReturnData,
+        TrainableReturnData,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +77,7 @@ def get_args_and_config(
     hparams: dict,
     setup: Optional["ExperimentSetupBase[Any, ConfigType_co, Any]"] = None,
     setup_class: Optional[type["ExperimentSetupBase[Any, ConfigType_co, Any]"]] = None,
-) -> tuple[dict[str, Any] | Any, ConfigType_co]:
+) -> tuple[dict[str, Any], ConfigType_co]:
     """
     Constructs the args and config from the given hparams, setup or setup_class.
     Either `setup` or `setup_class` must be provided, if both are provided, `setup` will be used.
@@ -91,6 +96,7 @@ def get_args_and_config(
         If `setup` is provided, the args will be a copy of `setup.args` created with `vars`.
     """
     # region setup config
+    args: dict[str, Any]
     if setup:
         # TODO: Use hparams
         args = setup.args_to_dict()
@@ -124,7 +130,7 @@ def setup_trainable(
     setup: Optional["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"] = None,
     setup_class: Optional[type["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"]] = None,
     overwrite_config: Optional[ConfigType_co | dict[str, Any]] = None,
-) -> tuple[dict[str, Any] | Any, "ConfigType_co", "AlgorithmType_co", "RewardUpdaters"]:
+) -> tuple[dict[str, Any], "ConfigType_co", "AlgorithmType_co", "RewardUpdaters"]:
     """
     Sets up the trainable by getting the args and config from the given hparams, setup or setup_class.
     Either `setup` or `setup_class` must be provided, if both are provided, `setup` will be used.
@@ -140,7 +146,9 @@ def setup_trainable(
         A tuple containing the parsed args (as a dict), an AlgorithmConfig, and an Algorithm.
 
         Note:
-            The type of the Algorithm is determined by the `algo_class` attribute of the config.
+            - The returned config of algorithm.config, to prevent unexpected behavior this config
+              object is frozen.
+            - The type of the Algorithm is determined by the `algo_class` attribute of the config.
             This is not entirely type-safe.
     """
     args, config = get_args_and_config(
@@ -178,6 +186,7 @@ def setup_trainable(
         "eval_reward": create_running_reward_updater(),
         "disc_eval_reward": create_running_reward_updater(),
     }
+    config.freeze()
     return (
         args,
         config,  # NOTE: a copy of algo.config

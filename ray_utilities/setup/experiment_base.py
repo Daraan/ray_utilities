@@ -23,7 +23,7 @@ import ray
 from ray import tune
 from ray.rllib.core.rl_module import MultiRLModuleSpec
 from tap.tap import Tap
-from typing_extensions import Self, TypeVar
+from typing_extensions import Self, TypedDict, TypeVar
 
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.comet import CometArchiveTracker
@@ -68,6 +68,21 @@ ConfigType_co = TypeVar("ConfigType_co", bound="AlgorithmConfig", covariant=True
 
 AlgorithmType_co = TypeVar("AlgorithmType_co", bound="Algorithm", covariant=True, default="PPO")
 """TypeVar for the Algorithm type of a Setup, e.g. PPO, DQN, etc; defaults to PPO."""
+
+
+class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, AlgorithmType_co]):
+    """
+    TypedDict for the setup checkpoint.
+    Contains the args, config, param_space, and setup_class.
+    """
+
+    args: ParserType_co
+    """Duck-typed SimpleNamespace"""
+    param_space: dict[str, Any]
+    setup_class: type[ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]]
+    config: ConfigType_co | Literal[False]
+    __init_config__: bool
+    """If True, the config is initialized from the args, `config` is ignored and should be unset"""
 
 
 class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmType_co]):
@@ -145,16 +160,34 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
     ):
         self.parser: Parser[ParserType_co]
         self.parser = self.create_parser()
+        self.setup(
+            args,
+            init_config=init_config,
+            init_param_space=init_param_space,
+            init_trainable=init_trainable,
+            parse_args=parse_args,
+        )
+
+    def setup(
+        self,
+        args: Optional[Sequence[str]] = None,
+        *,
+        init_config: bool = True,
+        init_param_space: bool = True,
+        init_trainable: bool = True,
+        parse_args: bool = True,
+    ):
         if parse_args:
             self.args = self.parse_args(args or self._fixed_argv, known_only=self.parse_known_only)
         if init_config:
             self.config: ConfigType_co = self.create_config()
-        self._set_dynamic_parameters_to_tune()
+        if hasattr(self, "args"):
+            self._set_dynamic_parameters_to_tune()
         if init_param_space:
             self.param_space = self.create_param_space()
         if init_trainable:
             self.trainable = self.create_trainable()
-        if self.args.comet:
+        if hasattr(self, "args") and self.args.comet:
             self.comet_tracker = CometArchiveTracker()
         else:
             self.comet_tracker = None
@@ -648,23 +681,57 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     # endregion
 
-    def save(self):
-        data = {
-            "args": SimpleNamespace(**self.args_to_dict()),
+    def save(self) -> SetupCheckpointDict[ParserType_co, ConfigType_co, AlgorithmType_co]:
+        """
+        Saves the current setup state to a dictionary.
+        Class can be restored from_saved
+        """
+        data: SetupCheckpointDict[ParserType_co, ConfigType_co, AlgorithmType_co] = {
+            "args": cast("ParserType_co", SimpleNamespace(**self.args_to_dict())),
             "config": self.config,
+            "__init_config__": False,
+            # Allows to recreate the config based on args
             "param_space": self.param_space,
             "setup_class": type(self),
-            # "trainable": self.trainable,
         }
         return data
 
-    def from_saved(self, data: dict[str, Any]) -> Self:
+    @classmethod
+    def from_saved(
+        cls,
+        data: SetupCheckpointDict[ParserType_co, ConfigType_co, AlgorithmType_co],
+        *,
+        load_class: bool = True,
+        init_trainable: bool = True,
+    ) -> Self:
         # TODO: Why not a classmethod again?
-        # new = cls(init_config=False, init_param_space=False, init_trainable=True, parse_args=False)
-        self.args = data["args"]
-        self.config = data["config"]
-        self.param_space = data["param_space"]
-        return self
+        setup_class = data.get("setup_class", cls) if load_class else cls
+        if setup_class is not cls:
+            logger.warning(
+                "This class %s is not the same as the one used to save the data %s. "
+                "This may lead to unexpected behavior. "
+                "Use `load_class=False` or call this method on another class to avoid this warning.",
+                cls,
+                setup_class,
+                stacklevel=2,
+            )
+        setup_class = cast("type[Self]", setup_class)
+        new = setup_class(init_config=False, init_param_space=False, init_trainable=False, parse_args=False)
+        config: ConfigType_co | Literal[False] = data.get("config", False)
+        new.param_space = data["param_space"]
+        if data["__init_config__"] and config:
+            logger.error("Passing __init_config__=True while also passing config ignores the passed config object")
+        if config:
+            new.config = config
+        new.args = data["args"]
+        new.setup(
+            None,
+            parse_args=False,
+            init_param_space=False,
+            init_trainable=init_trainable,
+            init_config=data["__init_config__"] or not bool(config),
+        )
+        return new
 
     @classmethod
     @final

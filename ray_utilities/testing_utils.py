@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+
+# pyright: reportOptionalMemberAccess=information
 from contextlib import nullcontext
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Collection
+from typing import TYPE_CHECKING, Any, Collection, Iterable, TypeVar, final
 from unittest import mock
 
 import gymnasium as gym
@@ -20,17 +22,54 @@ from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     import chex
     from jaxlib.xla_extension import pytree  # pyright: ignore[reportMissingModuleSource] pyi file
 
     LeafType = pytree.SequenceKey | pytree.DictKey | pytree.GetAttrKey
     from flax.training.train_state import TrainState
+    from ray.rllib.algorithms import Algorithm
 
 args_train_no_tuner = mock.patch.object(
     sys, "argv", ["file.py", "--a", "NA", "--no-render_env", "-J", "1", "-it", "2", "-np"]
 )
 clean_args = mock.patch.object(sys, "argv", ["file.py", "-a", "NA"])
 """Use when comparing to CLIArgs"""
+
+_C = TypeVar("_C", bound="Callable[[Any, mock.MagicMock], Any]")
+
+
+@final
+class TestCases:
+    def __init__(self, cases: Iterable[Any] | Callable[[], Any] | BaseException, *args, **kwargs):  # noqa: ARG002
+        self._cases = cases
+        self._args = args
+        self._kwargs = kwargs
+
+    def __call__(self, func: _C) -> _C:
+        """Allows to use TestCases as a decorator."""
+        return self.cases(self._cases, *self._args, **self._kwargs)(func)  # pyright: ignore[reportReturnType]
+
+    @classmethod
+    def next(cls) -> Any:
+        raise NotImplementedError("Mock this function with the test cases to return")
+
+    @classmethod
+    def cases(cls, cases: Iterable[Any] | Callable[[], Any] | BaseException, *args, **kwargs):
+        return mock.patch.object(cls, "next", *args, side_effect=cases, **kwargs)
+
+
+def iter_cases(cases: type[TestCases] | mock.MagicMock):
+    try:
+        while True:
+            if isinstance(cases, mock.MagicMock):
+                yield cases()
+            else:
+                yield cases.next()
+    except StopIteration:
+        return
+    except BaseException:
+        raise
 
 
 def patch_args(*args):
@@ -197,6 +236,61 @@ class TestHelpers(unittest.TestCase):
                     )
 
         # NOTE: Apply gradients modifies state
+
+    @staticmethod
+    def _filter_incompatible_remote_config(config: dict[str, Any]) -> dict[str, Any]:
+        if "tf_session_args" in config:
+            config["tf_session_args"]["inter_op_parallelism_threads"] = "removed_key_for_test"
+            config["tf_session_args"]["intra_op_parallelism_threads"] = "removed_key_for_test"
+            for key in (k for k, v in config.items() if "callbacks" in k and callable(v)):
+                config[key] = (
+                    config[key].__name__
+                    if hasattr(config[key], "__name__")
+                    else type(config[key]).__name__
+                    if not isinstance(config[key], type)
+                    else config[key].__name__
+                )
+        return config
+
+    def compare_weights(self, algo: Algorithm, algo_restored: Algorithm): ...
+
+    def compare_env_runner_configs(self, algo: Algorithm, algo_restored: Algorithm):
+        self.maxDiff = max(self.maxDiff or 13000, 13000)
+
+        def assertCleanDictEqual(a, b, *args, **kwargs):  # noqa: N802
+            self.assertDictEqual(
+                self._filter_incompatible_remote_config(a), self._filter_incompatible_remote_config(b), *args, **kwargs
+            )
+
+        algo_config_dict = algo.config.to_dict()
+        algo_restored_config_dict = algo_restored.config.to_dict()
+        assertCleanDictEqual(algo_restored_config_dict, algo_config_dict)
+        if algo.config.num_env_runners == 0:  # pyright: ignore[reportOptionalMemberAccess]
+            self.assertEqual(algo_restored.config.num_env_runners, 0)  # pyright: ignore[reportOptionalMemberAccess]
+            assertCleanDictEqual(
+                (algo.env_runner.config.to_dict()),
+                algo_config_dict,  # pyright: ignore[reportOptionalMemberAccess]
+            )
+            restored_env_runner_config_dict = algo_restored.env_runner.config.to_dict()
+            assertCleanDictEqual(restored_env_runner_config_dict, algo_restored_config_dict)
+            assertCleanDictEqual(algo_config_dict, restored_env_runner_config_dict)
+
+        remote_configs = algo.env_runner_group.foreach_env_runner(lambda r: r.config.to_dict())
+        # Possible ignore local env_runner here when using remotes
+        for i, config in enumerate(remote_configs):
+            assertCleanDictEqual(
+                config, algo_config_dict, f"Remote config {i}/{len(remote_configs)} does not match algo config"
+            )
+        remote_configs_restored = algo_restored.env_runner_group.foreach_env_runner(lambda r: r.config.to_dict())
+        for i, config in enumerate(remote_configs_restored):
+            assertCleanDictEqual(
+                config,
+                algo_restored_config_dict,
+                f"Remote config {i}/{len(remote_configs_restored)} does not match restored config",
+            )
+            assertCleanDictEqual(
+                config, algo_config_dict, f"Remote config {i}/{len(remote_configs_restored)} does not match algo config"
+            )
 
 
 class SetupDefaults(TestHelpers, DisableLoggers):

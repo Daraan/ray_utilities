@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+# pyright: reportOptionalMemberAccess=none
 import argparse
 import os
 import tempfile
 import time
 import unittest
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-import ray
 import tree
 import typing_extensions as te
 from ray import tune
@@ -187,7 +187,7 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
         # result["env_runners"]["time_between_sampling"]
         return result
 
-    def _test_checkpoint_values(self, result1, result2):
+    def _test_checkpoint_values(self, result1: dict[str, Any], result2: dict[str, Any]):
         env_runner1 = result1
         env_runner2 = result2
         # This step - trivial tests
@@ -232,6 +232,11 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
         algo_1_runner = config.env_runners(
             num_env_runners=1,
         ).build_algo()
+        # Metatest if local and remote env runner configs are correct
+        with self.subTest("Trivial compare of config vs. env runner configs"):
+            self.compare_env_runner_configs(algo_0_runner, algo_0_runner)
+            self.compare_env_runner_configs(algo_1_runner, algo_1_runner)
+
         self._test_algo_checkpointing(
             algo_0_runner,
             algo_1_runner,

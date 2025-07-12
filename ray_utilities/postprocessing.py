@@ -14,6 +14,7 @@ from typing import (
     ParamSpec,
     TypedDict,
     TypeGuard,
+    cast,
     overload,
 )
 
@@ -56,7 +57,7 @@ from ray_utilities.constants import (
 )
 from ray_utilities.misc import deep_update
 from ray_utilities.temp_dir import TEMP_DIR_PATH
-from ray_utilities.typing.trainable_return import TrainableReturnData
+from ray_utilities.typing.trainable_return import RewardUpdater, TrainableReturnData
 from ray_utilities.video.numpy_to_video import create_temp_video
 
 if TYPE_CHECKING:
@@ -550,13 +551,16 @@ def update_running_reward(new_reward: float, reward_array: list[float]) -> float
     return running_reward
 
 
-def create_running_reward_updater() -> Callable[[float], float]:
+def create_running_reward_updater(initial_array: Optional[list[float]] = None) -> RewardUpdater:
     """
     Creates a partial function that updates the running reward.
 
-    The partial function is stateful in their reward_array, which is initialized as an empty list.
+    The partial function is stateful in their reward_array, which is initialized as an empty list if
+    `initial_array` is not provided.
     """
-    return partial(update_running_reward, reward_array=[])
+    return cast(
+        "RewardUpdater", partial(update_running_reward, reward_array=initial_array if initial_array is not None else [])
+    )
 
 
 def verify_keys(metrics: Mapping[Any, Any], typ: type[_TD], *, test_optional: bool = True) -> TypeGuard[_TD]:

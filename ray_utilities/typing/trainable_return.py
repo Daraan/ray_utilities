@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Final, Protocol
 
 from typing_extensions import NotRequired, Required, TypedDict
 
@@ -37,15 +37,20 @@ class RewardsDict(TypedDict):
     disc_running_eval_reward: NotRequired[float]
 
 
-_Updater = Callable[[float], float]
+class RewardUpdater(Protocol):
+    """A protocol for a partial function that updates rewards."""
+
+    def __call__(self, new_reward: float) -> float: ...
+
+    keywords: Final[TypedDict[{"reward_array": list[float]}]]
 
 
-class RewardUpdaters(TypedDict, extra_items=_Updater):
+class RewardUpdaters(TypedDict, extra_items=RewardUpdater):
     """A dictionary containing the reward updaters for the current training step."""
 
     # The keys are the names of the reward updaters, and the values are the functions that update the rewards.
     # The functions take a float as input and return a float.
 
-    running_reward: _Updater
-    eval_reward: _Updater
-    disc_eval_reward: NotRequired[_Updater]
+    running_reward: RewardUpdater
+    eval_reward: RewardUpdater
+    disc_eval_reward: NotRequired[RewardUpdater]

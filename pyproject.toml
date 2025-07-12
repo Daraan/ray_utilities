@@ -92,14 +92,12 @@ exclude = [
     ".venv",
     "build",
     "dist",
-    "sc[2_]*",  # ignore StarCraft files
 ]
 
 [tool.ruff.format]
   docstring-code-format = true
   exclude = [
     ".git",
-    "sc[2_]*",  # ignore StarCraft files
 ]
 
 [tool.ruff.lint.isort]
