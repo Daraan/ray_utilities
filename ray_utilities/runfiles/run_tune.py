@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional, TypeVar
+from typing import TYPE_CHECKING, Optional, TypeVar, overload
 
 from ray.tune.result_grid import ResultGrid
 
@@ -50,7 +50,7 @@ def run_tune(
         logger.debug("Setting seed to %s", args.seed)
         _next_seed = seed_everything(env=None, seed=args.seed, torch_manual=True, torch_deterministic=True)
         setup.config.seed = args.seed
-    trainable = setup.trainable
+    trainable = setup.trainable or setup.create_trainable()
 
     # -- Test --
     if args.test and args.not_parallel:
@@ -66,6 +66,23 @@ def run_tune(
         }
         setup.param_space.update(params)
         # Possibly set RAY_DEBUG=legacy
+        if isinstance(trainable, type):
+            # If trainable is a class, instantiate it with the sampled parameters
+            trainable = trainable(**params)
+            logger.warning("[TESTING] Using a Trainable class, without a Tuner, performing only one step")
+            tuner = setup.create_tuner()
+            assert tuner._local_tuner
+            stopper = tuner._local_tuner.get_run_config().stop
+            while True:
+                result = trainable.step()
+                if callable(stopper):
+                    # If stop is a callable, call it with the result
+                    if stopper("NA", result):  # pyright: ignore[reportArgumentType]
+                        break
+                # If stop is not a callable, check if it is reached
+                elif result.get("done", False):
+                    break
+            return result
         if test_mode_func:
             return test_mode_func(trainable, setup)
         return trainable(setup.sample_params())
@@ -75,3 +92,11 @@ def run_tune(
     results = tuner.fit()
     setup.upload_offline_experiments()
     return results
+
+
+if __name__ == "__main__":
+    # For testing purposes, run the function with a dummy setup
+    from ray_utilities.setup import PPOSetup
+
+    dummy_setup = PPOSetup()
+    run_tune(dummy_setup)

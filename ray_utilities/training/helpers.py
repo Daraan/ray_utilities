@@ -2,43 +2,36 @@
 from __future__ import annotations
 
 import logging
-import tempfile
+import math
+from functools import partial
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, Optional, cast, overload
 
-from ray import tune
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.utils.metrics import (
     ALL_MODULES,  # pyright: ignore[reportPrivateImportUsage]
     ENV_RUNNER_RESULTS,
-    EPISODE_RETURN_MEAN,
-    EVALUATION_RESULTS,
     LEARNER_RESULTS,
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
 from typing_extensions import TypeAliasType
 
 from ray_utilities.config import seed_environments_for_config
-from ray_utilities.constants import EVALUATED_THIS_STEP, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
+from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_steps
-from ray_utilities.postprocessing import (
-    create_log_metrics,
-    create_running_reward_updater,
-)
+from ray_utilities.typing.metrics import LogMetricsDict
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
 
-    from ray_utilities.config.typed_argument_parser import DefaultArgumentParser, LogStatsChoices
+    from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
     from ray_utilities.typing import (
-        LogMetricsDict,
-        RewardsDict,
         RewardUpdaters,
         StrictAlgorithmReturnData,
-        TrainableReturnData,
     )
+    from ray_utilities.typing.trainable_return import RewardUpdater
 
 logger = logging.getLogger(__name__)
 
@@ -65,12 +58,19 @@ def episode_iterator(args: dict[str, Any], hparams: dict[str, Any], *, use_pbar:
     return range(args["iterations"])
 
 
-def get_current_step(result: StrictAlgorithmReturnData) -> int:
+def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict) -> int:
     # requires exact_sampling_callback to be set in the results, otherwise fallback
+    current_step = result.get("current_step")
+    if current_step is not None:  # LogMetricsDict
+        return current_step
+    result = cast("StrictAlgorithmReturnData", result)
     current_step = result[LEARNER_RESULTS][ALL_MODULES].get(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)
-    if current_step is None:
-        return result[ENV_RUNNER_RESULTS].get(NUM_ENV_STEPS_SAMPLED_LIFETIME)
-    return current_step
+    if current_step is not None:
+        return current_step
+    # try metric logged on env runner; else defaults to NUM_ENV_STEPS_SAMPLED_LIFETIME
+    return result[ENV_RUNNER_RESULTS].get(
+        NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]
+    )
 
 
 def get_args_and_config(
@@ -123,6 +123,25 @@ def get_args_and_config(
         seed_environments_for_config(config, None)
     # endregion
     return args, config
+
+
+def update_running_reward(new_reward: float, reward_array: list[float]) -> float:
+    if not math.isnan(new_reward):
+        reward_array.append(new_reward)
+    running_reward = sum(reward_array[-100:]) / (min(100, len(reward_array)) or float("nan"))  # nan for 0
+    return running_reward
+
+
+def create_running_reward_updater(initial_array: Optional[list[float]] = None) -> RewardUpdater:
+    """
+    Creates a partial function that updates the running reward.
+
+    The partial function is stateful in their reward_array, which is initialized as an empty list if
+    `initial_array` is not provided.
+    """
+    return cast(
+        "RewardUpdater", partial(update_running_reward, reward_array=initial_array if initial_array is not None else [])
+    )
 
 
 def setup_trainable(
@@ -193,71 +212,6 @@ def setup_trainable(
         algo,  # pyright: ignore[reportReturnType]
         reward_updaters,
     )
-
-
-def training_step(
-    algo: Algorithm,
-    reward_updaters: RewardUpdaters,
-    *,
-    discrete_eval: bool = False,
-    disable_report: bool = False,
-    log_stats: LogStatsChoices = "minimal",
-) -> tuple["StrictAlgorithmReturnData", "LogMetricsDict", "RewardsDict"]:
-    # Prevent unbound variables
-    metrics: TrainableReturnData | LogMetricsDict = {}  # type: ignore[assignment]
-    disc_eval_mean = None
-    disc_running_eval_reward = None
-    # Train and get results
-    result = cast("StrictAlgorithmReturnData", algo.train())
-
-    # Reduce to key-metrics
-    metrics = create_log_metrics(result, discrete_eval=discrete_eval, log_stats=log_stats)
-    # Possibly use if train.get_context().get_local/global_rank() == 0 to save videos
-    # Unknown if should save video here and clean from metrics or save in a callback later is faster.
-
-    # Training
-    train_reward = metrics[ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN]
-    running_reward = reward_updaters["running_reward"](train_reward)
-
-    # Evaluation:
-    eval_mean = metrics[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN]
-    running_eval_reward = reward_updaters["eval_reward"](eval_mean)
-
-    # Discrete rewards:
-    if "discrete" in metrics[EVALUATION_RESULTS]:
-        disc_eval_mean = metrics[EVALUATION_RESULTS]["discrete"][  # pyright: ignore[reportTypedDictNotRequiredAccess]
-            ENV_RUNNER_RESULTS
-        ][EPISODE_RETURN_MEAN]
-        assert "disc_eval_reward" in reward_updaters
-        disc_running_eval_reward = reward_updaters["disc_eval_reward"](disc_eval_mean)
-
-    # Checkpoint
-    report_metrics = cast("dict[str, Any]", metrics)  # satisfy train.report
-    if (
-        not disable_report
-        and (EVALUATION_RESULTS in result and result[EVALUATION_RESULTS].get(EVALUATED_THIS_STEP, False))
-        and False
-        # and tune.get_context().get_world_rank() == 0 # deprecated
-    ):
-        with tempfile.TemporaryDirectory() as tempdir:
-            algo.save_checkpoint(tempdir)
-            tune.report(metrics=report_metrics, checkpoint=tune.Checkpoint.from_directory(tempdir))
-    # Report metrics
-    elif not disable_report:
-        try:
-            tune.report(report_metrics, checkpoint=None)
-        except AttributeError:
-            import ray.train
-
-            ray.train.report(report_metrics, checkpoint=None)
-    rewards: RewardsDict = {
-        "running_reward": running_reward,
-        "running_eval_reward": running_eval_reward,
-        "eval_mean": eval_mean,
-        "disc_eval_mean": disc_eval_mean or 0,
-        "disc_eval_reward": disc_running_eval_reward or 0,
-    }
-    return result, metrics, rewards
 
 
 def get_total_steps(args: dict[str, Any], config: "AlgorithmConfig") -> int | None:

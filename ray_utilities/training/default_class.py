@@ -5,6 +5,7 @@ import logging
 import sys
 from copy import copy
 from typing import TYPE_CHECKING, Any, Collection, Generic, Optional, TypedDict, TypeVar, cast
+from inspect import isclass
 
 import ray
 from ray import tune
@@ -17,18 +18,18 @@ from ray.rllib.core import (
 from ray.rllib.utils import force_list
 from ray.rllib.utils.annotations import override
 from ray.rllib.utils.checkpoints import Checkpointable
+from typing_extensions import TypeAliasType
 
 from ray_utilities.callbacks.progress_bar import restore_pbar, save_pbar_state, update_pbar
 from ray_utilities.config.typed_argument_parser import LOG_STATS, LogStatsChoices
 from ray_utilities.misc import is_pbar
-from ray_utilities.postprocessing import create_running_reward_updater
-from ray_utilities.setup.experiment_base import SetupCheckpointDict
+from ray_utilities.training.functional import training_step
 from ray_utilities.training.helpers import (
+    create_running_reward_updater,
     episode_iterator,
     get_current_step,
     get_total_steps,
     setup_trainable,
-    training_step,
 )
 from ray_utilities.typing.trainable_return import RewardUpdaters
 
@@ -41,7 +42,7 @@ if TYPE_CHECKING:
 
     from ray_utilities.callbacks.progress_bar import RangeState, RayTqdmState, TqdmState
     from ray_utilities.config import DefaultArgumentParser
-    from ray_utilities.setup.experiment_base import ExperimentSetupBase
+    from ray_utilities.setup.experiment_base import ExperimentSetupBase, SetupCheckpointDict
     from ray_utilities.typing import LogMetricsDict
 
 
@@ -54,6 +55,12 @@ _AlgorithmTypeInner = TypeVar("_AlgorithmTypeInner", bound="Algorithm")
 _ParserType = TypeVar("_ParserType", bound="DefaultArgumentParser")
 _ConfigType = TypeVar("_ConfigType", bound="AlgorithmConfig")
 _AlgorithmType = TypeVar("_AlgorithmType", bound="Algorithm")
+
+_ExperimentSetup = TypeAliasType(
+    "_ExperimentSetup",
+    "type[ExperimentSetupBase[_ParserType, _ConfigType, _AlgorithmType]] | ExperimentSetupBase[_ParserType, _ConfigType, _AlgorithmType]",  # noqa: E501
+    type_params=(_ParserType, _ConfigType, _AlgorithmType),
+)
 
 
 def _validate_algorithm_config_afterward(func):
@@ -113,7 +120,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             restore()  # available; calls load_checkpoint
     """
 
-    setup_class: type[ExperimentSetupBase[_ParserType, _ConfigType, _AlgorithmType]]
+    setup_class: _ExperimentSetup[_ParserType, _ConfigType, _AlgorithmType]
     """
     Defines the setup class to use for this trainable, needs a call to `define` to create a subclass.
     with this value set.
@@ -124,7 +131,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     @classmethod
     def define(
         cls,
-        setup_cls: type[ExperimentSetupBase[_ParserTypeInner, _ConfigTypeInner, _AlgorithmTypeInner]],
+        # TODO: Allow instance of setup here as well
+        setup_cls: _ExperimentSetup[_ParserTypeInner, _ConfigTypeInner, _AlgorithmTypeInner],
         *,
         discrete_eval: bool = False,
         use_pbar: bool = True,
@@ -145,23 +153,24 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         use_pbar_ = use_pbar
         # Fix current cli args to the trainable - necessary for remote
         if fix_argv:
-            setup_cls = type(setup_cls.__name__ + "FixedArgv", (setup_cls,), {"_fixed_argv": sys.argv})
+            if isclass(setup_cls):
+                setup_cls = type(setup_cls.__name__ + "FixedArgv", (setup_cls,), {"_fixed_argv": sys.argv})
 
         if TYPE_CHECKING:
 
-            class DefinedDefaultTrainable(DefaultTrainable[Any, Any, Any]):
+            class DefinedTrainable(cls[Any, Any, Any]):  # pyright: ignore  # cls not subscriptable likely a bug
                 setup_class = setup_cls
                 discrete_eval = discrete_eval_
                 use_pbar = use_pbar_
 
         else:
 
-            class DefinedDefaultTrainable(DefaultTrainable[_ParserTypeInner, _ConfigTypeInner, _AlgorithmTypeInner]):
+            class DefinedTrainable(cls[_ParserTypeInner, _ConfigTypeInner, _AlgorithmTypeInner]):
                 setup_class = setup_cls
                 discrete_eval = discrete_eval_
                 use_pbar = use_pbar_
 
-        return DefinedDefaultTrainable
+        return DefinedTrainable
 
     # region Trainable setup
 
@@ -216,7 +225,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 )
             self._overwrite_algorithm = overwrite_algorithm
         assert self.setup_class.parse_known_only is True
-        self._setup = self.setup_class()  # XXX # FIXME # correct args; might not work when used with Tuner
+        # FIXME A modified setup.config is ignored; or allow setup in "define" <-- best
+        if isclass(self.setup_class):
+            self._setup = self.setup_class()  # XXX # FIXME # correct args; might not work when used with Tuner
+        else:
+            self._setup = self.setup_class
         # TODO: Possible unset setup._config to not confuse configs (or remove setup totally?)
         # use args = config["cli_args"] # XXX
         import sys
@@ -252,7 +265,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         self.config = value
 
     @override(tune.Trainable)
-    def reset_config(self, new_config):
+    def reset_config(self, new_config):  # pyright: ignore[reportIncompatibleMethodOverride] # currently not correctly typed in ray
         # Return True if the config was reset, False otherwise
         # This will be called when tune.TuneConfig(reuse_actors=True) is used
         # TODO
@@ -555,11 +568,7 @@ if TYPE_CHECKING:
 
 
 class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
-    """Default trainable for RLlib algorithms.
-
-    This class is used to create a trainable that can be used with ray tune.
-    It is a wrapper around the `default_trainable` function.
-    """
+    """Default trainable for ray.tune based on RLlib algorithms."""
 
     def step(self) -> LogMetricsDict:  # iteratively
         result, metrics, rewards = training_step(

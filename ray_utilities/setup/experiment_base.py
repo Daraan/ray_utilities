@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
     from ray.rllib.utils.typing import EnvType
 
+    from ray_utilities.training.default_class import TrainableBase
     from ray_utilities.typing import TrainableReturnData
 
     # from typing_extensions import TypeForm
@@ -186,7 +187,9 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         if init_param_space:
             self.param_space = self.create_param_space()
         if init_trainable:
-            self.trainable = self.create_trainable()
+            self.create_trainable()
+        else:
+            self.trainable = None
         if hasattr(self, "args") and self.args.comet:
             self.comet_tracker = CometArchiveTracker()
         else:
@@ -311,7 +314,10 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         return upload_args
 
     def get_trainable_name(self) -> str:
-        trainable = getattr(self, "trainable", None) or self.create_trainable()
+        trainable = getattr(self, "trainable", None)
+        if trainable is None:
+            logger.warning("get_trainable_name called before trainable is set, calling create_trainable()")
+            trainable = self.create_trainable()
         return get_trainable_name(trainable)
 
     def sample_params(self):
@@ -575,13 +581,33 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         return config, module_spec
 
     @abstractmethod
-    def create_trainable(self) -> Callable[[dict[str, Any]], TrainableReturnData]:
+    def _create_trainable(
+        self,
+    ) -> (
+        Callable[[dict[str, Any]], TrainableReturnData]
+        | type[TrainableBase[ParserType_co, ConfigType_co, AlgorithmType_co]]
+    ):
         """
         Return a trainable for the Tuner to use.
+
+        Attention:
+            When using this use the public method create_trainable instead,
+            which automatically assigns the trainable to self.trainable.
 
         Note:
             set trainable._progress_metrics to adjust the reporter output
         """
+
+    @final
+    def create_trainable(self):
+        """
+        Creates the trainable for the experiment.
+
+        Attention:
+            Do not overwrite this method. Overwrite _create_trainable instead.
+        """
+        self.trainable = self._create_trainable()
+        return self.trainable
 
     # endregion
 

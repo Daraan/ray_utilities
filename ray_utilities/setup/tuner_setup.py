@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Literal, Optional, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Iterable, Literal, Optional, Protocol, cast, overload
 
 from ray import train, tune
 from ray.rllib.algorithms.ppo import PPO
 from ray.tune.search.optuna import OptunaSearch
+from ray.tune.stopper import CombinedStopper, FunctionStopper, MaximumIterationStopper
 from typing_extensions import TypeVar
 
 from ray_utilities.config._tuner_callbacks_setup import TunerCallbackSetup
@@ -17,6 +18,8 @@ from ray_utilities.constants import (
 )
 from ray_utilities.misc import trial_name_creator
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner, create_search_algo
+from ray_utilities.training.helpers import get_current_step
+from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
 
 if TYPE_CHECKING:
     from ray.air.config import RunConfig as RunConfigV1
@@ -73,11 +76,35 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
     def get_experiment_name(self) -> str:
         return self._setup.project_name
 
+    def create_stoppers(self) -> list[Stopper]:
+        """
+        Create a stopper for the tuner based on the setup configuration.
+        If `optimize_config` is enabled, it uses OptunaSearchWithPruner.
+        Otherwise, it returns None or an empty list.
+        """
+        stoppers = []
+        if isinstance(self._setup.args.iterations, (int, float)):
+            logger.debug("Adding MaximumIterationStopper with %s iterations", self._setup.args.iterations)
+            stoppers.append(MaximumIterationStopper(int(self._setup.args.iterations)))
+        if isinstance(self._setup.args.total_steps, (int, float)):
+            logger.debug(
+                "Adding FunctionStopper for total steps (tied to setup.args.total_steps) %s",
+                self._setup.args.total_steps,
+            )
+
+            def total_steps_stopper(trial_id: str, results: dict[str, Any] | StrictAlgorithmReturnData) -> bool:  # noqa: ARG001
+                current_step = get_current_step(results)  # pyright: ignore[reportArgumentType]
+                return current_step >= self._setup.args.total_steps  # <-- this allows late modification
+
+            stoppers.append(FunctionStopper(total_steps_stopper))
+        return stoppers
+
     def create_tune_config(self) -> tune.TuneConfig:
         if getattr(self._setup.args, "resume", False):
             tune.ResumeConfig  # TODO
+        stoppers = self.create_stoppers()
         if self._setup.args.optimize_config:
-            searcher, stopper = create_search_algo(
+            searcher, optuna_stopper = create_search_algo(
                 hparams=self._setup.param_space,
                 study_name=self.get_experiment_name(),
                 seed=self._setup.args.seed,
@@ -85,10 +112,15 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
                 mode="max",
                 pruner=self._setup.args.optimize_config,
             )  # TODO: metric
-            self._stopper = stopper
+            stoppers.append(optuna_stopper)
         else:
             searcher = None
+        if len(stoppers) == 0:
             self._stopper = None
+        elif len(stoppers) == 1:
+            self._stopper = stoppers[0]
+        else:
+            self._stopper = CombinedStopper(*stoppers)
         return tune.TuneConfig(
             num_samples=1 if self._setup.args.not_parallel else self._setup.args.num_samples,
             metric=EVAL_METRIC_RETURN_MEAN,

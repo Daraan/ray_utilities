@@ -4,7 +4,7 @@ from __future__ import annotations
 # ruff: noqa: PLC0415  # imports at top level of file; safe import time if not needed.
 import logging
 import math
-from functools import partial, wraps
+from functools import wraps
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -14,7 +14,6 @@ from typing import (
     ParamSpec,
     TypedDict,
     TypeGuard,
-    cast,
     overload,
 )
 
@@ -53,11 +52,11 @@ from ray_utilities.constants import (
     DEFAULT_VIDEO_DICT_KEYS,
     EPISODE_BEST_VIDEO,
     EPISODE_WORST_VIDEO,
-    NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
 )
 from ray_utilities.misc import deep_update
 from ray_utilities.temp_dir import TEMP_DIR_PATH
-from ray_utilities.typing.trainable_return import RewardUpdater, TrainableReturnData
+from ray_utilities.training.helpers import get_current_step
+from ray_utilities.typing.trainable_return import TrainableReturnData
 from ray_utilities.video.numpy_to_video import create_temp_video
 
 if TYPE_CHECKING:
@@ -340,12 +339,7 @@ def create_log_metrics(
         eval_mean = float("nan")
         disc_eval_mean = float("nan")
 
-    current_step = result[LEARNER_RESULTS][ALL_MODULES].get(
-        NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
-        result[ENV_RUNNER_RESULTS].get(
-            NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]
-        ),
-    )
+    current_step = get_current_step(result)
     metrics: LogMetricsDict = {
         ENV_RUNNER_RESULTS: {
             EPISODE_RETURN_MEAN: result[ENV_RUNNER_RESULTS].get(
@@ -542,25 +536,6 @@ def _reorganize_timer_logs(results: dict[str, dict[str, Any | dict[str, Any]]]):
         except KeyError:
             pass  # second evaluation onward
     return results
-
-
-def update_running_reward(new_reward: float, reward_array: list[float]) -> float:
-    if not math.isnan(new_reward):
-        reward_array.append(new_reward)
-    running_reward = sum(reward_array[-100:]) / (min(100, len(reward_array)) or float("nan"))  # nan for 0
-    return running_reward
-
-
-def create_running_reward_updater(initial_array: Optional[list[float]] = None) -> RewardUpdater:
-    """
-    Creates a partial function that updates the running reward.
-
-    The partial function is stateful in their reward_array, which is initialized as an empty list if
-    `initial_array` is not provided.
-    """
-    return cast(
-        "RewardUpdater", partial(update_running_reward, reward_array=initial_array if initial_array is not None else [])
-    )
 
 
 def verify_keys(metrics: Mapping[Any, Any], typ: type[_TD], *, test_optional: bool = True) -> TypeGuard[_TD]:

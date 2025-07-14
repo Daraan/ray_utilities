@@ -1,21 +1,28 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from ray.rllib.algorithms.ppo import PPO, PPOConfig
-from typing_extensions import TypeVar
+from typing_extensions import TypeVar, TypeAliasType
 
 from ray_utilities.config import add_callbacks_to_config
 from ray_utilities.config.create_algorithm import create_algorithm_config
 from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
 from ray_utilities.setup.extensions import SetupWithDynamicBatchSize, SetupWithDynamicBuffer
+from ray_utilities.training.default_class import DefaultTrainable
+from ray_utilities.training.helpers import get_current_step
 
 if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
+    from ray_utilities.typing import AlgorithmReturnData
 
     from ray_utilities.typing import TrainableReturnData
 
 __all__ = ["AlgorithmSetup", "AlgorithmType_co", "ConfigType_co", "PPOSetup", "ParserType_co"]
+
+
+TrainableT = TypeVar("TrainableT", bound=Callable[..., "TrainableReturnData"] | type["DefaultTrainable"])
 
 
 class AlgorithmSetup(
@@ -41,7 +48,7 @@ class AlgorithmSetup(
     def group_name(self) -> str:
         return "algorithm_setup"
 
-    def create_trainable(self):
+    def _create_trainable(self) -> type[DefaultTrainable[ParserType_co, ConfigType_co, AlgorithmType_co]]:
         """
         Create a trainable instance for the algorithm setup.
 
@@ -52,8 +59,12 @@ class AlgorithmSetup(
         def trainable(params) -> TrainableReturnData:  # noqa: ARG001
             # This is a placeholder for the actual implementation of the trainable.
             # It should return a dictionary with training data.
-            return self.config.build().train()  # type: ignore
+            result: AlgorithmReturnData = self.config.build().train()  # type: ignore
+            result["current_step"] = get_current_step(result)
+            breakpoint()
+            return result
 
+        return DefaultTrainable.define(self)
         return trainable
 
     @classmethod

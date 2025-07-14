@@ -4,14 +4,11 @@ import io
 import pickle
 import tempfile
 from copy import deepcopy
-from functools import partial
 from typing import TYPE_CHECKING
+from unittest import mock
 
-from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core import COMPONENT_ENV_RUNNER
-from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
-from ray.tune.search.sample import Categorical, Domain
 from ray.tune.utils import validate_save_restore
 
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
@@ -28,9 +25,8 @@ from ray_utilities.testing_utils import (
 from ray_utilities.training.default_class import DefaultTrainable
 
 if TYPE_CHECKING:
+    from ray_utilities.typing.trainable_return import TrainableReturnData
     from ray.rllib.algorithms.ppo.ppo import PPO, PPOConfig
-    from ray.rllib.env.env_runner import EnvRunner
-    from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
 
     from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co
@@ -38,16 +34,26 @@ if TYPE_CHECKING:
 
 class TestTraining(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
     @patch_args()
-    def test_trainable_function(self):
+    def test_trainable_simple(self):
         # with self.subTest("No parameters"):
         #    _result = trainable({})
-        with self.subTest("With parameters"):
-            setup = PPOSetup(init_param_space=True)
-            setup.config.evaluation(evaluation_interval=1)
-            setup.config.training(num_epochs=2, train_batch_size_per_learner=64, minibatch_size=32)
-            trainable = setup.create_trainable()
-            params = setup.sample_params()
-            _result = trainable(params)
+        def _create_trainable(self: PPOSetup):
+            def trainable(params) -> TrainableReturnData:  # noqa: ARG001
+                # This is a placeholder for the actual implementation of the trainable.
+                # It should return a dictionary with training data.
+                return self.config.build().train()  # type: ignore
+
+            return trainable
+
+        with mock.patch.object(PPOSetup, "_create_trainable", _create_trainable):
+            with self.subTest("With parameters"):
+                setup = PPOSetup(init_param_space=True, init_trainable=False)
+                setup.config.evaluation(evaluation_interval=1)
+                setup.config.training(num_epochs=2, train_batch_size_per_learner=64, minibatch_size=32)
+                trainable = setup.create_trainable()
+                self.assertNotIsInstance(trainable, DefaultTrainable)
+                params = setup.sample_params()
+                _result = trainable(params)
 
     @patch_args()
     def test_trainable_class_and_overrides(self):
@@ -163,100 +169,6 @@ class TestTrainableClass(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpo
                     trainable2 = self.TrainableClass()
                     trainable2.restore_from_path(tmpdir)
             self.compare_trainables(trainable, trainable2)
-
-    def compare_trainables(
-        self,
-        trainable: DefaultTrainable["DefaultArgumentParser", "ConfigType_co", AlgorithmType_co],
-        trainable2: DefaultTrainable["DefaultArgumentParser", "ConfigType_co", AlgorithmType_co],
-    ) -> None:
-        """Test functions for trainables obtained in different ways"""
-        self.maxDiff = 60_000
-        with self.subTest("Step 1: Compare trainables"):
-            if hasattr(trainable, "_args") or hasattr(trainable2, "_args"):
-                self.assertDictEqual(trainable2._args, trainable._args)  # type: ignore[attr-defined]
-            self.assertEqual(trainable.algorithm_config.minibatch_size, 32)
-            self.assertEqual(trainable2.algorithm_config.minibatch_size, trainable.algorithm_config.minibatch_size)
-            self.assertEqual(trainable2._iteration, trainable._iteration)
-
-            # get_state stores "class" : type(self) of the config, this allows from_state to work correctly
-            # original trainable does not have that key
-            config_dict1 = trainable.algorithm_config.to_dict()
-            config_dict1.pop("class", None)
-            config_dict2 = trainable2.algorithm_config.to_dict()
-            config_dict2.pop("class", None)
-            self.assertDictEqual(config_dict2, config_dict1)
-            setup_data1 = trainable._setup.save()  # does not compare setup itself
-            setup_data2 = trainable2._setup.save()
-            # check all keys
-            self.assertEqual(setup_data1.keys(), setup_data2.keys())
-            keys = set(setup_data1.keys())
-            keys.remove("__init_config__")
-            self.assertDictEqual(vars(setup_data1["args"]), vars(setup_data2["args"]))  # SimpleNamespace
-            keys.remove("args")
-            self.assertIs(setup_data1["setup_class"], setup_data2["setup_class"])
-            keys.remove("setup_class")
-            assert setup_data1["config"] and setup_data2["config"]
-            setup1_config = setup_data1["config"].to_dict()
-            setup2_config = setup_data2["config"].to_dict()
-            # remove class
-            setup1_config.pop("class", None)
-            setup2_config.pop("class", None)
-            # Is set to False for one config, OldAPI value
-            setup1_config.pop("simple_optimizer", None)
-            setup2_config.pop("simple_optimizer", None)
-            self.assertDictEqual(setup1_config, setup2_config)  # ConfigType
-            keys.remove("config")
-            param_space1 = setup_data1["param_space"]
-            param_space2 = setup_data2["param_space"]
-            keys.remove("param_space")
-            self.assertEqual(len(keys), 0, f"Unchecked keys: {keys}")  # checked all params
-            self.assertCountEqual(param_space1, param_space2)
-            self.assertDictEqual(param_space1["cli_args"], param_space2["cli_args"])
-            for key in param_space1.keys() | param_space2.keys():
-                value1 = param_space1[key]
-                value2 = param_space2[key]
-                if isinstance(value1, Domain) or isinstance(value2, Domain):
-                    # Domain is not hashable, so we cannot compare them directly
-                    self.assertIs(type(value1), type(value2))
-                    if isinstance(value1, Categorical):
-                        assert isinstance(value2, Categorical)
-                        self.assertListEqual(value1.categories, value2.categories)
-                    else:
-                        # This will likely fail, need to compare attributes
-                        self.assertEqual(value1, value2, f"Domain {key} differs: {value1} != {value2}")
-                else:
-                    self.assertEqual(value1, value2, f"Parameter {key} differs: {value1} != {value2}")
-
-            # Compare attrs
-            self.assertIsNot(trainable2._reward_updaters, trainable._reward_updaters)
-            for key in trainable2._reward_updaters.keys() | trainable._reward_updaters.keys():
-                updater1 = trainable._reward_updaters[key]
-                updater2 = trainable2._reward_updaters[key]
-                self.assertIsNot(updater1, updater2)
-                assert isinstance(updater1, partial) and isinstance(updater2, partial)
-                self.assertDictEqual(updater1.keywords, updater2.keywords)
-                self.assertIsNot(updater1.keywords["reward_array"], updater2.keywords["reward_array"])
-
-            self.assertIsNot(trainable2._pbar, trainable._pbar)
-            self.assertIs(type(trainable2._pbar), type(trainable._pbar))
-            if isinstance(trainable2._pbar, tqdm_ray.tqdm):
-                pbar1_state = trainable2._pbar._get_state()
-                pbar2_state = trainable._pbar._get_state()  # type: ignore
-                pbar1_state = {k: v for k, v in pbar1_state.items() if k not in ("desc", "uuid")}
-                pbar2_state = {k: v for k, v in pbar2_state.items() if k not in ("desc", "uuid")}
-                self.assertEqual(pbar1_state, pbar2_state)
-
-            # Step 2
-            result2 = trainable.step()
-            result2_restored = trainable2.step()
-            self.assertEqual(result2[TRAINING_ITERATION], result2_restored[TRAINING_ITERATION])
-            self.assertEqual(result2[TRAINING_ITERATION], 2)
-
-        # Compare env_runners
-        with self.subTest("Step 2 Compare env_runner configs"):
-            if trainable.algorithm.env_runner or trainable2.algorithm.env_runner:
-                assert trainable.algorithm.env_runner and trainable2.algorithm.env_runner
-                self.compare_env_runner_configs(trainable.algorithm, trainable2.algorithm)
 
     def test_validate_save_restore(self):
         """Basically test if TRAINING_ITERATION is set correctly."""

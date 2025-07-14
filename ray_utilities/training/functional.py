@@ -1,15 +1,18 @@
 # pyright: enableExperimentalFeatures=true
 from __future__ import annotations
 
+import tempfile
 from functools import partial, wraps
 from typing import TYPE_CHECKING, Any, Optional, cast
 
-from ray.rllib.utils.metrics import EVALUATION_RESULTS
+from ray import tune
+from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS, EPISODE_RETURN_MEAN, EVALUATION_RESULTS
 
 from ray_utilities.callbacks.progress_bar import update_pbar
 from ray_utilities.config.typed_argument_parser import LOG_STATS
+from ray_utilities.constants import EVALUATED_THIS_STEP
 from ray_utilities.misc import is_pbar
-from ray_utilities.postprocessing import filter_metrics
+from ray_utilities.postprocessing import create_log_metrics, filter_metrics
 from ray_utilities.postprocessing import verify_return as verify_return_type
 from ray_utilities.training.helpers import (
     DefaultExperimentSetup,
@@ -18,13 +21,21 @@ from ray_utilities.training.helpers import (
     get_total_steps,
     logger,
     setup_trainable,
-    training_step,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from ray_utilities.typing import LogMetricsDict, StrictAlgorithmReturnData, TrainableReturnData
+    from ray.rllib.algorithms import Algorithm
+
+    from ray_utilities.config.typed_argument_parser import LogStatsChoices
+    from ray_utilities.typing import (
+        LogMetricsDict,
+        RewardsDict,
+        RewardUpdaters,
+        StrictAlgorithmReturnData,
+        TrainableReturnData,
+    )
 
 
 def default_trainable(
@@ -134,3 +145,68 @@ def create_default_trainable(
 
         return verify_return_type(TrainableReturnData)(trainable)
     return wraps(default_trainable)(trainable)
+
+
+def training_step(
+    algo: Algorithm,
+    reward_updaters: RewardUpdaters,
+    *,
+    discrete_eval: bool = False,
+    disable_report: bool = False,
+    log_stats: LogStatsChoices = "minimal",
+) -> tuple["StrictAlgorithmReturnData", "LogMetricsDict", "RewardsDict"]:
+    # Prevent unbound variables
+    metrics: TrainableReturnData | LogMetricsDict = {}  # type: ignore[assignment]
+    disc_eval_mean = None
+    disc_running_eval_reward = None
+    # Train and get results
+    result = cast("StrictAlgorithmReturnData", algo.train())
+
+    # Reduce to key-metrics
+    metrics = create_log_metrics(result, discrete_eval=discrete_eval, log_stats=log_stats)
+    # Possibly use if train.get_context().get_local/global_rank() == 0 to save videos
+    # Unknown if should save video here and clean from metrics or save in a callback later is faster.
+
+    # Training
+    train_reward = metrics[ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN]
+    running_reward = reward_updaters["running_reward"](train_reward)
+
+    # Evaluation:
+    eval_mean = metrics[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN]
+    running_eval_reward = reward_updaters["eval_reward"](eval_mean)
+
+    # Discrete rewards:
+    if "discrete" in metrics[EVALUATION_RESULTS]:
+        disc_eval_mean = metrics[EVALUATION_RESULTS]["discrete"][  # pyright: ignore[reportTypedDictNotRequiredAccess]
+            ENV_RUNNER_RESULTS
+        ][EPISODE_RETURN_MEAN]
+        assert "disc_eval_reward" in reward_updaters
+        disc_running_eval_reward = reward_updaters["disc_eval_reward"](disc_eval_mean)
+
+    # Checkpoint
+    report_metrics = cast("dict[str, Any]", metrics)  # satisfy train.report
+    if (
+        not disable_report
+        and (EVALUATION_RESULTS in result and result[EVALUATION_RESULTS].get(EVALUATED_THIS_STEP, False))
+        and False
+        # and tune.get_context().get_world_rank() == 0 # deprecated
+    ):
+        with tempfile.TemporaryDirectory() as tempdir:
+            algo.save_checkpoint(tempdir)
+            tune.report(metrics=report_metrics, checkpoint=tune.Checkpoint.from_directory(tempdir))
+    # Report metrics
+    elif not disable_report:
+        try:
+            tune.report(report_metrics, checkpoint=None)
+        except AttributeError:
+            import ray.train
+
+            ray.train.report(report_metrics, checkpoint=None)
+    rewards: RewardsDict = {
+        "running_reward": running_reward,
+        "running_eval_reward": running_eval_reward,
+        "eval_mean": eval_mean,
+        "disc_eval_mean": disc_eval_mean or 0,
+        "disc_eval_reward": disc_running_eval_reward or 0,
+    }
+    return result, metrics, rewards

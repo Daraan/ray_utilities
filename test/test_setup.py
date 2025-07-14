@@ -6,7 +6,7 @@ import os
 import tempfile
 import time
 import unittest
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import tree
 import typing_extensions as te
@@ -23,8 +23,10 @@ from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER, NUM_ENV_STE
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger
 from ray_utilities.testing_utils import DisableGUIBreakpoints, InitRay, SetupDefaults, patch_args
+from ray_utilities.training.default_class import DefaultTrainable
 
 if TYPE_CHECKING:
+    from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
     from ray.rllib.algorithms import Algorithm
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 
@@ -100,7 +102,11 @@ class TestSetupClasses(SetupDefaults):
                     grid = []
 
                 def fake_trainable(params, param=param):
-                    return {"evaluation/env_runners/episode_return_mean": 42, "param_value": params[param]}
+                    return {
+                        "current_step": 0,
+                        "evaluation/env_runners/episode_return_mean": 42,
+                        "param_value": params[param],
+                    }
 
                 setup.trainable = fake_trainable  # type: ignore
                 tuner = setup.create_tuner()
@@ -113,11 +119,83 @@ class TestSetupClasses(SetupDefaults):
                     f"Evaluated params do not match grid: {evaluated_params} != {grid}",
                 )
 
+    def test_config_overrides(self):
+        with patch_args("--batch_size", "1234", "--minibatch_size", "123"):
+            setup = AlgorithmSetup(init_trainable=False)
+            setup.config.training(num_epochs=3, minibatch_size=321)
+            Trainable = setup.create_trainable()
+            assert isinstance(Trainable, type) and issubclass(Trainable, DefaultTrainable)
+            trainable = Trainable({})
+
+        self.assertEqual(trainable.algorithm_config.num_epochs, 3)
+        self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 1234)
+        self.assertEqual(trainable.algorithm_config.minibatch_size, 321)
+
+        self.maxDiff = 15000
+        self.assertIsNot(trainable.algorithm_config, setup.config)
+        self.compare_configs(trainable.algorithm_config, setup.config)
+
 
 ENV_STEPS_PER_ITERATION = 10
 
 
 class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
+    def setUp(self):
+        super().setUp()
+
+    def test_evaluate(self):
+        _result = self._DEFAULT_SETUP.build_algo().evaluate()
+
+    def test_step(self):
+        algo = self._DEFAULT_SETUP.build_algo()
+        _result = algo.step()
+
+        with self.subTest("test weights after step"):
+            env_runner = cast("SingleAgentEnvRunner", algo.env_runner_group.local_env_runner)  # type: ignore[attr-defined]
+            eval_env_runner = cast("SingleAgentEnvRunner", algo.eval_env_runner_group.local_env_runner)  # type: ignore[attr-defined]
+            learner = algo.learner_group._learner
+            assert learner
+            learner_multi = learner.module
+
+            runner_module = env_runner.module
+            eval_module = eval_env_runner.module
+            assert runner_module and eval_module
+            learner_module = learner_multi["default_policy"]
+            algo_module = algo.get_module()
+
+            # Test weight sync
+            # NOTE THESE ARE TRAIN STATES not arrays
+            if runner_module is not algo_module:  # these are normally equal
+                print("WARNING: modules are not the object")
+                # identity
+                self.assertDictEqual(
+                    runner_module.get_state(),
+                    algo_module.get_state(),
+                    msg="runner_module vs algo_module",
+                )
+            self.maxDiff = 38000
+            state_on_learner = learner_module.get_state()
+            state_on_algo = algo_module.get_state()
+            # algo might not have critic states:
+            critic_keys_learner = {k for k in state_on_learner.keys() if k.startswith(("encoder.critic_encoder", "vf"))}
+            critic_keys_algo = {k for k in state_on_algo.keys() if k.startswith(("encoder.critic_encoder", "vf"))}
+            # remove weights that are only on learner
+            learner_weights = {
+                k: v for k, v in state_on_learner.items() if k not in critic_keys_learner - critic_keys_algo
+            }
+            self.assertGreater(len(learner_weights), 0, "No weights found in learner state")
+            self.compare_weights(
+                learner_weights,
+                state_on_algo,
+                msg="learner_module vs algo_module",
+            )
+            algo.evaluate()
+            # These are possibly not updated
+            self.compare_weights(
+                eval_module.get_state(),
+                algo_module.get_state(),
+            )
+
     @unittest.skip("Fix first: Ray moves checkpoint need to load from different location")
     def test_stopper_with_checkpoint(self):
         from copy import deepcopy
@@ -191,6 +269,7 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
         env_runner1 = result1
         env_runner2 = result2
         # This step - trivial tests
+        # TODO: is this also checked with learner?
         self.assertEqual(env_runner1[NUM_ENV_STEPS_SAMPLED], env_runner2[NUM_ENV_STEPS_SAMPLED])
         self.assertEqual(env_runner1[NUM_ENV_STEPS_PASSED_TO_LEARNER], env_runner2[NUM_ENV_STEPS_PASSED_TO_LEARNER])
 

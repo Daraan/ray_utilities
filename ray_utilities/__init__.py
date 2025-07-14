@@ -19,10 +19,9 @@ from ray_utilities.nice_logger import nice_logger
 from ray_utilities.random import seed_everything
 from ray_utilities.runfiles.run_tune import run_tune
 from ray_utilities.training.default_class import DefaultTrainable
-from ray_utilities.training.default_function import create_default_trainable, default_trainable
+from ray_utilities.training.functional import create_default_trainable, default_trainable
 from ray_utilities.training.helpers import episode_iterator
 from ray_utilities.typing.algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
-
 
 logger = nice_logger(__name__, level="DEBUG")
 logger.info("Ray utilities imported")

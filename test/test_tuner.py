@@ -4,6 +4,7 @@ from ray.rllib.utils.metrics import (
     EPISODE_RETURN_MEAN,
     EVALUATION_RESULTS,
 )
+from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.search.optuna import OptunaSearch
 
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
@@ -34,13 +35,21 @@ class TestTuner(InitRay, SetupDefaults):
             assert tuner2._local_tuner and tuner2._local_tuner._tune_config
             self.assertNotIsInstance(tuner2._local_tuner._tune_config.search_alg, OptunaSearch)
 
-    def test_run_tune_with_tuner(self):
-        with patch_args("--optimize_config", "--num_samples", "5", "--num_jobs", "2"):
-            optuna_setup = AlgorithmSetup()
-            optuna_setup.config.training(num_epochs=2, train_batch_size_per_learner=64, minibatch_size=64)
+    def test_run_tune_with_optuna_tuner(self):
+        with patch_args(
+            "--optimize_config", "--num_samples", "3", "--num_jobs", "2", "--batch_size", "128", "--iterations", "3"
+        ):
+            optuna_setup = AlgorithmSetup(init_trainable=False)
+            optuna_setup.config.training(num_epochs=2, minibatch_size=128)
             optuna_setup.config.evaluation(evaluation_interval=1)  # else eval metric not in dict
-            _results = run_tune(optuna_setup)
+            optuna_setup.create_trainable()
+            results = run_tune(optuna_setup)
             # NOTE: This can be OK even if runs fail!
+            for result in results:
+                assert result.metrics
+                self.assertEqual(result.metrics["current_step"], 3 * 128)
+                self.assertEqual(result.metrics[TRAINING_ITERATION], 3)
+            self.failIf(results.num_errors, "Encountered errors: " + str(results.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
 
 
 class TestOptunaTuner(SetupDefaults):
@@ -97,7 +106,7 @@ class TestOptunaTuner(SetupDefaults):
                         "env": "CartPole-v1",
                     }
 
-                def create_trainable(self):
+                def _create_trainable(self):
                     return trainable
 
             setup = RandomParamsSetup()

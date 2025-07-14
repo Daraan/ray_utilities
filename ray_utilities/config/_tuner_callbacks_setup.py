@@ -39,6 +39,16 @@ logger = logging.getLogger(__name__)
 
 
 class TunerCallbackSetup(_TunerCallbackSetupBase):
+    """
+    Setup to create callbacks for the tuner.
+
+    Methods:
+        - create_callbacks: Create a list of callbacks for the tuner.
+           In turn calls:
+            - create_wandb_logger: Create a WandB logger callback.
+            - create_comet_logger: Create a Comet logger callback.
+    """
+
     EXCLUDE_METRICS = (
         "time_since_restore",
         "iterations_since_restore",
@@ -89,7 +99,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
                 # Disable system metrics collection.
                 x_disable_stats=args.test,
                 # Disable check for latest version of wandb, from PyPI.
-                x_disable_update_check=not args.test,
+                # x_disable_update_check=not args.test,  # not avail in latest version
             )
         except Exception:
             logger.exception("Error creating wandb.Settings")

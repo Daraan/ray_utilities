@@ -1,11 +1,12 @@
+# pyright: reportOptionalMemberAccess=information
 from __future__ import annotations
 
 import os
 import sys
+import numpy.testing as npt
 import unittest
-
-# pyright: reportOptionalMemberAccess=information
 from contextlib import nullcontext
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Collection, Iterable, TypeVar, final
 from unittest import mock
@@ -16,15 +17,23 @@ import jax.numpy as jnp
 import numpy.testing as npt
 import ray
 import tree
+from ray.experimental import tqdm_ray
+from ray.rllib.algorithms import AlgorithmConfig
+from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
+from ray.tune.search.sample import Categorical, Domain
 from typing_extensions import NotRequired, Required, get_origin, get_type_hints
 
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
+from ray_utilities.training.default_class import DefaultTrainable
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
     import chex
     from jaxlib.xla_extension import pytree  # pyright: ignore[reportMissingModuleSource] pyi file
+
+    from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co
 
     LeafType = pytree.SequenceKey | pytree.DictKey | pytree.GetAttrKey
     from flax.training.train_state import TrainState
@@ -72,7 +81,7 @@ def iter_cases(cases: type[TestCases] | mock.MagicMock):
         raise
 
 
-def patch_args(*args):
+def patch_args(*args: str):
     patch = [
         "file.py",
         *(("-a", "no_actor_provided by patch_args") if ("-a" not in args and "--actor_type" not in args) else ()),
@@ -230,7 +239,7 @@ class TestHelpers(unittest.TestCase):
                 comp = attr1 == attr2
                 if isinstance(comp, bool):
                     self.assertTrue(comp, f"Attribute '{attr}' not equal in both states: {attr1}\n!=\n{attr2}\n{msg}")
-                else:
+                elif hasattr(comp, "all"):  # numpy, tensors, ...
                     self.assertTrue(
                         comp.all(), f"Attribute '{attr}' not equal in both states: {attr1}\n!=\n{attr2}\n{msg}"
                     )
@@ -252,7 +261,24 @@ class TestHelpers(unittest.TestCase):
                 )
         return config
 
-    def compare_weights(self, algo: Algorithm, algo_restored: Algorithm): ...
+    def compare_weights(
+        self, weights1: dict[str, Any], weights2: dict[str, Any], msg: str = "", ignore: Collection[str] = ()
+    ):
+        keys1 = set(weights1.keys()) - set(ignore)
+        keys2 = set(weights2.keys()) - set(ignore)
+        self.assertEqual(keys1, keys2, f"Keys in weights do not match: {msg}")
+        for key in weights1.keys():
+            if key in ignore:
+                continue
+            self.assertEqual(type(weights1[key]), type(weights2[key]), f"Weight '{key}' type does not match: {msg}")
+            if isinstance(weights1[key], dict) and isinstance(weights2[key], dict):
+                self.compare_weights(weights1[key], weights2[key], f"Weight '{key}' does not match: {msg}")
+                continue
+            npt.assert_array_equal(
+                weights1[key],
+                weights2[key],
+                err_msg=f"Key '{key}' not equal in both states {msg}",
+            )
 
     def compare_env_runner_configs(self, algo: Algorithm, algo_restored: Algorithm):
         self.maxDiff = max(self.maxDiff or 13000, 13000)
@@ -292,12 +318,114 @@ class TestHelpers(unittest.TestCase):
                 config, algo_config_dict, f"Remote config {i}/{len(remote_configs_restored)} does not match algo config"
             )
 
+    def compare_configs(self, config1: AlgorithmConfig | dict, config2: AlgorithmConfig | dict):
+        if isinstance(config1, AlgorithmConfig):
+            config1 = config1.to_dict()
+        else:
+            config1 = config1.copy()
+        if isinstance(config2, AlgorithmConfig):
+            config2 = config2.to_dict()
+        else:
+            config2 = config2.copy()
+        # remove class
+        config1.pop("class", None)
+        config2.pop("class", None)
+        # Is set to False for one config, OldAPI value
+        config1.pop("simple_optimizer", None)
+        config2.pop("simple_optimizer", None)
+        self.assertDictEqual(config1, config2)  # ConfigType
+
+    def compare_trainables(
+        self,
+        trainable: DefaultTrainable["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
+        trainable2: DefaultTrainable["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
+    ) -> None:
+        """Test functions for trainables obtained in different ways"""
+        self.maxDiff = 60_000
+        with self.subTest("Step 1: Compare trainables"):
+            if hasattr(trainable, "_args") or hasattr(trainable2, "_args"):
+                self.assertDictEqual(trainable2._args, trainable._args)  # type: ignore[attr-defined]
+            self.assertEqual(trainable.algorithm_config.minibatch_size, 32)
+            self.assertEqual(trainable2.algorithm_config.minibatch_size, trainable.algorithm_config.minibatch_size)
+            self.assertEqual(trainable2._iteration, trainable._iteration)
+
+            # get_state stores "class" : type(self) of the config, this allows from_state to work correctly
+            # original trainable does not have that key
+            config_dict1 = trainable.algorithm_config.to_dict()
+            config_dict1.pop("class", None)
+            config_dict2 = trainable2.algorithm_config.to_dict()
+            config_dict2.pop("class", None)
+            self.assertDictEqual(config_dict2, config_dict1)
+            setup_data1 = trainable._setup.save()  # does not compare setup itself
+            setup_data2 = trainable2._setup.save()
+            # check all keys
+            self.assertEqual(setup_data1.keys(), setup_data2.keys())
+            keys = set(setup_data1.keys())
+            keys.remove("__init_config__")
+            self.assertDictEqual(vars(setup_data1["args"]), vars(setup_data2["args"]))  # SimpleNamespace
+            keys.remove("args")
+            self.assertIs(setup_data1["setup_class"], setup_data2["setup_class"])
+            keys.remove("setup_class")
+            assert setup_data1["config"] and setup_data2["config"]
+            self.compare_configs(setup_data1["config"], setup_data2["config"])
+            keys.remove("config")
+            param_space1 = setup_data1["param_space"]
+            param_space2 = setup_data2["param_space"]
+            keys.remove("param_space")
+            self.assertEqual(len(keys), 0, f"Unchecked keys: {keys}")  # checked all params
+            self.assertCountEqual(param_space1, param_space2)
+            self.assertDictEqual(param_space1["cli_args"], param_space2["cli_args"])
+            for key in param_space1.keys() | param_space2.keys():
+                value1 = param_space1[key]
+                value2 = param_space2[key]
+                if isinstance(value1, Domain) or isinstance(value2, Domain):
+                    # Domain is not hashable, so we cannot compare them directly
+                    self.assertIs(type(value1), type(value2))
+                    if isinstance(value1, Categorical):
+                        assert isinstance(value2, Categorical)
+                        self.assertListEqual(value1.categories, value2.categories)
+                    else:
+                        # This will likely fail, need to compare attributes
+                        self.assertEqual(value1, value2, f"Domain {key} differs: {value1} != {value2}")
+                else:
+                    self.assertEqual(value1, value2, f"Parameter {key} differs: {value1} != {value2}")
+
+            # Compare attrs
+            self.assertIsNot(trainable2._reward_updaters, trainable._reward_updaters)
+            for key in trainable2._reward_updaters.keys() | trainable._reward_updaters.keys():
+                updater1 = trainable._reward_updaters[key]
+                updater2 = trainable2._reward_updaters[key]
+                self.assertIsNot(updater1, updater2)
+                assert isinstance(updater1, partial) and isinstance(updater2, partial)
+                self.assertDictEqual(updater1.keywords, updater2.keywords)
+                self.assertIsNot(updater1.keywords["reward_array"], updater2.keywords["reward_array"])
+
+            self.assertIsNot(trainable2._pbar, trainable._pbar)
+            self.assertIs(type(trainable2._pbar), type(trainable._pbar))
+            if isinstance(trainable2._pbar, tqdm_ray.tqdm):
+                pbar1_state = trainable2._pbar._get_state()
+                pbar2_state = trainable._pbar._get_state()  # type: ignore
+                pbar1_state = {k: v for k, v in pbar1_state.items() if k not in ("desc", "uuid")}
+                pbar2_state = {k: v for k, v in pbar2_state.items() if k not in ("desc", "uuid")}
+                self.assertEqual(pbar1_state, pbar2_state)
+
+            # Step 2
+            result2 = trainable.step()
+            result2_restored = trainable2.step()
+            self.assertEqual(result2[TRAINING_ITERATION], result2_restored[TRAINING_ITERATION])
+            self.assertEqual(result2[TRAINING_ITERATION], 2)
+
+        # Compare env_runners
+        with self.subTest("Step 2 Compare env_runner configs"):
+            if trainable.algorithm.env_runner or trainable2.algorithm.env_runner:
+                assert trainable.algorithm.env_runner and trainable2.algorithm.env_runner
+                self.compare_env_runner_configs(trainable.algorithm, trainable2.algorithm)
+
 
 class SetupDefaults(TestHelpers, DisableLoggers):
     @clean_args
     def setUp(self):
         super().setUp()
-        print("Remember to enable/disable justMyCode('\"debugpy.debugJustMyCode\": false,') in the settings")
         env = gym.make("CartPole-v1")
 
         self._OBSERVATION_SPACE = env.observation_space
@@ -308,12 +436,13 @@ class SetupDefaults(TestHelpers, DisableLoggers):
         )
         self._DEFAULT_NAMESPACE = DefaultArgumentParser()
         self._DEFAULT_SETUP = AlgorithmSetup()
-        self._DEFAULT_SETUP_LOW_RES = AlgorithmSetup()
+        self._DEFAULT_SETUP_LOW_RES = AlgorithmSetup(init_trainable=False)
         self._DEFAULT_SETUP_LOW_RES.config.training(
             train_batch_size_per_learner=128, minibatch_size=64, num_epochs=2
         ).env_runners(num_env_runners=0, num_envs_per_env_runner=1, num_cpus_per_env_runner=0).learners(
             num_learners=0, num_cpus_per_learner=0
         )
+        self._DEFAULT_SETUP_LOW_RES.create_trainable()
         self._INPUT_LENGTH = env.observation_space.shape[0]  # pyright: ignore[reportOptionalSubscript]
         self._DEFAULT_INPUT = jnp.arange(self._INPUT_LENGTH * 2).reshape((2, self._INPUT_LENGTH))
         self._DEFAULT_BATCH: dict[str, chex.Array] = MappingProxyType({"obs": self._DEFAULT_INPUT})  # pyright: ignore[reportAttributeAccessIssue]

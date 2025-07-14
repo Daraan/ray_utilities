@@ -265,7 +265,7 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
         if self.iterations == "auto":  # for testing reduce this number
             iterations = calculate_iterations(
                 dynamic_buffer=self.dynamic_buffer,
-                batch_size=self.train_batch_size_per_learner,
+                batch_size=self.train_batch_size_per_learner,  # <-- if adjusted manually afterwards iterations will be wrong  # noqa: E501
                 total_steps=self.total_steps,
                 assure_even=self.use_exact_total_steps,
                 min_size=self.min_step_size,
@@ -274,6 +274,8 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
         else:
             iterations = self.iterations
         self.iterations = iterations
+        # TODO / NOTE: When adjusting the train_batch_size_per_learner afterwards the amount of
+        # iterations will be wrong to reach total steps (at least shown in CLI).
 
 
 def _parse_tune_choices(
