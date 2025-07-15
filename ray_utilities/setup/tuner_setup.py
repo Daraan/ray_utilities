@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Iterable, Literal, Optional, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Protocol, cast, overload
 
 from ray import train, tune
 from ray.rllib.algorithms.ppo import PPO
@@ -19,7 +19,6 @@ from ray_utilities.constants import (
 from ray_utilities.misc import trial_name_creator
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner, create_search_algo
 from ray_utilities.training.helpers import get_current_step
-from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
 
 if TYPE_CHECKING:
     from ray.air.config import RunConfig as RunConfigV1
@@ -30,6 +29,7 @@ if TYPE_CHECKING:
 
     from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import ExperimentSetupBase
+    from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
 
 
 __all__ = [
@@ -45,8 +45,8 @@ logger = logging.getLogger(__name__)
 
 
 class _TunerSetupBase(Protocol):
-    eval_metric: ClassVar[str]
-    eval_metric_order: ClassVar[Literal["max", "min"]]
+    eval_metric: str
+    eval_metric_order: Literal["max", "min"]
     trial_name_creator: Callable[[Trial], str]
 
     def create_tune_config(self) -> tune.TuneConfig: ...
@@ -59,16 +59,18 @@ class _TunerSetupBase(Protocol):
 
 
 class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
-    eval_metric = DISC_EVAL_METRIC_RETURN_MEAN
-    eval_metric_order = "max"
     trial_name_creator = trial_name_creator
 
     def __init__(
         self,
+        eval_metric: str = EVAL_METRIC_RETURN_MEAN,
+        eval_metric_order: Literal["max", "min"] = "max",
         *,
         setup: ExperimentSetupBase[ParserTypeT, ConfigTypeT, _AlgorithmType_co],
         extra_tags: Optional[list[str]] = None,
     ):
+        self.eval_metric: str = eval_metric
+        self.eval_metric_order: Literal["max", "min"] = eval_metric_order
         self._setup = setup
         super().__init__(setup=setup, extra_tags=extra_tags)
         self._stopper: Optional[OptunaSearchWithPruner | Stopper | Literal["not_set"]] = "not_set"
@@ -108,8 +110,8 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
                 hparams=self._setup.param_space,
                 study_name=self.get_experiment_name(),
                 seed=self._setup.args.seed,
-                metric=EVAL_METRIC_RETURN_MEAN,
-                mode="max",
+                metric=self.eval_metric,
+                mode=self.eval_metric_order,
                 pruner=self._setup.args.optimize_config,
             )  # TODO: metric
             stoppers.append(optuna_stopper)
@@ -123,9 +125,9 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             self._stopper = CombinedStopper(*stoppers)
         return tune.TuneConfig(
             num_samples=1 if self._setup.args.not_parallel else self._setup.args.num_samples,
-            metric=EVAL_METRIC_RETURN_MEAN,
+            metric=self.eval_metric,
             search_alg=searcher,
-            mode="max",
+            mode=self.eval_metric_order,
             trial_name_creator=trial_name_creator,
             max_concurrent_trials=None if self._setup.args.not_parallel else self._setup.args.num_jobs,
         )
@@ -178,6 +180,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
                 num_to_keep=4,
                 checkpoint_score_order="max",
                 checkpoint_score_attribute=self.eval_metric,
+                checkpoint_frequency=0,  # No automatic checkpointing
             ),
             stop=stopper,
         )

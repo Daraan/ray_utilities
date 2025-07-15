@@ -95,6 +95,9 @@ class LogMetricsDict(TypedDict):
     num_env_steps_sampled_lifetime_throughput: NotRequired[float]
     """Mean time in seconds between two logging calls to num_env_steps_sampled_lifetime"""
 
+    should_checkpoint: NotRequired[bool]
+    """If True, the tuner should checkpoint this step."""
+
 
 class AutoExtendedLogMetricsDict(LogMetricsDict):
     """

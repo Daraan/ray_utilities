@@ -23,6 +23,7 @@ from typing import (
 
 import ray
 from ray import tune
+from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core.rl_module import MultiRLModuleSpec
 from tap.tap import Tap
 from typing_extensions import Self, TypedDict, TypeVar
@@ -30,11 +31,11 @@ from typing_extensions import Self, TypedDict, TypeVar
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.comet import CometArchiveTracker
 from ray_utilities.config import DefaultArgumentParser
+from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.environment import create_env
 from ray_utilities.misc import get_trainable_name
 from ray_utilities.setup.tuner_setup import TunerSetup
 from ray_utilities.training.default_class import TrainableBase
-from ray.rllib.algorithms import AlgorithmConfig
 
 if TYPE_CHECKING:
     import argparse
@@ -684,7 +685,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
     # region Tuner
 
     def create_tuner(self: ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]) -> tune.Tuner:
-        return TunerSetup(setup=self).create_tuner()
+        return TunerSetup(setup=self, eval_metric=EVAL_METRIC_RETURN_MEAN, eval_metric_order="max").create_tuner()
 
     # endregion
 

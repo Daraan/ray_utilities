@@ -164,11 +164,18 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 use_pbar = use_pbar_
 
         else:
+            try:
 
-            class DefinedTrainable(cls[_ParserTypeInner, _ConfigTypeInner, _AlgorithmTypeInner]):
-                setup_class = setup_cls
-                discrete_eval = discrete_eval_
-                use_pbar = use_pbar_
+                class DefinedTrainable(cls[_ParserTypeInner, _ConfigTypeInner, _AlgorithmTypeInner]):
+                    setup_class = setup_cls
+                    discrete_eval = discrete_eval_
+                    use_pbar = use_pbar_
+            except TypeError:  # base not generic
+
+                class DefinedTrainable(cls):
+                    setup_class = setup_cls
+                    discrete_eval = discrete_eval_
+                    use_pbar = use_pbar_
 
         return DefinedTrainable
 

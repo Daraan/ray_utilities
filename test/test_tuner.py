@@ -1,11 +1,13 @@
+import os
 from typing import Any
+from unittest import skip
 from ray import tune
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
     EPISODE_RETURN_MEAN,
     EVALUATION_RESULTS,
 )
-from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
+from ray.tune.result import TRAINING_ITERATION, SHOULD_CHECKPOINT  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.search.optuna import OptunaSearch
 from ray.tune.stopper import CombinedStopper
 
@@ -14,6 +16,7 @@ from ray_utilities.runfiles import run_tune
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner
 from ray_utilities.testing_utils import InitRay, SetupDefaults, patch_args
+from ray_utilities.training.default_class import DefaultTrainable
 from ray_utilities.typing.trainable_return import TrainableReturnData
 
 logger = __import__("logging").getLogger(__name__)
@@ -44,12 +47,82 @@ class TestTuner(InitRay, SetupDefaults):
             optuna_setup.config.evaluation(evaluation_interval=1)  # else eval metric not in dict
             optuna_setup.create_trainable()
             results = run_tune(optuna_setup)
+            assert not isinstance(results, dict)
             # NOTE: This can be OK even if runs fail!
             for result in results:
                 assert result.metrics
                 self.assertEqual(result.metrics["current_step"], 3 * 128)
                 self.assertEqual(result.metrics[TRAINING_ITERATION], 3)
-            self.failIf(results.num_errors, "Encountered errors: " + str(results.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+            self.assertEqual(results.num_errors, 0, "Encountered errors: " + str(results.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+
+    def test_checkpoint_save_auto(self):
+        self.enable_loggers()
+        with patch_args(
+            "--num_samples", "1", "--num_jobs", "1", "--batch_size", "32", "--minibatch_size", "32", "--iterations", "2"
+        ):
+            setup = AlgorithmSetup()
+        tuner = setup.create_tuner()
+        tuner._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
+            checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
+            checkpoint_score_order="max",
+            checkpoint_frequency=1,  # Save every iteration
+        )
+        result = tuner.fit()
+        self.assertEquals(result.num_errors, 0, "Encountered errors: " + str(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+        result = result[0]
+        assert result.checkpoint is not None
+        checkpoint_dir, file = os.path.split(result.checkpoint.path)
+        checkpoint_dirs = [
+            os.path.join(checkpoint_dir, f) for f in os.listdir(checkpoint_dir) if f.startswith("checkpoint_")
+        ]
+        self.assertEqual(
+            len(checkpoint_dirs),
+            2,
+            f"Checkpoints were not created. Found: {os.listdir(checkpoint_dir)} in {checkpoint_dir}",
+        )
+
+    @skip("This test is not implemented yet")
+    def test_checkpoint_save_standard(self): ...
+    @skip("This test is not implemented yet")
+    def test_checkpoint_save_and_load(self): ...
+
+    def test_checkpoint_save_manually(self):
+        self.enable_loggers()
+        with patch_args(
+            "--num_samples", "1", "--num_jobs", "1", "--batch_size", "32", "--minibatch_size", "32", "--iterations", "2"
+        ):
+
+            class CheckpointSetup(AlgorithmSetup):
+                def _create_trainable(self):
+                    class DefaultTrainableWithCheckpoint(DefaultTrainable):
+                        def step(self):
+                            result = super().step()
+                            result[SHOULD_CHECKPOINT] = True
+                            return result
+
+                        def save_checkpoint(self, checkpoint_dir: str):
+                            saved = super().save_checkpoint(checkpoint_dir)
+                            logger.info("Checkpoint saved to %s", checkpoint_dir)
+                            return saved
+
+                    return DefaultTrainableWithCheckpoint.define(self)
+
+            setup = CheckpointSetup()
+        tuner = setup.create_tuner()
+        result = tuner.fit()
+        self.assertEquals(result.num_errors, 0, "Encountered errors: " + str(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+        result = result[0]
+        assert result.checkpoint is not None
+        checkpoint_dir, file = os.path.split(result.checkpoint.path)
+        checkpoint_dirs = [
+            os.path.join(checkpoint_dir, f) for f in os.listdir(checkpoint_dir) if f.startswith("checkpoint_")
+        ]
+        self.assertEqual(
+            len(checkpoint_dirs),
+            2,
+            f"Checkpoints were not created. Found: {os.listdir(checkpoint_dir)} in {checkpoint_dir}",
+        )
+        breakpoint()
 
 
 class TestOptunaTuner(SetupDefaults):
