@@ -67,6 +67,17 @@ class RLlibArgumentParser(Tap):
             "--from_checkpoint", "-cp", "-load", default=None, type=str, help="Path to the checkpoint to load from."
         )
 
+    def process_args(self):
+        if self.minibatch_size > self.train_batch_size_per_learner:
+            logger.error(
+                "minibatch_size %d is larger than train_batch_size_per_learner %d, this can result in an error. "
+                "Reducing the minibatch_size to the train_batch_size_per_learner.",
+                self.minibatch_size,
+                self.train_batch_size_per_learner,
+            )
+            self.minibatch_size = self.train_batch_size_per_learner
+        return super().process_args()
+
 
 class DefaultResourceArgParser(Tap):
     num_jobs: int = 5

@@ -13,6 +13,7 @@ import tree
 import typing_extensions as te
 from ray import tune
 from ray.rllib.algorithms.ppo import PPO, PPOConfig
+from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
     NUM_ENV_STEPS_SAMPLED,
@@ -149,14 +150,14 @@ class TestSetupClasses(SetupDefaults):
                     f"Evaluated params do not match grid: {evaluated_params} != {grid}",
                 )
 
-    def test_config_overrides(self):
+    def test_config_overrides_via_setup(self):
         with patch_args("--batch_size", "1234", "--minibatch_size", "444"):
             # test with init_trainable=False
             setup = AlgorithmSetup(init_trainable=False)
             setup.config.training(num_epochs=3, minibatch_size=321)
             Trainable = setup.create_trainable()
             assert isinstance(Trainable, type) and issubclass(Trainable, DefaultTrainable)
-            trainable = Trainable({})
+            trainable = Trainable()
 
         self.assertEqual(trainable.algorithm_config.num_epochs, 3)
         self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 1234)
@@ -170,6 +171,44 @@ class TestSetupClasses(SetupDefaults):
             ignore=[
                 # ignore callbacks that are created on Trainable.setup
                 "callbacks_on_environment_created",
+            ],
+        )
+
+    def test_config_overwrites_on_trainable(self):
+        with patch_args("--batch_size", "1234", "--minibatch_size", "444"):
+            # test with init_trainable=False
+            setup = AlgorithmSetup(init_trainable=True)
+            self.assertEqual(setup.config.minibatch_size, 444)
+            self.assertEqual(setup.config.train_batch_size_per_learner, 1234)
+            trainable = setup.trainable_class(
+                overwrite_algorithm=AlgorithmConfig.overrides(
+                    num_epochs=22,
+                    minibatch_size=321,
+                )
+            )
+        # Test that config is not changed
+        self.assertEqual(setup.config.minibatch_size, 444)
+        self.assertEqual(setup.config.train_batch_size_per_learner, 1234)
+
+        self.assertEqual(trainable.algorithm_config.num_epochs, 22)  # changed
+        self.assertEqual(trainable.algorithm_config.minibatch_size, 321)  # changed
+        self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 1234)  # unchanged
+        # Unchanged on setup
+        self.assertNotEqual(trainable._setup.config.num_epochs, 22)  # changed from default (20)
+        self.assertEqual(trainable._setup.config.minibatch_size, 444)  # changed
+        self.assertEqual(trainable._setup.config.train_batch_size_per_learner, 1234)  # unchanged
+
+        self.maxDiff = 15000
+        self.assertIsNot(trainable.algorithm_config, setup.config)
+        self.compare_configs(
+            trainable.algorithm_config,
+            setup.config,
+            ignore=[
+                # ignore callbacks that are created on Trainable.setup
+                "callbacks_on_environment_created",
+                # ignore keys that differ via overrides
+                "num_epochs",
+                "minibatch_size",
             ],
         )
 

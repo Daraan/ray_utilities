@@ -1,4 +1,6 @@
+import logging
 import sys
+import unittest
 
 from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradientAccumulation
 from ray_utilities.callbacks.algorithm.dynamic_buffer_callback import DynamicBufferUpdate
@@ -215,3 +217,25 @@ class TestExtensionsAdded(SetupDefaults):
                             and config.callbacks_class.count(DynamicEvalInterval) == 1
                         )
                     )
+
+
+class TestProcessing(unittest.TestCase):
+    @patch_args("--batch_size", "64", "--minibatch_size", "128")
+    def test_to_large_minibatch_size(self):
+        """minibatch_size cannot be larger than train_batch_size_per_learner"""
+        from ray_utilities.config.typed_argument_parser import logger
+
+        with self.assertLogs(
+            logger,
+            logging.ERROR,
+        ) as ctx:
+            setup = AlgorithmSetup(init_trainable=False)
+        self.assertEqual(setup.args.minibatch_size, 64)
+        self.assertEqual(setup.args.train_batch_size_per_learner, 64)
+        self.assertEqual(setup.config.minibatch_size, 64)
+        self.assertEqual(setup.config.train_batch_size_per_learner, 64)
+        self.assertIn(
+            "minibatch_size 128 is larger than train_batch_size_per_learner 64",
+            ctx.output[0],
+            "Expected an error log when minibatch_size is larger than train_batch_size_per_learner",
+        )

@@ -474,7 +474,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # NOTE: evaluation_config might also not be set!
         keys_to_process.remove("algorithm_config")
         self._setup = self._setup.from_saved(state["setup"], init_trainable=False)
-        self._setup.config = new_algo_config  # TODO: Possible unset setup._config to not confuse configs
+        # NOTE: setup.config can differ from new_algo_config when overwrite_algorithm is used!
+        # self._setup.config = new_algo_config  # TODO: Possible unset setup._config to not confuse configs
         keys_to_process.remove("setup")
 
         if "algorithm" in state:

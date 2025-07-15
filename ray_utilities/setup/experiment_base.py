@@ -780,7 +780,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
     def save(self) -> SetupCheckpointDict[ParserType_co, ConfigType_co, AlgorithmType_co]:
         """
         Saves the current setup state to a dictionary.
-        Class can be restored from_saved
+        Class can be restored from_saved. Does not save trainable state.
         """
         data: SetupCheckpointDict[ParserType_co, ConfigType_co, AlgorithmType_co] = {
             "args": cast("ParserType_co", SimpleNamespace(**self.args_to_dict())),

@@ -346,10 +346,12 @@ class TestHelpers(unittest.TestCase):
         self,
         trainable: DefaultTrainable["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
         trainable2: DefaultTrainable["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
+        msg: str = "",
+        **subtest_kwargs,
     ) -> None:
         """Test functions for trainables obtained in different ways"""
         self.maxDiff = 60_000
-        with self.subTest("Step 1: Compare trainables"):
+        with self.subTest("Step 1: Compare trainables " + msg, **subtest_kwargs):
             if hasattr(trainable, "_args") or hasattr(trainable2, "_args"):
                 self.assertDictEqual(trainable2._args, trainable._args)  # type: ignore[attr-defined]
             self.assertEqual(trainable.algorithm_config.minibatch_size, 32)
@@ -423,7 +425,7 @@ class TestHelpers(unittest.TestCase):
             self.assertEqual(result2[TRAINING_ITERATION], 2)
 
         # Compare env_runners
-        with self.subTest("Step 2 Compare env_runner configs"):
+        with self.subTest("Step 2 Compare env_runner configs " + msg, **subtest_kwargs):
             if trainable.algorithm.env_runner or trainable2.algorithm.env_runner:
                 assert trainable.algorithm.env_runner and trainable2.algorithm.env_runner
                 self.compare_env_runner_configs(trainable.algorithm, trainable2.algorithm)

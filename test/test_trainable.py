@@ -5,6 +5,7 @@ import pickle
 import tempfile
 from copy import deepcopy
 from typing import TYPE_CHECKING
+from typing_extensions import Final
 from unittest import mock, skip
 
 from ray.rllib.algorithms import AlgorithmConfig
@@ -71,6 +72,9 @@ class TestTraining(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
         trainable.cleanup()
 
 
+OVERRIDE_KEYS: Final[set[str]] = {"num_env_runners", "num_epochs", "minibatch_size", "train_batch_size_per_learner"}
+
+
 class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
     def setUp(self):
         super().setUp()
@@ -82,11 +86,13 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             PPOSetup.typed()
         )
         # this initializes the algorithm; overwrite batch_size of 64 again.
-        trainable = self.TrainableClass(
-            overwrite_algorithm=AlgorithmConfig.overrides(
-                num_env_runners=num_env_runners, num_epochs=2, minibatch_size=32, train_batch_size_per_learner=32
-            )
+        # This does not modify the state["setup"]["config"]
+        overrides = AlgorithmConfig.overrides(
+            num_env_runners=num_env_runners, num_epochs=2, minibatch_size=32, train_batch_size_per_learner=32
         )
+        trainable = self.TrainableClass(overwrite_algorithm=overrides)
+        self.assertEqual(trainable._overwrite_algorithm, overrides)
+        self.assertEqual(overrides.keys(), OVERRIDE_KEYS)
         self.assertEqual(trainable.algorithm_config.num_env_runners, num_env_runners)
         self.assertEqual(trainable.algorithm_config.minibatch_size, 32)
         self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 32)
@@ -119,7 +125,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                 with patch_args():  # make sure that args do not influence the restore
                     trainable2 = self.TrainableClass()
                     trainable2.load_checkpoint(saved_ckpt)
-            self.compare_trainables(trainable, trainable2)
+            self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
 
     @TestCases([1, 2, 3])
     def test_test_cases(self, cases):
@@ -140,7 +146,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                     with patch_args():  # make sure that args do not influence the restore
                         trainable2 = self.TrainableClass()
                         trainable2.restore(deepcopy(training_result))
-                        self.compare_trainables(trainable, trainable2)
+                        self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
 
     @TestCases([0, 1, 2])
     def test_get_set_state(self, cases):
@@ -149,10 +155,11 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             state = trainable.get_state()
             # TODO: add no warning test
             self.assertIn(COMPONENT_ENV_RUNNER, state.get("algorithm", {}))
+
             trainable2 = self.TrainableClass()
             trainable2.set_state(deepcopy(state))
             # class is missing in config dict
-            self.compare_trainables(trainable, trainable2)
+            self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
 
     @TestCases([0, 1, 2])
     def test_safe_to_path(self, cases):
@@ -168,13 +175,13 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                 with patch_args():
                     trainable2 = self.TrainableClass()
                     trainable2.restore_from_path(tmpdir)
-            self.compare_trainables(trainable, trainable2)
+            self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
 
     def test_validate_save_restore(self):
         """Basically test if TRAINING_ITERATION is set correctly."""
         # ray.init(include_dashboard=False, ignore_reinit_error=True)
 
-        with patch_args("--iterations", "5", "--total_steps", "320", "--batch_size", "64"):
+        with patch_args("--iterations", "5", "--total_steps", "320", "--batch_size", "64", "--minibatch_size", "32"):
             # Need to fix argv for remote
             PPOTrainable = DefaultTrainable.define(PPOSetup.typed(), fix_argv=True)
             trainable = PPOTrainable()
