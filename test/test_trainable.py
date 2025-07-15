@@ -5,7 +5,7 @@ import pickle
 import tempfile
 from copy import deepcopy
 from typing import TYPE_CHECKING
-from unittest import mock
+from unittest import mock, skip
 
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core import COMPONENT_ENV_RUNNER
@@ -71,7 +71,7 @@ class TestTraining(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
         trainable.cleanup()
 
 
-class TestTrainableClass(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
+class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
     def setUp(self):
         super().setUp()
 
@@ -182,3 +182,8 @@ class TestTrainableClass(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpo
             self.assertEqual(trainable._setup.args.total_steps, 320)
             validate_save_restore(PPOTrainable)
         # ray.shutdown()
+
+    @skip("TODO implement")
+    def check_dynamic_settings_on_reload(self):
+        # check _get_global_step on reload
+        ...

@@ -24,12 +24,14 @@ class TestExtensionsAdded(SetupDefaults):
     def test_exact_sampling_callback_added(self):
         setup = AlgorithmSetup()
         self.assertFalse(setup.args.no_exact_sampling)
-        assert setup.config.callbacks_on_sample_end is not None
-        self.assertTrue(
-            exact_sampling_callback is setup.config.callbacks_on_sample_end
-            or exact_sampling_callback in setup.config.callbacks_on_sample_end,  # pyright: ignore
-            "Expected exact_sampling_callback to be in callbacks_on_sample_end when --no_exact_sampling is not set.",
-        )
+        for config in (setup.config, setup.trainable_class().algorithm_config):
+            with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
+                assert config.callbacks_on_sample_end is not None
+                self.assertTrue(
+                    exact_sampling_callback is config.callbacks_on_sample_end
+                    or exact_sampling_callback in config.callbacks_on_sample_end,  # pyright: ignore
+                    "Expected exact_sampling_callback to be in callbacks_on_sample_end when --no_exact_sampling is not set.",
+                )
 
         with patch_args("--no_exact_sampling"):
             setup = AlgorithmSetup()
@@ -40,57 +42,70 @@ class TestExtensionsAdded(SetupDefaults):
 
     @patch_args()
     def test_remove_masked_samples_added(self):
-        setup = AlgorithmSetup()
+        setup = AlgorithmSetup(init_trainable=False)
         setup.config.environment(observation_space=self._OBSERVATION_SPACE, action_space=self._ACTION_SPACE)
         self.assertFalse(setup.args.keep_masked_samples)
-        self.assertTrue(
-            issubclass(setup.config.learner_class, RemoveMaskedSamplesLearner),
-            "Expected learner_class to be a subclass of RemoveMaskedSamplesLearner "
-            "when --keep_masked_samples is not set.",
-        )
-        learner = setup.config.learner_class(config=setup.config)
-        learner.build()
-        # Check that there is a RemoveMaskedSamplesConnector in the learner's connector pipeline
-        self.assertTrue(
-            learner._learner_connector
-            and any(isinstance(connector, RemoveMaskedSamplesConnector) for connector in learner._learner_connector)
-        )
+        setup.create_trainable()
+        for config in (setup.config, setup.trainable_class().algorithm_config):
+            with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
+                self.assertTrue(
+                    issubclass(config.learner_class, RemoveMaskedSamplesLearner),
+                    "Expected learner_class to be a subclass of RemoveMaskedSamplesLearner "
+                    "when --keep_masked_samples is not set.",
+                )
+                learner = config.learner_class(config=config)
+                learner.build()
+                # Check that there is a RemoveMaskedSamplesConnector in the learner's connector pipeline
+                self.assertTrue(
+                    learner._learner_connector
+                    and any(
+                        isinstance(connector, RemoveMaskedSamplesConnector) for connector in learner._learner_connector
+                    )
+                )
 
         with patch_args("--keep_masked_samples"):
-            setup = AlgorithmSetup()
+            setup = AlgorithmSetup(init_trainable=False)
             setup.config.environment(observation_space=self._OBSERVATION_SPACE, action_space=self._ACTION_SPACE)
             self.assertTrue(
                 setup.args.keep_masked_samples,
                 "Expected keep_masked_samples to be True when --keep_masked_samples is set.",
             )
-            self.assertFalse(
-                issubclass(setup.config.learner_class, RemoveMaskedSamplesLearner),
-                "Expected learner_class to not be a subclass of RemoveMaskedSamplesLearner "
-                "when --keep_masked_samples is set.",
-            )
-            learner = setup.config.learner_class(config=setup.config)
-            learner.build()
-            # Check that there is no RemoveMaskedSamplesConnector in the learner's connector pipeline
-            if learner._learner_connector is not None:
-                self.assertFalse(
-                    any(isinstance(connector, RemoveMaskedSamplesConnector) for connector in learner._learner_connector)
-                )
+            setup.create_trainable()
+            for config in (setup.config, setup.trainable_class().algorithm_config):
+                with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
+                    self.assertFalse(
+                        issubclass(config.learner_class, RemoveMaskedSamplesLearner),
+                        "Expected learner_class to not be a subclass of RemoveMaskedSamplesLearner "
+                        "when --keep_masked_samples is set.",
+                    )
+                    learner = config.learner_class(config=config)
+                    learner.build()
+                    # Check that there is no RemoveMaskedSamplesConnector in the learner's connector pipeline
+                    if learner._learner_connector is not None:
+                        self.assertFalse(
+                            any(
+                                isinstance(connector, RemoveMaskedSamplesConnector)
+                                for connector in learner._learner_connector
+                            )
+                        )
 
     @patch_args()
     def test_dynamic_buffer_added(self):
         setup = AlgorithmSetup()
         self.assertFalse(setup.args.dynamic_buffer)
-        self.assertFalse(
-            setup.config.callbacks_class is DynamicBufferUpdate
-            or (
-                isinstance(setup.config.callbacks_class, type)
-                and issubclass(setup.config.callbacks_class, DynamicBufferUpdate)
-            )
-            or (
-                isinstance(setup.config.callbacks_class, (list, tuple))
-                and DynamicBufferUpdate in setup.config.callbacks_class
-            )
-        )
+        for config in (setup.config, setup.trainable_class().algorithm_config):
+            with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
+                self.assertFalse(
+                    config.callbacks_class is DynamicBufferUpdate
+                    or (
+                        isinstance(config.callbacks_class, type)
+                        and issubclass(config.callbacks_class, DynamicBufferUpdate)
+                    )
+                    or (
+                        isinstance(config.callbacks_class, (list, tuple))
+                        and DynamicBufferUpdate in config.callbacks_class
+                    )
+                )
 
         with patch_args("--dynamic_buffer"):
             setup = AlgorithmSetup()
@@ -98,33 +113,38 @@ class TestExtensionsAdded(SetupDefaults):
                 setup.args.dynamic_buffer,
                 "Expected dynamic_buffer to be True when --dynamic_buffer is set.",
             )
-            self.assertTrue(
-                setup.config.callbacks_class is DynamicBufferUpdate
-                or (
-                    isinstance(setup.config.callbacks_class, type)
-                    and issubclass(setup.config.callbacks_class, DynamicBufferUpdate)
-                )
-                or (
-                    isinstance(setup.config.callbacks_class, (list, tuple))
-                    and DynamicBufferUpdate in setup.config.callbacks_class
-                )
-            )
+            for config in (setup.config, setup.trainable_class().algorithm_config):
+                with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
+                    self.assertTrue(
+                        config.callbacks_class is DynamicBufferUpdate
+                        or (
+                            isinstance(config.callbacks_class, type)
+                            and issubclass(config.callbacks_class, DynamicBufferUpdate)
+                        )
+                        or (
+                            isinstance(config.callbacks_class, (list, tuple))
+                            and DynamicBufferUpdate in config.callbacks_class
+                        ),
+                        "Expected DynamicBufferUpdate to be in callbacks_class when --dynamic_buffer is set.",
+                    )
 
     @patch_args()
     def test_dynamic_batch_added(self):
         setup = AlgorithmSetup()
         self.assertFalse(setup.args.dynamic_buffer)
-        self.assertFalse(
-            setup.config.callbacks_class is DynamicGradientAccumulation
-            or (
-                isinstance(setup.config.callbacks_class, type)
-                and issubclass(setup.config.callbacks_class, DynamicGradientAccumulation)
-            )
-            or (
-                isinstance(setup.config.callbacks_class, (list, tuple))
-                and DynamicGradientAccumulation in setup.config.callbacks_class
-            )
-        )
+        for config in (setup.config, setup.trainable_class().algorithm_config):
+            with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
+                self.assertFalse(
+                    config.callbacks_class is DynamicGradientAccumulation
+                    or (
+                        isinstance(config.callbacks_class, type)
+                        and issubclass(config.callbacks_class, DynamicGradientAccumulation)
+                    )
+                    or (
+                        isinstance(config.callbacks_class, (list, tuple))
+                        and DynamicGradientAccumulation in config.callbacks_class
+                    )
+                )
 
         with patch_args("--dynamic_batch"):
             setup = AlgorithmSetup()
@@ -132,58 +152,66 @@ class TestExtensionsAdded(SetupDefaults):
                 setup.args.dynamic_batch,
                 "Expected dynamic_batch to be True when --dynamic_batch is set.",
             )
-            self.assertTrue(
-                setup.config.callbacks_class is DynamicGradientAccumulation
-                or (
-                    isinstance(setup.config.callbacks_class, type)
-                    and issubclass(setup.config.callbacks_class, DynamicGradientAccumulation)
-                )
-                or (
-                    isinstance(setup.config.callbacks_class, (list, tuple))
-                    and DynamicGradientAccumulation in setup.config.callbacks_class
-                )
-            )
+            for config in (setup.config, setup.trainable_class().algorithm_config):
+                with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
+                    self.assertTrue(
+                        config.callbacks_class is DynamicGradientAccumulation
+                        or (
+                            isinstance(config.callbacks_class, type)
+                            and issubclass(config.callbacks_class, DynamicGradientAccumulation)
+                        )
+                        or (
+                            isinstance(config.callbacks_class, (list, tuple))
+                            and DynamicGradientAccumulation in config.callbacks_class
+                        )
+                    )
 
     @patch_args()
     def test_dynamic_eval_interval_added(self):
         # Check DynamicEvalInterval is not added by default
         setup = AlgorithmSetup()
-        self.assertFalse(
-            (
-                isinstance(setup.config.callbacks_class, type)
-                and issubclass(setup.config.callbacks_class, DynamicEvalInterval)
-            )
-            or (
-                isinstance(setup.config.callbacks_class, (list, tuple))
-                and DynamicEvalInterval in setup.config.callbacks_class
-            ),
-        )
+        for config in (setup.config, setup.trainable_class().algorithm_config):
+            with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
+                self.assertFalse(
+                    (
+                        isinstance(config.callbacks_class, type)
+                        and issubclass(config.callbacks_class, DynamicEvalInterval)
+                    )
+                    or (
+                        isinstance(config.callbacks_class, (list, tuple))
+                        and DynamicEvalInterval in config.callbacks_class
+                    ),
+                )
         # Check that the DynamicEvalInterval is also added
         for args in ("--dynamic_buffer", "--dynamic_batch"):
             with patch_args(args), self.subTest(args=args):
                 setup = AlgorithmSetup()
-                self.assertTrue(
-                    (
-                        isinstance(setup.config.callbacks_class, type)
-                        and issubclass(setup.config.callbacks_class, DynamicEvalInterval)
-                    )
-                    or (
-                        isinstance(setup.config.callbacks_class, (list, tuple))
-                        and DynamicEvalInterval in setup.config.callbacks_class
-                    ),
-                    msg=f"Expected DynamicEvalInterval to be in callbacks_class when {args} is set.",
-                )
+                for config in (setup.config, setup.trainable_class().algorithm_config):
+                    with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
+                        self.assertTrue(
+                            (
+                                isinstance(config.callbacks_class, type)
+                                and issubclass(config.callbacks_class, DynamicEvalInterval)
+                            )
+                            or (
+                                isinstance(config.callbacks_class, (list, tuple))
+                                and DynamicEvalInterval in config.callbacks_class
+                            ),
+                            msg=f"Expected DynamicEvalInterval to be in callbacks_class when {args} is set.",
+                        )
         # Check that only one is added
         with patch_args("--dynamic_batch", "--dynamic_buffer"):
             setup = AlgorithmSetup()
-            self.assertTrue(
-                (
-                    isinstance(setup.config.callbacks_class, type)
-                    and issubclass(setup.config.callbacks_class, DynamicEvalInterval)
-                )
-                or (
-                    isinstance(setup.config.callbacks_class, (list, tuple))
-                    and DynamicEvalInterval in setup.config.callbacks_class
-                    and setup.config.callbacks_class.count(DynamicEvalInterval) == 1
-                )
-            )
+            for config in (setup.config, setup.trainable_class().algorithm_config):
+                with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
+                    self.assertTrue(
+                        (
+                            isinstance(config.callbacks_class, type)
+                            and issubclass(config.callbacks_class, DynamicEvalInterval)
+                        )
+                        or (
+                            isinstance(config.callbacks_class, (list, tuple))
+                            and DynamicEvalInterval in config.callbacks_class
+                            and config.callbacks_class.count(DynamicEvalInterval) == 1
+                        )
+                    )

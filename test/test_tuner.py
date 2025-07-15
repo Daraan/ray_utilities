@@ -1,3 +1,4 @@
+from typing import Any
 from ray import tune
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
@@ -6,6 +7,7 @@ from ray.rllib.utils.metrics import (
 )
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.search.optuna import OptunaSearch
+from ray.tune.stopper import CombinedStopper
 
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.runfiles import run_tune
@@ -36,9 +38,7 @@ class TestTuner(InitRay, SetupDefaults):
             self.assertNotIsInstance(tuner2._local_tuner._tune_config.search_alg, OptunaSearch)
 
     def test_run_tune_with_optuna_tuner(self):
-        with patch_args(
-            "--optimize_config", "--num_samples", "3", "--num_jobs", "2", "--batch_size", "128", "--iterations", "3"
-        ):
+        with patch_args("--num_samples", "3", "--num_jobs", "2", "--batch_size", "128", "--iterations", "3"):
             optuna_setup = AlgorithmSetup(init_trainable=False)
             optuna_setup.config.training(num_epochs=2, minibatch_size=128)
             optuna_setup.config.evaluation(evaluation_interval=1)  # else eval metric not in dict
@@ -60,9 +60,17 @@ class TestOptunaTuner(SetupDefaults):
             tuner = optuna_setup.create_tuner()
             assert tuner._local_tuner and tuner._local_tuner._tune_config
             self.assertIsInstance(tuner._local_tuner._tune_config.search_alg, OptunaSearch)
-            self.assertIsInstance(tuner._local_tuner.get_run_config().stop, OptunaSearchWithPruner)
-            # stopper and search are the same instance
-            self.assertIs(tuner._local_tuner.get_run_config().stop, tuner._local_tuner._tune_config.search_alg)
+            stopper = tuner._local_tuner.get_run_config().stop
+            if isinstance(stopper, CombinedStopper):
+                self.assertTrue(any(isinstance(s, OptunaSearchWithPruner) for s in stopper._stoppers))
+                optuna_stoppers = [s for s in stopper._stoppers if isinstance(s, OptunaSearchWithPruner)]
+                self.assertEqual(len(optuna_stoppers), 1)
+                optuna_stopper = optuna_stoppers[0]
+            else:
+                self.assertIsInstance(stopper, OptunaSearchWithPruner)
+                optuna_stopper = stopper
+                # stopper and search are the same
+            self.assertIs(optuna_stopper, tuner._local_tuner._tune_config.search_alg)
         with patch_args("--num_samples", "1"):
             setup2 = AlgorithmSetup()
             self.assertFalse(setup2.args.optimize_config)
@@ -81,7 +89,7 @@ class TestOptunaTuner(SetupDefaults):
         """
         with patch_args("--optimize_config", "--num_samples", "20", "--num_jobs", "4", "--seed", "42"):
 
-            def trainable(params) -> TrainableReturnData:
+            def trainable(params: dict[str, Any]) -> TrainableReturnData:
                 logger.info("Running trainable with value: %s", params["fake_result"])
                 for i in range(20):
                     tune.report(
@@ -106,7 +114,7 @@ class TestOptunaTuner(SetupDefaults):
                         "env": "CartPole-v1",
                     }
 
-                def _create_trainable(self):
+                def _create_trainable(self):  # type: ignore[override]
                     return trainable
 
             setup = RandomParamsSetup()

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-# pyright: enableExperimentalFeatures=true
 import logging
 from abc import ABC, abstractmethod
+
+# pyright: enableExperimentalFeatures=true
+from inspect import isclass
 from types import SimpleNamespace
 from typing import (
     TYPE_CHECKING,
@@ -31,13 +33,15 @@ from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.environment import create_env
 from ray_utilities.misc import get_trainable_name
 from ray_utilities.setup.tuner_setup import TunerSetup
+from ray_utilities.training.default_class import TrainableBase
+from ray.rllib.algorithms import AlgorithmConfig
 
 if TYPE_CHECKING:
     import argparse
 
     import gymnasium as gym
     import ray.tune.search.sample  # noqa: TC004  # present at runtime from import ray.tune
-    from ray.rllib.algorithms import PPO, Algorithm, AlgorithmConfig
+    from ray.rllib.algorithms import PPO, Algorithm
     from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
     from ray.rllib.utils.typing import EnvType
@@ -88,11 +92,14 @@ class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, Algor
 
 class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmType_co]):
     """
+    Base class for experiment setup, providing a framework for argument parsing, configuration,
+    and trainable algorithm instantiation to be compatible with ray.tune.Tuner.
+
+    This class is intended to be subclassed for specific experiment setups.
+
     Methods:
     - create_parser
     - create_config
-    - trainable_from_config
-    - trainable_return_type
 
     Attributes:
         PROJECT: A string used by `project_name` to determine the project name,
@@ -159,6 +166,28 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         init_trainable: bool = True,
         parse_args: bool = True,
     ):
+        """
+        Initializes the experiment base class with optional argument parsing and setup.
+
+        Args:
+            args : Command-line arguments to parse. If None, defaults to sys.argv.
+            init_config : Whether to initialize the configuration. Defaults to True.
+            init_param_space : Whether to initialize the parameter space. Defaults to True.
+            init_trainable : Whether to initialize the trainable component. Defaults to True.
+                Note:
+                    When the setup creates a trainable that is a class, the config is frozen to
+                    prevent potentially unforwarded changes between setup.config the config of the
+                    trainable. Use `init_trainable=False` or `unset_trainable()`, edit the config
+                    and restore the trainable class with a call to `create_trainable()`.
+            parse_args : Whether to parse the provided arguments. Defaults to True.
+
+        Attributes:
+            parser (Parser[ParserType_co]): The argument parser instance.
+
+        Calls:
+            - self.create_parser(): Creates and assigns the argument parser.
+            - self.setup(): Performs further setup based on initialization flags.
+        """
         self.parser: Parser[ParserType_co]
         self.parser = self.create_parser()
         self.setup(
@@ -184,12 +213,13 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             self.config: ConfigType_co = self.create_config()
         if hasattr(self, "args"):
             self._set_dynamic_parameters_to_tune()
-        if init_param_space:
-            self.param_space = self.create_param_space()
         if init_trainable:
             self.create_trainable()
         else:
             self.trainable = None
+        if init_param_space:
+            # relies on trainable to get its name
+            self.param_space = self.create_param_space()
         if hasattr(self, "args") and self.args.comet:
             self.comet_tracker = CometArchiveTracker()
         else:
@@ -316,8 +346,11 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
     def get_trainable_name(self) -> str:
         trainable = getattr(self, "trainable", None)
         if trainable is None:
-            logger.warning("get_trainable_name called before trainable is set, calling create_trainable()")
-            trainable = self.create_trainable()
+            logger.debug(
+                "get_trainable_name called before trainable is set, calling _create_trainable()"
+                "Cannot set its name yet, relying on create_trainable to set it."
+            )
+            return "UNDEFINED"
         return get_trainable_name(trainable)
 
     def sample_params(self):
@@ -371,7 +404,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             ),  # pyright: ignore[reportOptionalMemberAccess]
             "algo": self.config.algo_class.__name__ if self.config.algo_class is not None else "UNDEFINED",
             "module": module,
-            "trainable_name": self.get_trainable_name(),
+            "trainable_name": self.get_trainable_name(),  # "UNDEFINED" is called before create_trainable
         }
         # If not logged in choice will not be reported in the CLI interface
         param_space = {k: tune.choice([v]) for k, v in param_space.items()}
@@ -580,6 +613,15 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             )
         return config, module_spec
 
+    @property
+    def trainable_class(self) -> type[TrainableBase[ParserType_co, ConfigType_co, AlgorithmType_co]]:
+        """
+        Returns the trainable class for the experiment.
+        This is an alias of `self.trainable` but asserts that is as class.
+        """
+        assert isclass(self.trainable)
+        return self.trainable
+
     @abstractmethod
     def _create_trainable(
         self,
@@ -599,7 +641,12 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         """
 
     @final
-    def create_trainable(self):
+    def create_trainable(
+        self,
+    ) -> (
+        type[TrainableBase[ParserType_co, ConfigType_co, AlgorithmType_co]]
+        | Callable[[dict[str, Any]], TrainableReturnData]
+    ):
         """
         Creates the trainable for the experiment.
 
@@ -607,7 +654,30 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             Do not overwrite this method. Overwrite _create_trainable instead.
         """
         self.trainable = self._create_trainable()
+        if isclass(self.trainable):
+            logger.info(
+                "create_trainable returns a class '%s'.To prevent errors the config will be frozen.",
+                self.trainable.__name__,
+            )
+            self.config.freeze()
+        if hasattr(self, "param_space") and self.param_space is not None:
+            self.param_space["trainable_name"] = get_trainable_name(self.trainable)
+
         return self.trainable
+
+    def unset_trainable(self, *, copy_config=False):
+        """
+        Unsets the trainable for the experiment, this unfreezes the config
+        until the next create_trainable call.
+        """
+        self.trainable = None
+        if hasattr(self, "config"):
+            if copy_config:
+                self.config = cast("ConfigType_co", self.config.copy(copy_frozen=False))
+            else:
+                self.config._is_frozen = False
+                if isinstance(self.config.evaluation_config, AlgorithmConfig):
+                    self.config.evaluation_config._is_frozen = False
 
     # endregion
 

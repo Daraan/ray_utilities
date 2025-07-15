@@ -7,6 +7,7 @@ import tempfile
 import time
 import unittest
 from typing import TYPE_CHECKING, Any, cast
+from inspect import isclass
 
 import tree
 import typing_extensions as te
@@ -35,6 +36,34 @@ if TYPE_CHECKING:
 
 
 class TestSetupClasses(SetupDefaults):
+    def test_frozen_config(self):
+        with patch_args():
+            setup = AlgorithmSetup()
+        self.assertTrue(isclass(setup.trainable))  # change test if fails
+        assert isclass(setup.trainable)
+        with self.assertRaisesRegex(AttributeError, "Cannot set attribute .* already frozen"):
+            setup.config.training(num_epochs=3, minibatch_size=321)
+        # unset trainable, unfreeze config
+        self.assertIsNotNone(setup.trainable)
+        setup.unset_trainable()
+        self.assertIsNone(setup.trainable)
+        setup.config.training(num_epochs=4, minibatch_size=222)
+        setup.create_trainable()
+        assert issubclass(setup.trainable, DefaultTrainable)
+        trainable = setup.trainable({})
+        self.assertEqual(trainable.algorithm_config.num_epochs, 4)
+        self.assertEqual(trainable.algorithm_config.minibatch_size, second=222)
+        self.maxDiff = 15000
+        self.assertIsNot(trainable.algorithm_config, setup.config)
+        self.compare_configs(
+            trainable.algorithm_config,
+            setup.config,
+            ignore=[
+                # ignore callbacks that are created on Trainable.setup
+                "callbacks_on_environment_created",
+            ],
+        )
+
     def test_basic(self):
         with patch_args():
             setup = AlgorithmSetup()
@@ -45,6 +74,7 @@ class TestSetupClasses(SetupDefaults):
         self.assertIsNotNone(setup.create_param_space())
         self.assertIsNotNone(setup.create_parser())
         self.assertIsNotNone(setup.create_tags())
+        self.assertIsNotNone(setup.create_trainable())
 
     def test_argument_usage(self):
         # Test warning and failure
@@ -120,7 +150,8 @@ class TestSetupClasses(SetupDefaults):
                 )
 
     def test_config_overrides(self):
-        with patch_args("--batch_size", "1234", "--minibatch_size", "123"):
+        with patch_args("--batch_size", "1234", "--minibatch_size", "444"):
+            # test with init_trainable=False
             setup = AlgorithmSetup(init_trainable=False)
             setup.config.training(num_epochs=3, minibatch_size=321)
             Trainable = setup.create_trainable()
@@ -133,7 +164,14 @@ class TestSetupClasses(SetupDefaults):
 
         self.maxDiff = 15000
         self.assertIsNot(trainable.algorithm_config, setup.config)
-        self.compare_configs(trainable.algorithm_config, setup.config)
+        self.compare_configs(
+            trainable.algorithm_config,
+            setup.config,
+            ignore=[
+                # ignore callbacks that are created on Trainable.setup
+                "callbacks_on_environment_created",
+            ],
+        )
 
 
 ENV_STEPS_PER_ITERATION = 10

@@ -4,7 +4,11 @@ import logging
 from typing import TYPE_CHECKING, Any, Generic, Mapping, Optional, TypeVar
 
 from ray.rllib.algorithms.algorithm import Algorithm
-from ray.rllib.utils.metrics import ALL_MODULES, LEARNER_RESULTS  # pyright: ignore[reportPrivateImportUsage]
+from ray.rllib.utils.metrics import (
+    ALL_MODULES,
+    LEARNER_RESULTS,
+    ENV_RUNNER_RESULTS,
+)  # pyright: ignore[reportPrivateImportUsage]
 
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.dynamic_config.dynamic_buffer_update import SplitBudgetReturnDict, split_timestep_budget
@@ -105,12 +109,15 @@ class GetGlobalStepMixin:
 
     @staticmethod
     def _get_global_step(metrics_logger: MetricsLogger) -> int:
+        """Assumes metrics_logger.stats is not empty and contains necessary keys."""
         # other possible keys are num_module_steps_sampled_lifetime/default_policy
         # or num_agent_steps_sampled_lifetime/default_agent
-        gs = metrics_logger.stats[LEARNER_RESULTS][ALL_MODULES][
-            NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
-        ].peek()  # NOTE: Custom key
-        # otherwise:
+        if LEARNER_RESULTS in metrics_logger.stats:
+            gs = metrics_logger.stats[LEARNER_RESULTS][ALL_MODULES][
+                NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
+            ].peek()  # NOTE: Custom key
+        else:
+            gs = metrics_logger.stats[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME].peek()
         # gs = metrics_logger.stats[ENV_RUNNERS][NUM_ENV_STEPS_SAMPLED_LIFETIME"].peek()
         # logger.debug("Global step %s", gs)
         return gs

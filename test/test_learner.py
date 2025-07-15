@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 class TestLearners(InitRay, SetupDefaults):
     @patch_args("-a", "mlp", "--accumulate_gradients_every", "2")
     def test_ppo_torch_learner_with_gradient_accumulation(self):
-        setup = AlgorithmSetup()
+        setup = AlgorithmSetup(init_trainable=False)
         # NOTE: Need RemoveMaskedSamplesLearner to assure only one epoch is done
         setup.config.training(
             learner_class=mix_learners([PPOTorchLearnerWithGradientAccumulation, RemoveMaskedSamplesLearner]),
@@ -21,26 +21,29 @@ class TestLearners(InitRay, SetupDefaults):
             train_batch_size_per_learner=64,
             num_epochs=1,
         )
-        algo = setup.config.build()
-        learner: PPOTorchLearnerWithGradientAccumulation = (
-            algo.learner_group._learner  # pyright: ignore[reportAssignmentType, reportOptionalMemberAccess]
-        )
-        self.assertEqual(
-            algo.config.learner_config_dict["accumulate_gradients_every"],  # pyright: ignore[reportOptionalMemberAccess]
-            2,
-        )
-        self.assertEqual(
-            learner.config.learner_config_dict["accumulate_gradients_every"],
-            2,
-        )
-        module: DefaultPPOTorchRLModule = learner.module["default_policy"]  # type: ignore
-        state0 = module.get_state()
-        algo.step()
-        self.assertEqual(learner._step_count, 1)
-        state1 = module.get_state()
-        self.util_test_tree_equivalence(state0, state1)
-        algo.step()
-        self.assertEqual(learner._step_count, 2)
-        state2 = module.get_state()
-        with self.assertRaisesRegex(AssertionError, "(weight|bias).* not equal"):
-            self.util_test_tree_equivalence(state1, state2, use_subtests=False)
+        setup.create_trainable()
+        algo_setup = setup.config.build_algo()
+        for algo in (algo_setup, setup.trainable_class().algorithm_config.build_algo()):
+            with self.subTest("setup.config" if algo is algo_setup else "trainable.algorithm_config"):
+                learner: PPOTorchLearnerWithGradientAccumulation = (
+                    algo.learner_group._learner  # pyright: ignore[reportAssignmentType, reportOptionalMemberAccess]
+                )
+                self.assertEqual(
+                    algo.config.learner_config_dict["accumulate_gradients_every"],  # pyright: ignore[reportOptionalMemberAccess]
+                    2,
+                )
+                self.assertEqual(
+                    learner.config.learner_config_dict["accumulate_gradients_every"],
+                    2,
+                )
+                module: DefaultPPOTorchRLModule = learner.module["default_policy"]  # type: ignore
+                state0 = module.get_state()
+                algo.step()
+                self.assertEqual(learner._step_count, 1)
+                state1 = module.get_state()
+                self.util_test_tree_equivalence(state0, state1)
+                algo.step()
+                self.assertEqual(learner._step_count, 2)
+                state2 = module.get_state()
+                with self.assertRaisesRegex(AssertionError, "(weight|bias).* not equal"):
+                    self.util_test_tree_equivalence(state1, state2, use_subtests=False)

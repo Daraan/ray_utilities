@@ -318,7 +318,9 @@ class TestHelpers(unittest.TestCase):
                 config, algo_config_dict, f"Remote config {i}/{len(remote_configs_restored)} does not match algo config"
             )
 
-    def compare_configs(self, config1: AlgorithmConfig | dict, config2: AlgorithmConfig | dict):
+    def compare_configs(
+        self, config1: AlgorithmConfig | dict, config2: AlgorithmConfig | dict, *, ignore: Collection[str] = ()
+    ):
         if isinstance(config1, AlgorithmConfig):
             config1 = config1.to_dict()
         else:
@@ -327,6 +329,11 @@ class TestHelpers(unittest.TestCase):
             config2 = config2.to_dict()
         else:
             config2 = config2.copy()
+        # cleanup
+        if ignore:
+            for key in ignore:
+                config1.pop(key, None)
+                config2.pop(key, None)
         # remove class
         config1.pop("class", None)
         config2.pop("class", None)
@@ -435,7 +442,8 @@ class SetupDefaults(TestHelpers, DisableLoggers):
             DefaultArgumentParser().parse_args().as_dict()
         )
         self._DEFAULT_NAMESPACE = DefaultArgumentParser()
-        self._DEFAULT_SETUP = AlgorithmSetup()
+        self._DEFAULT_SETUP = AlgorithmSetup(init_trainable=False)
+
         self._DEFAULT_SETUP_LOW_RES = AlgorithmSetup(init_trainable=False)
         self._DEFAULT_SETUP_LOW_RES.config.training(
             train_batch_size_per_learner=128, minibatch_size=64, num_epochs=2
@@ -443,6 +451,7 @@ class SetupDefaults(TestHelpers, DisableLoggers):
             num_learners=0, num_cpus_per_learner=0
         )
         self._DEFAULT_SETUP_LOW_RES.create_trainable()
+        self._DEFAULT_SETUP.create_trainable()
         self._INPUT_LENGTH = env.observation_space.shape[0]  # pyright: ignore[reportOptionalSubscript]
         self._DEFAULT_INPUT = jnp.arange(self._INPUT_LENGTH * 2).reshape((2, self._INPUT_LENGTH))
         self._DEFAULT_BATCH: dict[str, chex.Array] = MappingProxyType({"obs": self._DEFAULT_INPUT})  # pyright: ignore[reportAttributeAccessIssue]

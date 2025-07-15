@@ -100,7 +100,7 @@ def get_args_and_config(
     if setup:
         # TODO: Use hparams
         args = setup.args_to_dict()
-        config = setup.config
+        config = setup.config.copy(copy_frozen=False)
     elif setup_class:
         args = hparams["cli_args"]
         # TODO: this should use the parameters from the search space

@@ -225,7 +225,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 )
             self._overwrite_algorithm = overwrite_algorithm
         assert self.setup_class.parse_known_only is True
-        # FIXME A modified setup.config is ignored; or allow setup in "define" <-- best
         if isclass(self.setup_class):
             self._setup = self.setup_class()  # XXX # FIXME # correct args; might not work when used with Tuner
         else:
@@ -250,6 +249,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
     @property
     def algorithm_config(self) -> _ConfigType:
+        """
+        Config of the algorithm used.
+        Note:
+            This is a copy of the setup's config which might has been further modified.
+        """
         return self.algorithm.config  # pyright: ignore[reportReturnType]
 
     @algorithm_config.setter
