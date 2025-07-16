@@ -1,24 +1,27 @@
 from __future__ import annotations
 
 import io
+import os
 import pickle
 import tempfile
 from copy import deepcopy
 from typing import TYPE_CHECKING
-from typing_extensions import Final
 from unittest import mock, skip
 
+from ray import tune
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core import COMPONENT_ENV_RUNNER
 from ray.tune.utils import validate_save_restore
+from typing_extensions import Final
 
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
-from ray_utilities.setup.algorithm_setup import PPOSetup
+from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
+from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.testing_utils import (
     DisableGUIBreakpoints,
     DisableLoggers,
     InitRay,
-    TestCases,
+    Cases,
     TestHelpers,
     iter_cases,
     patch_args,
@@ -26,11 +29,13 @@ from ray_utilities.testing_utils import (
 from ray_utilities.training.default_class import DefaultTrainable
 
 if TYPE_CHECKING:
-    from ray_utilities.typing.trainable_return import TrainableReturnData
     from ray.rllib.algorithms.ppo.ppo import PPO, PPOConfig
 
     from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co
+    from ray_utilities.typing.trainable_return import TrainableReturnData
+
+ENV_RUNNER_TESTS = [0]
 
 
 class TestTraining(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
@@ -71,6 +76,16 @@ class TestTraining(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
         _result1 = trainable.step()
         trainable.cleanup()
 
+    def test_subclass_check(self):
+        TrainableClass = DefaultTrainable.define(PPOSetup.typed())
+        TrainableClass2 = DefaultTrainable.define(PPOSetup.typed())
+        self.assertTrue(issubclass(TrainableClass, TrainableClass2))
+        self.assertTrue(issubclass(TrainableClass2, TrainableClass2))
+        self.assertTrue(issubclass(TrainableClass, DefaultTrainable))
+        self.assertTrue(issubclass(TrainableClass2, DefaultTrainable))
+        self.assertFalse(issubclass(DefaultTrainable, TrainableClass))
+        self.assertFalse(issubclass(DefaultTrainable, TrainableClass2))
+
 
 OVERRIDE_KEYS: Final[set[str]] = {"num_env_runners", "num_epochs", "minibatch_size", "train_batch_size_per_learner"}
 
@@ -104,7 +119,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
         result1 = trainable.step()
         return trainable, result1
 
-    @TestCases([0, 1, 2])
+    @Cases(ENV_RUNNER_TESTS)
     def test_save_checkpoint(self, cases):
         # NOTE: In this test attributes are shared BY identity, this is just a weak test.
         for num_env_runners in iter_cases(cases):
@@ -127,15 +142,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                     trainable2.load_checkpoint(saved_ckpt)
             self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
 
-    @TestCases([1, 2, 3])
-    def test_test_cases(self, cases):
-        tested = []
-        for i, r in enumerate(iter_cases(cases), start=1):
-            self.assertEqual(r, i)
-            tested.append(r)
-        self.assertEqual(tested, [1, 2, 3])
-
-    @TestCases([0, 1, 2])
+    @Cases(ENV_RUNNER_TESTS)
     def test_save_restore(self, cases):
         for num_env_runners in iter_cases(cases):
             trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
@@ -148,7 +155,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                         trainable2.restore(deepcopy(training_result))
                         self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
 
-    @TestCases([0, 1, 2])
+    @Cases(ENV_RUNNER_TESTS)
     def test_get_set_state(self, cases):
         for num_env_runners in iter_cases(cases):
             trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
@@ -161,7 +168,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             # class is missing in config dict
             self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
 
-    @TestCases([0, 1, 2])
+    @Cases(ENV_RUNNER_TESTS)
     def test_safe_to_path(self, cases):
         """Test that the trainable can be saved to a path and restored."""
         for num_env_runners in iter_cases(cases):
@@ -189,6 +196,65 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             self.assertEqual(trainable._setup.args.total_steps, 320)
             validate_save_restore(PPOTrainable)
         # ray.shutdown()
+
+    @Cases(ENV_RUNNER_TESTS)
+    def test_with_tuner(self, cases):
+        # self.enable_loggers()
+        with patch_args(
+            "--num_samples", "1", "--num_jobs", "1", "--batch_size", "32", "--minibatch_size", "16", "--iterations", "3"
+        ):
+            for num_env_runners in iter_cases(cases):
+                with self.subTest(num_env_runners=num_env_runners):
+                    setup = AlgorithmSetup(init_trainable=False)
+                    setup.config.env_runners(num_env_runners=num_env_runners)
+                    setup.config.training(minibatch_size=32)  # insert some noise
+                    setup.create_trainable()
+                    tuner = setup.create_tuner()
+                    assert tuner._local_tuner
+                    tuner._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(
+                        checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
+                        checkpoint_score_order="max",
+                        checkpoint_frequency=1,  # Save every iteration
+                        # NOTE: num_keep does not appear to work here
+                    )
+                    result = tuner.fit()
+                    self.assertEquals(result.num_errors, 0, "Encountered errors: " + str(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+                    checkpoint_dir, checkpoints = self.get_checkpoint_dirs(result[0])
+                    self.assertEqual(
+                        len(checkpoints),
+                        3,
+                        f"Checkpoints were not created. Found: {os.listdir(checkpoint_dir)} in {checkpoint_dir}",
+                    )
+                    # sort to get checkpoints in order 000, 001, 002
+                    for step, checkpoint in enumerate(sorted(checkpoints), 1):
+                        self.assertTrue(os.path.exists(checkpoint))
+
+                        trainable_from_path = DefaultTrainable.define(setup)()
+                        trainable_from_path.restore_from_path(checkpoint)
+                        trainable_from_ckpt: DefaultTrainable = DefaultTrainable.define(setup).from_checkpoint(
+                            checkpoint
+                        )  # pyright: ignore[reportAssignmentType]
+                        # restore is bad if algorithm_checkpoint_dir is a temp dir
+                        self.assertEqual(trainable_from_ckpt.algorithm.iteration, step)
+                        self.assertEqual(trainable_from_path.algorithm.iteration, step)
+                        self.compare_trainables(
+                            trainable_from_path,
+                            trainable_from_ckpt,
+                            "compare from_path with from_checkpoint",
+                            iteration_after_step=step + 1,
+                            step=step,
+                        )
+                        trainable_restore = DefaultTrainable.define(setup)()
+                        trainable_restore.restore(checkpoint)
+                        self.assertEqual(trainable_restore.algorithm.iteration, step)
+                        trainable_from_path.restore_from_path(checkpoint)  # load a second time to test as well
+                        self.compare_trainables(
+                            trainable_restore,
+                            trainable_from_path,
+                            "compare trainable_restore with from_path x2",
+                            iteration_after_step=step + 1,
+                            step=step,
+                        )
 
     @skip("TODO implement")
     def check_dynamic_settings_on_reload(self):

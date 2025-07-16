@@ -15,7 +15,7 @@ from ray_utilities.training.helpers import get_current_step
 
 if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
-    from ray_utilities.typing import AlgorithmReturnData
+    from ray_utilities.typing import StrictAlgorithmReturnData
 
     from ray_utilities.typing import TrainableReturnData
 
@@ -59,10 +59,9 @@ class AlgorithmSetup(
         def trainable(params) -> TrainableReturnData:  # noqa: ARG001
             # This is a placeholder for the actual implementation of the trainable.
             # It should return a dictionary with training data.
-            result: AlgorithmReturnData = self.config.build().train()  # type: ignore
+            result: StrictAlgorithmReturnData = self.config.build().train()  # type: ignore
             result["current_step"] = get_current_step(result)
-            breakpoint()
-            return result
+            return result  # type: ignore[return-value]  # actual implementation should follow protocol
 
         return DefaultTrainable.define(self)
         return trainable

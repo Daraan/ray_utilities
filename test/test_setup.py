@@ -574,7 +574,7 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
             "--batch_size",
             str(ENV_STEPS_PER_ITERATION),
         ):
-            setup = AlgorithmSetup()
+            setup = AlgorithmSetup(init_trainable=False)
         config = setup.config
         config.debugging(seed=11)
         config.environment(env="CartPole-v1")

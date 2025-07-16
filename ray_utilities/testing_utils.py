@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import os
+import pathlib
 import sys
-import numpy.testing as npt
 import unittest
 from contextlib import nullcontext
 from functools import partial
@@ -25,15 +25,16 @@ from typing_extensions import NotRequired, Required, get_origin, get_type_hints
 
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
-from ray_utilities.training.default_class import DefaultTrainable
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     import chex
     from jaxlib.xla_extension import pytree  # pyright: ignore[reportMissingModuleSource] pyi file
+    from ray.tune import Result
 
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co
+    from ray_utilities.training.default_class import DefaultTrainable
 
     LeafType = pytree.SequenceKey | pytree.DictKey | pytree.GetAttrKey
     from flax.training.train_state import TrainState
@@ -49,7 +50,7 @@ _C = TypeVar("_C", bound="Callable[[Any, mock.MagicMock], Any]")
 
 
 @final
-class TestCases:
+class Cases:
     def __init__(self, cases: Iterable[Any] | Callable[[], Any] | BaseException, *args, **kwargs):  # noqa: ARG002
         self._cases = cases
         self._args = args
@@ -68,7 +69,7 @@ class TestCases:
         return mock.patch.object(cls, "next", *args, side_effect=cases, **kwargs)
 
 
-def iter_cases(cases: type[TestCases] | mock.MagicMock):
+def iter_cases(cases: type[Cases] | mock.MagicMock):
     try:
         while True:
             if isinstance(cases, mock.MagicMock):
@@ -267,15 +268,15 @@ class TestHelpers(unittest.TestCase):
         keys1 = set(weights1.keys()) - set(ignore)
         keys2 = set(weights2.keys()) - set(ignore)
         self.assertEqual(keys1, keys2, f"Keys in weights do not match: {msg}")
-        for key in weights1.keys():
+        for key, w1 in weights1.items():
             if key in ignore:
                 continue
-            self.assertEqual(type(weights1[key]), type(weights2[key]), f"Weight '{key}' type does not match: {msg}")
-            if isinstance(weights1[key], dict) and isinstance(weights2[key], dict):
-                self.compare_weights(weights1[key], weights2[key], f"Weight '{key}' does not match: {msg}")
+            self.assertEqual(type(w1), type(weights2[key]), f"Weight '{key}' type does not match: {msg}")
+            if isinstance(weights2[key], dict) and isinstance(w1, dict):
+                self.compare_weights(w1, weights2[key], f"Weight '{key}' does not match: {msg}")
                 continue
             npt.assert_array_equal(
-                weights1[key],
+                w1,
                 weights2[key],
                 err_msg=f"Key '{key}' not equal in both states {msg}",
             )
@@ -347,6 +348,9 @@ class TestHelpers(unittest.TestCase):
         trainable: DefaultTrainable["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
         trainable2: DefaultTrainable["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
         msg: str = "",
+        *,
+        iteration_after_step=2,
+        minibatch_size=32,
         **subtest_kwargs,
     ) -> None:
         """Test functions for trainables obtained in different ways"""
@@ -354,7 +358,7 @@ class TestHelpers(unittest.TestCase):
         with self.subTest("Step 1: Compare trainables " + msg, **subtest_kwargs):
             if hasattr(trainable, "_args") or hasattr(trainable2, "_args"):
                 self.assertDictEqual(trainable2._args, trainable._args)  # type: ignore[attr-defined]
-            self.assertEqual(trainable.algorithm_config.minibatch_size, 32)
+            self.assertEqual(trainable.algorithm_config.minibatch_size, minibatch_size)
             self.assertEqual(trainable2.algorithm_config.minibatch_size, trainable.algorithm_config.minibatch_size)
             self.assertEqual(trainable2._iteration, trainable._iteration)
 
@@ -421,14 +425,23 @@ class TestHelpers(unittest.TestCase):
             # Step 2
             result2 = trainable.step()
             result2_restored = trainable2.step()
-            self.assertEqual(result2[TRAINING_ITERATION], result2_restored[TRAINING_ITERATION])
-            self.assertEqual(result2[TRAINING_ITERATION], 2)
+            self.assertEqual(result2[TRAINING_ITERATION], result2_restored[TRAINING_ITERATION], msg)
+            self.assertEqual(result2[TRAINING_ITERATION], iteration_after_step, msg)
 
         # Compare env_runners
         with self.subTest("Step 2 Compare env_runner configs " + msg, **subtest_kwargs):
             if trainable.algorithm.env_runner or trainable2.algorithm.env_runner:
                 assert trainable.algorithm.env_runner and trainable2.algorithm.env_runner
                 self.compare_env_runner_configs(trainable.algorithm, trainable2.algorithm)
+
+    @staticmethod
+    def get_checkpoint_dirs(result: Result) -> tuple[pathlib.Path, list[str]]:
+        """Returns checkpoint dir of the result and found saved checkpoints"""
+        assert result.checkpoint is not None
+        checkpoint_dir, file = os.path.split(result.checkpoint.path)
+        return pathlib.Path(checkpoint_dir), [
+            os.path.join(checkpoint_dir, f) for f in os.listdir(checkpoint_dir) if f.startswith("checkpoint_")
+        ]
 
 
 class SetupDefaults(TestHelpers, DisableLoggers):

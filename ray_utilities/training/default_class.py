@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.metadata
 import logging
+import os
+from pathlib import Path
 import sys
 from copy import copy
 from typing import TYPE_CHECKING, Any, Collection, Generic, Optional, TypedDict, TypeVar, cast
@@ -158,24 +160,25 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
         if TYPE_CHECKING:
 
-            class DefinedTrainable(cls[Any, Any, Any]):  # pyright: ignore  # cls not subscriptable likely a bug
+            class DefinedTrainable(
+                cls[Any, Any, Any],  # pyright: ignore[reportGeneralTypeIssues]  # cls not subscriptable likely a bug
+                _DefinedTrainableSubclass,
+                base=cls,
+            ):
                 setup_class = setup_cls
                 discrete_eval = discrete_eval_
                 use_pbar = use_pbar_
 
         else:
             try:
-
-                class DefinedTrainable(cls[_ParserTypeInner, _ConfigTypeInner, _AlgorithmTypeInner]):
-                    setup_class = setup_cls
-                    discrete_eval = discrete_eval_
-                    use_pbar = use_pbar_
+                base = cls[_ParserTypeInner, _ConfigTypeInner, _AlgorithmTypeInner]
             except TypeError:  # base not generic
+                base = cls
 
-                class DefinedTrainable(cls):
-                    setup_class = setup_cls
-                    discrete_eval = discrete_eval_
-                    use_pbar = use_pbar_
+            class DefinedTrainable(base, _DefinedTrainableSubclass, base=cls):
+                setup_class = setup_cls
+                discrete_eval = discrete_eval_
+                use_pbar = use_pbar_
 
         return DefinedTrainable
 
@@ -217,7 +220,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # Setup algo, config, args, etc.
         if not hasattr(self, "setup_class"):
             raise ValueError(
-                f"setup_class is not set on {self}. Use TrainableCls = {self.__class__}.define(setup_class) to set it.",
+                f"setup_class is not set on {self}. Use TrainableCls = {self.__class__.__name__}.define(setup_class) to set it.",
             )
         if overwrite_algorithm is not None and self._overwrite_algorithm is not None:
             if overwrite_algorithm != self._overwrite_algorithm:
@@ -302,13 +305,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # can return dict_or_path
         # NOTE: Do not rely on absolute paths in the implementation of
         state = self.get_state()  # TODO: check components
-        self.algorithm.save_checkpoint(checkpoint_dir)
-        # TODO: Use get_state here + checkpoint_dir
+        # save in subdir
+        algo_save_dir = (Path(checkpoint_dir) / "algorithm").as_posix()
+        self.save_to_path(checkpoint_dir)  # saves components
         save = {
             "state": state,  # contains most information
-            "algorithm_checkpoint_dir": checkpoint_dir,
+            "algorithm_checkpoint_dir": algo_save_dir,
         }
-        # Call save_to_path here, instead/as well?
         return save
 
     @override(tune.Trainable)
@@ -327,8 +330,22 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             keys_to_process.remove("state")
 
             # from_checkpoint calls restore_from_path which calls set state
-            self.algorithm = self.algorithm.from_checkpoint(checkpoint["algorithm_checkpoint_dir"])  # pyright: ignore[reportAttributeAccessIssue]
-
+            # if checkpoint["algorithm_checkpoint_dir"] is a tempdir (e.g. from tune, this is wrong)
+            if not os.path.exists(checkpoint["algorithm_checkpoint_dir"]):
+                if "algorithm_state" in checkpoint:
+                    _logger.error(
+                        "Algorithm checkpoint directory %s does not exist, will restore from state",
+                        checkpoint["algorithm_checkpoint_dir"],
+                    )
+                    self.algorithm.set_state(checkpoint["algorithm_state"])
+                else:
+                    _logger.critical(
+                        "Algorithm checkpoint directory %s does not exist (possibly temporary path was saved) and no state provided. ",
+                        "Restored algorithm might be in an unexpected state.",
+                        checkpoint["algorithm_checkpoint_dir"],
+                    )
+            else:
+                self.algorithm = self.algorithm.from_checkpoint(checkpoint["algorithm_checkpoint_dir"])  # pyright: ignore[reportAttributeAccessIssue]
             # Is set_state even needed?
             # Test loaded algo state:
             loaded_algo_state = self.algorithm.get_state(
@@ -602,6 +619,31 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
             )
             self._pbar.update()
         return metrics
+
+
+class _DefinedTrainableSubclass(TrainableBase[Any, Any, Any]):
+    """
+    When restoring the locally defined trainable,
+    rllib performs a subclass check, that fails without a custom hook.
+
+    issubclass will be True if both classes are subclasses of TrainableBase class
+    and the setup classes are subclasses of each other
+    """
+
+    def __init_subclass__(cls, base: type[TrainableBase[Any, Any, Any]] = TrainableBase):
+        cls._base_cls = base
+        return super().__init_subclass__()
+
+    @classmethod
+    def __subclasshook__(cls, subclass: type[TrainableBase[Any, Any, Any] | Any]):
+        if not issubclass(subclass, cls._base_cls):
+            return NotImplemented
+        if hasattr(subclass, "setup_class") and issubclass(
+            subclass.setup_class if isclass(subclass.setup_class) else type(subclass.setup_class),  # pyright: ignore[reportGeneralTypeIssues]
+            cls.setup_class if isclass(cls.setup_class) else type(cls.setup_class),
+        ):
+            return True
+        return False
 
 
 if TYPE_CHECKING:  # check ABC
