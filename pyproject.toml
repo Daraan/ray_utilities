@@ -128,3 +128,6 @@ profile = "black"
 reportDeprecated = "warning"
 reportUnnecessaryComparison = "warning"
 reportUnnecessaryCast = "warning"
+
+[tool.pytest]
+timeout = 300

@@ -26,10 +26,10 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pytest
+        pip install pytest pytest-timeout
         pip install .
     - name: Test with pytest
       # Disable checkpoint tests until Ray's issues with checkpoint loading is solved
       run: |
         export KEEP_MAX_DIFF=1
-        pytest -k "not standalone and not TestAlgorithm"
+        pytest -k "not standalone and not TestMetricsRestored or test_with_tuner"

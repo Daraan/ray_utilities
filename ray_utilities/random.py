@@ -73,6 +73,9 @@ def seed_everything(env, seed: _IntOrNone, *, torch_manual=False, torch_determin
     else:
         seed, next_seed = _split_seed(next_seed)
         tf.random.set_seed(seed)
+        seed, next_seed = _split_seed(next_seed)
+        tf.keras.utils.set_random_seed(seed)  # pyright: ignore
+        tf.config.experimental.enable_op_determinism()
 
     if env:
         if not GYM_V_0_26:  # gymnasium does not have this

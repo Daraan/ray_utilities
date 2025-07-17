@@ -1,11 +1,13 @@
 # pyright: reportOptionalMemberAccess=information
 from __future__ import annotations
 
+# pyright: reportOptionalMemberAccess=none
 import os
 import pathlib
 import sys
 import unittest
 from contextlib import nullcontext
+from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Collection, Iterable, TypeVar, final
@@ -19,26 +21,33 @@ import ray
 import tree
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
+from ray.rllib.core import ALL_MODULES
+from ray.rllib.utils.metrics import (
+    ENV_RUNNER_RESULTS,
+    LEARNER_RESULTS,
+    TIMERS,
+)
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.search.sample import Categorical, Domain
 from typing_extensions import NotRequired, Required, get_origin, get_type_hints
 
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
+from ray_utilities.training.default_class import DefaultTrainable
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     import chex
+    from flax.training.train_state import TrainState
     from jaxlib.xla_extension import pytree  # pyright: ignore[reportMissingModuleSource] pyi file
+    from ray.rllib.algorithms import Algorithm
     from ray.tune import Result
 
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co
     from ray_utilities.training.default_class import DefaultTrainable
 
     LeafType = pytree.SequenceKey | pytree.DictKey | pytree.GetAttrKey
-    from flax.training.train_state import TrainState
-    from ray.rllib.algorithms import Algorithm
 
 args_train_no_tuner = mock.patch.object(
     sys, "argv", ["file.py", "--a", "NA", "--no-render_env", "-J", "1", "-it", "2", "-np"]
@@ -187,6 +196,37 @@ class TestHelpers(unittest.TestCase):
                 npt.assert_array_equal(
                     val1, val2, err_msg=f"Attribute '{attr_checked}.{path1}' not equal in both states {msg}"
                 )
+
+    def util_test_compare_env_runner_results(
+        self,
+        metrics_0: dict[str, Any],
+        metrics_1: dict[str, Any],
+        msg: str | None = None,
+        *,
+        strict: bool = False,
+        compare_results: bool | None = None,
+    ):
+        # Min max metrics can be missing
+        key_difference = set(metrics_0.keys()).symmetric_difference(metrics_1.keys())
+        same_keys = set(metrics_0.keys()).intersection(metrics_1.keys())
+        all_keys = same_keys | key_difference
+        if not strict:
+            all_keys.discard("env_to_module_sum_episodes_length_in")
+            all_keys.discard("env_to_module_sum_episodes_length_out")
+            all_keys.difference_update(key_difference)
+        if compare_results is None:
+            compare_results = strict
+            all_keys.discard("agent_episode_returns_mean")
+            all_keys.discard("module_episode_returns_mean")
+            all_keys.discard("num_episodes_lifetime")  # needs same sampling
+            all_keys.discard("episode_len_max")
+            all_keys.discard("episode_len_min")
+            all_keys.discard("episode_len_mean")
+            all_keys.discard("episode_return_max")
+            all_keys.discard("episode_return_min")
+            all_keys.discard("episode_return_mean")
+        self.set_max_diff(2000)
+        self.assertDictEqual({k: metrics_0[k] for k in all_keys}, {k: metrics_1[k] for k in all_keys}, msg=msg)
 
     def util_test_state_equivalence(
         self,
@@ -451,6 +491,37 @@ class TestHelpers(unittest.TestCase):
         return pathlib.Path(checkpoint_dir), [
             os.path.join(checkpoint_dir, f) for f in os.listdir(checkpoint_dir) if f.startswith("checkpoint_")
         ]
+
+    @classmethod
+    def clean_timer_logs(cls, result: dict):
+        """
+        Cleans the timer logs from the env_runners_dict.
+        This is useful to compare results without the timer logs.
+        """
+        result = deepcopy(result)
+        env_runners_dict = result[ENV_RUNNER_RESULTS]
+        result.pop(TIMERS, None)
+        for key in list(env_runners_dict.keys()):
+            if key.startswith("timer") or key.endswith("timer"):
+                del env_runners_dict[key]
+        del env_runners_dict["module_to_env_connector"]
+        del env_runners_dict["env_to_module_connector"]
+        env_runners_dict.pop("episode_duration_sec_mean", None)
+        del env_runners_dict["sample"]
+        del env_runners_dict["time_between_sampling"]
+        # possibly also remove 'env_to_module_sum_episodes_length_in' which differ greatly
+        env_runners_dict.pop("num_env_steps_sampled_lifetime_throughput", None)
+        # result[ENV_RUNNER_RESULTS]["time_between_sampling"]
+        if LEARNER_RESULTS in result:  # not for evaluation
+            learner_dict = result[LEARNER_RESULTS]
+            learner_all_modules = learner_dict[ALL_MODULES]
+            # learner_default_policy = learner_all_modules[DEFAULT_POLICY_ID]
+            del learner_all_modules["learner_connector"]
+        evaluation_dict = result.get("evaluation", {})
+        if not evaluation_dict:
+            return result
+        result["evaluation"] = cls.clean_timer_logs(evaluation_dict)
+        return result
 
 
 class SetupDefaults(TestHelpers, DisableLoggers):

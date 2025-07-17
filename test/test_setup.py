@@ -6,30 +6,36 @@ import os
 import tempfile
 import time
 import unittest
-from typing import TYPE_CHECKING, Any, cast
 from inspect import isclass
+from typing import TYPE_CHECKING, Any, cast
 
 import tree
 import typing_extensions as te
 from ray import tune
+from ray.rllib.algorithms import Algorithm, AlgorithmConfig
 from ray.rllib.algorithms.ppo import PPO, PPOConfig
-from ray.rllib.algorithms import AlgorithmConfig
+from ray.rllib.core import ALL_MODULES
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
+    LEARNER_RESULTS,
     NUM_ENV_STEPS_SAMPLED,
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
 
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
+from ray_utilities.constants import (
+    EVAL_METRIC_RETURN_MEAN,
+    NUM_ENV_STEPS_PASSED_TO_LEARNER,
+    NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
+)
+from ray_utilities.random import seed_everything
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger
 from ray_utilities.testing_utils import DisableGUIBreakpoints, InitRay, SetupDefaults, patch_args
-from ray_utilities.training.default_class import DefaultTrainable
+from ray_utilities.training.default_class import DefaultTrainable, TrainableBase
 
 if TYPE_CHECKING:
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
-    from ray.rllib.algorithms import Algorithm
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 
 
@@ -322,27 +328,10 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
                 algo_restored.metrics.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)), 0
             )
 
-    def clean_timer_logs(self, result: dict):
-        """
-        Cleans the timer logs from the env_runners_dict.
-        This is useful to compare results without the timer logs.
-        """
-        env_runners_dict = result["env_runners"]
-        for key in list(result.keys()):
-            if key.startswith("timers/"):
-                del env_runners_dict[key]
-        del env_runners_dict["module_to_env_connector"]
-        del env_runners_dict["env_to_module_connector"]
-        del env_runners_dict["episode_duration_sec_mean"]
-        del result["env_runners"]["env_reset_timer"]
-        del result["env_runners"]["env_step_timer"]
-        del result["env_runners"]["rlmodule_inference_timer"]
-        del result["env_runners"]["sample"]
-        env_runners_dict.pop("num_env_steps_sampled_lifetime_throughput", None)
-        # result["env_runners"]["time_between_sampling"]
-        return result
 
+class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
     def _test_checkpoint_values(self, result1: dict[str, Any], result2: dict[str, Any]):
+        """Test NUM_ENV_STEPS_SAMPLED and NUM_ENV_STEPS_PASSED_TO_LEARNER values of two training results."""
         env_runner1 = result1
         env_runner2 = result2
         # This step - trivial tests
@@ -390,19 +379,144 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
         ).build_algo()
         # Metatest if local and remote env runner configs are correct
         with self.subTest("Trivial compare of config vs. env runner configs"):
+            # compare with itself
             self.compare_env_runner_configs(algo_0_runner, algo_0_runner)
             self.compare_env_runner_configs(algo_1_runner, algo_1_runner)
 
+        # Continue training and check new metris
         self._test_algo_checkpointing(
             algo_0_runner,
             algo_1_runner,
             metrics=[NUM_ENV_STEPS_SAMPLED_LIFETIME, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME],
         )
 
-    def _test_algo_checkpointing(self, algo_0_runner: Algorithm, algo_1_runner: Algorithm, metrics: list[str]):
-        assert algo_0_runner.config and algo_1_runner.config and algo_0_runner.metrics and algo_1_runner.metrics
-        self.assertEqual(algo_0_runner.config.num_env_runners, 0)
-        self.assertEqual(algo_1_runner.config.num_env_runners, 1)
+    def test_with_tuner(self):
+        """Test if key stats are restored correctly - does not test further training"""
+        with patch_args(
+            "--num_samples", "1",
+            "--num_jobs", "1",
+            "--batch_size", str(ENV_STEPS_PER_ITERATION),
+            "--minibatch_size", str(ENV_STEPS_PER_ITERATION),
+            "--iterations", "15",
+        ):  # fmt: off
+            frequency = 5
+            # cannot make this deterministic on local vs remote
+            seed_everything(None, 42)
+            setup = AlgorithmSetup(init_trainable=False)
+            setup.config.env_runners(num_env_runners=0)
+            setup.config.training(minibatch_size=5)  # insert some noise
+            setup.config.debugging(seed=42)
+            setup.create_trainable()
+            tuner_0 = setup.create_tuner()
+            seed_everything(None, 42)
+            setup = AlgorithmSetup(init_trainable=False)
+            setup.config.env_runners(num_env_runners=1)
+            setup.config.training(minibatch_size=5)  # insert some noise
+            setup.config.debugging(seed=42)
+            setup.create_trainable()
+            tuner_1 = setup.create_tuner()
+            tune_results = {}
+            for num_env_runners, tuner in enumerate([tuner_0, tuner_1]):
+                assert tuner._local_tuner
+                tuner._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(
+                    checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
+                    checkpoint_score_order="max",
+                    checkpoint_frequency=frequency,  # Save every iteration
+                    # NOTE: num_keep does not appear to work here
+                )
+                seed_everything(None, 42)
+                result = tuner.fit()
+                self.assertEqual(result.num_errors, 0, "Encountered errors: " + str(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+                checkpoint_dir, checkpoints = self.get_checkpoint_dirs(result[0])
+                self.assertEqual(
+                    len(checkpoints),
+                    3,
+                    f"Checkpoints were not created. Found: {os.listdir(checkpoint_dir)} in {checkpoint_dir}",
+                )
+                # sort to get checkpoints in order 000, 001, 002
+                tune_results[num_env_runners] = {
+                    "checkpoint_dir": checkpoint_dir,
+                    "checkpoints": sorted(checkpoints),
+                    "trainables": [],
+                }
+                for step, checkpoint in enumerate(sorted(checkpoints), 1):
+                    self.assertTrue(os.path.exists(checkpoint))
+
+                    restored_trainable: DefaultTrainable = DefaultTrainable.define(setup).from_checkpoint(checkpoint)  # pyright: ignore[reportAssignmentType]
+                    # restore is bad if algorithm_checkpoint_dir is a temp dir
+                    self.assertEqual(restored_trainable.algorithm.iteration, step * frequency)
+                    self.assertEqual(restored_trainable.algorithm_config.num_env_runners, num_env_runners)
+                    self.assertEqual(restored_trainable._setup.config.num_env_runners, num_env_runners)
+                    tune_results[num_env_runners]["trainables"].append(restored_trainable)
+            self.assertGreater(len(tune_results[0]["trainables"]), 0)
+            for step in range(len(tune_results[0]["trainables"])):
+                with self.subTest(f"Compare trainables from step {(step + 1) * frequency}"):
+                    trainable_0: DefaultTrainable = tune_results[0]["trainables"][step]
+                    trainable_1: DefaultTrainable = tune_results[1]["trainables"][step]
+                    assert trainable_0.algorithm.metrics and trainable_1.algorithm.metrics
+                    metrics_0 = trainable_0.algorithm.metrics.reduce()
+                    metrics_1 = trainable_1.algorithm.metrics.reduce()
+                    self._test_checkpoint_values(
+                        metrics_0[ENV_RUNNER_RESULTS],
+                        metrics_1[ENV_RUNNER_RESULTS],
+                    )
+                    self.assertEqual(
+                        metrics_0[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME],
+                        (step + 1) * frequency * ENV_STEPS_PER_ITERATION,
+                        "steps count in learner it not equal",
+                    )
+                    self.assertEqual(
+                        metrics_0[LEARNER_RESULTS][ALL_MODULES][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME],
+                        metrics_1[LEARNER_RESULTS][ALL_MODULES][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME],
+                        "steps count in learner it not equal",
+                    )
+                    self.assertEqual(
+                        metrics_0[LEARNER_RESULTS][ALL_MODULES][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME],
+                        (step + 1) * frequency * ENV_STEPS_PER_ITERATION,
+                        "steps count in learner it not equal",
+                    )
+                    metrics_0_clean = self.clean_timer_logs(metrics_0)
+                    metrics_1_clean = self.clean_timer_logs(metrics_1)
+                    self.util_test_compare_env_runner_results(
+                        metrics_0_clean[ENV_RUNNER_RESULTS],
+                        metrics_1_clean[ENV_RUNNER_RESULTS],
+                        "training",
+                        strict=False,
+                    )
+                    if False:  # do not compare evaluation; no exact sampling and random differences does not align this
+                        self.util_test_compare_env_runner_results(
+                            metrics_0_clean["evaluation"][ENV_RUNNER_RESULTS],
+                            metrics_1_clean["evaluation"][ENV_RUNNER_RESULTS],
+                            "evaluation",
+                            strict=False,
+                        )
+
+    def _test_algo_checkpointing(
+        self,
+        algo_0_runner: Algorithm | TrainableBase,
+        algo_1_runner: Algorithm | TrainableBase,
+        metrics: list[str],
+    ) -> dict[str, dict[int, dict[str, Any]]]:
+        if isinstance(algo_0_runner, Algorithm) and isinstance(algo_1_runner, Algorithm):
+            assert algo_0_runner.config and algo_1_runner.config and algo_0_runner.metrics and algo_1_runner.metrics
+            algorithm_config_0 = algo_0_runner.config
+            algorithm_config_1 = algo_1_runner.config
+            BaseClass = Algorithm
+        elif isinstance(algo_0_runner, TrainableBase) and isinstance(algo_1_runner, TrainableBase):
+            assert (
+                algo_0_runner._setup
+                and algo_1_runner._setup
+                and algo_0_runner.algorithm_config
+                and algo_1_runner.algorithm_config
+            )
+            algorithm_config_0: AlgorithmConfig = algo_0_runner.algorithm_config
+            algorithm_config_1: AlgorithmConfig = algo_1_runner.algorithm_config
+            BaseClass = TrainableBase
+        else:
+            raise TypeError("Algo runners must be of type Algorithm or DefaultTrainable")
+
+        self.assertEqual(algorithm_config_0.num_env_runners, 0)
+        self.assertEqual(algorithm_config_1.num_env_runners, 1)
         # --- Step 1 ---
         result_algo_0_step1 = algo_0_runner.step()
         result_algo_1_step1 = algo_1_runner.step()
@@ -448,21 +562,29 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
                         ENV_STEPS_PER_ITERATION * 3,
                     )
             # Load Step 1
-            algo_0_runner_restored = PPO.from_checkpoint(checkpoint_0_step1)
-            algo_1_runner_restored = PPO.from_checkpoint(checkpoint_1_step1)
-            assert algo_0_runner_restored.metrics and algo_1_runner_restored.metrics
+            algo_0_runner_restored: Algorithm | TrainableBase = BaseClass.from_checkpoint(checkpoint_0_step1)  # pyright: ignore[reportAssignmentType]
+            algo_1_runner_restored: Algorithm | TrainableBase = BaseClass.from_checkpoint(checkpoint_1_step1)  # pyright: ignore[reportAssignmentType]
+            if isinstance(algo_0_runner_restored, Algorithm):
+                metrics_0_restored = algo_0_runner_restored.metrics
+            else:
+                metrics_0_restored = algo_0_runner_restored.algorithm.metrics
+
+            if isinstance(algo_1_runner_restored, Algorithm):
+                metrics_1_restored = algo_1_runner_restored.metrics
+            else:
+                metrics_1_restored = algo_1_runner_restored.algorithm.metrics
             # Check loaded metric
             for metric in metrics:
                 with self.subTest(f"(Checkpointed) Check {metric} after restored step 1", metric=metric):
                     self.assertEqual(
-                        algo_0_runner_restored.metrics.peek((ENV_RUNNER_RESULTS, metric)),
+                        metrics_0_restored.peek((ENV_RUNNER_RESULTS, metric)),
                         ENV_STEPS_PER_ITERATION,
                     )
                     self.assertEqual(
-                        algo_1_runner_restored.metrics.peek((ENV_RUNNER_RESULTS, metric)),
+                        metrics_1_restored.peek((ENV_RUNNER_RESULTS, metric)),
                         ENV_STEPS_PER_ITERATION,
                     )
-            tree.assert_same_structure(algo_0_runner_restored.metrics, algo_1_runner_restored.metrics)
+            tree.assert_same_structure(metrics_0_restored, metrics_1_restored)
 
             # --- Step 2 from restored & checkpoint ---
             result_algo0_step2_restored = algo_0_runner_restored.step()
@@ -471,11 +593,11 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
             for metric in metrics:
                 with self.subTest(f"(Checkpointed) Check {metric} after restored step 2", metric=metric):
                     self.assertEqual(
-                        algo_0_runner_restored.metrics.peek((ENV_RUNNER_RESULTS, metric)),
+                        metrics_0_restored.peek((ENV_RUNNER_RESULTS, metric)),
                         ENV_STEPS_PER_ITERATION * 2,
                     )
                     self.assertEqual(
-                        algo_1_runner_restored.metrics.peek((ENV_RUNNER_RESULTS, metric)),
+                        metrics_1_restored.peek((ENV_RUNNER_RESULTS, metric)),
                         ENV_STEPS_PER_ITERATION * 2,
                     )
             algo_0_runner_restored.save_checkpoint(checkpoint_0_step2_restored)
@@ -500,19 +622,27 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
                         )
             # Test after restoring a second time
             # Load Restored from step 2
-            algo_0_restored_x2 = PPO.from_checkpoint(checkpoint_0_step2_restored)
-            algo_1_restored_x2 = PPO.from_checkpoint(checkpoint_1_step2_restored)
-            assert algo_0_restored_x2.metrics and algo_1_restored_x2.metrics
+            algo_0_restored_x2: Algorithm | TrainableBase = BaseClass.from_checkpoint(checkpoint_0_step2_restored)  # pyright: ignore[reportAssignmentType]
+            algo_1_restored_x2: Algorithm | TrainableBase = BaseClass.from_checkpoint(checkpoint_1_step2_restored)  # pyright: ignore[reportAssignmentType]
+            if isinstance(algo_0_restored_x2, Algorithm):
+                metrics_0_restored_x2 = algo_0_restored_x2.metrics
+            else:
+                metrics_0_restored_x2 = algo_0_restored_x2.algorithm.metrics
+
+            if isinstance(algo_1_restored_x2, Algorithm):
+                metrics_1_restored_x2 = algo_1_restored_x2.metrics
+            else:
+                metrics_1_restored_x2 = algo_1_restored_x2.algorithm.metrics
             for metric in metrics:
                 with self.subTest(f"(Checkpointed x2) Check {metric} after step 2", metric=metric):
                     self.assertEqual(
-                        algo_0_restored_x2.metrics.peek((ENV_RUNNER_RESULTS, metric)),
+                        metrics_0_restored_x2.peek((ENV_RUNNER_RESULTS, metric)),
                         ENV_STEPS_PER_ITERATION * 2,
                         f"Restored x2 num_env_runners=0: {metric} does not match expected value "
                         f"{ENV_STEPS_PER_ITERATION * 2}",
                     )
                     self.assertEqual(
-                        algo_1_restored_x2.metrics.peek((ENV_RUNNER_RESULTS, metric)),
+                        metrics_1_restored_x2.peek((ENV_RUNNER_RESULTS, metric)),
                         ENV_STEPS_PER_ITERATION * 2,
                         f"Restored x2 num_env_runners=1: {metric} does not match expected value "
                         f"{ENV_STEPS_PER_ITERATION * 2}",
@@ -566,7 +696,51 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
             }
         }
 
-    def test_checkpointing(self):
+    def test_trainable_checkpointing(self):
+        """
+        Test if trainable can be checkpointed and restored.
+        """
+        with patch_args(
+            "--batch_size",
+            str(ENV_STEPS_PER_ITERATION),
+        ):
+            setup = AlgorithmSetup(init_trainable=False)
+            config = setup.config
+            config.debugging(seed=11)
+            config.environment(env="CartPole-v1")
+            config.training(
+                train_batch_size_per_learner=ENV_STEPS_PER_ITERATION,
+                num_epochs=2,
+                minibatch_size=ENV_STEPS_PER_ITERATION // 2,
+            )
+            config.env_runners(num_env_runners=0)
+            trainable0 = setup.create_trainable()
+            setup = AlgorithmSetup(init_trainable=False)
+            config = setup.config
+            config.debugging(seed=11)
+            config.environment(env="CartPole-v1")
+            config.training(
+                train_batch_size_per_learner=ENV_STEPS_PER_ITERATION,
+                num_epochs=2,
+                minibatch_size=ENV_STEPS_PER_ITERATION // 2,
+            )
+            config.env_runners(num_env_runners=1)
+            trainable1 = setup.create_trainable()
+        results = self._test_algo_checkpointing(
+            trainable0(),
+            trainable1(),
+            metrics=[
+                NUM_ENV_STEPS_SAMPLED_LIFETIME,
+                NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
+            ],
+        )
+
+        self._test_checkpoint_values(
+            results["env_runners"][0]["step_3"],
+            results["env_runners"][1]["step_3"],
+        )
+
+    def test_algorithm_checkpointing(self):
         print("start")
         path = os.path.dirname(__file__)
         print("path is", path)
