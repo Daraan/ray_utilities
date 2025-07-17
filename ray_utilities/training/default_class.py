@@ -158,27 +158,17 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             if isclass(setup_cls):
                 setup_cls = type(setup_cls.__name__ + "FixedArgv", (setup_cls,), {"_fixed_argv": sys.argv})
 
-        if TYPE_CHECKING:
+        class DefinedTrainable(
+            cls,
+            metaclass=_TrainableSubclassMeta,
+            base=cls,
+        ):
+            setup_class = setup_cls
+            discrete_eval = discrete_eval_
+            use_pbar = use_pbar_
 
-            class DefinedTrainable(
-                cls[Any, Any, Any],  # pyright: ignore[reportGeneralTypeIssues]  # cls not subscriptable likely a bug
-                _DefinedTrainableSubclass,
-                base=cls,
-            ):
-                setup_class = setup_cls
-                discrete_eval = discrete_eval_
-                use_pbar = use_pbar_
-
-        else:
-            try:
-                base = cls[_ParserTypeInner, _ConfigTypeInner, _AlgorithmTypeInner]
-            except TypeError:  # base not generic
-                base = cls
-
-            class DefinedTrainable(base, _DefinedTrainableSubclass, base=cls):
-                setup_class = setup_cls
-                discrete_eval = discrete_eval_
-                use_pbar = use_pbar_
+        assert issubclass(DefinedTrainable, TrainableBase)
+        assert DefinedTrainable._base_cls is cls
 
         return DefinedTrainable
 
@@ -621,23 +611,32 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
         return metrics
 
 
-class _DefinedTrainableSubclass(TrainableBase[Any, Any, Any]):
+from abc import ABCMeta
+
+
+class _TrainableSubclassMeta(ABCMeta):
     """
     When restoring the locally defined trainable,
     rllib performs a subclass check, that fails without a custom hook.
 
     issubclass will be True if both classes are subclasses of TrainableBase class
     and the setup classes are subclasses of each other
+
+    Because of https://github.com/python/cpython/issues/13671 do not use `__subclasshook__`
+    and do not use issubclass(subclass, cls._base_cls) can cause recursion because of ABCMeta.
     """
 
-    def __init_subclass__(cls, base: type[TrainableBase[Any, Any, Any]] = TrainableBase):
-        cls._base_cls = base
-        return super().__init_subclass__()
+    _base_cls: type[TrainableBase[Any, Any, Any]]
+    setup_class: _ExperimentSetup[Any, Any, Any]
 
-    @classmethod
-    def __subclasshook__(cls, subclass: type[TrainableBase[Any, Any, Any] | Any]):
-        if not issubclass(subclass, cls._base_cls):
-            return NotImplemented
+    def __new__(cls, name, bases, namespace, base: type[TrainableBase[Any, Any, Any]] = TrainableBase):
+        namespace["_base_cls"] = base
+        return super().__new__(cls, name, bases, namespace)
+
+    def __subclasscheck__(cls, subclass: type[TrainableBase[Any, Any, Any] | Any]):
+        if cls._base_cls not in subclass.mro():
+            return False
+        # Check that the setup class is also a subclass relationship
         if hasattr(subclass, "setup_class") and issubclass(
             subclass.setup_class if isclass(subclass.setup_class) else type(subclass.setup_class),  # pyright: ignore[reportGeneralTypeIssues]
             cls.setup_class if isclass(cls.setup_class) else type(cls.setup_class),

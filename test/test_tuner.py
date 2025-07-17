@@ -103,7 +103,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers):
             setup = CheckpointSetup()
         tuner = setup.create_tuner()
         results = tuner.fit()
-        self.assertEquals(results.num_errors, 0, "Encountered errors: " + str(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+        self.assertEquals(results.num_errors, 0, "Encountered errors: " + str(results.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
         checkpoint_dir, checkpoints = self.get_checkpoint_dirs(results[0])
         self.assertEqual(
             len(checkpoints),

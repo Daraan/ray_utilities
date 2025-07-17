@@ -348,7 +348,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         trainable = getattr(self, "trainable", None)
         if trainable is None:
             logger.debug(
-                "get_trainable_name called before trainable is set, calling _create_trainable()"
+                "get_trainable_name called before trainable is set. "
                 "Cannot set its name yet, relying on create_trainable to set it."
             )
             return "UNDEFINED"

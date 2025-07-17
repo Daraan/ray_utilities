@@ -18,10 +18,10 @@ from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.testing_utils import (
+    Cases,
     DisableGUIBreakpoints,
     DisableLoggers,
     InitRay,
-    Cases,
     TestHelpers,
     iter_cases,
     patch_args,
@@ -32,24 +32,35 @@ if TYPE_CHECKING:
     from ray.rllib.algorithms.ppo.ppo import PPO, PPOConfig
 
     from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
-    from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co
     from ray_utilities.typing.trainable_return import TrainableReturnData
 
-ENV_RUNNER_TESTS = [0]
+ENV_RUNNER_TESTS = [0, 1, 2]
 
 
-class TestTraining(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
+class TestTrainable(TestHelpers, DisableLoggers, DisableGUIBreakpoints):
+    def test_1_subclass_check(self):
+        """This test should run first as it has side-effects concerning ABCMeta"""
+        TrainableClass = DefaultTrainable.define(PPOSetup.typed())
+        TrainableClass2 = DefaultTrainable.define(PPOSetup.typed())
+        self.assertTrue(issubclass(TrainableClass, TrainableClass2))
+        self.assertTrue(issubclass(TrainableClass2, TrainableClass2))
+        self.assertTrue(issubclass(TrainableClass, DefaultTrainable))
+        self.assertTrue(issubclass(TrainableClass2, DefaultTrainable))
+
+        self.assertFalse(issubclass(DefaultTrainable, TrainableClass))
+        self.assertFalse(issubclass(DefaultTrainable, TrainableClass2))
+
     @patch_args()
     def test_trainable_simple(self):
-        # with self.subTest("No parameters"):
-        #    _result = trainable({})
         def _create_trainable(self: PPOSetup):
-            def trainable(params) -> TrainableReturnData:  # noqa: ARG001
+            global a_trainable_function  # noqa: PLW0603
+
+            def a_trainable_function(params) -> TrainableReturnData:  # noqa: ARG001
                 # This is a placeholder for the actual implementation of the trainable.
                 # It should return a dictionary with training data.
                 return self.config.build().train()  # type: ignore
 
-            return trainable
+            return a_trainable_function
 
         with mock.patch.object(PPOSetup, "_create_trainable", _create_trainable):
             with self.subTest("With parameters"):
@@ -57,7 +68,11 @@ class TestTraining(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
                 setup.config.evaluation(evaluation_interval=1)
                 setup.config.training(num_epochs=2, train_batch_size_per_learner=64, minibatch_size=32)
                 trainable = setup.create_trainable()
+                self.assertIs(trainable, a_trainable_function)
+                print("Invalid check")
                 self.assertNotIsInstance(trainable, DefaultTrainable)
+
+                # train 1 step
                 params = setup.sample_params()
                 _result = trainable(params)
 
@@ -75,16 +90,6 @@ class TestTraining(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
         self.assertEqual(trainable.algorithm_config.num_epochs, 2)
         _result1 = trainable.step()
         trainable.cleanup()
-
-    def test_subclass_check(self):
-        TrainableClass = DefaultTrainable.define(PPOSetup.typed())
-        TrainableClass2 = DefaultTrainable.define(PPOSetup.typed())
-        self.assertTrue(issubclass(TrainableClass, TrainableClass2))
-        self.assertTrue(issubclass(TrainableClass2, TrainableClass2))
-        self.assertTrue(issubclass(TrainableClass, DefaultTrainable))
-        self.assertTrue(issubclass(TrainableClass2, DefaultTrainable))
-        self.assertFalse(issubclass(DefaultTrainable, TrainableClass))
-        self.assertFalse(issubclass(DefaultTrainable, TrainableClass2))
 
 
 OVERRIDE_KEYS: Final[set[str]] = {"num_env_runners", "num_epochs", "minibatch_size", "train_batch_size_per_learner"}
