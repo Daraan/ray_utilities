@@ -281,8 +281,17 @@ class TestHelpers(unittest.TestCase):
                 err_msg=f"Key '{key}' not equal in both states {msg}",
             )
 
+    def set_max_diff(self, max_diff: int | None = None):
+        """Changes the maxDiff only when environment variable KEEP_MAX_DIFF is not set."""
+        if int(os.environ.get("KEEP_MAX_DIFF", "0")):
+            return
+        if max_diff is None:
+            self.maxDiff = 640
+        else:
+            self.maxDiff = max_diff
+
     def compare_env_runner_configs(self, algo: Algorithm, algo_restored: Algorithm):
-        self.maxDiff = max(self.maxDiff or 13000, 13000)
+        self.set_max_diff(max(self.maxDiff or 0, 13000))
 
         def assertCleanDictEqual(a, b, *args, **kwargs):  # noqa: N802
             self.assertDictEqual(
@@ -354,7 +363,7 @@ class TestHelpers(unittest.TestCase):
         **subtest_kwargs,
     ) -> None:
         """Test functions for trainables obtained in different ways"""
-        self.maxDiff = 60_000
+        self.set_max_diff(60_000)
         with self.subTest("Step 1: Compare trainables " + msg, **subtest_kwargs):
             if hasattr(trainable, "_args") or hasattr(trainable2, "_args"):
                 self.assertDictEqual(trainable2._args, trainable._args)  # type: ignore[attr-defined]

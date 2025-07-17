@@ -54,7 +54,7 @@ class TestSetupClasses(SetupDefaults):
         trainable = setup.trainable({})
         self.assertEqual(trainable.algorithm_config.num_epochs, 4)
         self.assertEqual(trainable.algorithm_config.minibatch_size, second=222)
-        self.maxDiff = 15000
+        self.set_max_diff(15000)
         self.assertIsNot(trainable.algorithm_config, setup.config)
         self.compare_configs(
             trainable.algorithm_config,
@@ -163,7 +163,7 @@ class TestSetupClasses(SetupDefaults):
         self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 1234)
         self.assertEqual(trainable.algorithm_config.minibatch_size, 321)
 
-        self.maxDiff = 15000
+        self.set_max_diff(15000)
         self.assertIsNot(trainable.algorithm_config, setup.config)
         self.compare_configs(
             trainable.algorithm_config,
@@ -198,7 +198,7 @@ class TestSetupClasses(SetupDefaults):
         self.assertEqual(trainable._setup.config.minibatch_size, 444)  # changed
         self.assertEqual(trainable._setup.config.train_batch_size_per_learner, 1234)  # unchanged
 
-        self.maxDiff = 15000
+        self.set_max_diff(15000)
         self.assertIsNot(trainable.algorithm_config, setup.config)
         self.compare_configs(
             trainable.algorithm_config,
@@ -250,7 +250,7 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
                     algo_module.get_state(),
                     msg="runner_module vs algo_module",
                 )
-            self.maxDiff = 38000
+            self.set_max_diff(38000)
             state_on_learner = learner_module.get_state()
             state_on_algo = algo_module.get_state()
             # algo might not have critic states:
@@ -599,7 +599,8 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
             results["env_runners"][1]["step_3"],
         )
         # because _throughput values results are not equal in structure (only after 2 steps)
-        # self.maxDiff = 40_000
+        # self.set_max_diff(40000)
+
         # breakpoint()
         # self.assertDictEqual(results["env_runners"][0]["step_3"], results["env_runners"][1]["step_3"])
 

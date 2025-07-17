@@ -71,7 +71,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers):
             # NOTE: num_keep does not appear to work here
         )
         results = tuner.fit()
-        self.assertEquals(results.num_errors, 0, "Encountered errors: " + str(results.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+        self.assertEqual(results.num_errors, 0, "Encountered errors: " + str(results.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
         checkpoint_dir, checkpoints = self.get_checkpoint_dirs(results[0])
         self.assertEqual(
             len(checkpoints),
@@ -103,7 +103,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers):
             setup = CheckpointSetup()
         tuner = setup.create_tuner()
         results = tuner.fit()
-        self.assertEquals(results.num_errors, 0, "Encountered errors: " + str(results.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+        self.assertEqual(results.num_errors, 0, "Encountered errors: " + str(results.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
         checkpoint_dir, checkpoints = self.get_checkpoint_dirs(results[0])
         self.assertEqual(
             len(checkpoints),

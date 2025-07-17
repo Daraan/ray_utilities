@@ -1,3 +1,8 @@
+"""
+This module provides a temporary directory for utility functions, e.g. to store
+logged videos to be uploaded to wandb/comet.
+"""
+
 import atexit
 import os
 import tempfile

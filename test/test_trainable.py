@@ -223,7 +223,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                         # NOTE: num_keep does not appear to work here
                     )
                     result = tuner.fit()
-                    self.assertEquals(result.num_errors, 0, "Encountered errors: " + str(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+                    self.assertEqual(result.num_errors, 0, "Encountered errors: " + str(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
                     checkpoint_dir, checkpoints = self.get_checkpoint_dirs(result[0])
                     self.assertEqual(
                         len(checkpoints),

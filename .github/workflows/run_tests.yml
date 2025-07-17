@@ -31,4 +31,5 @@ jobs:
     - name: Test with pytest
       # Disable checkpoint tests until Ray's issues with checkpoint loading is solved
       run: |
+        export KEEP_MAX_DIFF=1
         pytest -k "not standalone and not TestAlgorithm"

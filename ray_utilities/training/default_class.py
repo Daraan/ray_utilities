@@ -306,12 +306,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
     @override(tune.Trainable)
     def load_checkpoint(self, checkpoint: Optional[dict] | str):
-        # NOTE:from_checkpoint is a classmethod, this isn't
+        # NOTE: from_checkpoint is a classmethod, this isn't
         # set pbar
         # set weights
         # set iterations
         # set reward_updaters
-        _logger.warning("Loading checkpoint: %s", checkpoint)
         if isinstance(checkpoint, dict):
             # TODO
             keys_to_process = set(checkpoint.keys())  # Sanity check if processed all keys
@@ -330,12 +329,12 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     self.algorithm.set_state(checkpoint["algorithm_state"])
                 else:
                     _logger.critical(
-                        "Algorithm checkpoint directory %s does not exist (possibly temporary path was saved) and no state provided. ",
+                        "Algorithm checkpoint directory %s does not exist, (possibly temporary path was saved) and no state provided. "
                         "Restored algorithm might be in an unexpected state.",
                         checkpoint["algorithm_checkpoint_dir"],
                     )
             else:
-                self.algorithm = self.algorithm.from_checkpoint(checkpoint["algorithm_checkpoint_dir"])  # pyright: ignore[reportAttributeAccessIssue]
+                self.algorithm = self.algorithm.from_checkpoint(checkpoint["algorithm_checkpoint_dir"])
             # Is set_state even needed?
             # Test loaded algo state:
             loaded_algo_state = self.algorithm.get_state(
