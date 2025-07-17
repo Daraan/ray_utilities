@@ -32,4 +32,7 @@ jobs:
       # Disable checkpoint tests until Ray's issues with checkpoint loading is solved
       run: |
         export KEEP_MAX_DIFF=1
-        pytest -k "not standalone and not TestMetricsRestored or test_with_tuner"
+        export DISABLE_BREAKPOINTS=1
+        # Split tests because of deadlock
+        pytest -k "not standalone and not TestMetricsRestored or test_with_tuner and not test_trainable"
+        pytest -k "test_trainable"

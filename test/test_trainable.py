@@ -203,7 +203,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
         # ray.shutdown()
 
     @Cases(ENV_RUNNER_TESTS)
-    def test_with_tuner(self, cases):
+    def test_tuner_checkpointing(self, cases):
         # self.enable_loggers()
         with patch_args(
             "--num_samples", "1", "--num_jobs", "1", "--batch_size", "32", "--minibatch_size", "16", "--iterations", "3"

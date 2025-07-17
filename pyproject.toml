@@ -129,5 +129,5 @@ reportDeprecated = "warning"
 reportUnnecessaryComparison = "warning"
 reportUnnecessaryCast = "warning"
 
-[tool.pytest]
+[tool.pytest.ini_options]
 timeout = 300

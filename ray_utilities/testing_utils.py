@@ -560,7 +560,16 @@ class SetupDefaults(TestHelpers, DisableLoggers):
 class DisableGUIBreakpoints(unittest.TestCase):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        if {"-v", "test*.py"} & set(sys.argv) and not int(os.environ.get("KEEP_BREAKPOINTS", "0")):
+        if "GITHUB_REF" in os.environ or (  # no breakpoints on GitHub
+            (
+                (
+                    {"-v", "test*.py"} & set(sys.argv)  # VSCode unittest execution, CLI OK
+                    or os.path.split(sys.argv[0])[-1] == "pytest"  # pytest CLI
+                )
+                and not int(os.environ.get("KEEP_BREAKPOINTS", "0"))  # override
+            )
+            or int(os.environ.get("DISABLE_BREAKPOINTS", "0"))
+        ):
             print("disable breakpoint")
             self._disabled_breakpoints = mock.patch("builtins.breakpoint")
             self._disabled_breakpoints.start()
