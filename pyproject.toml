@@ -130,4 +130,4 @@ reportUnnecessaryComparison = "warning"
 reportUnnecessaryCast = "warning"
 
 [tool.pytest.ini_options]
-timeout = 300
+timeout = 240

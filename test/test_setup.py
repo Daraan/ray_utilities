@@ -13,7 +13,7 @@ import tree
 import typing_extensions as te
 from ray import tune
 from ray.rllib.algorithms import Algorithm, AlgorithmConfig
-from ray.rllib.algorithms.ppo import PPO, PPOConfig
+from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.core import ALL_MODULES
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
@@ -279,7 +279,7 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
                 algo_module.get_state(),
             )
 
-    @unittest.skip("Fix first: Ray moves checkpoint need to load from different location")
+    # @unittest.skip("Fix first: Ray moves checkpoint need to load from different location")
     def test_stopper_with_checkpoint(self):
         from copy import deepcopy
 
@@ -295,17 +295,17 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
                 logger.info(
                     "Iteration %s: Sampled Lifetime: %s", i, result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]
                 )
-                print("iteration", i, "Sampled Lifetime", result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME])
-                time.sleep(0.2)
                 # algo.save_checkpoint(tempdir1)
-                if i == 2:
+                log = {"evaluation/env_runners/episode_return_mean": i} | result
+                algo.save_checkpoint(tempdir1)
+                if (i + 1) % 2 == 0:
                     tune.report(
-                        {"evaluation/env_runners/episode_return_mean": i} | result,
+                        log,
                         checkpoint=tune.Checkpoint.from_directory(tempdir1),
                     )
                 else:
                     tune.report(
-                        {"evaluation/env_runners/episode_return_mean": i} | result,
+                        log,
                         checkpoint=None,
                     )
 
@@ -313,20 +313,24 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
         tuner = setup.create_tuner()
         # With stopper should only iterate 4 times:
         assert tuner._local_tuner
-        tuner._local_tuner._run_config.stop = {NUM_ENV_STEPS_SAMPLED_LIFETIME: 512}
+        # Define stopper
+        tuner._local_tuner._run_config.stop = {ENV_RUNNER_RESULTS + "/" + NUM_ENV_STEPS_SAMPLED_LIFETIME: 512}
         with tempfile.TemporaryDirectory(prefix=".ckpt_") as tempdir1:
             result_grid = tuner.fit()
-            time.sleep(1)
-            print("Training ended.")
             checkpoint = result_grid[0].checkpoint
             assert checkpoint
             # Problem ray moves checkpoint to new location
-            tempdir = checkpoint.to_directory(tempdir1)
-            algo_restored = config.build_algo().from_checkpoint(tempdir)
+            algo_restored = config.build_algo().from_checkpoint(checkpoint.path)
             assert algo_restored.metrics
             self.assertNotEqual(
                 algo_restored.metrics.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)), 0
             )
+            self.assertEqual(
+                algo_restored.metrics.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)), 512
+            )
+            self.assertEqual(algo_restored.iteration, 4)
+            self.assertEqual(result_grid[0].metrics["training_iteration"], 4)
+            self.assertEqual(result_grid[0].metrics["evaluation/env_runners/episode_return_mean"], 512 // 128 - 1)
 
 
 class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):

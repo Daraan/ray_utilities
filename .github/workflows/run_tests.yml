@@ -34,5 +34,6 @@ jobs:
         export KEEP_MAX_DIFF=1
         export DISABLE_BREAKPOINTS=1
         # Split tests because of deadlock
-        pytest -k "not standalone and not TestMetricsRestored or test_with_tuner and not test_trainable"
+        pytest -k "not standalone and not TestMetricsRestored or test_with_tuner and not test_trainable and not test_tuner_checkpointing"
         pytest -k "test_trainable"
+        pytest -k "test_tuner_checkpointing"

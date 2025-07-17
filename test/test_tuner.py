@@ -80,7 +80,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers):
         )
 
     def test_checkpoint_manually(self):
-        self.enable_loggers()
+        # self.enable_loggers()
         with patch_args(
             "--num_samples", "1", "--num_jobs", "1", "--batch_size", "32", "--minibatch_size", "32", "--iterations", "2"
         ):
