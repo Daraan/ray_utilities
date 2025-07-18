@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import logging
+from inspect import isclass
 from typing import TYPE_CHECKING, ClassVar, Optional
 
 import numpy as np
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
 
+try:
+    from ray.tune.callback import _CallbackMeta
+except ImportError:
+    from abc import ABCMeta as _CallbackMeta  # in case meta is removed in future versions
+
+
 if TYPE_CHECKING:
     import gymnasium as gym
-    from ray.rllib.env.env_runner import EnvRunner
     from ray.rllib.env.env_context import EnvContext
+    from ray.rllib.env.env_runner import EnvRunner
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
     from typing_extensions import TypeIs
 
@@ -25,6 +32,21 @@ def _is_async(env) -> TypeIs[gym.vector.AsyncVectorEnv]:
 
 
 logger = logging.getLogger(__name__)
+
+
+class _SeededEnvCallbackMeta(_CallbackMeta):  # pyright: ignore[reportGeneralTypeIssues]  # base is union type
+    env_seed: ClassVar[int | None] = 0
+
+    def __eq__(cls, value):  # pyright: ignore[reportSelfClsParameterName]
+        if not isclass(value):
+            return False
+        if SeedEnvsCallback in value.__bases__:
+            return cls.env_seed == value.env_seed
+        return False
+
+    def __hash__(cls):  # pyright: ignore[reportSelfClsParameterName]
+        # Jonas
+        return hash(DefaultCallbacks) + hash(cls.env_seed) + hash(cls.__name__)
 
 
 class SeedEnvsCallback(DefaultCallbacks):
@@ -103,13 +125,17 @@ class SeedEnvsCallback(DefaultCallbacks):
         if "env_context" in kwargs:
             self.on_environment_created(**kwargs)
 
+    def __eq__(self, other):
+        """Equality check for the callback."""
+        return isinstance(other, SeedEnvsCallback) and self.env_seed == other.env_seed
+
 
 def make_seeded_env_callback(env_seed_: int | None) -> type[SeedEnvsCallback]:
     """Create a callback that seeds the environment."""
     if env_seed_ is None:
         logger.info("Using None as env_seed, this will create non-reproducible runs. The callback is deactivated.")
 
-    class FixedSeedEnvsCallback(SeedEnvsCallback):
+    class FixedSeedEnvsCallback(SeedEnvsCallback, metaclass=_SeededEnvCallbackMeta):
         env_seed = env_seed_
 
     return FixedSeedEnvsCallback

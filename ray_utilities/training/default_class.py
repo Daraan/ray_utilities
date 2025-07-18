@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from abc import ABCMeta
 import importlib.metadata
 import logging
 import os
@@ -225,6 +226,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 )
             self._overwrite_algorithm = overwrite_algorithm
         assert self.setup_class.parse_known_only is True
+        _logger.info("Setting up %s with config: %s", self.__class__.__name__, config)
+        if "cli_args" in config and "from_checkpoint" in config["cli_args"]:
+            # calls restore from path; from_checkpoint could also be a dict here
+            self.load_checkpoint(config["cli_args"]["from_checkpoint"])
+            return
         if isclass(self.setup_class):
             self._setup = self.setup_class()  # XXX # FIXME # correct args; might not work when used with Tuner
         else:
@@ -585,34 +591,6 @@ if TYPE_CHECKING:
     TrainableBase()  # check ABC
 
 
-class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
-    """Default trainable for ray.tune based on RLlib algorithms."""
-
-    def step(self) -> LogMetricsDict:  # iteratively
-        result, metrics, rewards = training_step(
-            self.algorithm,
-            reward_updaters=self._reward_updaters,
-            discrete_eval=self.discrete_eval,
-            disable_report=True,
-            log_stats=self.log_stats,
-        )
-        # Update progress bar
-        if is_pbar(self._pbar):
-            update_pbar(
-                self._pbar,
-                rewards=rewards,
-                metrics=metrics,
-                result=result,
-                current_step=get_current_step(result),
-                total_steps=get_total_steps(self._total_steps, self.algorithm_config),
-            )
-            self._pbar.update()
-        return metrics
-
-
-from abc import ABCMeta
-
-
 class _TrainableSubclassMeta(ABCMeta):
     """
     When restoring the locally defined trainable,
@@ -637,11 +615,38 @@ class _TrainableSubclassMeta(ABCMeta):
             return False
         # Check that the setup class is also a subclass relationship
         if hasattr(subclass, "setup_class") and issubclass(
-            subclass.setup_class if isclass(subclass.setup_class) else type(subclass.setup_class),  # pyright: ignore[reportGeneralTypeIssues]
+            (
+                subclass.setup_class if isclass(subclass.setup_class) else type(subclass.setup_class)  # pyright: ignore[reportGeneralTypeIssues]
+            ),
             cls.setup_class if isclass(cls.setup_class) else type(cls.setup_class),
         ):
             return True
         return False
+
+
+class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
+    """Default trainable for ray.tune based on RLlib algorithms."""
+
+    def step(self) -> LogMetricsDict:  # iteratively
+        result, metrics, rewards = training_step(
+            self.algorithm,
+            reward_updaters=self._reward_updaters,
+            discrete_eval=self.discrete_eval,
+            disable_report=True,
+            log_stats=self.log_stats,
+        )
+        # Update progress bar
+        if is_pbar(self._pbar):
+            update_pbar(
+                self._pbar,
+                rewards=rewards,
+                metrics=metrics,
+                result=result,
+                current_step=get_current_step(result),
+                total_steps=get_total_steps(self._total_steps, self.algorithm_config),
+            )
+            self._pbar.update()
+        return metrics
 
 
 if TYPE_CHECKING:  # check ABC

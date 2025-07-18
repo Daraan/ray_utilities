@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional, TypeVar, overload
-
-from ray.tune.result_grid import ResultGrid
+from typing import TYPE_CHECKING, Optional, TypeVar
 
 from ray_utilities.random import seed_everything
 

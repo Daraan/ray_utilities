@@ -10,7 +10,7 @@ from contextlib import nullcontext
 from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Collection, Iterable, TypeVar, final
+from typing import TYPE_CHECKING, Any, Collection, Iterable, TypeAlias, TypeVar, final
 from unittest import mock
 
 import gymnasium as gym
@@ -28,11 +28,11 @@ from ray.rllib.utils.metrics import (
     TIMERS,
 )
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
-from ray.tune.search.sample import Categorical, Domain
-from typing_extensions import NotRequired, Required, get_origin, get_type_hints
+from ray.tune.search.sample import Categorical, Domain, Integer, Float
+from typing_extensions import Final, NotRequired, Required, get_origin, get_type_hints
 
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.setup.algorithm_setup import AlgorithmSetup
+from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.training.default_class import DefaultTrainable
 
 if TYPE_CHECKING:
@@ -42,12 +42,12 @@ if TYPE_CHECKING:
     from flax.training.train_state import TrainState
     from jaxlib.xla_extension import pytree  # pyright: ignore[reportMissingModuleSource] pyi file
     from ray.rllib.algorithms import Algorithm
+    from ray.rllib.algorithms.ppo.ppo import PPO, PPOConfig
     from ray.tune import Result
 
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co
-    from ray_utilities.training.default_class import DefaultTrainable
 
-    LeafType = pytree.SequenceKey | pytree.DictKey | pytree.GetAttrKey
+    LeafType: TypeAlias = pytree.SequenceKey | pytree.DictKey | pytree.GetAttrKey
 
 args_train_no_tuner = mock.patch.object(
     sys, "argv", ["file.py", "--a", "NA", "--no-render_env", "-J", "1", "-it", "2", "-np"]
@@ -167,7 +167,50 @@ class InitRay(unittest.TestCase):
         super().tearDownClass()
 
 
+OVERRIDE_KEYS: Final[set[str]] = {"num_env_runners", "num_epochs", "minibatch_size", "train_batch_size_per_learner"}
+
+
 class TestHelpers(unittest.TestCase):
+    # region setups
+
+    @patch_args(
+        "--iterations", "5", "--total_steps", "320", "--batch_size", "64", "--comment", "running tests", "--seed", "42"
+    )
+    def get_trainable(self, num_env_runners: int = 0):
+        # NOTE: In this test attributes are shared BY identity, this is just a weak test.
+        self.TrainableClass: type[DefaultTrainable[DefaultArgumentParser, PPOConfig, PPO]] = DefaultTrainable.define(
+            PPOSetup.typed()
+        )
+        # this initializes the algorithm; overwrite batch_size of 64 again.
+        # This does not modify the state["setup"]["config"]
+        overrides = AlgorithmConfig.overrides(
+            num_env_runners=num_env_runners, num_epochs=2, minibatch_size=32, train_batch_size_per_learner=32
+        )
+        trainable = self.TrainableClass(overwrite_algorithm=overrides)
+        self.assertEqual(trainable._overwrite_algorithm, overrides)
+        self.assertEqual(overrides.keys(), OVERRIDE_KEYS)
+        self.assertEqual(trainable.algorithm_config.num_env_runners, num_env_runners)
+        self.assertEqual(trainable.algorithm_config.minibatch_size, 32)
+        self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 32)
+        self.assertEqual(trainable.algorithm_config.num_epochs, 2)
+        self.assertEqual(trainable._setup.args.iterations, 5)
+        self.assertEqual(trainable._setup.args.total_steps, 320)
+        self.assertEqual(trainable._setup.args.train_batch_size_per_learner, 64)  # not overwritten
+
+        result1 = trainable.step()
+        return trainable, result1
+
+    # endregion
+
+    def set_max_diff(self, max_diff: int | None = None):
+        """Changes the maxDiff only when environment variable KEEP_MAX_DIFF is not set."""
+        if int(os.environ.get("KEEP_MAX_DIFF", "0")):
+            return
+        if max_diff is None:
+            self.maxDiff = 640
+        else:
+            self.maxDiff = max_diff
+
     def util_test_tree_equivalence(
         self,
         tree1: TrainState | Any,
@@ -321,14 +364,7 @@ class TestHelpers(unittest.TestCase):
                 err_msg=f"Key '{key}' not equal in both states {msg}",
             )
 
-    def set_max_diff(self, max_diff: int | None = None):
-        """Changes the maxDiff only when environment variable KEEP_MAX_DIFF is not set."""
-        if int(os.environ.get("KEEP_MAX_DIFF", "0")):
-            return
-        if max_diff is None:
-            self.maxDiff = 640
-        else:
-            self.maxDiff = max_diff
+    # region tests
 
     def compare_env_runner_configs(self, algo: Algorithm, algo_restored: Algorithm):
         self.set_max_diff(max(self.maxDiff or 0, 13000))
@@ -402,7 +438,12 @@ class TestHelpers(unittest.TestCase):
         minibatch_size=32,
         **subtest_kwargs,
     ) -> None:
-        """Test functions for trainables obtained in different ways"""
+        """
+        Test functions for trainables obtained in different ways
+
+        Attention:
+            Does perform a step on each trainable
+        """
         self.set_max_diff(60_000)
         with self.subTest("Step 1: Compare trainables " + msg, **subtest_kwargs):
             if hasattr(trainable, "_args") or hasattr(trainable2, "_args"):
@@ -446,9 +487,18 @@ class TestHelpers(unittest.TestCase):
                     if isinstance(value1, Categorical):
                         assert isinstance(value2, Categorical)
                         self.assertListEqual(value1.categories, value2.categories)
+                    elif isinstance(value1, (Integer, Float)):
+                        assert isinstance(value2, type(value1))
+                        self.assertEqual(value1.lower, value2.lower)
+                        self.assertEqual(value1.upper, value2.upper)
                     else:
                         # This will likely fail, need to compare attributes
-                        self.assertEqual(value1, value2, f"Domain {key} differs: {value1} != {value2}")
+                        try:
+                            self.assertEqual(value1, value2, f"Domain {key} differs: {value1} != {value2}")
+                        except AssertionError:
+                            self.assertDictEqual(
+                                value1.__dict__, value2.__dict__, f"Domain {key} differs: {value1} != {value2}"
+                            )
                 else:
                     self.assertEqual(value1, value2, f"Parameter {key} differs: {value1} != {value2}")
 

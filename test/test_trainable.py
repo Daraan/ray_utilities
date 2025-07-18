@@ -12,9 +12,7 @@ from ray import tune
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core import COMPONENT_ENV_RUNNER
 from ray.tune.utils import validate_save_restore
-from typing_extensions import Final
 
-from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.testing_utils import (
@@ -29,9 +27,6 @@ from ray_utilities.testing_utils import (
 from ray_utilities.training.default_class import DefaultTrainable
 
 if TYPE_CHECKING:
-    from ray.rllib.algorithms.ppo.ppo import PPO, PPOConfig
-
-    from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
     from ray_utilities.typing.trainable_return import TrainableReturnData
 
 ENV_RUNNER_TESTS = [0, 1, 2]
@@ -92,37 +87,9 @@ class TestTrainable(TestHelpers, DisableLoggers, DisableGUIBreakpoints):
         trainable.cleanup()
 
 
-OVERRIDE_KEYS: Final[set[str]] = {"num_env_runners", "num_epochs", "minibatch_size", "train_batch_size_per_learner"}
-
-
 class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
     def setUp(self):
         super().setUp()
-
-    @patch_args("--iterations", "5", "--total_steps", "320", "--batch_size", "64", "--comment", "running tests")
-    def get_trainable(self, num_env_runners: int = 0):
-        # NOTE: In this test attributes are shared BY identity, this is just a weak test.
-        self.TrainableClass: type[DefaultTrainable[DefaultArgumentParser, PPOConfig, PPO]] = DefaultTrainable.define(
-            PPOSetup.typed()
-        )
-        # this initializes the algorithm; overwrite batch_size of 64 again.
-        # This does not modify the state["setup"]["config"]
-        overrides = AlgorithmConfig.overrides(
-            num_env_runners=num_env_runners, num_epochs=2, minibatch_size=32, train_batch_size_per_learner=32
-        )
-        trainable = self.TrainableClass(overwrite_algorithm=overrides)
-        self.assertEqual(trainable._overwrite_algorithm, overrides)
-        self.assertEqual(overrides.keys(), OVERRIDE_KEYS)
-        self.assertEqual(trainable.algorithm_config.num_env_runners, num_env_runners)
-        self.assertEqual(trainable.algorithm_config.minibatch_size, 32)
-        self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 32)
-        self.assertEqual(trainable.algorithm_config.num_epochs, 2)
-        self.assertEqual(trainable._setup.args.iterations, 5)
-        self.assertEqual(trainable._setup.args.total_steps, 320)
-        self.assertEqual(trainable._setup.args.train_batch_size_per_learner, 64)  # not overwritten
-
-        result1 = trainable.step()
-        return trainable, result1
 
     @Cases(ENV_RUNNER_TESTS)
     def test_save_checkpoint(self, cases):
@@ -157,7 +124,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                     print(f"Saved training result: {training_result}")
                     with patch_args():  # make sure that args do not influence the restore
                         trainable2 = self.TrainableClass()
-                        trainable2.restore(deepcopy(training_result))
+                        trainable2.restore(deepcopy(training_result))  # calls load_checkpoint
                         self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
 
     @Cases(ENV_RUNNER_TESTS)
@@ -201,6 +168,82 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             self.assertEqual(trainable._setup.args.total_steps, 320)
             validate_save_restore(PPOTrainable)
         # ray.shutdown()
+
+    @Cases([0])
+    def test_interface_interchangeability(self, cases):
+        """Test if methods can be used interchangeably."""
+        for num_env_runners in iter_cases(cases):
+            # create two trainables as compare_trainables takes a step
+            trainable_a, _ = self.get_trainable(num_env_runners=num_env_runners)
+            trainable_b, _ = self.get_trainable(num_env_runners=num_env_runners)
+            # Save to save_checkpoint saves less data; i.e. no class and kwargs
+            with self.subTest("save_checkpoint -> restore_from_path"):
+                with tempfile.TemporaryDirectory() as tmpdir1, tempfile.TemporaryDirectory() as tmpdir2:
+                    trainable_a.save_checkpoint(tmpdir1)
+                    trainable_b.save_checkpoint(tmpdir2)
+                    with patch_args():
+                        trainable2 = self.TrainableClass()
+                        trainable2.restore_from_path(tmpdir1)
+                        trainable2_b: DefaultTrainable = self.TrainableClass.from_checkpoint(tmpdir2)  # pyright: ignore[reportAssignmentType]
+                self.compare_trainables(trainable_a, trainable2, num_env_runners=num_env_runners)
+                self.compare_trainables(trainable_b, trainable2_b, num_env_runners=num_env_runners)
+            del trainable2
+            del trainable2_b
+            del trainable_a
+            del trainable_b
+            with self.subTest("save_to_path -> load_checkpoint"):
+                trainable_c, _ = self.get_trainable(num_env_runners=num_env_runners)
+                trainable_d, _ = self.get_trainable(num_env_runners=num_env_runners)
+                with tempfile.TemporaryDirectory() as tmpdir1, tempfile.TemporaryDirectory() as tmpdir2:
+                    trainable_c.save_to_path(tmpdir1)
+                    trainable_d.save_to_path(tmpdir2)
+                    with patch_args():
+                        trainable3 = self.TrainableClass()
+                        trainable3.load_checkpoint(tmpdir1)
+                        trainable3_b: DefaultTrainable = self.TrainableClass.from_checkpoint(tmpdir2)  # pyright: ignore[reportAssignmentType]
+                self.compare_trainables(trainable_c, trainable3, num_env_runners=num_env_runners)
+                self.compare_trainables(trainable_d, trainable3_b, num_env_runners=num_env_runners)
+
+    def test_restore_multiprocessing(self):
+        import ray
+
+        ray.shutdown()
+        from multiprocessing import Process, Pipe
+        from ray.util.multiprocessing import Pool
+        from test._mp_trainable import remote_process
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            parent_conn, child_conn = Pipe()
+            if True:
+                pool = Pool(1)
+                pickled_trainable = pool.map(remote_process, [(tmpdir, child_conn)])[0]
+                # pickled_trainable_2 = parent_conn.recv()
+                pool.close()
+            else:
+                p = Process(target=remote_process, args=(tmpdir, child_conn))
+                print("starting remote process")
+                p.start()
+                print("Waiting for remote process to send pickled trainable")
+                print("Received pickled trainable in main process")
+                p.join()
+                print("Unpickling trainable in main process")
+            print("Restorintg trainable from saved data")
+            trainable_restored = DefaultTrainable.define(PPOSetup.typed()).from_checkpoint(tmpdir)
+            # Compare with default trainable:
+            print("Create new default trainable")
+            self._disable_loggers.start()
+            trainable, _ = self.get_trainable()
+            self.compare_trainables(
+                trainable,
+                trainable_restored,
+            )
+            print("Compareing restored trainable with pickled trainable")
+            if pickled_trainable is not None:
+                trainable_restored2 = pickle.loads(pickled_trainable)
+                self.compare_trainables(
+                    trainable_restored,
+                    trainable_restored2,
+                )
 
     @Cases(ENV_RUNNER_TESTS)
     def test_tuner_checkpointing(self, cases):
