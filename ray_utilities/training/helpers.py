@@ -20,7 +20,6 @@ from typing_extensions import TypeAliasType
 from ray_utilities.config import seed_environments_for_config
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_steps
-from ray_utilities.typing.metrics import LogMetricsDict
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
@@ -31,6 +30,7 @@ if TYPE_CHECKING:
         RewardUpdaters,
         StrictAlgorithmReturnData,
     )
+    from ray_utilities.typing.metrics import LogMetricsDict
     from ray_utilities.typing.trainable_return import RewardUpdater
 
 logger = logging.getLogger(__name__)

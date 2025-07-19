@@ -403,6 +403,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             "--batch_size", str(ENV_STEPS_PER_ITERATION),
             "--minibatch_size", str(ENV_STEPS_PER_ITERATION),
             "--iterations", "15",
+            "--seed", "12",
         ):  # fmt: off
             frequency = 5
             # cannot make this deterministic on local vs remote
@@ -447,9 +448,13 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                 for step, checkpoint in enumerate(sorted(checkpoints), 1):
                     self.assertTrue(os.path.exists(checkpoint))
 
-                    restored_trainable: DefaultTrainable = DefaultTrainable.define(setup).from_checkpoint(checkpoint)  # pyright: ignore[reportAssignmentType]
+                    restored_trainable: DefaultTrainable[Any, AlgorithmConfig, Any] = DefaultTrainable.define(
+                        setup
+                    ).from_checkpoint(checkpoint)  # pyright: ignore[reportAssignmentType]
                     # restore is bad if algorithm_checkpoint_dir is a temp dir
                     self.assertEqual(restored_trainable.algorithm.iteration, step * frequency)
+                    self.assertEqual(restored_trainable.algorithm_config.seed, 42)
+                    self.assertEqual(restored_trainable._setup.args.seed, 12)
                     self.assertEqual(restored_trainable.algorithm_config.num_env_runners, num_env_runners)
                     self.assertEqual(restored_trainable._setup.config.num_env_runners, num_env_runners)
                     tune_results[num_env_runners]["trainables"].append(restored_trainable)
@@ -482,8 +487,6 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                     )
                     metrics_0_clean = self.clean_timer_logs(metrics_0)
                     metrics_1_clean = self.clean_timer_logs(metrics_1)
-                    # Fails on GitHub (ray 2.46, but not on 2.47.1)
-                    self.maxDiff = 1000
                     self.util_test_compare_env_runner_results(
                         metrics_0_clean[ENV_RUNNER_RESULTS],
                         metrics_1_clean[ENV_RUNNER_RESULTS],

@@ -10,7 +10,7 @@ from contextlib import nullcontext
 from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Collection, Iterable, TypeAlias, TypeVar, final
+from typing import TYPE_CHECKING, Any, ClassVar, Collection, Iterable, TypeAlias, TypeVar, final
 from unittest import mock
 
 import gymnasium as gym
@@ -28,7 +28,7 @@ from ray.rllib.utils.metrics import (
     TIMERS,
 )
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
-from ray.tune.search.sample import Categorical, Domain, Integer, Float
+from ray.tune.search.sample import Categorical, Domain, Float, Integer
 from typing_extensions import Final, NotRequired, Required, get_origin, get_type_hints
 
 from ray_utilities.config import DefaultArgumentParser
@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from ray.tune import Result
 
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co
+    from ray_utilities.training.default_class import TrainableBase
 
     LeafType: TypeAlias = pytree.SequenceKey | pytree.DictKey | pytree.GetAttrKey
 
@@ -173,6 +174,13 @@ OVERRIDE_KEYS: Final[set[str]] = {"num_env_runners", "num_epochs", "minibatch_si
 class TestHelpers(unittest.TestCase):
     # region setups
 
+    _created_trainables: ClassVar[list[TrainableBase]] = []
+
+    def tearDown(self):
+        for trainable in self._created_trainables:
+            trainable.cleanup()
+        super().tearDown()
+
     @patch_args(
         "--iterations", "5", "--total_steps", "320", "--batch_size", "64", "--comment", "running tests", "--seed", "42"
     )
@@ -187,6 +195,7 @@ class TestHelpers(unittest.TestCase):
             num_env_runners=num_env_runners, num_epochs=2, minibatch_size=32, train_batch_size_per_learner=32
         )
         trainable = self.TrainableClass(overwrite_algorithm=overrides)
+        self._created_trainables.append(trainable)
         self.assertEqual(trainable._overwrite_algorithm, overrides)
         self.assertEqual(overrides.keys(), OVERRIDE_KEYS)
         self.assertEqual(trainable.algorithm_config.num_env_runners, num_env_runners)
@@ -259,8 +268,10 @@ class TestHelpers(unittest.TestCase):
             all_keys.difference_update(key_difference)
         if compare_results is None:
             compare_results = strict
-            all_keys.discard("agent_episode_returns_mean")
-            all_keys.discard("module_episode_returns_mean")
+            all_keys.discard("agent_episode_returns_mean")  # <2.48
+            all_keys.discard("agent_episode_return_mean")  # 2.48
+            all_keys.discard("module_episode_returns_mean")  # <2.48
+            all_keys.discard("module_episode_return_mean")  # 2.48
             all_keys.discard("num_episodes_lifetime")  # needs same sampling
             all_keys.discard("episode_len_max")
             all_keys.discard("episode_len_min")

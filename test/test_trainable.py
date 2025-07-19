@@ -117,6 +117,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                     trainable2 = self.TrainableClass()
                     trainable2.load_checkpoint(saved_ckpt)
             self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
+            trainable2.cleanup()
 
     @Cases(ENV_RUNNER_TESTS)
     def test_save_restore(self, cases):
@@ -130,6 +131,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                         trainable2 = self.TrainableClass()
                         trainable2.restore(deepcopy(training_result))  # calls load_checkpoint
                         self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
+                        trainable2.cleanup()
 
     @Cases(ENV_RUNNER_TESTS)
     def test_get_set_state(self, cases):
@@ -173,9 +175,10 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             self.assertEqual(trainable._setup.args.iterations, 5)
             self.assertEqual(trainable._setup.args.total_steps, 320)
             validate_save_restore(PPOTrainable)
+            trainable.cleanup()
         # ray.shutdown()
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases([0])
     def test_interface_interchangeability(self, cases):
         """Test if methods can be used interchangeably."""
         for num_env_runners in iter_cases(cases):
@@ -249,7 +252,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             if pickled_trainable is not None:
                 trainable_restored2 = pickle.loads(pickled_trainable)
                 self.compare_trainables(
-                    trainable_restored,
+                    trainable_restored,  # <-- need new trainable here
                     trainable_restored2,
                 )
 

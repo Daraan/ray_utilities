@@ -226,7 +226,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 )
             self._overwrite_algorithm = overwrite_algorithm
         assert self.setup_class.parse_known_only is True
-        _logger.info("Setting up %s with config: %s", self.__class__.__name__, config)
+        _logger.debug("Setting up %s with config: %s", self.__class__.__name__, config)
         if "cli_args" in config and config["cli_args"].get("from_checkpoint") not in (None, ""):
             # calls restore from path; from_checkpoint could also be a dict here
             self.load_checkpoint(config["cli_args"]["from_checkpoint"])
@@ -585,6 +585,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
     def step(self) -> LogMetricsDict:
         raise NotImplementedError("Subclasses must implement the `step` method.")
+
+    def __del__(self):
+        # Cleanup the pbar if it is still open
+        try:
+            if is_pbar(self._pbar):
+                self._pbar.close()
+        except:  # noqa: E722
+            pass
 
 
 if TYPE_CHECKING:

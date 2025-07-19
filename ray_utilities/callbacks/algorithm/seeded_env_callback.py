@@ -133,7 +133,9 @@ class SeedEnvsCallback(DefaultCallbacks):
 def make_seeded_env_callback(env_seed_: int | None) -> type[SeedEnvsCallback]:
     """Create a callback that seeds the environment."""
     if env_seed_ is None:
-        logger.info("Using None as env_seed, this will create non-reproducible runs. The callback is deactivated.")
+        logger.info(
+            "Using None as env_seed, this will create non-reproducible runs. The callback is deactivated.", stacklevel=2
+        )
 
     class FixedSeedEnvsCallback(SeedEnvsCallback, metaclass=_SeededEnvCallbackMeta):
         env_seed = env_seed_
