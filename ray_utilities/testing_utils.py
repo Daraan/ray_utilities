@@ -608,6 +608,8 @@ class SetupDefaults(TestHelpers, DisableLoggers):
 
 
 class DisableGUIBreakpoints(unittest.TestCase):
+    _printed_breakpoints: bool = False
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         if "GITHUB_REF" in os.environ or (  # no breakpoints on GitHub
@@ -620,9 +622,11 @@ class DisableGUIBreakpoints(unittest.TestCase):
             )
             or int(os.environ.get("DISABLE_BREAKPOINTS", "0"))
         ):
-            print("disable breakpoint")
+            if not self._printed_breakpoints:
+                print("Disabling breakpoints in tests")
+                DisableGUIBreakpoints._printed_breakpoints = True
             self._disabled_breakpoints = mock.patch("builtins.breakpoint")
             self._disabled_breakpoints.start()
         else:
             self._disabled_breakpoints = mock.patch("builtins.breakpoint")
-            print("enable breakpoint")
+            print("enabled breakpoint")

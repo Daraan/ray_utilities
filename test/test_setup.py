@@ -482,6 +482,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                     )
                     metrics_0_clean = self.clean_timer_logs(metrics_0)
                     metrics_1_clean = self.clean_timer_logs(metrics_1)
+                    # Fails on GitHub (ray 2.46, but not on 2.47.1)
+                    self.maxDiff = 1000
                     self.util_test_compare_env_runner_results(
                         metrics_0_clean[ENV_RUNNER_RESULTS],
                         metrics_1_clean[ENV_RUNNER_RESULTS],
