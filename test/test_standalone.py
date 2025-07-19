@@ -94,6 +94,7 @@ class TestAlgorithm(unittest.TestCase):
         ).build_algo()
         return algo_0_runner, algo_1_runner
 
+    @unittest.skip("Needs to be fixed in ray first")
     def test_metrics_after_checkpoint(self):
         algo_0_runner, algo_1_runner = self.setup_algos()
         self._test_algo_checkpointing(
@@ -262,6 +263,7 @@ class TestAlgorithm(unittest.TestCase):
                             result_algo1_step3_restored_x2[ENV_RUNNER_RESULTS][metric],
                         )
 
+    @unittest.skip("Needs to be fixed in ray first")
     def test_steps_after_later_reload(self):
         """Assure that reload does not reset metrics."""
         algo_0_runner, algo_1_runner = self.setup_algos()

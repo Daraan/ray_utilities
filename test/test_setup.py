@@ -352,6 +352,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
 
     #        self.assertEqual(env_runner1[EPISODE_RETURN_MEAN], env_runner2[EPISODE_RETURN_MEAN])
 
+    @unittest.skip("Needs to be fixed in ray first")
     def test_checkpointing_native(self):
         """
         NOTE: This test needs a patch in ray (very!) earliest coming with 2.47.2+
@@ -395,7 +396,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
         )
 
     def test_with_tuner(self):
-        """Test if key stats are restored correctly - does not test further training"""
+        """Test if key stats are restored correctly - does not test further training and metrics"""
         with patch_args(
             "--num_samples", "1",
             "--num_jobs", "1",
@@ -494,6 +495,9 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                             "evaluation",
                             strict=False,
                         )
+
+    @unittest.skip("Implementation Missing")
+    def test_metrics_further_tuning(self): ...
 
     def _test_algo_checkpointing(
         self,
@@ -700,10 +704,9 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             }
         }
 
+    @unittest.skip("Needs to be fixed in ray first")
     def test_trainable_checkpointing(self):
-        """
-        Test if trainable can be checkpointed and restored.
-        """
+        """Test if trainable can be checkpointed and restored."""
         with patch_args(
             "--batch_size",
             str(ENV_STEPS_PER_ITERATION),
@@ -744,10 +747,9 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             results["env_runners"][1]["step_3"],
         )
 
+    @unittest.skip("Needs to be fixed in ray first")
     def test_algorithm_checkpointing(self):
-        print("start")
-        path = os.path.dirname(__file__)
-        print("path is", path)
+        # similar to test_trainable_checkpointing, but pure algorithms
         with patch_args(
             "--batch_size",
             str(ENV_STEPS_PER_ITERATION),

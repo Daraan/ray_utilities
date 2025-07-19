@@ -227,7 +227,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             self._overwrite_algorithm = overwrite_algorithm
         assert self.setup_class.parse_known_only is True
         _logger.info("Setting up %s with config: %s", self.__class__.__name__, config)
-        if "cli_args" in config and "from_checkpoint" in config["cli_args"]:
+        if "cli_args" in config and config["cli_args"].get("from_checkpoint") not in (None, ""):
             # calls restore from path; from_checkpoint could also be a dict here
             self.load_checkpoint(config["cli_args"]["from_checkpoint"])
             return
@@ -385,7 +385,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         elif checkpoint is not None:
             self.restore_from_path(checkpoint)
         else:
-            raise ValueError("Checkpoint must be a dict or a path.")
+            raise ValueError(f"Checkpoint must be a dict or a path. Not {type(checkpoint)}")
 
     # endregion
 

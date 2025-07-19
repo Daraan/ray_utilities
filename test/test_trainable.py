@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import os
 import pickle
+import sys
 import tempfile
 from copy import deepcopy
 from typing import TYPE_CHECKING
@@ -29,7 +30,10 @@ from ray_utilities.training.default_class import DefaultTrainable
 if TYPE_CHECKING:
     from ray_utilities.typing.trainable_return import TrainableReturnData
 
-ENV_RUNNER_TESTS = [0, 1, 2]
+if "--fast" in sys.argv:
+    ENV_RUNNER_TESTS = [0]
+else:
+    ENV_RUNNER_TESTS = [0, 1, 2]
 
 
 class TestTrainable(TestHelpers, DisableLoggers, DisableGUIBreakpoints):
@@ -139,6 +143,8 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable2.set_state(deepcopy(state))
             # class is missing in config dict
             self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
+            # trainable.cleanup()
+            trainable2.cleanup()
 
     @Cases(ENV_RUNNER_TESTS)
     def test_safe_to_path(self, cases):
@@ -169,7 +175,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             validate_save_restore(PPOTrainable)
         # ray.shutdown()
 
-    @Cases([0])
+    @Cases(ENV_RUNNER_TESTS)
     def test_interface_interchangeability(self, cases):
         """Test if methods can be used interchangeably."""
         for num_env_runners in iter_cases(cases):
@@ -208,8 +214,10 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
         import ray
 
         ray.shutdown()
-        from multiprocessing import Process, Pipe
+        from multiprocessing import Pipe, Process
+
         from ray.util.multiprocessing import Pool
+
         from test._mp_trainable import remote_process
 
         with tempfile.TemporaryDirectory() as tmpdir:
