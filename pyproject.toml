@@ -131,3 +131,4 @@ reportUnnecessaryCast = "warning"
 
 [tool.pytest.ini_options]
 timeout = 240
+session_timeout = 900
