@@ -214,7 +214,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         if not hasattr(self, "setup_class"):
             raise ValueError(
                 f"setup_class is not set on {self}. "
-                "Use TrainableCls = {self.__class__.__name__}.define(setup_class) to set it.",
+                f"Use TrainableCls = {self.__class__.__name__}.define(setup_class) to set it.",
             )
         if overwrite_algorithm is not None and self._overwrite_algorithm is not None:
             if overwrite_algorithm != self._overwrite_algorithm:
