@@ -286,6 +286,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     @override(tune.Trainable)
     def cleanup(self):
         super().cleanup()
+        self.algorithm.cleanup()
         if is_pbar(self._pbar):
             self._pbar.close()
 

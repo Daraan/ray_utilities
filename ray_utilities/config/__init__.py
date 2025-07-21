@@ -126,11 +126,16 @@ def seed_environments_for_config(config: AlgorithmConfig, env_seed: int | None):
 
     Choose One:
     - Same environment seeding across trials, workers have different constant seeds:
-        seed_environments_for_config(config, constant_seed)
+
+        seed_environments_for_config(config, constant_seed)  # <-- constant across trials
+
     - Different, but deterministic, seeding across trials:
-        seed_environments_for_config(config, run_seed)
+
+        seed_environments_for_config(config, env_seed)  # <-- sampled by tune
+
     - Random seeding across trials:
-        seed_environments_for_config(config, None)
+
+        seed_environments_for_config(config, None)  # <-- always random
     """
     seed_envs_cb = make_seeded_env_callback(env_seed)
     add_callbacks_to_config(config, on_environment_created=seed_envs_cb, remove_existing=_remove_existing_seeded_envs)

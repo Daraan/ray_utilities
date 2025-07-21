@@ -12,6 +12,7 @@ from unittest import mock, skip
 from ray import tune
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core import COMPONENT_ENV_RUNNER
+from ray.rllib.utils.metrics import EVALUATION_RESULTS
 from ray.tune.utils import validate_save_restore
 
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
@@ -89,6 +90,14 @@ class TestTrainable(TestHelpers, DisableLoggers, DisableGUIBreakpoints):
         self.assertEqual(trainable.algorithm_config.num_epochs, 2)
         _result1 = trainable.step()
         trainable.cleanup()
+
+    @patch_args()
+    def test_train(self):
+        self.TrainableClass = DefaultTrainable.define(PPOSetup.typed())
+        trainable = self.TrainableClass(overwrite_algorithm=AlgorithmConfig.overrides(evaluation_interval=1))
+        result = trainable.train()
+        self.assertIn(EVALUATION_RESULTS, result)
+        self.assertGreater(len(result[EVALUATION_RESULTS]), 0)
 
 
 class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):

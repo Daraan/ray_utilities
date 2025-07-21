@@ -127,7 +127,13 @@ class DefaultEnvironmentArgParser(Tap):
         - sequential: use different, but deterministic, seeds for each trial,
             i.e. the first trial will always use the same seed, but a different one from
             the subsequent trials.
-            `make_seeded_env_callback(run_seed)`
+
+            Usage:
+                .. code-block:: python
+
+                    make_seeded_env_callback(env_seed)
+                    seed_environments_for_config(config, env_seed)
+
     """
 
     def configure(self) -> None:

@@ -1,4 +1,4 @@
-![example workflow](https://github.com/Daraan/ray_utilities/actions/workflows/run_tests.yml/badge.svg) [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff) [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/format.json)](https://github.com/astral-sh/ruff)
+![test workflow badge](https://github.com/Daraan/ray_utilities/actions/workflows/run_tests.yml/badge.svg) [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff) [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/format.json)](https://github.com/astral-sh/ruff)
 
 # Ray Utilities
 
@@ -9,7 +9,7 @@ Many Features are stand-alone and can be used independently. The main features i
 - **JAX PPO for RLlib**: A JAX-based implementation of the Proximal Policy Optimization (PPO) algorithm compatible with RLlib Algorithm.
 - **Ray + Optuna Grid Search + Optuna Pruners**: Extends ray's `OptunaSearch` to be compatible with 
 - **Experiment Framework**: A base class for setting up experiments with dynamic parameters and parameter spaces, easily run via CLI and `ray.tune.Tuner`.
-- **Reproducible Environments**: Reproducible environments for experiments using `ray.tune`
+- **Reproducible Environments**: Reproducible environments for experiments using `ray.tune` by using a more sophisticated seeding mechanism.
 - **Dynamic Parameter Tuning (WIP)**: Support for dynamic tuning of parameters during experiments.
     `ray.tune.grid_search` and Optuna pruners can work as a `Stopper`.
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 # pyright: reportOptionalMemberAccess=none
 import os
 import pathlib
+import random
 import sys
 import unittest
 from contextlib import nullcontext
@@ -29,7 +30,7 @@ from ray.rllib.utils.metrics import (
 )
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.search.sample import Categorical, Domain, Float, Integer
-from typing_extensions import Final, NotRequired, Required, get_origin, get_type_hints
+from typing_extensions import Final, NotRequired, Required, Sentinel, get_origin, get_type_hints
 
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
@@ -40,7 +41,7 @@ if TYPE_CHECKING:
 
     import chex
     from flax.training.train_state import TrainState
-    from jaxlib.xla_extension import pytree  # pyright: ignore[reportMissingModuleSource] pyi file
+    from jaxlib.xla_extension import pytree  # pyright: ignore[reportMissingModuleSource,reportMissingImports] pyi file
     from ray.rllib.algorithms import Algorithm
     from ray.rllib.algorithms.ppo.ppo import PPO, PPOConfig
     from ray.tune import Result
@@ -170,9 +171,18 @@ class InitRay(unittest.TestCase):
 
 OVERRIDE_KEYS: Final[set[str]] = {"num_env_runners", "num_epochs", "minibatch_size", "train_batch_size_per_learner"}
 
+# pyright: enableExperimentalFeatures=true
+_NOT_PROVIDED = Sentinel(
+    "_NOT_PROVIDED",
+)
+
 
 class TestHelpers(unittest.TestCase):
     # region setups
+
+    def setUp(self):
+        super().setUp()
+        self._env_seed_rng = random.Random(111)
 
     _created_trainables: ClassVar[list[TrainableBase]] = []
 
@@ -184,7 +194,7 @@ class TestHelpers(unittest.TestCase):
     @patch_args(
         "--iterations", "5", "--total_steps", "320", "--batch_size", "64", "--comment", "running tests", "--seed", "42"
     )
-    def get_trainable(self, num_env_runners: int = 0):
+    def get_trainable(self, *, num_env_runners: int = 0, env_seed: int | None | _NOT_PROVIDED = _NOT_PROVIDED):
         # NOTE: In this test attributes are shared BY identity, this is just a weak test.
         self.TrainableClass: type[DefaultTrainable[DefaultArgumentParser, PPOConfig, PPO]] = DefaultTrainable.define(
             PPOSetup.typed()
@@ -194,7 +204,10 @@ class TestHelpers(unittest.TestCase):
         overrides = AlgorithmConfig.overrides(
             num_env_runners=num_env_runners, num_epochs=2, minibatch_size=32, train_batch_size_per_learner=32
         )
-        trainable = self.TrainableClass(overwrite_algorithm=overrides)
+        if env_seed is _NOT_PROVIDED:
+            # use a random but reproducible seed
+            env_seed = self._env_seed_rng.randint(0, 2**15 - 1)
+        trainable = self.TrainableClass({"env_seed": env_seed}, overwrite_algorithm=overrides)
         self._created_trainables.append(trainable)
         self.assertEqual(trainable._overwrite_algorithm, overrides)
         self.assertEqual(overrides.keys(), OVERRIDE_KEYS)
@@ -215,10 +228,7 @@ class TestHelpers(unittest.TestCase):
         """Changes the maxDiff only when environment variable KEEP_MAX_DIFF is not set."""
         if int(os.environ.get("KEEP_MAX_DIFF", "0")):
             return
-        if max_diff is None:
-            self.maxDiff = 640
-        else:
-            self.maxDiff = max_diff
+        self.maxDiff = max_diff
 
     def util_test_tree_equivalence(
         self,
@@ -258,28 +268,39 @@ class TestHelpers(unittest.TestCase):
         strict: bool = False,
         compare_results: bool | None = None,
     ):
-        # Min max metrics can be missing
+        """
+        Args:
+            metrics_0: Metrics from the first env_runner.
+            metrics_1: Metrics from the second env_runner.
+            msg: Optional message to display on failure.
+            strict: If True, all keys must match exactly, otherwise only common keys are compared.
+                For restored metrics the min/max/mean keys might be different
+            compare_results: If False, some keys are ignored in the comparison.
+        """
         key_difference = set(metrics_0.keys()).symmetric_difference(metrics_1.keys())
+        print("Key differences for metrics:", sorted(key_difference))
         same_keys = set(metrics_0.keys()).intersection(metrics_1.keys())
         all_keys = same_keys | key_difference
         if not strict:
-            all_keys.discard("env_to_module_sum_episodes_length_in")
+            all_keys.discard("env_to_module_sum_episodes_length_in")  # might be wrong due to restore
             all_keys.discard("env_to_module_sum_episodes_length_out")
             all_keys.difference_update(key_difference)
         if compare_results is None:
             compare_results = strict
+        if not compare_results:
             all_keys.discard("agent_episode_returns_mean")  # <2.48
             all_keys.discard("agent_episode_return_mean")  # 2.48
             all_keys.discard("module_episode_returns_mean")  # <2.48
             all_keys.discard("module_episode_return_mean")  # 2.48
-            all_keys.discard("num_episodes_lifetime")  # needs same sampling
             all_keys.discard("episode_len_max")
             all_keys.discard("episode_len_min")
             all_keys.discard("episode_len_mean")
             all_keys.discard("episode_return_max")
             all_keys.discard("episode_return_min")
             all_keys.discard("episode_return_mean")
-        self.set_max_diff(2000)
+            all_keys.discard("num_episodes_lifetime")  # needs same sampling
+        all_keys.discard("num_episodes_lifetime")  # Remove because of metrics restore bug # 54324
+        self.set_max_diff(None)
         self.assertDictEqual({k: metrics_0[k] for k in all_keys}, {k: metrics_1[k] for k in all_keys}, msg=msg)
 
     def util_test_state_equivalence(
