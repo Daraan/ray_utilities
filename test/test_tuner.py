@@ -42,21 +42,22 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers):
             assert tuner2._local_tuner and tuner2._local_tuner._tune_config
             self.assertNotIsInstance(tuner2._local_tuner._tune_config.search_alg, OptunaSearch)
 
-    def test_run_tune_with_optuna_tuner(self):
-        with patch_args("--num_samples", "3", "--num_jobs", "2", "--batch_size", "128", "--iterations", "3"):
-            optuna_setup = AlgorithmSetup(init_trainable=False)
-            optuna_setup.config.training(num_epochs=2, minibatch_size=128)
-            optuna_setup.config.evaluation(evaluation_interval=1)  # else eval metric not in dict
-            optuna_setup.create_trainable()
-            results = run_tune(optuna_setup)
+    def test_run_tune_function(self):
+        with patch_args("--num_samples", "3", "--num_jobs", "2", "--batch_size", "32", "--iterations", "3"):
+            with AlgorithmSetup(init_trainable=False) as setup:
+                setup.config.training(num_epochs=2, minibatch_size=32)
+                setup.config.evaluation(evaluation_interval=1)  # else eval metric not in dict
+            results = run_tune(setup)
             assert not isinstance(results, dict)
             # NOTE: This can be OK even if runs fail!
             for result in results:
                 assert result.metrics
                 self.assertEqual(result.metrics["current_step"], 3 * 128)
                 self.assertEqual(result.metrics[TRAINING_ITERATION], 3)
-            self.assertEqual(results.num_errors, 0, "Encountered errors: " + str(results.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+            self.assertEqual(results.num_errors, 0, "Encountered errors: " + str(results.errors))
 
+
+class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
     def test_checkpoint_auto(self):
         # self.enable_loggers()
         with patch_args(

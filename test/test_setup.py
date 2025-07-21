@@ -59,7 +59,7 @@ class TestSetupClasses(SetupDefaults):
         setup.config.training(num_epochs=4, minibatch_size=222)
         setup.create_trainable()
         assert issubclass(setup.trainable, DefaultTrainable)
-        trainable = setup.trainable({})
+        trainable = setup.trainable()
         self.assertEqual(trainable.algorithm_config.num_epochs, 4)
         self.assertEqual(trainable.algorithm_config.minibatch_size, second=222)
         self.set_max_diff(15000)
@@ -72,6 +72,24 @@ class TestSetupClasses(SetupDefaults):
                 "callbacks_on_environment_created",
             ],
         )
+
+    def test_context_manager(self):
+        with patch_args():
+            for setup in [
+                AlgorithmSetup(init_trainable=False, init_param_space=False),
+                AlgorithmSetup(init_trainable=True, init_param_space=True),
+            ]:
+                # Check unset
+                with setup:
+                    self.assertTrue(not hasattr(setup, "trainable") or setup.trainable is None)
+                    self.assertTrue(not hasattr(setup, "param_space") or setup.param_space is None)
+                    setup.config.training(num_epochs=4, minibatch_size=222)
+                self.assertIsNotNone(setup.trainable)
+                self.assertIsNotNone(setup.param_space)
+                if isclass(setup.trainable):
+                    trainable = setup.trainable_class()
+                    self.assertEqual(trainable.algorithm_config.num_epochs, 4)
+                    self.assertEqual(trainable.algorithm_config.minibatch_size, 222)
 
     def test_basic(self):
         with patch_args():
@@ -424,18 +442,16 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
         ):  # fmt: off
             # cannot make this deterministic on local vs remote
             seed_everything(None, setup_seed)
-            setup = AlgorithmSetup(init_trainable=False)
-            setup.config.env_runners(num_env_runners=0)
-            setup.config.training(minibatch_size=5)  # insert some noise
-            setup.config.debugging(seed=setup_seed)
-            setup.create_trainable()
+            with AlgorithmSetup(init_trainable=False) as setup:
+                setup.config.env_runners(num_env_runners=0)
+                setup.config.training(minibatch_size=5)  # insert some noise
+                setup.config.debugging(seed=setup_seed)
             tuner_0 = setup.create_tuner()
             seed_everything(None, setup_seed)
-            setup = AlgorithmSetup(init_trainable=False)
-            setup.config.env_runners(num_env_runners=1)
-            setup.config.training(minibatch_size=5)  # insert some noise
-            setup.config.debugging(seed=setup_seed)
-            setup.create_trainable()
+            with AlgorithmSetup(init_trainable=False) as setup:
+                setup.config.env_runners(num_env_runners=1)
+                setup.config.training(minibatch_size=5)  # insert some noise
+                setup.config.debugging(seed=setup_seed)
             tuner_1 = setup.create_tuner()
             tune_results = {}
             for num_env_runners, tuner in enumerate([tuner_0, tuner_1]):
@@ -750,7 +766,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                 minibatch_size=ENV_STEPS_PER_ITERATION // 2,
             )
             config.env_runners(num_env_runners=0)
-            trainable0 = setup.create_trainable()
+            Trainable0 = setup.create_trainable()
             setup = AlgorithmSetup(init_trainable=False)
             config = setup.config
             config.debugging(seed=11)
@@ -761,11 +777,11 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                 minibatch_size=ENV_STEPS_PER_ITERATION // 2,
             )
             config.env_runners(num_env_runners=1)
-            trainable1 = setup.create_trainable()
-        assert isclass(trainable0) and isclass(trainable1)
+            Trainable1 = setup.create_trainable()
+        assert isclass(Trainable0) and isclass(Trainable1)
         results = self._test_algo_checkpointing(
-            trainable0(),
-            trainable1(),
+            Trainable0(),
+            Trainable1(),
             metrics=[
                 NUM_ENV_STEPS_SAMPLED_LIFETIME,
                 NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,

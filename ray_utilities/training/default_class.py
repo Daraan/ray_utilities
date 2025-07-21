@@ -247,7 +247,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # NOTE: args is a dict, self._setup.args a Namespace | Tap
         self._reward_updaters: RewardUpdaters
         args, _algo_config, self.algorithm, self._reward_updaters = setup_trainable(
-            hparams=config, setup=self._setup, setup_class=self.setup_class, overwrite_config=self._overwrite_algorithm
+            hparams=config,
+            setup=self._setup,
+            setup_class=self.setup_class if isclass(self.setup_class) else None,
+            overwrite_config=self._overwrite_algorithm,
         )
         self._pbar: tqdm | range | tqdm_ray.tqdm = episode_iterator(args, config, use_pbar=self.use_pbar)
         self._iteration: int = 0

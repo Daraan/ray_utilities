@@ -13,7 +13,6 @@ from typing_extensions import TypeVar
 from ray_utilities.config._tuner_callbacks_setup import TunerCallbackSetup
 from ray_utilities.constants import (
     CLI_REPORTER_PARAMETER_COLUMNS,
-    DISC_EVAL_METRIC_RETURN_MEAN,
     EVAL_METRIC_RETURN_MEAN,
 )
 from ray_utilities.misc import trial_name_creator
@@ -202,6 +201,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             "PlacementGroupFactory", resource_requirements
         )  # Resources return value is deprecated
         logger.info("Default resource per trial: %s", resource_requirements.bundles)
+        assert self._setup.trainable is not None, "Trainable must be set before creating the tuner"
         trainable = tune.with_resources(self._setup.trainable, resource_requirements)
         # functools.update_wrapper(trainable, self._setup.trainable)
         trainable.__name__ = self._setup.trainable.__name__

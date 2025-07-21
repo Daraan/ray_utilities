@@ -75,6 +75,9 @@ ConfigType_co = TypeVar("ConfigType_co", bound="AlgorithmConfig", covariant=True
 AlgorithmType_co = TypeVar("AlgorithmType_co", bound="Algorithm", covariant=True, default="PPO")
 """TypeVar for the Algorithm type of a Setup, e.g. PPO, DQN, etc; defaults to PPO."""
 
+_MaybeNone = Any
+"""Attribute might be None when trainable is not set up"""
+
 
 class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, AlgorithmType_co]):
     """
@@ -220,7 +223,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             self.trainable = None
         if init_param_space:
             # relies on trainable to get its name
-            self.param_space = self.create_param_space()
+            self.param_space: dict[str, Any] | _MaybeNone = self.create_param_space()
         if hasattr(self, "args") and self.args.comet:
             self.comet_tracker = CometArchiveTracker()
         else:
@@ -654,7 +657,11 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         Attention:
             Do not overwrite this method. Overwrite _create_trainable instead.
         """
-        self.trainable = self._create_trainable()
+        self.trainable: (
+            Callable[[dict[str, Any]], TrainableReturnData]
+            | type[TrainableBase[ParserType_co, ConfigType_co, AlgorithmType_co]]
+            | _MaybeNone
+        ) = self._create_trainable()
         if isclass(self.trainable):
             logger.info(
                 "create_trainable returns a class '%s'. To prevent errors the config will be frozen.",
@@ -670,6 +677,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         """
         Unsets the trainable for the experiment, this unfreezes the config
         until the next create_trainable call.
+
+        Using the setup as a context manager is often a better alternative to this function.
         """
         self.trainable = None
         if hasattr(self, "config"):
@@ -778,6 +787,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     # endregion
 
+    # region save and restore
+
     def save(self) -> SetupCheckpointDict[ParserType_co, ConfigType_co, AlgorithmType_co]:
         """
         Saves the current setup state to a dictionary.
@@ -830,6 +841,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         )
         return new
 
+    # endregion
+
     @classmethod
     @final
     def typed(cls) -> type[Self]:
@@ -840,6 +853,40 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         DefaultTrainable.define(Setup.typed) or similar methods that require a class as an argument.
         """
         return cls
+
+    # region contextmanager
+
+    def __enter__(self) -> Self:
+        """
+        When used as a context manager, the config can be modified at the end the
+        param_space and trainable will be created
+
+        Usage:
+            .. code-block:: python
+
+                # less overhead when setting these two to False, otherwise some overhead
+                with Setup(init_param_space=False, init_trainable=False) as setup:
+                    setup.config.env_runners(num_env_runners=0)
+                    setup.config.training(minibatch_size=64)
+
+                This is roughly equivalent to:
+                setup = Setup(parse_args=True, init_config=True, init_param_space=False, init_trainable=False)
+                setup.config.env_runners(num_env_runners=0)
+                setup.config.training(minibatch_size=64)
+                setup.setup(parse_args=False, init_config=False, init_param_space=True, init_trainable=True)
+        """
+        self.unset_trainable()
+        self.param_space = None
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        """Finishes the setup and creates the trainable"""
+        self.setup(
+            init_config=False,
+            init_param_space=True,
+            init_trainable=True,
+            parse_args=False,
+        )
 
     # Currently cannot use TypeForm[type[TypedDict]] as it is not included in the typing spec.
     # @property
