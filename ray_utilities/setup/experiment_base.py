@@ -411,7 +411,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         param_space = {k: tune.choice([v]) for k, v in param_space.items()}
         if self.args.seed is not None:
             param_space["env_seed"] = tune.randint(0, 2**16)
-            # logger.debug("Creating envs with seeds: %s", param_space["env_seed"])
+            # param_space["run_seed"] = tune.randint(0, 2**16)  # potential seed for config
 
         # Other args not shown in the CLI
         # NOTE: This is None when the Old API / no module_spec is used!
@@ -563,7 +563,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         *,
         copy: Literal[True],
         env: Optional[EnvType] = None,
-        spaces: Optional[dict[str, gym.Space]] = None,
+        spaces: Optional[dict[str, tuple[gym.Space, gym.Space]]] = None,
         inference_only: Optional[bool] = None,
     ) -> RLModuleSpec: ...
 
@@ -572,7 +572,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         *,
         copy: bool,
         env: Optional[EnvType] = None,
-        spaces: Optional[dict[str, gym.Space]] = None,
+        spaces: Optional[dict[str, tuple[gym.Space, gym.Space]]] = None,
         inference_only: Optional[bool] = None,
     ) -> RLModuleSpec | None:
         if not self.config:
@@ -590,7 +590,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         self,
         *,
         env: Optional[EnvType] = None,
-        spaces: Optional[dict[str, gym.Space]] = None,
+        spaces: Optional[dict[str, tuple[gym.Space, gym.Space]]] = None,
         inference_only: Optional[bool] = None,
     ) -> tuple[ConfigType_co, RLModuleSpec]:
         """
@@ -657,7 +657,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         self.trainable = self._create_trainable()
         if isclass(self.trainable):
             logger.info(
-                "create_trainable returns a class '%s'.To prevent errors the config will be frozen.",
+                "create_trainable returns a class '%s'. To prevent errors the config will be frozen.",
                 self.trainable.__name__,
             )
             self.config.freeze()

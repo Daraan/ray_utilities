@@ -54,7 +54,7 @@ def create_algorithm_config(
     Args:
         args: Arguments for the algorithm
         env_type: Environment type
-        env_seed: Environment seed
+        env_seed: Environment seed, deprecated use `SeedEnvsCallback` instead.
         module_class: RLModule class used for the algorithm.
             Not recommended to be None must be updated in that case manually afterwards.
         catalog_class: Catalog used with the `module_class`
@@ -74,16 +74,17 @@ def create_algorithm_config(
     assert env_spec, "No environment specified"
     config = config_class()
 
-    env_config = {}
+    env_config: dict[str, Any] = {}  # kwargs for environment __init__
     if args["render_mode"]:
         env_config["render_mode"] = args["render_mode"]
     if env_seed is not None:
+        logger.warning(
+            "env_seed is deprecated, use SeedEnvsCallback/seed_environments_for_config(config, env_seed) instead, "
+            "env creation might fail."
+        )
         env_config.update({"seed": env_seed, "env_type": env_spec})
         # Will use a SeededEnvCallback to apply seed and generators
-    elif env_config:
-        config.environment(env_spec, env_config=env_config)
-    else:
-        config.environment(env_spec)
+    config.environment(env_spec, env_config=env_config)
     if args["test"]:
         # increase time in case of debugging the sampler
         config.env_runners(sample_timeout_s=1000)
@@ -233,10 +234,10 @@ def create_algorithm_config(
     if discrete_eval:
         callbacks.append(DiscreteEvalCallback)
     if args["env_seeding_strategy"] == "sequential":
-        # Must set this in the trainable with seed_environments_for_config(config, run_seed)
+        # Must set this in the trainable with seed_environments_for_config(config, env_seed)
         logger.info(
             "Using sequential env seed strategy, "
-            "Remember to call seed_environments_for_config(config, run_seed) with a seed acquired from the trial."
+            "Remember to call seed_environments_for_config(config, env_seed) with a seed acquired from the trial."
         )
     elif args["env_seeding_strategy"] == "same":
         make_seeded_env_callback(args["seed"])

@@ -108,20 +108,31 @@ def get_args_and_config(
     else:
         raise ValueError("Either setup or setup_class must be provided.")
     # endregion
+
     # region seeding
-    if (run_seed := hparams.get("run_seed", None)) is not None:
-        logger.debug("Using run_seed for config.seed %s", run_seed)
-        config.debugging(seed=run_seed)
-    # Seeded environments - sequential seeds have to be set here, run_seed comes from Tuner
+
+    env_seed = hparams.get("env_seed", None)
+    # Seeded environments - sequential seeds have to be set here, env_seed comes from Tuner
     if args["env_seeding_strategy"] == "sequential":
-        seed_environments_for_config(config, run_seed)
+        # Warn if a seed is set but no env_seed is present
+        if env_seed is None and "cli_args" in hparams and hparams["cli_args"]["seed"] is not None:
+            logger.warning(
+                "cli_args has a seed(%d) set but env_seed is None, sequential seeding will not work. "
+                "Assure that env_seed is passed as a parameter when creating the Trainable, "
+                "e.g. sample env_seed by tune. Falling back to cli_args seed and env_seeding_strategy='same'.",
+                hparams["cli_args"]["seed"],
+            )
+            env_seed = hparams["cli_args"]["seed"]
+        seed_environments_for_config(config, env_seed)
     elif args["env_seeding_strategy"] == "same":
         seed_environments_for_config(config, args["seed"])
     elif args["env_seeding_strategy"] == "constant":
         seed_environments_for_config(config, 0)
     else:
         seed_environments_for_config(config, None)
-    # endregion
+
+    # endregion seeding
+
     return args, config
 
 

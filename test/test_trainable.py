@@ -12,7 +12,9 @@ from unittest import mock, skip
 from ray import tune
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core import COMPONENT_ENV_RUNNER
+from ray.rllib.utils.metrics import EVALUATION_RESULTS
 from ray.tune.utils import validate_save_restore
+from ray.util.multiprocessing import Pool
 
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
@@ -26,6 +28,7 @@ from ray_utilities.testing_utils import (
     patch_args,
 )
 from ray_utilities.training.default_class import DefaultTrainable
+from test._mp_trainable import remote_process
 
 if TYPE_CHECKING:
     from ray_utilities.typing.trainable_return import TrainableReturnData
@@ -89,6 +92,14 @@ class TestTrainable(TestHelpers, DisableLoggers, DisableGUIBreakpoints):
         self.assertEqual(trainable.algorithm_config.num_epochs, 2)
         _result1 = trainable.step()
         trainable.cleanup()
+
+    @patch_args()
+    def test_train(self):
+        self.TrainableClass = DefaultTrainable.define(PPOSetup.typed())
+        trainable = self.TrainableClass(overwrite_algorithm=AlgorithmConfig.overrides(evaluation_interval=1))
+        result = trainable.train()
+        self.assertIn(EVALUATION_RESULTS, result)
+        self.assertGreater(len(result[EVALUATION_RESULTS]), 0)
 
 
 class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
@@ -214,31 +225,13 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                 self.compare_trainables(trainable_d, trainable3_b, num_env_runners=num_env_runners)
 
     def test_restore_multiprocessing(self):
-        import ray
-
-        ray.shutdown()
-        from multiprocessing import Pipe, Process
-
-        from ray.util.multiprocessing import Pool
-
-        from test._mp_trainable import remote_process
-
         with tempfile.TemporaryDirectory() as tmpdir:
-            parent_conn, child_conn = Pipe()
-            if True:
-                pool = Pool(1)
-                pickled_trainable = pool.map(remote_process, [(tmpdir, child_conn)])[0]
-                # pickled_trainable_2 = parent_conn.recv()
-                pool.close()
-            else:
-                p = Process(target=remote_process, args=(tmpdir, child_conn))
-                print("starting remote process")
-                p.start()
-                print("Waiting for remote process to send pickled trainable")
-                print("Received pickled trainable in main process")
-                p.join()
-                print("Unpickling trainable in main process")
-            print("Restorintg trainable from saved data")
+            # pool works
+            pool = Pool(1)
+            pickled_trainable = pool.map(remote_process, [(tmpdir, None)])[0]
+            # pickled_trainable_2 = parent_conn.recv()
+            pool.close()
+            print("Restoring trainable from saved data")
             trainable_restored = DefaultTrainable.define(PPOSetup.typed()).from_checkpoint(tmpdir)
             # Compare with default trainable:
             print("Create new default trainable")

@@ -32,7 +32,8 @@ class TestExtensionsAdded(SetupDefaults):
                 self.assertTrue(
                     exact_sampling_callback is config.callbacks_on_sample_end
                     or exact_sampling_callback in config.callbacks_on_sample_end,  # pyright: ignore
-                    "Expected exact_sampling_callback to be in callbacks_on_sample_end when --no_exact_sampling is not set.",
+                    "Expected exact_sampling_callback to be in callbacks_on_sample_end "
+                    "when --no_exact_sampling is not set.",
                 )
 
         with patch_args("--no_exact_sampling"):
