@@ -4,7 +4,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from ray.rllib.algorithms.ppo import PPO, PPOConfig
-from typing_extensions import TypeVar, TypeAliasType
+from typing_extensions import TypeVar
 
 from ray_utilities.config import add_callbacks_to_config
 from ray_utilities.config.create_algorithm import create_algorithm_config

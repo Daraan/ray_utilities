@@ -336,6 +336,7 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
                 algo_restored.metrics.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)), 512
             )
             self.assertEqual(algo_restored.iteration, 4)
+            assert result_grid[0].metrics
             self.assertEqual(result_grid[0].metrics["training_iteration"], 4)
             self.assertEqual(result_grid[0].metrics["evaluation/env_runners/episode_return_mean"], 512 // 128 - 1)
 
@@ -761,6 +762,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             )
             config.env_runners(num_env_runners=1)
             trainable1 = setup.create_trainable()
+        assert isclass(trainable0) and isclass(trainable1)
         results = self._test_algo_checkpointing(
             trainable0(),
             trainable1(),

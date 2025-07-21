@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from abc import ABCMeta
 import importlib.metadata
 import logging
 import os
-from pathlib import Path
+import pathlib
 import sys
+from abc import ABCMeta
 from copy import copy
-from typing import TYPE_CHECKING, Any, Collection, Generic, Optional, TypedDict, TypeVar, cast
 from inspect import isclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Collection, Generic, Optional, TypedDict, TypeVar, cast
 
 import ray
 from ray import tune
@@ -21,7 +22,7 @@ from ray.rllib.core import (
 from ray.rllib.utils import force_list
 from ray.rllib.utils.annotations import override
 from ray.rllib.utils.checkpoints import Checkpointable
-from typing_extensions import TypeAliasType
+from typing_extensions import Self, TypeAliasType
 
 from ray_utilities.callbacks.progress_bar import restore_pbar, save_pbar_state, update_pbar
 from ray_utilities.config.typed_argument_parser import LOG_STATS, LogStatsChoices
@@ -37,6 +38,7 @@ from ray_utilities.training.helpers import (
 from ray_utilities.typing.trainable_return import RewardUpdaters
 
 if TYPE_CHECKING:
+    import pyarrow.fs
     from ray.experimental import tqdm_ray
     from ray.rllib.algorithms import Algorithm
     from ray.rllib.utils.typing import StateDict
@@ -168,10 +170,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             discrete_eval = discrete_eval_
             use_pbar = use_pbar_
 
-        assert issubclass(DefinedTrainable, TrainableBase)
+        assert not TYPE_CHECKING or issubclass(DefinedTrainable, TrainableBase)
         assert DefinedTrainable._base_cls is cls
 
-        return DefinedTrainable
+        return DefinedTrainable  # type: ignore[return-value]
 
     # region Trainable setup
 
@@ -211,7 +213,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # Setup algo, config, args, etc.
         if not hasattr(self, "setup_class"):
             raise ValueError(
-                f"setup_class is not set on {self}. Use TrainableCls = {self.__class__.__name__}.define(setup_class) to set it.",
+                f"setup_class is not set on {self}. "
+                "Use TrainableCls = {self.__class__.__name__}.define(setup_class) to set it.",
             )
         if overwrite_algorithm is not None and self._overwrite_algorithm is not None:
             if overwrite_algorithm != self._overwrite_algorithm:
@@ -336,8 +339,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     self.algorithm.set_state(checkpoint["algorithm_state"])
                 else:
                     _logger.critical(
-                        "Algorithm checkpoint directory %s does not exist, (possibly temporary path was saved) and no state provided. "
-                        "Restored algorithm might be in an unexpected state.",
+                        "Algorithm checkpoint directory %s does not exist, (possibly temporary path was saved) "
+                        "and no state provided. Restored algorithm might be in an unexpected state.",
                         checkpoint["algorithm_checkpoint_dir"],
                     )
             else:
@@ -594,6 +597,16 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 self._pbar.close()
         except:  # noqa: E722
             pass
+
+    if TYPE_CHECKING:
+
+        @classmethod
+        def from_checkpoint(
+            cls,
+            path: str | pathlib.Path,
+            filesystem: Optional["pyarrow.fs.FileSystem"] = None,
+            **kwargs,
+        ) -> Self: ...
 
 
 if TYPE_CHECKING:

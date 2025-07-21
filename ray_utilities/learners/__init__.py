@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Sequence
-from ray.rllib.core.learner import Learner
 from abc import ABCMeta
+
+if TYPE_CHECKING:
+    from ray.rllib.core.learner import Learner
 
 
 class _MixedLearnerMeta(ABCMeta):

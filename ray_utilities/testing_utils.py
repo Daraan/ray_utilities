@@ -206,6 +206,8 @@ class TestHelpers(unittest.TestCase):
         )
         if env_seed is _NOT_PROVIDED:
             # use a random but reproducible seed
+            if not hasattr(self, "_env_seed_rng"):
+                self.setUp()
             env_seed = self._env_seed_rng.randint(0, 2**15 - 1)
         trainable = self.TrainableClass({"env_seed": env_seed}, overwrite_algorithm=overrides)
         self._created_trainables.append(trainable)

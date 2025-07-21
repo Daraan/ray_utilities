@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from inspect import isclass
-from typing import TYPE_CHECKING, ClassVar, Final, Optional
+from typing import TYPE_CHECKING, ClassVar, Optional
 
 import numpy as np
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
