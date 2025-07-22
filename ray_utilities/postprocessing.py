@@ -451,7 +451,7 @@ def create_log_metrics(
 
     merged_result.pop("fault_tolerance")
     merged_result.pop("env_runner_group")
-    merged_result.pop(NUM_ENV_STEPS_SAMPLED_LIFETIME + "_throughput")
+    merged_result.pop(NUM_ENV_STEPS_SAMPLED_LIFETIME + "_throughput", None)
     # merged_result[ENV_RUNNER_RESULTS].pop("num_healthy_workers", )
     # merged_result[ENV_RUNNER_RESULTS].pop("num_remote_worker_restarts", None)
     merged_result[ENV_RUNNER_RESULTS].pop(ENV_TO_MODULE_SUM_EPISODES_LENGTH_IN)
@@ -508,8 +508,10 @@ def _reorganize_timer_logs(results: dict[str, dict[str, Any | dict[str, Any]]]):
     # results[TIMERS]["time_total_s"] = results.pop("time_total_s")
     # results[TIMERS]["time_this_iter_s"] = results["time_this_iter_s"] # autofilled
     results[TIMERS].setdefault(ENV_RUNNER_RESULTS, {})
+    # if sample amount is very low, e.g. during debugging, _done_episodes_for_metrics is empty
+    # this results in keys missings for episodes
     results[TIMERS][ENV_RUNNER_RESULTS][EPISODE_DURATION_SEC_MEAN] = results[ENV_RUNNER_RESULTS].pop(
-        EPISODE_DURATION_SEC_MEAN
+        EPISODE_DURATION_SEC_MEAN, float("nan")
     )
     try:
         results[TIMERS][ENV_RUNNER_RESULTS][TIME_BETWEEN_SAMPLING] = results[ENV_RUNNER_RESULTS].pop(
@@ -524,7 +526,7 @@ def _reorganize_timer_logs(results: dict[str, dict[str, Any | dict[str, Any]]]):
         evaluation_timers[ENV_RUNNER_RESULTS] = {}
         evaluation_timers[ENV_RUNNER_RESULTS][EPISODE_DURATION_SEC_MEAN] = results[EVALUATION_RESULTS][
             ENV_RUNNER_RESULTS
-        ].pop(EPISODE_DURATION_SEC_MEAN)
+        ].pop(EPISODE_DURATION_SEC_MEAN, float("nan"))
         # step 2+; else only mean=nan
         evaluation_timers[ENV_RUNNER_RESULTS][SAMPLE_TIMER] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(
             SAMPLE_TIMER
