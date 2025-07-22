@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 # pyright: reportOptionalMemberAccess=none
+import difflib
 import os
 import pathlib
+import pprint
 import random
 import sys
 import unittest
+import unittest.util
 from contextlib import nullcontext
 from copy import deepcopy
 from functools import partial
@@ -19,6 +22,9 @@ import jax
 import jax.numpy as jnp
 import numpy.testing as npt
 import ray
+import ray.tune
+import ray.tune.logger
+import ray.tune.logger.unified
 import tree
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
@@ -135,14 +141,21 @@ class DisableLoggers(unittest.TestCase):
 
     def enable_loggers(self):
         """Enable loggers after disabling them in setUp."""
-        self._disable_loggers.stop()
+        self._disable_tune_loggers.stop()
+        self._disable_file_loggers.stop()
+        self._disable_file_loggers2.stop()
         self._mock_env.stop()
 
     def setUp(self):
         self._mock_env = mock.patch.dict("os.environ", {"TUNE_DISABLE_AUTO_CALLBACK_LOGGERS": "1"})
         self._mock_env.start()
-        self._disable_loggers = mock.patch("ray_utilities.callbacks.tuner.create_tuner_callbacks", return_value=[])
-        self._disable_loggers.start()
+        self._disable_tune_loggers = mock.patch("ray_utilities.callbacks.tuner.create_tuner_callbacks", return_value=[])
+        self._disable_tune_loggers.start()
+        self._disable_file_loggers = mock.patch.object(ray.tune.logger, "DEFAULT_LOGGERS", ())
+        self._disable_file_loggers.start()
+        self._disable_file_loggers2 = mock.patch.object(ray.tune.logger.unified, "DEFAULT_LOGGERS", ())
+        """Disable local copy used by UnifiedLogger"""
+        self._disable_file_loggers2.start()
         super().setUp()
 
     def tearDown(self):
@@ -365,7 +378,7 @@ class TestHelpers(unittest.TestCase):
         # NOTE: Apply gradients modifies state
 
     @staticmethod
-    def _filter_incompatible_remote_config(config: dict[str, Any]) -> dict[str, Any]:
+    def filter_incompatible_remote_config(config: dict[str, Any]) -> dict[str, Any]:
         if "tf_session_args" in config:
             config["tf_session_args"]["inter_op_parallelism_threads"] = "removed_key_for_test"
             config["tf_session_args"]["intra_op_parallelism_threads"] = "removed_key_for_test"
@@ -380,7 +393,13 @@ class TestHelpers(unittest.TestCase):
         return config
 
     def compare_weights(
-        self, weights1: dict[str, Any], weights2: dict[str, Any], msg: str = "", ignore: Collection[str] = ()
+        self,
+        weights1: dict[str, Any],
+        weights2: dict[str, Any],
+        msg: str = "",
+        ignore: Collection[str] = (),
+        *,
+        almost: bool = False,
     ):
         keys1 = set(weights1.keys()) - set(ignore)
         keys2 = set(weights2.keys()) - set(ignore)
@@ -390,13 +409,40 @@ class TestHelpers(unittest.TestCase):
                 continue
             self.assertEqual(type(w1), type(weights2[key]), f"Weight '{key}' type does not match: {msg}")
             if isinstance(weights2[key], dict) and isinstance(w1, dict):
-                self.compare_weights(w1, weights2[key], f"Weight '{key}' does not match: {msg}")
+                self.compare_weights(w1, weights2[key], f"Weight '{key}' does not match: {msg}", almost=almost)
                 continue
-            npt.assert_array_equal(
-                w1,
-                weights2[key],
-                err_msg=f"Key '{key}' not equal in both states {msg}",
-            )
+            if isinstance(w1, str):  # if other structures are present
+                self.assertEqual(w1, weights2[key], f"Key '{key}' not equal in both states {msg}")
+                continue
+            if isinstance(w1, list) and any(isinstance(x, dict) for x in w1):
+                # If list contains dicts, compare dicts
+                try:
+                    self.assertListEqual(w1, weights2[key], f"Key '{key}' not equal in both states {msg}")
+                except (ValueError, AssertionError):  # could be almost equal
+                    self.assertEqual(len(w1), len(weights2[key]), f"Key '{key}' not equal in both states {msg}")
+                    for i, item in enumerate(w1):
+                        self.compare_weights(
+                            item, weights2[key][i], f"Key '{key}[{i}]' not equal in both states {msg}", almost=almost
+                        )
+                    continue
+                else:
+                    continue
+            if w1 is None:
+                self.assertIsNone(weights2[key], f"Key '{key}' not equal in both states {msg}")
+                continue
+            if almost:
+                # Use almost equal for floats, arrays, etc.
+                npt.assert_array_almost_equal(
+                    w1,
+                    weights2[key],
+                    err_msg=f"Key '{key}' not equal in both states {msg}",
+                )
+            else:
+                npt.assert_array_equal(
+                    w1,
+                    weights2[key],
+                    err_msg=f"Key '{key}' not equal in both states {msg}",
+                )
 
     # region tests
 
@@ -405,7 +451,7 @@ class TestHelpers(unittest.TestCase):
 
         def assertCleanDictEqual(a, b, *args, **kwargs):  # noqa: N802
             self.assertDictEqual(
-                self._filter_incompatible_remote_config(a), self._filter_incompatible_remote_config(b), *args, **kwargs
+                self.filter_incompatible_remote_config(a), self.filter_incompatible_remote_config(b), *args, **kwargs
             )
 
         algo_config_dict = algo.config.to_dict()
@@ -549,8 +595,8 @@ class TestHelpers(unittest.TestCase):
             self.assertIsNot(trainable2._pbar, trainable._pbar)
             self.assertIs(type(trainable2._pbar), type(trainable._pbar))
             if isinstance(trainable2._pbar, tqdm_ray.tqdm):
-                pbar1_state = trainable2._pbar._get_state()
-                pbar2_state = trainable._pbar._get_state()  # type: ignore
+                pbar1_state = trainable._pbar._get_state()  # type: ignore
+                pbar2_state = trainable2._pbar._get_state()
                 pbar1_state = {k: v for k, v in pbar1_state.items() if k not in ("desc", "uuid")}
                 pbar2_state = {k: v for k, v in pbar2_state.items() if k not in ("desc", "uuid")}
                 self.assertEqual(pbar1_state, pbar2_state)
@@ -664,3 +710,9 @@ class DisableGUIBreakpoints(unittest.TestCase):
         else:
             self._disabled_breakpoints = mock.patch("builtins.breakpoint")
             print("enabled breakpoint")
+
+
+def dict_diff_message(d1: Any, d2: Any) -> str:
+    standardMsg = "%s != %s" % unittest.util._common_shorten_repr(d1, d2)
+    diff = "\n" + "\n".join(difflib.ndiff(pprint.pformat(d1).splitlines(), pprint.pformat(d2).splitlines()))
+    return standardMsg + diff

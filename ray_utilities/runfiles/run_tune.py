@@ -10,7 +10,6 @@ from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.random import seed_everything
 from ray_utilities.training.default_class import TrainableBase
-from ray_utilities.typing.metrics import LogMetricsDict
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
