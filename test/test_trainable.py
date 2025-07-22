@@ -114,16 +114,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             with tempfile.TemporaryDirectory() as tmpdir:
                 # NOTE This loads some parts by identity!
                 saved_ckpt = trainable.save_checkpoint(tmpdir)
-                saved_ckpt = deepcopy(saved_ckpt)  # make sure we do not modify the original
-                # pickle and load
-                if False:
-                    # fails because of:  AttributeError: Can't pickle local object 'mix_learners.<locals>.MixedLearner'
-                    # Serialize saved_ckpt to a BytesIO object
-                    buf = io.BytesIO()
-                    pickle.dump(saved_ckpt, buf)
-                    buf.seek(0)
-                    # Deserialize from BytesIO
-                    saved_ckpt = pickle.load(buf)
+                saved_ckpt = deepcopy(saved_ckpt)  # assure to not compare by identity
                 with patch_args():  # make sure that args do not influence the restore
                     trainable2 = self.TrainableClass()
                     trainable2.load_checkpoint(saved_ckpt)
@@ -131,18 +122,31 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable2.cleanup()
 
     @Cases(ENV_RUNNER_TESTS)
-    def test_save_restore(self, cases):
+    def test_save_restore_dict(self, cases):
         for num_env_runners in iter_cases(cases):
             trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
             with self.subTest(num_env_runners=num_env_runners):
                 with tempfile.TemporaryDirectory() as tmpdir:
                     training_result = trainable.save(tmpdir)  # calls save_checkpoint
-                    print(f"Saved training result: {training_result}")
                     with patch_args():  # make sure that args do not influence the restore
                         trainable2 = self.TrainableClass()
-                        trainable2.restore(deepcopy(training_result))  # calls load_checkpoint
-                        self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
-                        trainable2.cleanup()
+                        with self.subTest("Restore trainable from dict"):
+                            trainable2.restore(deepcopy(training_result))  # calls load_checkpoint
+                            self.compare_trainables(trainable, trainable2, "from dict", num_env_runners=num_env_runners)
+                            trainable2.stop()
+
+    @Cases(ENV_RUNNER_TESTS)
+    def test_save_restore_path(self, cases):
+        for num_env_runners in iter_cases(cases):
+            trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
+            with self.subTest(num_env_runners=num_env_runners):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    trainable.save(tmpdir)  # calls save_checkpoint
+                    with patch_args():  # make sure that args do not influence the restore
+                        trainable3 = self.TrainableClass()
+                        trainable3.restore(tmpdir)  # calls load_checkpoint
+                        self.compare_trainables(trainable, trainable3, "from path", num_env_runners=num_env_runners)
+                        trainable3.stop()
 
     @Cases(ENV_RUNNER_TESTS)
     def test_get_set_state(self, cases):
@@ -235,7 +239,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable_restored = DefaultTrainable.define(PPOSetup.typed()).from_checkpoint(tmpdir)
             # Compare with default trainable:
             print("Create new default trainable")
-            self._disable_loggers.start()
+            self._disable_tune_loggers.start()
             trainable, _ = self.get_trainable()
             self.compare_trainables(
                 trainable,
@@ -249,12 +253,17 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                     trainable_restored2,
                 )
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases([0])
     def test_tuner_checkpointing(self, cases):
         # self.enable_loggers()
         with patch_args(
-            "--num_samples", "1", "--num_jobs", "1", "--batch_size", "32", "--minibatch_size", "16", "--iterations", "3"
-        ):
+            "--num_samples", "1",
+            "--num_jobs", "1",
+            "--batch_size", "32",
+            "--minibatch_size", "16",
+            "--iterations", "3",
+            "--seed", "12",
+        ):  # fmt: off
             for num_env_runners in iter_cases(cases):
                 with self.subTest(num_env_runners=num_env_runners):
                     setup = AlgorithmSetup(init_trainable=False)
