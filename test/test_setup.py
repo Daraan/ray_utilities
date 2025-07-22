@@ -588,6 +588,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             result_algo_0_step2 = algo_0_runner.step()
             result_algo_1_step2 = algo_1_runner.step()
             for metric in metrics:
+                self.assertIn(metric, result_algo_0_step2[ENV_RUNNER_RESULTS])
+                self.assertIn(metric, result_algo_1_step2[ENV_RUNNER_RESULTS])
                 with self.subTest(f"Check {metric} after step 2", metric=metric):
                     self.assertEqual(
                         result_algo_0_step2[ENV_RUNNER_RESULTS][metric],
@@ -605,6 +607,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             result_algo_0_step3 = algo_0_runner.step()
             result_algo_1_step3 = algo_1_runner.step()
             for metric in metrics:
+                self.assertIn(metric, result_algo_0_step3[ENV_RUNNER_RESULTS])
+                self.assertIn(metric, result_algo_1_step3[ENV_RUNNER_RESULTS])
                 with self.subTest(f"Check {metric} after step 3", metric=metric):
                     self.assertEqual(
                         result_algo_0_step3[ENV_RUNNER_RESULTS][metric],
@@ -628,6 +632,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                 metrics_1_restored = algo_1_runner_restored.algorithm.metrics
             # Check loaded metric
             for metric in metrics:
+                self.assertIn(metric, metrics_0_restored.stats[ENV_RUNNER_RESULTS])
+                self.assertIn(metric, metrics_1_restored.stats[ENV_RUNNER_RESULTS])
                 with self.subTest(f"(Checkpointed) Check {metric} after restored step 1", metric=metric):
                     self.assertEqual(
                         metrics_0_restored.peek((ENV_RUNNER_RESULTS, metric)),
@@ -642,7 +648,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             # --- Step 2 from restored & checkpoint ---
             result_algo0_step2_restored = algo_0_runner_restored.step()
             result_algo1_step2_restored = algo_1_runner_restored.step()
-            # Check if metric was updated
+            # Check that metrics was updated
             for metric in metrics:
                 with self.subTest(f"(Checkpointed) Check {metric} after restored step 2", metric=metric):
                     self.assertEqual(
@@ -658,6 +664,9 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
 
             # Check results
             for metric in metrics:
+                self.assertIn(metric, result_algo_0_step2[ENV_RUNNER_RESULTS])
+                self.assertIn(metric, result_algo0_step2_restored[ENV_RUNNER_RESULTS])
+
                 with self.subTest(f"(Checkpointed) Check {metric} after step 2", metric=metric):
                     with self.subTest("From checkpoint: env_runners=0 - Step 2"):
                         self.assertEqual(
@@ -687,6 +696,9 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             else:
                 metrics_1_restored_x2 = algo_1_restored_x2.algorithm.metrics
             for metric in metrics:
+                self.assertIn(metric, metrics_0_restored_x2.stats[ENV_RUNNER_RESULTS])
+                self.assertIn(metric, metrics_1_restored_x2.stats[ENV_RUNNER_RESULTS])
+
                 with self.subTest(f"(Checkpointed x2) Check {metric} after step 2", metric=metric):
                     self.assertEqual(
                         metrics_0_restored_x2.peek((ENV_RUNNER_RESULTS, metric)),
@@ -708,6 +720,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
 
             # Test that all results after step 3 are have 300 steps
             for metric in metrics:
+                self.assertIn(metric, result_algo_0_step3[ENV_RUNNER_RESULTS])
+                self.assertIn(metric, result_algo0_step3_restored[ENV_RUNNER_RESULTS])
                 with self.subTest(f"(Checkpointed) Check {metric} after step 3", metric=metric):
                     with self.subTest("From checkpoint: env_runners=0 - Step 3"):
                         self.assertEqual(
@@ -755,6 +769,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
         with patch_args(
             "--batch_size",
             str(ENV_STEPS_PER_ITERATION),
+            "--log_stats",
+            "most",  # increase log stats to assure necessary keys are present
         ):
             setup = AlgorithmSetup(init_trainable=False)
             config = setup.config
@@ -779,9 +795,12 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             config.env_runners(num_env_runners=1)
             Trainable1 = setup.create_trainable()
         assert isclass(Trainable0) and isclass(Trainable1)
+        trainable0 = Trainable0()
+        trainable1 = Trainable1()
+
         results = self._test_algo_checkpointing(
-            Trainable0(),
-            Trainable1(),
+            trainable0,
+            trainable1,
             metrics=[
                 NUM_ENV_STEPS_SAMPLED_LIFETIME,
                 NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
@@ -815,7 +834,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             algo0,
             algo1,
             metrics=[
-                # NUM_ENV_STEPS_SAMPLED_LIFETIME,
+                NUM_ENV_STEPS_SAMPLED_LIFETIME,
                 NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
             ],
         )

@@ -3,15 +3,18 @@ from __future__ import annotations
 
 import logging
 import math
+from collections import deque
 from functools import partial
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Literal, Optional, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, Optional, TypeVar, cast, overload
 
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
+from ray.rllib.core import COMPONENT_LEARNER, COMPONENT_METRICS_LOGGER, COMPONENT_RL_MODULE
 from ray.rllib.utils.metrics import (
     ALL_MODULES,  # pyright: ignore[reportPrivateImportUsage]
     ENV_RUNNER_RESULTS,
+    EVALUATION_RESULTS,
     LEARNER_RESULTS,
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
@@ -23,6 +26,7 @@ from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_steps
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
+    from ray.rllib.env.env_runner import EnvRunner
 
     from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
@@ -242,3 +246,130 @@ def get_total_steps(args: dict[str, Any], config: "AlgorithmConfig") -> int | No
             * args["iterations"]
         )
     )
+
+
+def _set_env_runner_state(env_runner: EnvRunner, state: dict[str, Any]):
+    env_runner.metrics.set_state(state[COMPONENT_METRICS_LOGGER])
+
+
+def _clear_nan_stats(stat: dict[str, Any | list[list[float]]]):
+    for k, v in stat.items():
+        if k != "_hist":
+            continue
+        hist: list[list[float]] = v
+        for i, h in enumerate(hist):
+            hist[i] = [0.0 if (isinstance(x, float) and math.isnan(x)) else x for x in h]
+
+
+def nan_to_zero_hist_leaves(struct: Any, path: tuple[str, ...] = (), parent=None, *, remove_all: bool = False) -> Any:
+    """
+    With a bug in ray updating a metric with -= value, where value could be NaN,
+    replace such leafes with 0.
+
+    Also usefull for testing where nan != nan.
+    """
+    if isinstance(struct, dict):
+        return {k: nan_to_zero_hist_leaves(v, (*path, k), struct, remove_all=remove_all) for k, v in struct.items()}
+    elif isinstance(struct, list):
+        return [nan_to_zero_hist_leaves(v, path, parent, remove_all=remove_all) for v in struct]
+    else:
+        if path and path[-1] == "_hist":
+            # Only modify if parent has "reduce" == "sum"
+            if remove_all or (
+                parent is not None
+                and parent["reduce"] == "sum"
+                and parent["clear_on_reduce"] is False
+                and parent["window"] in (None, float("inf"))
+            ):
+                return 0.0 if (isinstance(struct, float) and math.isnan(struct)) else struct
+        return struct
+
+
+def _remove_values_on_tensor_stats(struct, path: tuple[str, ...] = (), parent: dict[str, Any] | None = None):
+    if isinstance(struct, dict):
+        return {k: _remove_values_on_tensor_stats(v, (*path, k), struct) for k, v in struct.items()}
+    elif isinstance(struct, list):
+        return [_remove_values_on_tensor_stats(v, path, parent) for v in struct]
+    else:
+        if path and path[-1] == "values" and parent is not None and parent.get("_is_tensor"):
+            if isinstance(struct, deque):
+                return deque(maxlen=struct.maxlen)
+        elif path and path[-1] == "_is_tensor":
+            return False
+        return struct
+
+
+def _sync_env_runner_states(algorithm: Algorithm) -> None:
+    """
+    Syncs metric states for env runners, fixing a bug with restored metrics
+
+    See my PR: https://github.com/ray-project/ray/pull/54148
+    """
+    assert algorithm.learner_group is not None
+    assert algorithm.metrics
+    assert algorithm.config
+    assert algorithm.evaluation_config
+    rl_module_state = algorithm.learner_group.get_state(
+        components=COMPONENT_LEARNER + "/" + COMPONENT_RL_MODULE,
+        inference_only=True,
+    )[COMPONENT_LEARNER]
+
+    # Sync states, especially env_steps
+
+    metrics_state = algorithm.metrics.get_state()
+    # State keys are "--" joined
+    env_runner_metrics_state = {
+        COMPONENT_METRICS_LOGGER: {
+            "stats": {
+                k: nan_to_zero_hist_leaves(v)
+                for k, v in metrics_state["stats"].items()
+                if k.startswith(ENV_RUNNER_RESULTS + "--")
+            }
+        }
+    }
+    eval_stats = {
+        k: nan_to_zero_hist_leaves(v)
+        for k, v in metrics_state["stats"].items()
+        if k.startswith("--".join((EVALUATION_RESULTS, ENV_RUNNER_RESULTS)))
+    }
+    eval_runner_metrics = {COMPONENT_METRICS_LOGGER: {"stats": eval_stats}}
+
+    if algorithm.env_runner_group:
+        algorithm.env_runner_group.sync_env_runner_states(
+            config=algorithm.config,
+            env_steps_sampled=algorithm.metrics.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=0),
+            rl_module_state=rl_module_state,
+            env_to_module=algorithm.env_to_module_connector,
+            module_to_env=algorithm.module_to_env_connector,
+            # env_runner_metrics=env_runner_metrics,
+        )
+        # Sync metrics
+
+        algorithm.env_runner_group.foreach_env_runner(
+            partial(_set_env_runner_state, state=env_runner_metrics_state),
+            remote_worker_ids=None,  # pyright: ignore[reportArgumentType]
+            local_env_runner=False,
+            # kwargs is not save to use here, not used on all code paths
+            timeout_seconds=0.0,  # This is a state update -> Fire-and-forget.
+        )
+
+    if algorithm.eval_env_runner_group:  # TODO: # XXX Why elif here in RLLib code?
+        algorithm.eval_env_runner_group.sync_env_runner_states(
+            config=algorithm.evaluation_config,
+            # NOTE: Ray does not use EVALUATION_RESULTS here!
+            env_steps_sampled=algorithm.metrics.peek(
+                (EVALUATION_RESULTS, ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=0
+            ),
+            rl_module_state=rl_module_state,
+            env_to_module=algorithm.env_to_module_connector,
+            module_to_env=algorithm.module_to_env_connector,
+            # env_runner_metrics=env_runner_metrics,
+        )
+        if eval_stats:
+            algorithm.eval_env_runner_group.foreach_env_runner(
+                partial(_set_env_runner_state, state=eval_runner_metrics),
+                remote_worker_ids=None,  # pyright: ignore[reportArgumentType]
+                local_env_runner=False,
+                # kwargs is not save to use here, not used on all code paths
+                timeout_seconds=0.0,  # This is a state update -> Fire-and-forget.
+            )

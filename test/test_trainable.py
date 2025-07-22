@@ -253,7 +253,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                     trainable_restored2,
                 )
 
-    @Cases([0])
+    @Cases(ENV_RUNNER_TESTS)
     def test_tuner_checkpointing(self, cases):
         # self.enable_loggers()
         with patch_args(
@@ -262,7 +262,6 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             "--batch_size", "32",
             "--minibatch_size", "16",
             "--iterations", "3",
-            "--seed", "12",
         ):  # fmt: off
             for num_env_runners in iter_cases(cases):
                 with self.subTest(num_env_runners=num_env_runners):

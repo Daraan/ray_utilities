@@ -119,6 +119,11 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
     def test_checkpoint_and_load(self): ...
 
 
+class TestReTuning(InitRay, TestHelpers, DisableLoggers):
+    def test_retune_with_different_config(self):
+        assert False
+
+
 class TestOptunaTuner(SetupDefaults):
     def test_optuna_tuner_setup(self):
         with patch_args("--optimize_config", "--num_samples", "1"):
