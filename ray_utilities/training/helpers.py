@@ -261,6 +261,28 @@ def _clear_nan_stats(stat: dict[str, Any | list[list[float]]]):
             hist[i] = [0.0 if (isinstance(x, float) and math.isnan(x)) else x for x in h]
 
 
+def split_sum_stats_over_env_runners(
+    struct: Any, path: tuple[str, ...] = (), parent=None, *, num_env_runners: int
+) -> Any:
+    """
+    As sum values are aggregated over all env runners, split them evenly over the env runners
+    again for every to have roughly its own metric.
+    """
+    if num_env_runners <= 1:
+        return struct  # No need to split if only one env runner
+    if isinstance(struct, dict):
+        return {
+            k: split_sum_stats_over_env_runners(v, (*path, k), struct, num_env_runners=num_env_runners)
+            for k, v in struct.items()
+        }
+    if isinstance(struct, list):
+        return [split_sum_stats_over_env_runners(v, path, parent, num_env_runners=num_env_runners) for v in struct]
+    if parent is not None and parent["reduce"] == "sum" and parent["clear_on_reduce"] is False:
+        if path[-1] == "values" or (path[-1] == "_hist" and parent["window"] in (None, float("inf"))):
+            return struct / num_env_runners
+    return struct
+
+
 def nan_to_zero_hist_leaves(struct: Any, path: tuple[str, ...] = (), parent=None, *, remove_all: bool = False) -> Any:
     """
     With a bug in ray updating a metric with -= value, where value could be NaN,
@@ -270,36 +292,34 @@ def nan_to_zero_hist_leaves(struct: Any, path: tuple[str, ...] = (), parent=None
     """
     if isinstance(struct, dict):
         return {k: nan_to_zero_hist_leaves(v, (*path, k), struct, remove_all=remove_all) for k, v in struct.items()}
-    elif isinstance(struct, list):
+    if isinstance(struct, list):
         return [nan_to_zero_hist_leaves(v, path, parent, remove_all=remove_all) for v in struct]
-    else:
-        if path and path[-1] == "_hist":
-            # Only modify if parent has "reduce" == "sum"
-            if remove_all or (
-                parent is not None
-                and parent["reduce"] == "sum"
-                and parent["clear_on_reduce"] is False
-                and parent["window"] in (None, float("inf"))
-            ):
-                return 0.0 if (isinstance(struct, float) and math.isnan(struct)) else struct
-        return struct
+    if path and path[-1] == "_hist":
+        # Only modify if parent has "reduce" == "sum"
+        if remove_all or (
+            parent is not None
+            and parent["reduce"] == "sum"
+            and parent["clear_on_reduce"] is False
+            and parent["window"] in (None, float("inf"))
+        ):
+            return 0.0 if (isinstance(struct, float) and math.isnan(struct)) else struct
+    return struct
 
 
 def _remove_values_on_tensor_stats(struct, path: tuple[str, ...] = (), parent: dict[str, Any] | None = None):
     if isinstance(struct, dict):
         return {k: _remove_values_on_tensor_stats(v, (*path, k), struct) for k, v in struct.items()}
-    elif isinstance(struct, list):
+    if isinstance(struct, list):
         return [_remove_values_on_tensor_stats(v, path, parent) for v in struct]
-    else:
-        if path and path[-1] == "values" and parent is not None and parent.get("_is_tensor"):
-            if isinstance(struct, deque):
-                return deque(maxlen=struct.maxlen)
-        elif path and path[-1] == "_is_tensor":
-            return False
-        return struct
+    if path and path[-1] == "values" and parent is not None and parent.get("_is_tensor"):
+        if isinstance(struct, deque):
+            return deque(maxlen=struct.maxlen)
+    elif path and path[-1] == "_is_tensor":
+        return False
+    return struct
 
 
-def _sync_env_runner_states(algorithm: Algorithm) -> None:
+def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
     """
     Syncs metric states for env runners, fixing a bug with restored metrics
 
@@ -321,14 +341,18 @@ def _sync_env_runner_states(algorithm: Algorithm) -> None:
     env_runner_metrics_state = {
         COMPONENT_METRICS_LOGGER: {
             "stats": {
-                k: nan_to_zero_hist_leaves(v)
+                k.removeprefix(ENV_RUNNER_RESULTS + "--"): split_sum_stats_over_env_runners(
+                    nan_to_zero_hist_leaves(v), num_env_runners=algorithm.config.num_env_runners or 1
+                )
                 for k, v in metrics_state["stats"].items()
                 if k.startswith(ENV_RUNNER_RESULTS + "--")
             }
         }
     }
     eval_stats = {
-        k: nan_to_zero_hist_leaves(v)
+        k.removeprefix(EVALUATION_RESULTS + "--" + ENV_RUNNER_RESULTS + "--"): split_sum_stats_over_env_runners(
+            nan_to_zero_hist_leaves(v), num_env_runners=algorithm.config.num_env_runners or 1
+        )
         for k, v in metrics_state["stats"].items()
         if k.startswith("--".join((EVALUATION_RESULTS, ENV_RUNNER_RESULTS)))
     }
@@ -348,7 +372,7 @@ def _sync_env_runner_states(algorithm: Algorithm) -> None:
         algorithm.env_runner_group.foreach_env_runner(
             partial(_set_env_runner_state, state=env_runner_metrics_state),
             remote_worker_ids=None,  # pyright: ignore[reportArgumentType]
-            local_env_runner=False,
+            local_env_runner=True,
             # kwargs is not save to use here, not used on all code paths
             timeout_seconds=0.0,  # This is a state update -> Fire-and-forget.
         )

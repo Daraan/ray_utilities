@@ -1,3 +1,4 @@
+import argparse
 import logging
 import sys
 import unittest
@@ -257,3 +258,7 @@ class TestProcessing(unittest.TestCase):
                         _result = setup.trainable_class().train()
                     else:
                         _result = setup.trainable(setup.param_space)
+            with patch_args("--log_stats", "invalid_choice"):
+                with self.assertRaises(SystemExit) as context:
+                    AlgorithmSetup()
+                self.assertIsInstance(context.exception.__context__, argparse.ArgumentError)

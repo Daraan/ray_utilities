@@ -32,13 +32,13 @@ from ray_utilities.misc import is_pbar
 from ray_utilities.training.functional import training_step
 from ray_utilities.training.helpers import (
     _remove_values_on_tensor_stats,
-    _sync_env_runner_states,
     create_running_reward_updater,
     episode_iterator,
     get_current_step,
     get_total_steps,
     nan_to_zero_hist_leaves,
     setup_trainable,
+    sync_env_runner_states_after_reload,
 )
 from ray_utilities.typing.trainable_return import RewardUpdaters
 
@@ -605,8 +605,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         self.algorithm.set_state(state.get("algorithm", {"config": state["algorithm_config"]}))
         # Update env_runners after restore
         # check if config has been restored correctly - TODO: Remove after more testing
-        from ray_utilities.testing_utils import dict_diff_message, TestHelpers
-        from ray_utilities.training.helpers import nan_to_zero_hist_leaves
+        from ray_utilities.testing_utils import TestHelpers, dict_diff_message
 
         config1_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm_config.to_dict())
         config2_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm.env_runner.config.to_dict())
@@ -746,7 +745,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         restored = super().from_checkpoint(path, filesystem=filesystem, **kwargs)
         restored = cast("Self", restored)
         # Restore algorithm metric states; see my PR https://github.com/ray-project/ray/pull/54148/
-        _sync_env_runner_states(restored.algorithm)
+        sync_env_runner_states_after_reload(restored.algorithm)
         return restored
 
 

@@ -43,7 +43,7 @@ from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.training.default_class import DefaultTrainable
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     import chex
     from flax.training.train_state import TrainState
@@ -377,6 +377,30 @@ class TestHelpers(unittest.TestCase):
 
         # NOTE: Apply gradients modifies state
 
+    def compare_metrics_in_results(
+        self,
+        result1: Mapping,
+        result2: Mapping,
+        expected: float | Iterable[Any],
+        metrics: Collection[str],
+        msg: str | None = None,
+    ):
+        """Check that the metrics in both results are equal."""
+        if not isinstance(expected, Iterable):
+            expected = [expected] * len(metrics)  # same result
+        for expected_value, metric in zip(expected, metrics):
+            self.assertIn(metric, result1)
+            self.assertIn(metric, result2)
+            with self.subTest(msg.format(metric), metric=metric):
+                self.assertEqual(
+                    result1[metric],
+                    result2[metric],
+                )
+                self.assertEqual(
+                    result1[metric],
+                    expected_value,
+                )
+
     @staticmethod
     def filter_incompatible_remote_config(config: dict[str, Any]) -> dict[str, Any]:
         if "tf_session_args" in config:
@@ -487,11 +511,16 @@ class TestHelpers(unittest.TestCase):
     def compare_configs(
         self, config1: AlgorithmConfig | dict, config2: AlgorithmConfig | dict, *, ignore: Collection[str] = ()
     ):
+        config1_eval = None
+        config2_eval = None
         if isinstance(config1, AlgorithmConfig):
+            if config1.evaluation_config:
+                config1_eval = config1.evaluation_config
             config1 = config1.to_dict()
         else:
             config1 = config1.copy()
         if isinstance(config2, AlgorithmConfig):
+            config2_eval = config2.evaluation_config
             config2 = config2.to_dict()
         else:
             config2 = config2.copy()
@@ -507,6 +536,11 @@ class TestHelpers(unittest.TestCase):
         config1.pop("simple_optimizer", None)
         config2.pop("simple_optimizer", None)
         self.assertDictEqual(config1, config2)  # ConfigType
+        if config1_eval or config2_eval:
+            if not config1_eval or not config2_eval:
+                self.fail("One of the configs has no evaluation_config")
+            with self.subTest("Compare evaluation configs"):
+                self.compare_configs(config1_eval, config2_eval, ignore=ignore)
 
     def compare_trainables(
         self,
