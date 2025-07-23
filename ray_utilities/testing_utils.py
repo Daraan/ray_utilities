@@ -3,6 +3,7 @@ from __future__ import annotations
 
 # pyright: reportOptionalMemberAccess=none
 import difflib
+import math
 import os
 import pathlib
 import pprint
@@ -274,7 +275,7 @@ class TestHelpers(unittest.TestCase):
                     val1, val2, err_msg=f"Attribute '{attr_checked}.{path1}' not equal in both states {msg}"
                 )
 
-    def util_test_compare_env_runner_results(
+    def compare_env_runner_results(
         self,
         metrics_0: dict[str, Any],
         metrics_1: dict[str, Any],
@@ -300,6 +301,8 @@ class TestHelpers(unittest.TestCase):
             all_keys.discard("env_to_module_sum_episodes_length_in")  # might be wrong due to restore
             all_keys.discard("env_to_module_sum_episodes_length_out")
             all_keys.difference_update(key_difference)
+        # remove timer stats
+        all_keys = {k for k in all_keys if not k.endswith("_throughput")}
         if compare_results is None:
             compare_results = strict
         if not compare_results:
@@ -316,7 +319,18 @@ class TestHelpers(unittest.TestCase):
             all_keys.discard("num_episodes_lifetime")  # needs same sampling
         all_keys.discard("num_episodes_lifetime")  # Remove because of metrics restore bug # 54324
         self.set_max_diff(None)
-        self.assertDictEqual({k: metrics_0[k] for k in all_keys}, {k: metrics_1[k] for k in all_keys}, msg=msg)
+        # compare nan values
+        self.assertEqual(
+            {k: math.isnan(v) for k in all_keys if isinstance(v := metrics_0[k], float)},
+            {k: math.isnan(v) for k in all_keys if isinstance(v := metrics_1[k], float)},
+            msg=f"NaN values differ: {metrics_0} != {metrics_1} {msg}",
+        )
+        # not nans
+        self.assertDictEqual(
+            {k: v for k in all_keys if not (isinstance(v := metrics_0[k], float) and math.isnan(v))},
+            {k: v for k in all_keys if not (isinstance(v := metrics_1[k], float) and math.isnan(v))},
+            msg=msg,
+        )
 
     def util_test_state_equivalence(
         self,
