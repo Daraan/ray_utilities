@@ -125,11 +125,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         - Trainable methods:
             setup()
             step()   # Keep abstract
-            save_checkpoint()
-            load_checkpoint()
+            save_checkpoint()  # we call save_to_path
+            load_checkpoint() -> restore_from_path (if path) or ... (when dict)
             reset_config()
             cleanup()
-            save()  # available; calls save_checkpoint
+            save()  # available; calls save_checkpoint -> save_to_path
             restore()  # available; calls load_checkpoint
     """
 
@@ -238,10 +238,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             self._overwrite_algorithm = overwrite_algorithm
         assert self.setup_class.parse_known_only is True
         _logger.debug("Setting up %s with config: %s", self.__class__.__name__, config)
-        if "cli_args" in config and config["cli_args"].get("from_checkpoint") not in (None, ""):
-            # calls restore from path; from_checkpoint could also be a dict here
-            self.load_checkpoint(config["cli_args"]["from_checkpoint"])
-            return
         if isclass(self.setup_class):
             self._setup = self.setup_class()  # XXX # FIXME # correct args; might not work when used with Tuner
         else:
@@ -266,6 +262,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         assert self.algorithm.config
         # calculate total steps once
         self._total_steps = {"total_steps": get_total_steps(args, self.algorithm.config), "iterations": "auto"}
+        # After components have been setup up load checkpoint if requested
+        if "cli_args" in config and config["cli_args"].get("from_checkpoint") not in (None, ""):
+            _logger.info("At end of setup(), loading from checkpoint: %s", config["cli_args"]["from_checkpoint"])
+            # calls restore from path; from_checkpoint could also be a dict here
+            self.load_checkpoint(config["cli_args"]["from_checkpoint"])
+            # FIXME: This restored the original cli args and overwrites do not take effect
+            # Problem: Figure out which are "default (old)" to keep and which are "new" to overwrite
+            return
 
     @property
     def algorithm_config(self) -> _ConfigType:

@@ -101,6 +101,37 @@ class TestTrainable(TestHelpers, DisableLoggers, DisableGUIBreakpoints):
         self.assertIn(EVALUATION_RESULTS, result)
         self.assertGreater(len(result[EVALUATION_RESULTS]), 0)
 
+    def test_overrides_after_restore(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            batch_size1 = 40
+            with patch_args(
+                "--total_steps", "80", "--batch_size", batch_size1, "--minibatch_size", "20", "--comment", "A"
+            ):
+                trainable = AlgorithmSetup().trainable_class()
+                self.assertEqual(trainable._total_steps["total_steps"], 80)
+                self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 40)
+                self.assertEqual(trainable.algorithm_config.minibatch_size, 20)
+                self.assertEqual(trainable._setup.args.comment, "A")
+                for i in range(1, 3):
+                    result = trainable.step()
+                    self.assertEqual(result["training_iteration"], i)
+                    self.assertEqual(result["current_step"], batch_size1 * i)
+                trainable.save(tmpdir)
+                trainable.stop()
+            with patch_args(
+                "--total_steps", 80 + 120,
+                "--batch_size", "60",
+                "--comment", "B",
+                "--from_checkpoint", tmpdir,
+            ):  # fmt: off
+                trainable2 = AlgorithmSetup().trainable_class()
+                # left unchanged
+                self.assertEqual(trainable2.algorithm_config.minibatch_size, 20)
+                # Should change
+                self.assertEqual(trainable2.algorithm_config.train_batch_size_per_learner, 60)
+                self.assertEqual(trainable2._total_steps["total_steps"], 80 + 120)
+                self.assertEqual(trainable2._setup.args.comment, "B")
+
 
 class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
     def setUp(self):

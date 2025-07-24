@@ -141,9 +141,116 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
     def test_checkpoint_and_load(self): ...
 
 
-class TestReTuning(InitRay, TestHelpers, DisableLoggers):
+class TestReTuning(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
     def test_retune_with_different_config(self):
-        assert False
+        self.enable_loggers()
+        with patch_args(
+            "--num_samples", "1",
+            "--num_jobs", "1",
+            "--batch_size", BATCH_SIZE,
+            "--minibatch_size", MINIBATCH_SIZE,
+            "--iterations", "1",
+        ):  # fmt: off
+            with AlgorithmSetup() as setup1:
+                setup1.config.env_runners(num_env_runners=0)
+        tuner1 = setup1.create_tuner()
+        tuner1._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
+            checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
+            checkpoint_score_order="max",
+            checkpoint_frequency=1,
+        )
+        results1 = tuner1.fit()
+        self.assertEqual(results1.num_errors, 0, "Encountered errors: " + format_result_errors((results1.errors)))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+        # Check metrics:
+        result1 = results1[0]
+        assert result1.metrics
+        self.assertEqual(result1.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME], BATCH_SIZE)  # pyright: ignore[reportOptionalSubscript]
+        self.assertEqual(result1.metrics[TRAINING_ITERATION], 1)  # pyright: ignore[reportOptionalSubscript]
+        checkpoint_dir, checkpoints = self.get_checkpoint_dirs(results1[0])
+        self.assertEqual(
+            len(checkpoints),
+            1,
+            f"Checkpoints were not created. Found: {os.listdir(checkpoint_dir)} in {checkpoint_dir}",
+        )
+        self.assertTrue(os.path.exists(checkpoints[0]), "Checkpoint file does not exist: " + checkpoints[0])
+
+        class TrainableWithChecks(DefaultTrainable[Any, AlgorithmConfig, Any]):
+            def setup(self, config, *, overwrite_algorithm=None):
+                super().setup(config, overwrite_algorithm=overwrite_algorithm)
+                assert self._iteration == 1, "Trainable should be setup with iteration 1"
+
+            def step(self):
+                assert self.algorithm_config.train_batch_size_per_learner == BATCH_SIZE * 2, (
+                    f"Batch size should be 2x the original batch size, not {self.algorithm_config.train_batch_size_per_learner}"
+                )
+                result, metrics, rewards = training_step(
+                    self.algorithm,
+                    reward_updaters=self._reward_updaters,
+                    discrete_eval=self.discrete_eval,
+                    disable_report=True,
+                    log_stats=self.log_stats,
+                )
+                assert result["training_iteration"] > 2, "Should start with at least 1 iteration"
+                expected = 2 * BATCH_SIZE
+                assert (value := result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED]) == 2 * BATCH_SIZE, (
+                    f"Expected {expected} env steps sampled, got {value}"
+                )
+                assert (
+                    value := result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER] == BATCH_SIZE + 2 * BATCH_SIZE
+                ), f"Expected {expected} env steps passed to learner, got {value}"
+                metrics["_checking_class_"] = True  # pyright: ignore[reportGeneralTypeIssues]
+
+                return metrics
+
+        class Setup(AlgorithmSetup):
+            def _create_trainable(self):
+                return TrainableWithChecks.define(self)
+
+        with patch_args(
+            "--num_samples", "1",
+            "--num_jobs", "1",
+            "--batch_size", BATCH_SIZE * 2,
+            "--minibatch_size", MINIBATCH_SIZE,
+            "--total_steps", BATCH_SIZE * 2 * 3 + BATCH_SIZE,  # 1 + 3 iterations
+            "--from_checkpoint", checkpoints[0],
+            "--log_metrics", "most",
+        ):  # fmt: off
+            with Setup() as setup2:
+                setup2.config.env_runners(num_env_runners=0)
+            self.assertEqual(setup2.args.total_steps, BATCH_SIZE * 2 * 3 + BATCH_SIZE)
+            # Auto iteration will be 4; but only 3 new should be done.
+            self.assertEqual(setup2.args.train_batch_size_per_learner, BATCH_SIZE * 2)
+
+        tuner2 = setup2.create_tuner()
+        tuner2._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
+            checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
+            checkpoint_score_order="max",
+            checkpoint_frequency=1,
+        )
+        results2 = tuner2.fit()
+        self.assertEqual(results2.num_errors, 0, "Encountered errors: " + format_result_errors(results2.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+        result2 = results2[0]
+        assert result2.metrics
+        self.assertIn(
+            "_checking_class_",
+            result2.metrics,
+            "Metrics should contain '_checking_class_'. Custom class was likely not used",
+        )
+        # Check iterations change
+        self.assertEqual(result2.metrics[TRAINING_ITERATION], 4)
+        self.assertEqual(result2.metrics["iterations_since_restore"], 3)
+
+        # Change batch size change:
+        self.assertEqual(
+            result2.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME], BATCH_SIZE + (BATCH_SIZE * 2) * 3
+        )
+        checkpoint_dir2, checkpoints2 = self.get_checkpoint_dirs(results2[0])
+        self.assertEqual(
+            len(checkpoints2),
+            2,  # 2 checkpoints as in total 3 steps; or does it save ?
+            f"Checkpoints were not created. Found: {os.listdir(checkpoint_dir2)} in {checkpoint_dir2}",
+        )
+        self.assertTrue(os.path.exists(checkpoints2[0]), "Checkpoint file does not exist: " + checkpoints2[0])
 
 
 class TestOptunaTuner(SetupDefaults):

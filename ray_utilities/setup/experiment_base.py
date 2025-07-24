@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
+import pickle
 from abc import ABC, abstractmethod
 
 # pyright: enableExperimentalFeatures=true
@@ -263,7 +266,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         return self.args
 
     def parse_args(
-        self, args: Sequence[str] | None = None, *, known_only: bool | None = None
+        self, args: Sequence[str] | None = None, *, known_only: bool | None = None, checkpoint: Optional[str] = None
     ) -> NamespaceType[ParserType_co]:
         """
         Raises:
@@ -291,6 +294,21 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 "The following arguments were not recognized by the parser: %s.",
                 extra_args,
             )
+        # Merge args from a checkpoint:
+        checkpoint = checkpoint or parsed.from_checkpoint
+        if checkpoint:
+            path = Path(checkpoint)
+            with open(path / "state.pkl", "rb") as f:
+                state: dict[str, Any] = pickle.load(f)
+            # Create a patched parser with the old values as default values
+            new_default_parser = self.create_parser()
+            restored_args: dict[str, Any] = vars(state["setup"]["args"])
+            actions: list[argparse.Action] = new_default_parser._actions
+            for action in actions:
+                action.default = restored_args.get(action.dest, action.default)  # set new default values
+            self.parser = new_default_parser
+            parsed = self.parser.parse_args()
+
         self.args = self.postprocess_args(parsed)
         return self.args
 
@@ -546,7 +564,11 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 cls.config_class().algo_class,
                 cls.algo_class,
             )
-        return cast("AlgorithmType_co", cls.algo_class.from_checkpoint(path))
+        try:
+            # Algorithm checkpoint is likely in subdir.
+            return cast("AlgorithmType_co", cls.algo_class.from_checkpoint(os.path.join(path, "algorithm")))
+        except ValueError:
+            return cast("AlgorithmType_co", cls.algo_class.from_checkpoint(path))
 
     def build_algo(self) -> AlgorithmType_co:
         try:
@@ -809,17 +831,21 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         cls,
         data: SetupCheckpointDict[ParserType_co, ConfigType_co, AlgorithmType_co],
         *,
-        load_class: bool = True,
+        load_class: bool = False,
         init_trainable: bool = True,
     ) -> Self:
         # TODO: Why not a classmethod again?
-        setup_class = data.get("setup_class", cls) if load_class else cls
-        if setup_class is not cls:
+        saved_class = data.get("setup_class", cls)
+        setup_class = saved_class if load_class else cls
+        if saved_class is not cls:
             logger.warning(
                 "This class %s is not the same as the one used to save the data %s. "
+                "Will use this class %s to restore the setup. "
                 "This may lead to unexpected behavior. "
-                "Use `load_class=False` or call this method on another class to avoid this warning.",
+                "Use `load_class=True` to load the stored type "
+                "or call this method on another class to avoid this warning.",
                 cls,
+                saved_class,
                 setup_class,
                 stacklevel=2,
             )
