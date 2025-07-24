@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Protocol, ca
 from ray import train, tune
 from ray.rllib.algorithms.ppo import PPO
 from ray.tune.search.optuna import OptunaSearch
-from ray.tune.stopper import CombinedStopper, FunctionStopper, MaximumIterationStopper
+from ray.tune.stopper import CombinedStopper, FunctionStopper
 from typing_extensions import TypeVar
 
 from ray_utilities.config._tuner_callbacks_setup import TunerCallbackSetup
@@ -18,6 +18,7 @@ from ray_utilities.constants import (
 from ray_utilities.misc import trial_name_creator
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner, create_search_algo
 from ray_utilities.training.helpers import get_current_step
+from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultIterationStopper
 
 if TYPE_CHECKING:
     from ray.air.config import RunConfig as RunConfigV1
@@ -84,9 +85,6 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
         Otherwise, it returns None or an empty list.
         """
         stoppers = []
-        if isinstance(self._setup.args.iterations, (int, float)):
-            logger.debug("Adding MaximumIterationStopper with %s iterations", self._setup.args.iterations)
-            stoppers.append(MaximumIterationStopper(int(self._setup.args.iterations)))
         if isinstance(self._setup.args.total_steps, (int, float)):
             logger.debug(
                 "Adding FunctionStopper for total steps (tied to setup.args.total_steps) %s",
@@ -95,9 +93,21 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
 
             def total_steps_stopper(trial_id: str, results: dict[str, Any] | StrictAlgorithmReturnData) -> bool:  # noqa: ARG001
                 current_step = get_current_step(results)  # pyright: ignore[reportArgumentType]
-                return current_step >= self._setup.args.total_steps  # <-- this allows late modification
+                stop = current_step >= self._setup.args.total_steps  # <-- this allows late modification
+                # however will self._setup and trainable._setup still be aligned after a restore?
+                if stop:
+                    logger.info(
+                        "Stopping trial %s at step %s >= total_steps %s",
+                        trial_id,
+                        current_step,
+                        self._setup.args.total_steps,
+                    )
+                return stop
 
             stoppers.append(FunctionStopper(total_steps_stopper))
+        if isinstance(self._setup.args.iterations, (int, float)):
+            logger.debug("Adding MaximumResultIterationStopper with %s iterations", self._setup.args.iterations)
+            stoppers.append(MaximumResultIterationStopper(int(self._setup.args.iterations)))
         return stoppers
 
     def create_tune_config(self) -> tune.TuneConfig:

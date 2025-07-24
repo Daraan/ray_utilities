@@ -100,11 +100,11 @@ def iter_cases(cases: type[Cases] | mock.MagicMock):
         raise
 
 
-def patch_args(*args: str):
+def patch_args(*args: str | int):
     patch = [
         "file.py",
         *(("-a", "no_actor_provided by patch_args") if ("-a" not in args and "--actor_type" not in args) else ()),
-        *args,
+        *map(str, args),
     ]
     return mock.patch.object(
         sys,
@@ -764,3 +764,7 @@ def dict_diff_message(d1: Any, d2: Any) -> str:
     standardMsg = "%s != %s" % unittest.util._common_shorten_repr(d1, d2)
     diff = "\n" + "\n".join(difflib.ndiff(pprint.pformat(d1).splitlines(), pprint.pformat(d2).splitlines()))
     return standardMsg + diff
+
+
+def format_result_errors(errors):
+    return str(errors).replace(r"\n", "\n")
