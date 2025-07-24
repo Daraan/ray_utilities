@@ -8,20 +8,34 @@ from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
     EPISODE_RETURN_MEAN,
     EVALUATION_RESULTS,
+    NUM_ENV_STEPS_SAMPLED_LIFETIME,
+    NUM_ENV_STEPS_SAMPLED,
 )
 from ray.tune.result import SHOULD_CHECKPOINT, TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.search.optuna import OptunaSearch
 from ray.tune.stopper import CombinedStopper
 
-from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
+from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN, NUM_ENV_STEPS_PASSED_TO_LEARNER
 from ray_utilities.runfiles import run_tune
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner
-from ray_utilities.testing_utils import DisableLoggers, InitRay, SetupDefaults, TestHelpers, patch_args
+from ray_utilities.testing_utils import (
+    DisableGUIBreakpoints,
+    DisableLoggers,
+    InitRay,
+    SetupDefaults,
+    TestHelpers,
+    format_result_errors,
+    patch_args,
+)
+from ray_utilities.training.functional import training_step
 from ray_utilities.training.default_class import DefaultTrainable
 from ray_utilities.typing.trainable_return import TrainableReturnData
 
 logger = logging.getLogger(__name__)
+
+BATCH_SIZE = 32
+MINIBATCH_SIZE = 32
 
 
 class TestTuner(InitRay, TestHelpers, DisableLoggers):
@@ -43,26 +57,30 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers):
             self.assertNotIsInstance(tuner2._local_tuner._tune_config.search_alg, OptunaSearch)
 
     def test_run_tune_function(self):
-        with patch_args("--num_samples", "3", "--num_jobs", "2", "--batch_size", "32", "--iterations", "3"):
+        with patch_args("--num_samples", "3", "--num_jobs", "2", "--batch_size", BATCH_SIZE, "--iterations", "3"):
             with AlgorithmSetup(init_trainable=False) as setup:
-                setup.config.training(num_epochs=2, minibatch_size=32)
+                setup.config.training(num_epochs=2, minibatch_size=BATCH_SIZE)
                 setup.config.evaluation(evaluation_interval=1)  # else eval metric not in dict
             results = run_tune(setup)
             assert not isinstance(results, dict)
             # NOTE: This can be OK even if runs fail!
             for result in results:
                 assert result.metrics
-                self.assertEqual(result.metrics["current_step"], 3 * 128)
+                self.assertEqual(result.metrics["current_step"], 3 * BATCH_SIZE)
                 self.assertEqual(result.metrics[TRAINING_ITERATION], 3)
-            self.assertEqual(results.num_errors, 0, "Encountered errors: " + str(results.errors))
+            self.assertEqual(results.num_errors, 0, "Encountered errors: " + format_result_errors(results.errors))
 
 
 class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
     def test_checkpoint_auto(self):
         # self.enable_loggers()
         with patch_args(
-            "--num_samples", "1", "--num_jobs", "1", "--batch_size", "32", "--minibatch_size", "32", "--iterations", "4"
-        ):
+            "--num_samples", "1",
+            "--num_jobs", "1",
+            "--batch_size", BATCH_SIZE,
+            "--minibatch_size", MINIBATCH_SIZE,
+            "--iterations", "4",
+        ):  # fmt: off
             setup = AlgorithmSetup()
         tuner = setup.create_tuner()
         tuner._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
@@ -72,19 +90,23 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
             # NOTE: num_keep does not appear to work here
         )
         results = tuner.fit()
-        self.assertEqual(results.num_errors, 0, "Encountered errors: " + str(results.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+        self.assertEqual(results.num_errors, 0, "Encountered errors: " + format_result_errors(results.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
         checkpoint_dir, checkpoints = self.get_checkpoint_dirs(results[0])
         self.assertEqual(
             len(checkpoints),
-            2,
+            2,  # 4 iterations / 2 checkpoint frequency = 2 checkpoints
             f"Checkpoints were not created. Found: {os.listdir(checkpoint_dir)} in {checkpoint_dir}",
         )
 
     def test_checkpoint_manually(self):
         # self.enable_loggers()
         with patch_args(
-            "--num_samples", "1", "--num_jobs", "1", "--batch_size", "32", "--minibatch_size", "32", "--iterations", "2"
-        ):
+            "--num_samples", "1",
+            "--num_jobs", "1",
+            "--batch_size", BATCH_SIZE,
+            "--minibatch_size", MINIBATCH_SIZE,
+            "--iterations", "2",
+        ):  # fmt: off
 
             class CheckpointSetup(AlgorithmSetup):
                 def _create_trainable(self):
@@ -104,7 +126,7 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
             setup = CheckpointSetup()
         tuner = setup.create_tuner()
         results = tuner.fit()
-        self.assertEqual(results.num_errors, 0, "Encountered errors: " + str(results.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+        self.assertEqual(results.num_errors, 0, "Encountered errors: " + format_result_errors(results.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
         checkpoint_dir, checkpoints = self.get_checkpoint_dirs(results[0])
         self.assertEqual(
             len(checkpoints),

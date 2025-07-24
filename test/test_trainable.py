@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import os
 import pickle
 import sys
@@ -24,6 +23,7 @@ from ray_utilities.testing_utils import (
     DisableLoggers,
     InitRay,
     TestHelpers,
+    format_result_errors,
     iter_cases,
     patch_args,
 )
@@ -131,6 +131,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                     with patch_args():  # make sure that args do not influence the restore
                         trainable2 = self.TrainableClass()
                         with self.subTest("Restore trainable from dict"):
+                            self.assertIsInstance(training_result, dict)
                             trainable2.restore(deepcopy(training_result))  # calls load_checkpoint
                             self.compare_trainables(trainable, trainable2, "from dict", num_env_runners=num_env_runners)
                             trainable2.stop()
@@ -144,6 +145,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                     trainable.save(tmpdir)  # calls save_checkpoint
                     with patch_args():  # make sure that args do not influence the restore
                         trainable3 = self.TrainableClass()
+                        self.assertIsInstance(tmpdir, str)
                         trainable3.restore(tmpdir)  # calls load_checkpoint
                         self.compare_trainables(trainable, trainable3, "from path", num_env_runners=num_env_runners)
                         trainable3.stop()
@@ -278,7 +280,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                         # NOTE: num_keep does not appear to work here
                     )
                     result = tuner.fit()
-                    self.assertEqual(result.num_errors, 0, "Encountered errors: " + str(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+                    self.assertEqual(result.num_errors, 0, format_result_errors(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
                     checkpoint_dir, checkpoints = self.get_checkpoint_dirs(result[0])
                     self.assertEqual(
                         len(checkpoints),
@@ -307,6 +309,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                         trainable_restore = DefaultTrainable.define(setup)()
                         trainable_restore.restore(checkpoint)
                         self.assertEqual(trainable_restore.algorithm.iteration, step)
+                        self.assertIsInstance(checkpoint, str)
                         trainable_from_path.restore_from_path(checkpoint)  # load a second time to test as well
                         self.compare_trainables(
                             trainable_restore,

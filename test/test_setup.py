@@ -34,7 +34,7 @@ from ray_utilities.constants import (
 from ray_utilities.random import seed_everything
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger
-from ray_utilities.testing_utils import DisableGUIBreakpoints, InitRay, SetupDefaults, patch_args
+from ray_utilities.testing_utils import DisableGUIBreakpoints, InitRay, SetupDefaults, format_result_errors, patch_args
 from ray_utilities.training.default_class import DefaultTrainable, TrainableBase
 
 if TYPE_CHECKING:
@@ -463,7 +463,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                 )
                 seed_everything(None, setup_seed)
                 result = tuner.fit()
-                self.assertEqual(result.num_errors, 0, "Encountered errors: " + str(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+                self.assertEqual(result.num_errors, 0, format_result_errors(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
                 checkpoint_dir, checkpoints = self.get_checkpoint_dirs(result[0])
                 self.assertEqual(
                     len(checkpoints),

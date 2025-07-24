@@ -390,7 +390,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                                         # use str to avoid nan!=nan and floating point errors
                                         str(d1),
                                         str(d2),
-                                        f"Algorithm state[{key}]['stats'][{metric_key}] in checkpoint differs from current algorithm state.",
+                                        f"Algorithm state[{key}]['stats'][{metric_key}] in checkpoint "
+                                        "differs from current algorithm state.",
                                     )
                             elif key == "learner_group":
                                 # currently learner only key, but forward compatible
@@ -419,7 +420,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                                 tester.compare_weights(
                                     checkpoint_learner_state["rl_module"],
                                     loaded_learner_state["rl_module"],
-                                    f"Algorithm state[{key}]['learner']['rl_module'] in checkpoint differs from current algorithm state.",
+                                    f"Algorithm state[{key}]['learner']['rl_module'] in checkpoint "
+                                    "differs from current algorithm state.",
                                 )
                                 # NOTE about inequality:
                                 # As `values` could contain tensors they are not reinstated on set_state,
@@ -436,12 +438,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                                         loaded_learner_state["metrics_logger"]["stats"],
                                         remove_all=True,
                                     ),
-                                    f"Algorithm state[{key}]['learner']['metrics_logger'] in checkpoint differs from current algorithm state.",
+                                    f"Algorithm state[{key}]['learner']['metrics_logger'] in checkpoint "
+                                    "differs from current algorithm state.",
                                 )
                                 tester.compare_weights(
                                     checkpoint_learner_state["optimizer"],
                                     loaded_learner_state["optimizer"],
-                                    f"Algorithm state[{key}]['learner']['optimizer'] in checkpoint differs from current algorithm state.",
+                                    f"Algorithm state[{key}]['learner']['optimizer'] in checkpoint "
+                                    "differs from current algorithm state.",
                                     almost=True,
                                 )
 
