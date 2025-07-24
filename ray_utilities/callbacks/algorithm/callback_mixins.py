@@ -5,10 +5,10 @@ from typing import TYPE_CHECKING, Any, Generic, Mapping, Optional, TypeVar
 
 from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.utils.metrics import (
-    ALL_MODULES,
+    ALL_MODULES,  # pyright: ignore[reportPrivateImportUsage]
     LEARNER_RESULTS,
     ENV_RUNNER_RESULTS,
-)  # pyright: ignore[reportPrivateImportUsage]
+)
 
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.dynamic_config.dynamic_buffer_update import SplitBudgetReturnDict, split_timestep_budget

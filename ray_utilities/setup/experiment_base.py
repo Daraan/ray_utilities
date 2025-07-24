@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
+import pickle
 from abc import ABC, abstractmethod
 
 # pyright: enableExperimentalFeatures=true
@@ -74,6 +77,9 @@ ConfigType_co = TypeVar("ConfigType_co", bound="AlgorithmConfig", covariant=True
 
 AlgorithmType_co = TypeVar("AlgorithmType_co", bound="Algorithm", covariant=True, default="PPO")
 """TypeVar for the Algorithm type of a Setup, e.g. PPO, DQN, etc; defaults to PPO."""
+
+_MaybeNone = Any
+"""Attribute might be None when trainable is not set up"""
 
 
 class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, AlgorithmType_co]):
@@ -220,7 +226,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             self.trainable = None
         if init_param_space:
             # relies on trainable to get its name
-            self.param_space = self.create_param_space()
+            self.param_space: dict[str, Any] | _MaybeNone = self.create_param_space()
         if hasattr(self, "args") and self.args.comet:
             self.comet_tracker = CometArchiveTracker()
         else:
@@ -260,7 +266,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         return self.args
 
     def parse_args(
-        self, args: Sequence[str] | None = None, *, known_only: bool | None = None
+        self, args: Sequence[str] | None = None, *, known_only: bool | None = None, checkpoint: Optional[str] = None
     ) -> NamespaceType[ParserType_co]:
         """
         Raises:
@@ -288,6 +294,21 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 "The following arguments were not recognized by the parser: %s.",
                 extra_args,
             )
+        # Merge args from a checkpoint:
+        checkpoint = checkpoint or parsed.from_checkpoint
+        if checkpoint:
+            path = Path(checkpoint)
+            with open(path / "state.pkl", "rb") as f:
+                state: dict[str, Any] = pickle.load(f)
+            # Create a patched parser with the old values as default values
+            new_default_parser = self.create_parser()
+            restored_args: dict[str, Any] = vars(state["setup"]["args"])
+            actions: list[argparse.Action] = new_default_parser._actions
+            for action in actions:
+                action.default = restored_args.get(action.dest, action.default)  # set new default values
+            self.parser = new_default_parser
+            parsed = self.parser.parse_args()
+
         self.args = self.postprocess_args(parsed)
         return self.args
 
@@ -543,7 +564,11 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 cls.config_class().algo_class,
                 cls.algo_class,
             )
-        return cast("AlgorithmType_co", cls.algo_class.from_checkpoint(path))
+        try:
+            # Algorithm checkpoint is likely in subdir.
+            return cast("AlgorithmType_co", cls.algo_class.from_checkpoint(os.path.join(path, "algorithm")))
+        except ValueError:
+            return cast("AlgorithmType_co", cls.algo_class.from_checkpoint(path))
 
     def build_algo(self) -> AlgorithmType_co:
         try:
@@ -654,7 +679,11 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         Attention:
             Do not overwrite this method. Overwrite _create_trainable instead.
         """
-        self.trainable = self._create_trainable()
+        self.trainable: (
+            Callable[[dict[str, Any]], TrainableReturnData]
+            | type[TrainableBase[ParserType_co, ConfigType_co, AlgorithmType_co]]
+            | _MaybeNone
+        ) = self._create_trainable()
         if isclass(self.trainable):
             logger.info(
                 "create_trainable returns a class '%s'. To prevent errors the config will be frozen.",
@@ -670,6 +699,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         """
         Unsets the trainable for the experiment, this unfreezes the config
         until the next create_trainable call.
+
+        Using the setup as a context manager is often a better alternative to this function.
         """
         self.trainable = None
         if hasattr(self, "config"):
@@ -778,6 +809,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     # endregion
 
+    # region save and restore
+
     def save(self) -> SetupCheckpointDict[ParserType_co, ConfigType_co, AlgorithmType_co]:
         """
         Saves the current setup state to a dictionary.
@@ -798,17 +831,21 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         cls,
         data: SetupCheckpointDict[ParserType_co, ConfigType_co, AlgorithmType_co],
         *,
-        load_class: bool = True,
+        load_class: bool = False,
         init_trainable: bool = True,
     ) -> Self:
         # TODO: Why not a classmethod again?
-        setup_class = data.get("setup_class", cls) if load_class else cls
-        if setup_class is not cls:
+        saved_class = data.get("setup_class", cls)
+        setup_class = saved_class if load_class else cls
+        if saved_class is not cls:
             logger.warning(
                 "This class %s is not the same as the one used to save the data %s. "
+                "Will use this class %s to restore the setup. "
                 "This may lead to unexpected behavior. "
-                "Use `load_class=False` or call this method on another class to avoid this warning.",
+                "Use `load_class=True` to load the stored type "
+                "or call this method on another class to avoid this warning.",
                 cls,
+                saved_class,
                 setup_class,
                 stacklevel=2,
             )
@@ -830,6 +867,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         )
         return new
 
+    # endregion
+
     @classmethod
     @final
     def typed(cls) -> type[Self]:
@@ -840,6 +879,40 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         DefaultTrainable.define(Setup.typed) or similar methods that require a class as an argument.
         """
         return cls
+
+    # region contextmanager
+
+    def __enter__(self) -> Self:
+        """
+        When used as a context manager, the config can be modified at the end the
+        param_space and trainable will be created
+
+        Usage:
+            .. code-block:: python
+
+                # less overhead when setting these two to False, otherwise some overhead
+                with Setup(init_param_space=False, init_trainable=False) as setup:
+                    setup.config.env_runners(num_env_runners=0)
+                    setup.config.training(minibatch_size=64)
+
+                This is roughly equivalent to:
+                setup = Setup(parse_args=True, init_config=True, init_param_space=False, init_trainable=False)
+                setup.config.env_runners(num_env_runners=0)
+                setup.config.training(minibatch_size=64)
+                setup.setup(parse_args=False, init_config=False, init_param_space=True, init_trainable=True)
+        """
+        self.unset_trainable()
+        self.param_space = None
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        """Finishes the setup and creates the trainable"""
+        self.setup(
+            init_config=False,
+            init_param_space=True,
+            init_trainable=True,
+            parse_args=False,
+        )
 
     # Currently cannot use TypeForm[type[TypedDict]] as it is not included in the typing spec.
     # @property

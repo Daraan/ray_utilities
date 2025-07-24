@@ -55,16 +55,7 @@ class AlgorithmSetup(
         Returns:
             A callable that returns a dictionary with training data.
         """
-
-        def trainable(params) -> TrainableReturnData:  # noqa: ARG001
-            # This is a placeholder for the actual implementation of the trainable.
-            # It should return a dictionary with training data.
-            result: StrictAlgorithmReturnData = self.config.build().train()  # type: ignore
-            result["current_step"] = get_current_step(result)
-            return result  # type: ignore[return-value]  # actual implementation should follow protocol
-
         return DefaultTrainable.define(self)
-        return trainable
 
     @classmethod
     def _config_from_args(cls, args) -> ConfigType_co:

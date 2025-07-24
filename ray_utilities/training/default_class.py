@@ -4,6 +4,7 @@ import importlib.metadata
 import logging
 import os
 import pathlib
+import pickle
 import sys
 from abc import ABCMeta
 from copy import copy
@@ -11,6 +12,7 @@ from inspect import isclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Collection, Generic, Optional, TypedDict, TypeVar, cast
 
+import pyarrow.fs
 import ray
 from ray import tune
 from ray.rllib.algorithms import AlgorithmConfig
@@ -29,16 +31,18 @@ from ray_utilities.config.typed_argument_parser import LOG_STATS, LogStatsChoice
 from ray_utilities.misc import is_pbar
 from ray_utilities.training.functional import training_step
 from ray_utilities.training.helpers import (
+    _remove_values_on_tensor_stats,
     create_running_reward_updater,
     episode_iterator,
     get_current_step,
     get_total_steps,
+    nan_to_zero_hist_leaves,
     setup_trainable,
+    sync_env_runner_states_after_reload,
 )
 from ray_utilities.typing.trainable_return import RewardUpdaters
 
 if TYPE_CHECKING:
-    import pyarrow.fs
     from ray.experimental import tqdm_ray
     from ray.rllib.algorithms import Algorithm
     from ray.rllib.utils.typing import StateDict
@@ -101,13 +105,17 @@ class TrainableStateDict(TypedDict):
 
 class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _ConfigType, _AlgorithmType]):
     """
+    Loading logic:
+        - (classmethod) from_checkpoint -> restore_from_path -> set_state
+            looks for loads class_and_ctor_args.pkl -> class, args&kwargs
+
     Methods:
 
         - Checkpointable methods:
             save_to_path()  # available in super
                 calls: get_metadata(), pickles type(self) and ctor_args_and_kwargs, get_state
             restore_from_path()  # available in super, calls set_state and iterates subcomponents
-            from_checkpoint()  # available in super, restore_from_path
+            from_checkpoint()  # available in super, calls restore_from_path
             get_state()
             set_state()
             get_ctor_args_and_kwargs()
@@ -117,11 +125,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         - Trainable methods:
             setup()
             step()   # Keep abstract
-            save_checkpoint()
-            load_checkpoint()
+            save_checkpoint()  # we call save_to_path
+            load_checkpoint() -> restore_from_path (if path) or ... (when dict)
             reset_config()
             cleanup()
-            save()  # available; calls save_checkpoint
+            save()  # available; calls save_checkpoint -> save_to_path
             restore()  # available; calls load_checkpoint
     """
 
@@ -230,10 +238,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             self._overwrite_algorithm = overwrite_algorithm
         assert self.setup_class.parse_known_only is True
         _logger.debug("Setting up %s with config: %s", self.__class__.__name__, config)
-        if "cli_args" in config and config["cli_args"].get("from_checkpoint") not in (None, ""):
-            # calls restore from path; from_checkpoint could also be a dict here
-            self.load_checkpoint(config["cli_args"]["from_checkpoint"])
-            return
         if isclass(self.setup_class):
             self._setup = self.setup_class()  # XXX # FIXME # correct args; might not work when used with Tuner
         else:
@@ -247,7 +251,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # NOTE: args is a dict, self._setup.args a Namespace | Tap
         self._reward_updaters: RewardUpdaters
         args, _algo_config, self.algorithm, self._reward_updaters = setup_trainable(
-            hparams=config, setup=self._setup, setup_class=self.setup_class, overwrite_config=self._overwrite_algorithm
+            hparams=config,
+            setup=self._setup,
+            setup_class=self.setup_class if isclass(self.setup_class) else None,
+            overwrite_config=self._overwrite_algorithm,
         )
         self._pbar: tqdm | range | tqdm_ray.tqdm = episode_iterator(args, config, use_pbar=self.use_pbar)
         self._iteration: int = 0
@@ -255,6 +262,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         assert self.algorithm.config
         # calculate total steps once
         self._total_steps = {"total_steps": get_total_steps(args, self.algorithm.config), "iterations": "auto"}
+        # After components have been setup up load checkpoint if requested
+        if "cli_args" in config and config["cli_args"].get("from_checkpoint") not in (None, ""):
+            _logger.info("At end of setup(), loading from checkpoint: %s", config["cli_args"]["from_checkpoint"])
+            # calls restore from path; from_checkpoint could also be a dict here
+            self.load_checkpoint(config["cli_args"]["from_checkpoint"])
+            # FIXME: This restored the original cli args and overwrites do not take effect
+            # Problem: Figure out which are "default (old)" to keep and which are "new" to overwrite
+            return
 
     @property
     def algorithm_config(self) -> _ConfigType:
@@ -288,6 +303,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
     @override(tune.Trainable)
     def cleanup(self):
+        # call stop to fully free resources
         super().cleanup()
         self.algorithm.cleanup()
         if is_pbar(self._pbar):
@@ -330,21 +346,21 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
             # from_checkpoint calls restore_from_path which calls set state
             # if checkpoint["algorithm_checkpoint_dir"] is a tempdir (e.g. from tune, this is wrong)
-            if not os.path.exists(checkpoint["algorithm_checkpoint_dir"]):
-                if "algorithm_state" in checkpoint:
-                    _logger.error(
-                        "Algorithm checkpoint directory %s does not exist, will restore from state",
-                        checkpoint["algorithm_checkpoint_dir"],
-                    )
-                    self.algorithm.set_state(checkpoint["algorithm_state"])
-                else:
-                    _logger.critical(
-                        "Algorithm checkpoint directory %s does not exist, (possibly temporary path was saved) "
-                        "and no state provided. Restored algorithm might be in an unexpected state.",
-                        checkpoint["algorithm_checkpoint_dir"],
-                    )
-            else:
+            # However, self.set_state should have take care of algorithm already even if checkpoint dir is missing
+            if os.path.exists(checkpoint["algorithm_checkpoint_dir"]):
                 self.algorithm = self.algorithm.from_checkpoint(checkpoint["algorithm_checkpoint_dir"])
+            elif "algorithm_state" in checkpoint:
+                _logger.error(
+                    "Algorithm checkpoint directory %s does not exist, will restore from state",
+                    checkpoint["algorithm_checkpoint_dir"],
+                )
+                self.algorithm.set_state(checkpoint["algorithm_state"])
+            else:
+                _logger.critical(
+                    "Algorithm checkpoint directory %s does not exist, (possibly temporary path was saved) "
+                    "and no state provided. Restored algorithm might be in an unexpected state.",
+                    checkpoint["algorithm_checkpoint_dir"],
+                )
             # Is set_state even needed?
             # Test loaded algo state:
             loaded_algo_state = self.algorithm.get_state(
@@ -352,35 +368,120 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 not_components=force_list(self._get_subcomponents("algorithm", None)),
             )
             keys_to_process.remove("algorithm_checkpoint_dir")
-            if False and checkpoint["state"]["algorithm"]:  # can add algorithm_state to check correctness
-                if checkpoint["state"]["algorithm"] != loaded_algo_state:
-                    _logger.error(
-                        "Algorithm state in checkpoint differs from current algorithm state. "
-                        "This may lead to unexpected behavior."
-                    )
-                    import unittest
+            # TODO: Remove tests when safe
+            # can add algorithm_state to check correctness
+            # equality check will likely fail because of nan/float differences
+            if checkpoint["state"]["algorithm"] and checkpoint["state"]["algorithm"] != loaded_algo_state:
+                try:
+                    from ray_utilities.testing_utils import TestHelpers
 
-                    tester = unittest.TestCase()
+                    tester = TestHelpers()
                     tester.maxDiff = 340_000  # Limit the max diff length
                     for key in loaded_algo_state.keys():
                         if isinstance(loaded_algo_state[key], dict) and isinstance(
                             checkpoint["state"]["algorithm"][key], dict
                         ):  # Check if both are dicts
-                            try:
+                            if key == "metrics_logger":
+                                # Special handling for metrics_logger
+                                for metric_key in loaded_algo_state[key]["stats"].keys():
+                                    d1 = checkpoint["state"]["algorithm"][key]["stats"][metric_key]
+                                    d2 = loaded_algo_state[key]["stats"][metric_key]
+                                    if "throughput_stats" in d2:  # there might be more values present
+                                        # values repeated for each env_runner
+                                        d1["throughput_stats"].clear()
+                                        d2["throughput_stats"].clear()
+                                    tester.assertEqual(
+                                        # use str to avoid nan!=nan and floating point errors
+                                        str(d1),
+                                        str(d2),
+                                        f"Algorithm state[{key}]['stats'][{metric_key}] in checkpoint "
+                                        "differs from current algorithm state.",
+                                    )
+                            elif key == "learner_group":
+                                # currently learner only key, but forward compatible
                                 tester.assertDictEqual(
-                                    checkpoint["state"]["algorithm"][key],
-                                    loaded_algo_state[key],
-                                    "Algorithm state in checkpoint differs from current algorithm state.",
+                                    {
+                                        k: v
+                                        for k, v in checkpoint["state"]["algorithm"][key].items()
+                                        if k not in ("learner")
+                                    },
+                                    {k: v for k, v in loaded_algo_state[key].items() if k not in ("learner")},
                                 )
-                            except ValueError:
-                                _logger.error("Cannot compare dicts for key %s", key)
+                                checkpoint_learner_state = checkpoint["state"]["algorithm"][key]["learner"]
+                                loaded_learner_state = loaded_algo_state[key]["learner"]
+                                tester.assertDictEqual(
+                                    {
+                                        k: v
+                                        for k, v in checkpoint_learner_state.items()
+                                        if k not in ("metrics_logger", "optimizer", "rl_module")
+                                    },
+                                    {
+                                        k: v
+                                        for k, v in loaded_learner_state.items()
+                                        if k not in ("metrics_logger", "optimizer", "rl_module")
+                                    },
+                                )
+                                tester.compare_weights(
+                                    checkpoint_learner_state["rl_module"],
+                                    loaded_learner_state["rl_module"],
+                                    f"Algorithm state[{key}]['learner']['rl_module'] in checkpoint "
+                                    "differs from current algorithm state.",
+                                )
+                                # NOTE about inequality:
+                                # As `values` could contain tensors they are not reinstated on set_state,
+                                # but saved as such in the checkpoint
+
+                                tester.assertDictEqual(
+                                    nan_to_zero_hist_leaves(
+                                        _remove_values_on_tensor_stats(
+                                            checkpoint_learner_state["metrics_logger"]["stats"],
+                                        ),
+                                        remove_all=True,
+                                    ),
+                                    nan_to_zero_hist_leaves(
+                                        loaded_learner_state["metrics_logger"]["stats"],
+                                        remove_all=True,
+                                    ),
+                                    f"Algorithm state[{key}]['learner']['metrics_logger'] in checkpoint "
+                                    "differs from current algorithm state.",
+                                )
+                                tester.compare_weights(
+                                    checkpoint_learner_state["optimizer"],
+                                    loaded_learner_state["optimizer"],
+                                    f"Algorithm state[{key}]['learner']['optimizer'] in checkpoint "
+                                    "differs from current algorithm state.",
+                                    almost=True,
+                                )
+
+                            else:
+                                try:
+                                    tester.assertDictEqual(
+                                        checkpoint["state"]["algorithm"][key],
+                                        loaded_algo_state[key],
+                                        f"Algorithm state[{key}] in checkpoint differs from current algorithm state.",
+                                    )
+                                except ValueError as e:
+                                    _logger.error("Cannot compare dicts for key %s: %s", key, e)
+                                except AssertionError:
+                                    if key != "eval_env_runner":
+                                        raise
+                                    _logger.info(
+                                        "eval_env_runner state differs, ignoring for now. "
+                                        "This is due to Ray syncing the eval worker with the train worker on set_state"
+                                    )
                         else:
                             tester.assertEqual(
                                 checkpoint["state"]["algorithm"][key],
                                 loaded_algo_state[key],
-                                "Algorithm state in checkpoint differs from current algorithm state.",
+                                f"Algorithm state[{key}] in checkpoint differs from current algorithm state.",
                             )
-                    self.algorithm.set_state(checkpoint.get("algorithm_state", {}))  # TODO remove if tests pass
+                except AssertionError as e:
+                    _logger.error(
+                        "Algorithm state in checkpoint differs from current algorithm state. "
+                        "This may lead to unexpected behavior: %s",
+                        e,
+                    )
+                    raise
             else:
                 # loaded from checkpoint
                 _logger.debug("No algorithm state found in checkpoint.")
@@ -461,6 +562,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             state: The state dict to restore the state from. Maps component keys
                 to the corresponding subcomponent's own state.
         """
+        # NOTE: When coming from restore_from_path, the components have already be restored
+        # TODO: are they possible more correct?
         keys_to_process = set(state.keys())
         try:
             super(Checkpointable, self).set_state(state.get("trainable", {}))  # pyright: ignore
@@ -505,12 +608,22 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             for component in COMPONENT_ENV_RUNNER, COMPONENT_EVAL_ENV_RUNNER, COMPONENT_LEARNER_GROUP:
                 if component not in state["algorithm"]:
                     _logger.warning("Restoring algorithm without %s component in state.", component)
-        # NOTE: config very likely not used in set_state
+        # Get algorithm state; fallback to only config (which however might not do anything)
+        # NOTE: This sync env_runner -> eval_env_runner which causes wrong env_steps_sampled metric
         self.algorithm.set_state(state.get("algorithm", {"config": state["algorithm_config"]}))
         # Update env_runners after restore
-        if self.algorithm.env_runner and self.algorithm_config != self.algorithm.env_runner.config:
-            _logger.debug("Updating env_runner config after restore, old did not match")
+        # check if config has been restored correctly - TODO: Remove after more testing
+        from ray_utilities.testing_utils import TestHelpers, dict_diff_message
+
+        config1_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm_config.to_dict())
+        config2_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm.env_runner.config.to_dict())
+        if self.algorithm.env_runner and (config1_dict != config2_dict):
+            _logger.warning(
+                "Updating env_runner config after restore, old did not match: %s",
+                dict_diff_message(config1_dict, config2_dict),
+            )
             self.algorithm.env_runner.config = self.algorithm_config.copy(copy_frozen=True)
+        # TODO: This likely has no effect at all; possibly sync metrics with custom function
         if self.algorithm.env_runner_group:
             self.algorithm.env_runner_group.sync_env_runner_states(config=self.algorithm_config)
         keys_to_process.remove("algorithm")
@@ -598,15 +711,50 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         except:  # noqa: E722
             pass
 
-    if TYPE_CHECKING:
+    # if TYPE_CHECKING:  # want to return -> Self
 
-        @classmethod
-        def from_checkpoint(
-            cls,
-            path: str | pathlib.Path,
-            filesystem: Optional["pyarrow.fs.FileSystem"] = None,
-            **kwargs,
-        ) -> Self: ...
+    @classmethod
+    def from_checkpoint(
+        cls,
+        path: str | pathlib.Path,
+        filesystem: Optional["pyarrow.fs.FileSystem"] = None,
+        **kwargs,
+    ) -> Self:
+        # check if pickle file with type, args and kwargs can be found - ray fails silently
+        # Duplication of `from_checkpoint` code:
+        # ----- TODO possibly remove after testing ------
+        # We need a string path for the `PyArrow` filesystem.
+        path = path if isinstance(path, str) else path.as_posix()
+
+        # If no filesystem is passed in create one.
+        if path and not filesystem:
+            # Note the path needs to be a path that is relative to the
+            # filesystem (e.g. `gs://tmp/...` -> `tmp/...`).
+            filesystem, path = pyarrow.fs.FileSystem.from_uri(path)
+        # Only here convert to a `Path` instance b/c otherwise
+        # cloud path gets broken (i.e. 'gs://' -> 'gs:/').
+        path = pathlib.Path(path)
+
+        # Get the class constructor to call and its args/kwargs.
+        # Try reading the pickle file first.
+        try:
+            assert filesystem is not None
+            with filesystem.open_input_stream((path / cls.CLASS_AND_CTOR_ARGS_FILE_NAME).as_posix()) as f:
+                ctor_info = pickle.load(f)
+            _ctor = ctor_info["class"]
+            _ctor_args = force_list(ctor_info["ctor_args_and_kwargs"][0])
+            _ctor_kwargs = ctor_info["ctor_args_and_kwargs"][1]
+        except Exception:
+            _logger.exception(
+                "Failed to load class and ctor args from checkpoint at %s:",
+                path,
+            )
+        # -----
+        restored = super().from_checkpoint(path, filesystem=filesystem, **kwargs)
+        restored = cast("Self", restored)
+        # Restore algorithm metric states; see my PR https://github.com/ray-project/ray/pull/54148/
+        sync_env_runner_states_after_reload(restored.algorithm)
+        return restored
 
 
 if TYPE_CHECKING:
@@ -668,6 +816,11 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
                 total_steps=get_total_steps(self._total_steps, self.algorithm_config),
             )
             self._pbar.update()
+        _logger.warning(
+            "Result of eval env runner %s\nstats of eval env runner: %s",
+            result["evaluation"]["env_runners"]["num_env_steps_sampled_lifetime"],
+            self.algorithm.eval_env_runner.metrics.stats["num_env_steps_sampled_lifetime"],
+        )
         return metrics
 
 

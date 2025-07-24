@@ -19,6 +19,7 @@ from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.core import ALL_MODULES
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
+    EVALUATION_RESULTS,
     LEARNER_RESULTS,
     NUM_ENV_STEPS_SAMPLED,
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
@@ -33,7 +34,7 @@ from ray_utilities.constants import (
 from ray_utilities.random import seed_everything
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger
-from ray_utilities.testing_utils import DisableGUIBreakpoints, InitRay, SetupDefaults, patch_args
+from ray_utilities.testing_utils import DisableGUIBreakpoints, InitRay, SetupDefaults, format_result_errors, patch_args
 from ray_utilities.training.default_class import DefaultTrainable, TrainableBase
 
 if TYPE_CHECKING:
@@ -59,7 +60,7 @@ class TestSetupClasses(SetupDefaults):
         setup.config.training(num_epochs=4, minibatch_size=222)
         setup.create_trainable()
         assert issubclass(setup.trainable, DefaultTrainable)
-        trainable = setup.trainable({})
+        trainable = setup.trainable()
         self.assertEqual(trainable.algorithm_config.num_epochs, 4)
         self.assertEqual(trainable.algorithm_config.minibatch_size, second=222)
         self.set_max_diff(15000)
@@ -72,6 +73,24 @@ class TestSetupClasses(SetupDefaults):
                 "callbacks_on_environment_created",
             ],
         )
+
+    def test_context_manager(self):
+        with patch_args():
+            for setup in [
+                AlgorithmSetup(init_trainable=False, init_param_space=False),
+                AlgorithmSetup(init_trainable=True, init_param_space=True),
+            ]:
+                # Check unset
+                with setup:
+                    self.assertTrue(not hasattr(setup, "trainable") or setup.trainable is None)
+                    self.assertTrue(not hasattr(setup, "param_space") or setup.param_space is None)
+                    setup.config.training(num_epochs=4, minibatch_size=222)
+                self.assertIsNotNone(setup.trainable)
+                self.assertIsNotNone(setup.param_space)
+                if isclass(setup.trainable):
+                    trainable = setup.trainable_class()
+                    self.assertEqual(trainable.algorithm_config.num_epochs, 4)
+                    self.assertEqual(trainable.algorithm_config.minibatch_size, 222)
 
     def test_basic(self):
         with patch_args():
@@ -410,10 +429,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
         setup_seed = 42
         cli_seed = 42
         with patch_args(
-            "--num_samples",
-            "1",
-            "--num_jobs",
-            "1",
+            "--num_samples", "1",
+            "--num_jobs", "1",
             "--batch_size",
             str(ENV_STEPS_PER_ITERATION),
             "--minibatch_size",
@@ -424,18 +441,16 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
         ):  # fmt: off
             # cannot make this deterministic on local vs remote
             seed_everything(None, setup_seed)
-            setup = AlgorithmSetup(init_trainable=False)
-            setup.config.env_runners(num_env_runners=0)
-            setup.config.training(minibatch_size=5)  # insert some noise
-            setup.config.debugging(seed=setup_seed)
-            setup.create_trainable()
+            with AlgorithmSetup(init_trainable=False) as setup:
+                setup.config.env_runners(num_env_runners=0)
+                setup.config.training(minibatch_size=5)  # insert some noise
+                setup.config.debugging(seed=setup_seed)
             tuner_0 = setup.create_tuner()
             seed_everything(None, setup_seed)
-            setup = AlgorithmSetup(init_trainable=False)
-            setup.config.env_runners(num_env_runners=1)
-            setup.config.training(minibatch_size=5)  # insert some noise
-            setup.config.debugging(seed=setup_seed)
-            setup.create_trainable()
+            with AlgorithmSetup(init_trainable=False) as setup:
+                setup.config.env_runners(num_env_runners=1)
+                setup.config.training(minibatch_size=5)  # insert some noise
+                setup.config.debugging(seed=setup_seed)
             tuner_1 = setup.create_tuner()
             tune_results = {}
             for num_env_runners, tuner in enumerate([tuner_0, tuner_1]):
@@ -448,7 +463,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                 )
                 seed_everything(None, setup_seed)
                 result = tuner.fit()
-                self.assertEqual(result.num_errors, 0, "Encountered errors: " + str(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+                self.assertEqual(result.num_errors, 0, format_result_errors(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
                 checkpoint_dir, checkpoints = self.get_checkpoint_dirs(result[0])
                 self.assertEqual(
                     len(checkpoints),
@@ -502,7 +517,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                     )
                     metrics_0_clean = self.clean_timer_logs(metrics_0)
                     metrics_1_clean = self.clean_timer_logs(metrics_1)
-                    self.util_test_compare_env_runner_results(
+                    self.compare_env_runner_results(
                         metrics_0_clean[ENV_RUNNER_RESULTS],
                         metrics_1_clean[ENV_RUNNER_RESULTS],
                         f"training results do not match at from step {(step + 1) * frequency}",
@@ -512,10 +527,10 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                     # Results differ greatly for evaluation
                     # same sampling not enforced, might be the reason?
                 with self.subTest("Compare evaluation results at step", step=step + 1):  # pyright: ignore[reportPossiblyUnboundVariable]
-                    self.skipTest("Eval results differ greatly in amount of steps sampled")
-                    self.util_test_compare_env_runner_results(
-                        metrics_0_clean["evaluation"][ENV_RUNNER_RESULTS],  # pyright: ignore[reportPossiblyUnboundVariable]
-                        metrics_1_clean["evaluation"][ENV_RUNNER_RESULTS],  # pyright: ignore[reportPossiblyUnboundVariable]
+                    self.skipTest("Eval results differ greatly in steps when unit=episodes")
+                    self.compare_env_runner_results(
+                        metrics_0_clean[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],  # pyright: ignore[reportPossiblyUnboundVariable]
+                        metrics_1_clean[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],  # pyright: ignore[reportPossiblyUnboundVariable]
                         f"evaluation results do not match at from step {(step + 1) * frequency}",  # pyright: ignore[reportPossiblyUnboundVariable]
                         strict=False,
                         compare_results=False,
@@ -526,7 +541,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                     tune_results[1]["trainables"][step].cleanup()
 
     @unittest.skip("Implementation Missing")
-    def test_metrics_further_tuning(self): ...
+    def test_metrics_further_tuning(self):
+        pass
 
     def _test_algo_checkpointing(
         self,
@@ -534,6 +550,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
         algo_1_runner: Algorithm | TrainableBase,
         metrics: list[str],
     ) -> dict[str, dict[int, dict[str, Any]]]:
+        eval_metrics = [m for m in metrics if "learner" not in m]  # strip learner metrics
         if isinstance(algo_0_runner, Algorithm) and isinstance(algo_1_runner, Algorithm):
             assert algo_0_runner.config and algo_1_runner.config and algo_0_runner.metrics and algo_1_runner.metrics
             algorithm_config_0 = algo_0_runner.config
@@ -565,22 +582,27 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             tempfile.TemporaryDirectory(prefix=".ckpt_c0_") as checkpoint_0_step2_restored,
             tempfile.TemporaryDirectory(prefix=".ckpt_c1_") as checkpoint_1_step2_restored,
         ):
+            # Train until step 3 - get results of uninterrupted training, check if expected
             # Save Step 1
             algo_0_runner.save_checkpoint(checkpoint_0_step1)
             algo_1_runner.save_checkpoint(checkpoint_1_step1)
             # --- Step 2 ---
             result_algo_0_step2 = algo_0_runner.step()
             result_algo_1_step2 = algo_1_runner.step()
-            for metric in metrics:
-                with self.subTest(f"Check {metric} after step 2", metric=metric):
-                    self.assertEqual(
-                        result_algo_0_step2[ENV_RUNNER_RESULTS][metric],
-                        result_algo_1_step2[ENV_RUNNER_RESULTS][metric],
-                    )
-                    self.assertEqual(
-                        result_algo_0_step2[ENV_RUNNER_RESULTS][metric],
-                        ENV_STEPS_PER_ITERATION * 2,
-                    )
+            self.compare_metrics_in_results(
+                result_algo_0_step2[ENV_RUNNER_RESULTS],
+                result_algo_1_step2[ENV_RUNNER_RESULTS],
+                ENV_STEPS_PER_ITERATION * 2,
+                metrics,
+                "Check {} after step 2",
+            )
+            self.compare_metrics_in_results(
+                result_algo_0_step2[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],
+                result_algo_1_step2[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],
+                ENV_STEPS_PER_ITERATION * 2 * 10,
+                eval_metrics,
+                "Evaluation: Check {} after step 2",
+            )
             # Save Step 2
             algo_0_runner.save_checkpoint(checkpoint_0_step2)
             algo_1_runner.save_checkpoint(checkpoint_1_step2)
@@ -588,16 +610,23 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             # --- Step 3 ---
             result_algo_0_step3 = algo_0_runner.step()
             result_algo_1_step3 = algo_1_runner.step()
-            for metric in metrics:
-                with self.subTest(f"Check {metric} after step 3", metric=metric):
-                    self.assertEqual(
-                        result_algo_0_step3[ENV_RUNNER_RESULTS][metric],
-                        result_algo_1_step3[ENV_RUNNER_RESULTS][metric],
-                    )
-                    self.assertEqual(
-                        result_algo_0_step3[ENV_RUNNER_RESULTS][metric],
-                        ENV_STEPS_PER_ITERATION * 3,
-                    )
+            self.compare_metrics_in_results(
+                result_algo_0_step3[ENV_RUNNER_RESULTS],
+                result_algo_1_step3[ENV_RUNNER_RESULTS],
+                ENV_STEPS_PER_ITERATION * 3,
+                metrics,
+                "Check {} after step 3",
+            )
+            self.compare_metrics_in_results(
+                result_algo_0_step3[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],
+                result_algo_1_step3[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],
+                ENV_STEPS_PER_ITERATION * 3 * 10,
+                eval_metrics,
+                "Evaluation: Check {} after step 3",
+            )
+
+            # Load and train from checkpoint
+
             # Load Step 1
             algo_0_runner_restored: Algorithm | TrainableBase = BaseClass.from_checkpoint(checkpoint_0_step1)  # pyright: ignore[reportAssignmentType]
             algo_1_runner_restored: Algorithm | TrainableBase = BaseClass.from_checkpoint(checkpoint_1_step1)  # pyright: ignore[reportAssignmentType]
@@ -612,6 +641,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                 metrics_1_restored = algo_1_runner_restored.algorithm.metrics
             # Check loaded metric
             for metric in metrics:
+                self.assertIn(metric, metrics_0_restored.stats[ENV_RUNNER_RESULTS])
+                self.assertIn(metric, metrics_1_restored.stats[ENV_RUNNER_RESULTS])
                 with self.subTest(f"(Checkpointed) Check {metric} after restored step 1", metric=metric):
                     self.assertEqual(
                         metrics_0_restored.peek((ENV_RUNNER_RESULTS, metric)),
@@ -626,7 +657,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             # --- Step 2 from restored & checkpoint ---
             result_algo0_step2_restored = algo_0_runner_restored.step()
             result_algo1_step2_restored = algo_1_runner_restored.step()
-            # Check if metric was updated
+            # Check that metrics was updated
             for metric in metrics:
                 with self.subTest(f"(Checkpointed) Check {metric} after restored step 2", metric=metric):
                     self.assertEqual(
@@ -640,23 +671,50 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             algo_0_runner_restored.save_checkpoint(checkpoint_0_step2_restored)
             algo_1_runner_restored.save_checkpoint(checkpoint_1_step2_restored)
 
-            # Check results
-            for metric in metrics:
-                with self.subTest(f"(Checkpointed) Check {metric} after step 2", metric=metric):
-                    with self.subTest("From checkpoint: env_runners=0 - Step 2"):
-                        self.assertEqual(
-                            result_algo_0_step2[ENV_RUNNER_RESULTS][metric],
-                            result_algo0_step2_restored[ENV_RUNNER_RESULTS][metric],
-                            f"Restored num_env_runners=0: {metric} does not match expected value "
-                            f"{ENV_STEPS_PER_ITERATION * 2}",
-                        )
-                    with self.subTest("From checkpoint: env_runners=1 - Step 2"):
-                        self.assertEqual(
-                            result_algo_1_step2[ENV_RUNNER_RESULTS][metric],
-                            result_algo1_step2_restored[ENV_RUNNER_RESULTS][metric],
-                            f"Restored num_env_runners=1: {metric} does not match expected value "
-                            f"{ENV_STEPS_PER_ITERATION * 2}",
-                        )
+            # Check results, compare with original results
+            self.compare_metrics_in_results(
+                result_algo_0_step2[ENV_RUNNER_RESULTS],
+                result_algo0_step2_restored[ENV_RUNNER_RESULTS],
+                ENV_STEPS_PER_ITERATION * 2,
+                metrics,
+                "(Checkpointed) Check {} after step 2, env_runners=0",
+            )
+            self.compare_metrics_in_results(
+                result_algo_1_step2[ENV_RUNNER_RESULTS],
+                result_algo1_step2_restored[ENV_RUNNER_RESULTS],
+                ENV_STEPS_PER_ITERATION * 2,
+                metrics,
+                "(Checkpointed) Check {} after step 2, env_runners=1",
+            )
+            # Advanced: Compare all results # NOTE: This superseeds weaker metrics-only check
+            self.compare_env_runner_results(
+                result_algo_0_step2[ENV_RUNNER_RESULTS],  # pyright: ignore[reportArgumentType]
+                result_algo0_step2_restored[ENV_RUNNER_RESULTS],  # pyright: ignore[reportArgumentType]
+                compare_results=True,
+            )
+            # Evaluation
+            self.compare_metrics_in_results(
+                result_algo_0_step2[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],
+                result_algo0_step2_restored[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],
+                ENV_STEPS_PER_ITERATION * 2 * 10,
+                eval_metrics,
+                "Evaluation: (Checkpointed) Check {} after step 2, env_runners=0",
+            )
+            self.compare_metrics_in_results(
+                result_algo_1_step2[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],
+                result_algo1_step2_restored[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],
+                ENV_STEPS_PER_ITERATION * 2 * 10,
+                eval_metrics,
+                "Evaluation: (Checkpointed) Check {} after step 2, env_runners=1",
+            )
+            # Some metrics like: 'num_agent_steps_sampled_lifetime': {'default_agent': 200}
+            # do not align, or num_env_steps_sampled_lifetime can be missing
+            # self.compare_env_runner_results(
+            #    result_algo_0_step2[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],  # pyright: ignore[reportArgumentType]
+            #    result_algo0_step2_restored[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],  # pyright: ignore[reportArgumentType]
+            #    compare_results=True,
+            # )
+
             # Test after restoring a second time
             # Load Restored from step 2
             algo_0_restored_x2: Algorithm | TrainableBase = BaseClass.from_checkpoint(checkpoint_0_step2_restored)  # pyright: ignore[reportAssignmentType]
@@ -671,6 +729,9 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             else:
                 metrics_1_restored_x2 = algo_1_restored_x2.algorithm.metrics
             for metric in metrics:
+                self.assertIn(metric, metrics_0_restored_x2.stats[ENV_RUNNER_RESULTS])
+                self.assertIn(metric, metrics_1_restored_x2.stats[ENV_RUNNER_RESULTS])
+
                 with self.subTest(f"(Checkpointed x2) Check {metric} after step 2", metric=metric):
                     self.assertEqual(
                         metrics_0_restored_x2.peek((ENV_RUNNER_RESULTS, metric)),
@@ -685,39 +746,73 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                         f"{ENV_STEPS_PER_ITERATION * 2}",
                     )
             # Step 3 from restored
-            result_algo0_step3_restored = algo_0_runner_restored.step()
-            result_algo1_step3_restored = algo_1_runner_restored.step()
-            result_algo0_step3_restored_x2 = algo_0_restored_x2.step()
-            result_algo1_step3_restored_x2 = algo_1_restored_x2.step()
+            result_algo_0_step3_restored = algo_0_runner_restored.step()
+            result_algo_1_step3_restored = algo_1_runner_restored.step()
+            result_algo_0_step3_restored_x2 = algo_0_restored_x2.step()
+            result_algo_1_step3_restored_x2 = algo_1_restored_x2.step()
 
-            # Test that all results after step 3 are have 300 steps
-            for metric in metrics:
-                with self.subTest(f"(Checkpointed) Check {metric} after step 3", metric=metric):
-                    with self.subTest("From checkpoint: env_runners=0 - Step 3"):
-                        self.assertEqual(
-                            result_algo_0_step3[ENV_RUNNER_RESULTS][metric],
-                            result_algo0_step3_restored[ENV_RUNNER_RESULTS][metric],
-                            f"Restored num_env_runners=0: {metric} does not match {ENV_STEPS_PER_ITERATION * 3}",
-                        )
-                    with self.subTest("From checkpoint: env_runners=0 - Step 3 (restored x2)"):
-                        self.assertEqual(
-                            result_algo_0_step3[ENV_RUNNER_RESULTS][metric],
-                            result_algo0_step3_restored_x2[ENV_RUNNER_RESULTS][metric],
-                            f"Restored x2 num_env_runners=0: {metric} does not match {ENV_STEPS_PER_ITERATION * 3}",
-                        )
-                    with self.subTest("From checkpoint: env_runners=1 - Step 3"):
-                        self.assertEqual(
-                            result_algo_1_step3[ENV_RUNNER_RESULTS][metric],
-                            result_algo1_step3_restored[ENV_RUNNER_RESULTS][metric],
-                            f"Restored num_env_runners=1: {metric} does not match {ENV_STEPS_PER_ITERATION * 3}",
-                        )
-                    with self.subTest("From checkpoint: env_runners=1 - Step 3 (restored x2)"):
-                        self.assertEqual(
-                            result_algo_1_step3[ENV_RUNNER_RESULTS][metric],
-                            result_algo1_step3_restored_x2[ENV_RUNNER_RESULTS][metric],
-                            f"Restored num_env_runners=1: {metric} does not match expected value "
-                            f"{ENV_STEPS_PER_ITERATION * 3}",
-                        )
+            # Test that all results after step 3 are have 3x steps
+            #  -- num_env_runners=0 --
+            self.compare_metrics_in_results(
+                result_algo_0_step3[ENV_RUNNER_RESULTS],
+                result_algo_0_step3_restored[ENV_RUNNER_RESULTS],
+                ENV_STEPS_PER_ITERATION * 3,
+                metrics,
+                "(Checkpointed) Check {} after step 3, env_runners=0",
+            )
+            self.compare_metrics_in_results(
+                result_algo_0_step3[ENV_RUNNER_RESULTS],
+                result_algo_0_step3_restored_x2[ENV_RUNNER_RESULTS],
+                ENV_STEPS_PER_ITERATION * 3,
+                metrics,
+                "(Checkpointed x2) Check {} after step 3, env_runners=0",
+            )
+            # Evaluation
+            self.compare_metrics_in_results(
+                result_algo_0_step3[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],
+                result_algo_0_step3_restored[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],
+                ENV_STEPS_PER_ITERATION * 3 * 10,
+                eval_metrics,
+                "Evaluation: (Checkpointed) Check {} after step 3, env_runners=0",
+            )
+            self.compare_metrics_in_results(
+                result_algo_0_step3[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],
+                result_algo_0_step3_restored_x2[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],
+                ENV_STEPS_PER_ITERATION * 3 * 10,
+                eval_metrics,
+                "Evaluation: (Checkpointed x2) Check {} after step 3, env_runners=0",
+            )
+            #  -- num_env_runners=1 --
+            self.compare_metrics_in_results(
+                result_algo_1_step3[ENV_RUNNER_RESULTS],
+                result_algo_1_step3_restored[ENV_RUNNER_RESULTS],
+                ENV_STEPS_PER_ITERATION * 3,
+                metrics,
+                "(Checkpointed) Check {} after step 3, env_runners=1",
+            )
+            self.compare_metrics_in_results(
+                result_algo_1_step3[ENV_RUNNER_RESULTS],
+                result_algo_1_step3_restored_x2[ENV_RUNNER_RESULTS],
+                ENV_STEPS_PER_ITERATION * 3,
+                metrics,
+                "(Checkpointed x2) Check {} after step 3, env_runners=1",
+            )
+            # Evaluation
+            self.compare_metrics_in_results(
+                result_algo_1_step3[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],
+                result_algo_1_step3_restored[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],
+                ENV_STEPS_PER_ITERATION * 3 * 10,
+                eval_metrics,
+                "Evaluation: (Checkpointed) Check {} after step 3, env_runners=0",
+            )
+            self.compare_metrics_in_results(
+                result_algo_1_step3[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],
+                result_algo_1_step3_restored_x2[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],
+                ENV_STEPS_PER_ITERATION * 3 * 10,
+                eval_metrics,
+                "Evaluation: (Checkpointed x2) Check {} after step 3, env_runners=0",
+            )
+
         return {
             "env_runners": {
                 0: {
@@ -733,12 +828,14 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             }
         }
 
-    @unittest.skip("Needs to be fixed in ray first")
+    # @unittest.skip("Needs to be fixed in ray first")
     def test_trainable_checkpointing(self):
         """Test if trainable can be checkpointed and restored."""
         with patch_args(
             "--batch_size",
             str(ENV_STEPS_PER_ITERATION),
+            "--log_stats",
+            "most",  # increase log stats to assure necessary keys are present
         ):
             setup = AlgorithmSetup(init_trainable=False)
             config = setup.config
@@ -750,7 +847,13 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                 minibatch_size=ENV_STEPS_PER_ITERATION // 2,
             )
             config.env_runners(num_env_runners=0)
-            trainable0 = setup.create_trainable()
+            config.evaluation(
+                evaluation_interval=1,
+                evaluation_duration=100,
+                evaluation_num_env_runners=0,
+                evaluation_duration_unit="timesteps",
+            )
+            Trainable0 = setup.create_trainable()
             setup = AlgorithmSetup(init_trainable=False)
             config = setup.config
             config.debugging(seed=11)
@@ -761,11 +864,21 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                 minibatch_size=ENV_STEPS_PER_ITERATION // 2,
             )
             config.env_runners(num_env_runners=1)
-            trainable1 = setup.create_trainable()
-        assert isclass(trainable0) and isclass(trainable1)
+            config.evaluation(
+                evaluation_interval=1,
+                evaluation_duration=100,
+                evaluation_num_env_runners=0,
+                evaluation_duration_unit="timesteps",
+            )
+
+            Trainable1 = setup.create_trainable()
+        assert isclass(Trainable0) and isclass(Trainable1)
+        trainable0 = Trainable0()
+        trainable1 = Trainable1()
+
         results = self._test_algo_checkpointing(
-            trainable0(),
-            trainable1(),
+            trainable0,
+            trainable1,
             metrics=[
                 NUM_ENV_STEPS_SAMPLED_LIFETIME,
                 NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
@@ -799,7 +912,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             algo0,
             algo1,
             metrics=[
-                # NUM_ENV_STEPS_SAMPLED_LIFETIME,
+                NUM_ENV_STEPS_SAMPLED_LIFETIME,
                 NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
             ],
         )

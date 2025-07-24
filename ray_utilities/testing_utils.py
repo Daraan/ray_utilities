@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 # pyright: reportOptionalMemberAccess=none
+import difflib
+import math
 import os
 import pathlib
+import pprint
 import random
 import sys
 import unittest
+import unittest.util
 from contextlib import nullcontext
 from copy import deepcopy
 from functools import partial
@@ -19,6 +23,9 @@ import jax
 import jax.numpy as jnp
 import numpy.testing as npt
 import ray
+import ray.tune
+import ray.tune.logger
+import ray.tune.logger.unified
 import tree
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
@@ -37,7 +44,7 @@ from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.training.default_class import DefaultTrainable
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     import chex
     from flax.training.train_state import TrainState
@@ -93,11 +100,11 @@ def iter_cases(cases: type[Cases] | mock.MagicMock):
         raise
 
 
-def patch_args(*args: str):
+def patch_args(*args: str | int):
     patch = [
         "file.py",
         *(("-a", "no_actor_provided by patch_args") if ("-a" not in args and "--actor_type" not in args) else ()),
-        *args,
+        *map(str, args),
     ]
     return mock.patch.object(
         sys,
@@ -135,14 +142,21 @@ class DisableLoggers(unittest.TestCase):
 
     def enable_loggers(self):
         """Enable loggers after disabling them in setUp."""
-        self._disable_loggers.stop()
+        self._disable_tune_loggers.stop()
+        self._disable_file_loggers.stop()
+        self._disable_file_loggers2.stop()
         self._mock_env.stop()
 
     def setUp(self):
         self._mock_env = mock.patch.dict("os.environ", {"TUNE_DISABLE_AUTO_CALLBACK_LOGGERS": "1"})
         self._mock_env.start()
-        self._disable_loggers = mock.patch("ray_utilities.callbacks.tuner.create_tuner_callbacks", return_value=[])
-        self._disable_loggers.start()
+        self._disable_tune_loggers = mock.patch("ray_utilities.callbacks.tuner.create_tuner_callbacks", return_value=[])
+        self._disable_tune_loggers.start()
+        self._disable_file_loggers = mock.patch.object(ray.tune.logger, "DEFAULT_LOGGERS", ())
+        self._disable_file_loggers.start()
+        self._disable_file_loggers2 = mock.patch.object(ray.tune.logger.unified, "DEFAULT_LOGGERS", ())
+        """Disable local copy used by UnifiedLogger"""
+        self._disable_file_loggers2.start()
         super().setUp()
 
     def tearDown(self):
@@ -261,7 +275,7 @@ class TestHelpers(unittest.TestCase):
                     val1, val2, err_msg=f"Attribute '{attr_checked}.{path1}' not equal in both states {msg}"
                 )
 
-    def util_test_compare_env_runner_results(
+    def compare_env_runner_results(
         self,
         metrics_0: dict[str, Any],
         metrics_1: dict[str, Any],
@@ -287,6 +301,8 @@ class TestHelpers(unittest.TestCase):
             all_keys.discard("env_to_module_sum_episodes_length_in")  # might be wrong due to restore
             all_keys.discard("env_to_module_sum_episodes_length_out")
             all_keys.difference_update(key_difference)
+        # remove timer stats
+        all_keys = {k for k in all_keys if not k.endswith("_throughput")}
         if compare_results is None:
             compare_results = strict
         if not compare_results:
@@ -303,7 +319,18 @@ class TestHelpers(unittest.TestCase):
             all_keys.discard("num_episodes_lifetime")  # needs same sampling
         all_keys.discard("num_episodes_lifetime")  # Remove because of metrics restore bug # 54324
         self.set_max_diff(None)
-        self.assertDictEqual({k: metrics_0[k] for k in all_keys}, {k: metrics_1[k] for k in all_keys}, msg=msg)
+        # compare nan values
+        self.assertEqual(
+            {k: math.isnan(v) for k in all_keys if isinstance(v := metrics_0[k], float)},
+            {k: math.isnan(v) for k in all_keys if isinstance(v := metrics_1[k], float)},
+            msg=f"NaN values differ: {metrics_0} != {metrics_1} {msg}",
+        )
+        # not nans
+        self.assertDictEqual(
+            {k: v for k in all_keys if not (isinstance(v := metrics_0[k], float) and math.isnan(v))},
+            {k: v for k in all_keys if not (isinstance(v := metrics_1[k], float) and math.isnan(v))},
+            msg=msg,
+        )
 
     def util_test_state_equivalence(
         self,
@@ -364,8 +391,32 @@ class TestHelpers(unittest.TestCase):
 
         # NOTE: Apply gradients modifies state
 
+    def compare_metrics_in_results(
+        self,
+        result1: Mapping,
+        result2: Mapping,
+        expected: float | Iterable[Any],
+        metrics: Collection[str],
+        msg: str | None = None,
+    ):
+        """Check that the metrics in both results are equal."""
+        if not isinstance(expected, Iterable):
+            expected = [expected] * len(metrics)  # same result
+        for expected_value, metric in zip(expected, metrics):
+            self.assertIn(metric, result1)
+            self.assertIn(metric, result2)
+            with self.subTest(msg.format(metric), metric=metric):
+                self.assertEqual(
+                    result1[metric],
+                    result2[metric],
+                )
+                self.assertEqual(
+                    result1[metric],
+                    expected_value,
+                )
+
     @staticmethod
-    def _filter_incompatible_remote_config(config: dict[str, Any]) -> dict[str, Any]:
+    def filter_incompatible_remote_config(config: dict[str, Any]) -> dict[str, Any]:
         if "tf_session_args" in config:
             config["tf_session_args"]["inter_op_parallelism_threads"] = "removed_key_for_test"
             config["tf_session_args"]["intra_op_parallelism_threads"] = "removed_key_for_test"
@@ -380,7 +431,13 @@ class TestHelpers(unittest.TestCase):
         return config
 
     def compare_weights(
-        self, weights1: dict[str, Any], weights2: dict[str, Any], msg: str = "", ignore: Collection[str] = ()
+        self,
+        weights1: dict[str, Any],
+        weights2: dict[str, Any],
+        msg: str = "",
+        ignore: Collection[str] = (),
+        *,
+        almost: bool = False,
     ):
         keys1 = set(weights1.keys()) - set(ignore)
         keys2 = set(weights2.keys()) - set(ignore)
@@ -390,13 +447,40 @@ class TestHelpers(unittest.TestCase):
                 continue
             self.assertEqual(type(w1), type(weights2[key]), f"Weight '{key}' type does not match: {msg}")
             if isinstance(weights2[key], dict) and isinstance(w1, dict):
-                self.compare_weights(w1, weights2[key], f"Weight '{key}' does not match: {msg}")
+                self.compare_weights(w1, weights2[key], f"Weight '{key}' does not match: {msg}", almost=almost)
                 continue
-            npt.assert_array_equal(
-                w1,
-                weights2[key],
-                err_msg=f"Key '{key}' not equal in both states {msg}",
-            )
+            if isinstance(w1, str):  # if other structures are present
+                self.assertEqual(w1, weights2[key], f"Key '{key}' not equal in both states {msg}")
+                continue
+            if isinstance(w1, list) and any(isinstance(x, dict) for x in w1):
+                # If list contains dicts, compare dicts
+                try:
+                    self.assertListEqual(w1, weights2[key], f"Key '{key}' not equal in both states {msg}")
+                except (ValueError, AssertionError):  # could be almost equal
+                    self.assertEqual(len(w1), len(weights2[key]), f"Key '{key}' not equal in both states {msg}")
+                    for i, item in enumerate(w1):
+                        self.compare_weights(
+                            item, weights2[key][i], f"Key '{key}[{i}]' not equal in both states {msg}", almost=almost
+                        )
+                    continue
+                else:
+                    continue
+            if w1 is None:
+                self.assertIsNone(weights2[key], f"Key '{key}' not equal in both states {msg}")
+                continue
+            if almost:
+                # Use almost equal for floats, arrays, etc.
+                npt.assert_array_almost_equal(
+                    w1,
+                    weights2[key],
+                    err_msg=f"Key '{key}' not equal in both states {msg}",
+                )
+            else:
+                npt.assert_array_equal(
+                    w1,
+                    weights2[key],
+                    err_msg=f"Key '{key}' not equal in both states {msg}",
+                )
 
     # region tests
 
@@ -405,7 +489,7 @@ class TestHelpers(unittest.TestCase):
 
         def assertCleanDictEqual(a, b, *args, **kwargs):  # noqa: N802
             self.assertDictEqual(
-                self._filter_incompatible_remote_config(a), self._filter_incompatible_remote_config(b), *args, **kwargs
+                self.filter_incompatible_remote_config(a), self.filter_incompatible_remote_config(b), *args, **kwargs
             )
 
         algo_config_dict = algo.config.to_dict()
@@ -441,11 +525,16 @@ class TestHelpers(unittest.TestCase):
     def compare_configs(
         self, config1: AlgorithmConfig | dict, config2: AlgorithmConfig | dict, *, ignore: Collection[str] = ()
     ):
+        config1_eval = None
+        config2_eval = None
         if isinstance(config1, AlgorithmConfig):
+            if config1.evaluation_config:
+                config1_eval = config1.evaluation_config
             config1 = config1.to_dict()
         else:
             config1 = config1.copy()
         if isinstance(config2, AlgorithmConfig):
+            config2_eval = config2.evaluation_config
             config2 = config2.to_dict()
         else:
             config2 = config2.copy()
@@ -461,6 +550,11 @@ class TestHelpers(unittest.TestCase):
         config1.pop("simple_optimizer", None)
         config2.pop("simple_optimizer", None)
         self.assertDictEqual(config1, config2)  # ConfigType
+        if config1_eval or config2_eval:
+            if not config1_eval or not config2_eval:
+                self.fail("One of the configs has no evaluation_config")
+            with self.subTest("Compare evaluation configs"):
+                self.compare_configs(config1_eval, config2_eval, ignore=ignore)
 
     def compare_trainables(
         self,
@@ -549,8 +643,8 @@ class TestHelpers(unittest.TestCase):
             self.assertIsNot(trainable2._pbar, trainable._pbar)
             self.assertIs(type(trainable2._pbar), type(trainable._pbar))
             if isinstance(trainable2._pbar, tqdm_ray.tqdm):
-                pbar1_state = trainable2._pbar._get_state()
-                pbar2_state = trainable._pbar._get_state()  # type: ignore
+                pbar1_state = trainable._pbar._get_state()  # type: ignore
+                pbar2_state = trainable2._pbar._get_state()
                 pbar1_state = {k: v for k, v in pbar1_state.items() if k not in ("desc", "uuid")}
                 pbar2_state = {k: v for k, v in pbar2_state.items() if k not in ("desc", "uuid")}
                 self.assertEqual(pbar1_state, pbar2_state)
@@ -664,3 +758,13 @@ class DisableGUIBreakpoints(unittest.TestCase):
         else:
             self._disabled_breakpoints = mock.patch("builtins.breakpoint")
             print("enabled breakpoint")
+
+
+def dict_diff_message(d1: Any, d2: Any) -> str:
+    standardMsg = "%s != %s" % unittest.util._common_shorten_repr(d1, d2)
+    diff = "\n" + "\n".join(difflib.ndiff(pprint.pformat(d1).splitlines(), pprint.pformat(d2).splitlines()))
+    return standardMsg + diff
+
+
+def format_result_errors(errors):
+    return str(errors).replace(r"\n", "\n")

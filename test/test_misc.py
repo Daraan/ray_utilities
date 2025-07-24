@@ -2,7 +2,10 @@ from unittest import TestCase
 
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
-from ray_utilities.testing_utils import Cases, iter_cases
+from ray_utilities.setup.algorithm_setup import AlgorithmSetup
+from ray_utilities.testing_utils import Cases, DisableLoggers, iter_cases
+
+import ray.tune.logger
 
 
 class TestMeta(TestCase):
@@ -24,3 +27,18 @@ class TestMeta(TestCase):
         eval_config = config.get_evaluation_config_object()
         assert eval_config
         self.assertDictEqual(eval_config.env_config, {"a": 5, "b": 3, "c": 4, "d": 5})
+
+
+class TestNoLoggers(DisableLoggers):
+    def test_no_loggers(self):
+        # This test is just to ensure that the DisableLoggers context manager works.
+        # It does not need to do anything, as the context manager will disable loggers.
+        self.assertEqual(ray.tune.logger.DEFAULT_LOGGERS, ())
+        setup = AlgorithmSetup()
+        trainable = setup.trainable_class()
+        if isinstance(trainable._result_logger, ray.tune.logger.UnifiedLogger):
+            self.assertEqual(trainable._result_logger._logger_cls_list, ())
+            self.assertEqual(len(trainable._result_logger._loggers), 0)
+        if isinstance(trainable.algorithm._result_logger, ray.tune.logger.UnifiedLogger):
+            self.assertEqual(trainable.algorithm._result_logger._logger_cls_list, ())
+            self.assertEqual(len(trainable.algorithm._result_logger._loggers), 0)
