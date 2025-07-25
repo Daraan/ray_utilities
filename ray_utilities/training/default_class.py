@@ -10,7 +10,7 @@ from abc import ABCMeta
 from copy import copy
 from inspect import isclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Collection, Generic, Optional, TypedDict, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Collection, Generic, Optional, TypedDict, TypeVar, cast, overload
 
 import pyarrow.fs
 import ray
@@ -94,6 +94,23 @@ class TrainableStateDict(TypedDict):
     # TODO: What with own state, e.g. hparams passed?, not contained in get_state
 
     algorithm: NotRequired[StateDict]  # component; can be ignored
+    algorithm_config: StateDict
+    iteration: int
+    pbar_state: RayTqdmState | TqdmState | RangeState
+
+    reward_updaters: dict[str, list[float]]
+
+    setup: SetupCheckpointDict[Any, Any, Any]
+
+
+class PartialTrainableStateDict(TypedDict, total=False):
+    """Returned by `TrainableBase.get_state()`."""
+
+    trainable: StateDict
+    """The state obtained by tune.Trainable.get_state()."""
+    # TODO: What with own state, e.g. hparams passed?, not contained in get_state
+
+    algorithm: StateDict
     algorithm_config: StateDict
     iteration: int
     pbar_state: RayTqdmState | TqdmState | RangeState
@@ -496,6 +513,24 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
     # region Checkpointable methods
 
+    @overload
+    def get_state(
+        self,
+        components: None = None,
+        *,
+        not_components: None = None,
+        **kwargs,
+    ) -> TrainableStateDict: ...
+
+    @overload
+    def get_state(
+        self,
+        components: Optional[str | Collection[str]] = None,
+        *,
+        not_components: Optional[str | Collection[str]] = None,
+        **kwargs,
+    ) -> PartialTrainableStateDict | TrainableStateDict: ...
+
     @override(Checkpointable)
     @override(tune.Trainable)
     def get_state(  # pyright: ignore[reportIncompatibleMethodOverride]
@@ -504,7 +539,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         *,
         not_components: Optional[str | Collection[str]] = None,
         **kwargs,  # noqa: ARG002
-    ) -> TrainableStateDict | Any:
+    ) -> TrainableStateDict | PartialTrainableStateDict:
         """Returns the implementing class's current state as a dict.
 
         The returned dict must only contain msgpack-serializable data if you want to
@@ -528,26 +563,57 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             The current state of the implementing class (or only the `components`
             specified, w/o those in `not_components`).
         """
-        trainable_state = super(Checkpointable, self).get_state()
-        algorithm_config_state = self.algorithm_config.get_state()
+        if components is not None and not isinstance(components, str):
+            components = copy(components)
+        if not_components is not None and not isinstance(not_components, str):
+            not_components = copy(not_components)
+        trainable_state = super(Checkpointable, self).get_state()  # cheap call
+        algorithm_config_state = (
+            self.algorithm_config.get_state()
+            if self._check_component("algorithm_config", components, not_components)
+            else None
+        )
+        setup_state = self._setup.get_state() if self._check_component("setup", components, not_components) else None
+        reward_updaters_state = (
+            {k: v.keywords["reward_array"] for k, v in self._reward_updaters.items()}
+            if self._check_component("reward_updaters", components, not_components)
+            else None
+        )
+        pbar_state = (
+            save_pbar_state(self._pbar, self._iteration)
+            if self._check_component("pbar", components, not_components)
+            else None
+        )
+        if self._check_component("algorithm", components, not_components):
+            algo_state = self.algorithm.get_state(
+                self._get_subcomponents("algorithm", components),
+                not_components=force_list(self._get_subcomponents("algorithm", not_components)),
+            )
+            algo_state["algorithm_class"] = type(self.algorithm)  # NOTE: Not msgpack-serializable
+            algo_state["config"] = algorithm_config_state
+        else:
+            algo_state = {}
+        # for integrity of the TrainableStateDict, remove None case:
+        if TYPE_CHECKING:
+            assert setup_state
+            assert algorithm_config_state
+            assert reward_updaters_state
+            assert pbar_state
         state: TrainableStateDict = {
             "trainable": trainable_state,
             "algorithm_config": algorithm_config_state,
             "iteration": self._iteration,
-            "pbar_state": save_pbar_state(self._pbar, self._iteration),
-            "reward_updaters": {k: v.keywords["reward_array"] for k, v in self._reward_updaters.items()},
-            "setup": self._setup.save(),
+            "pbar_state": pbar_state,
+            "reward_updaters": reward_updaters_state,
+            "setup": setup_state,
+            "algorithm": algo_state,
         }
-        if (not_components and "algorithm" not in not_components) or components is None or "algorithm" in components:
-            if components and not isinstance(components, str):
-                components = copy(components)
-            algo_state = self.algorithm.get_state(
-                self._get_subcomponents("algorithm", components),
-                not_components=force_list(self._get_subcomponents("algorithm", not_components)),
-            )  # TODO: check components
-            algo_state["algorithm_class"] = type(self.algorithm)  # NOTE: Not msgpack-serializable
-            algo_state["config"] = algorithm_config_state
-            state["algorithm"] = algo_state
+        # Filter out components not in the components list
+        if components is not None or not_components is not None:
+            return cast(
+                "PartialTrainableStateDict",
+                {k: v for k, v in state.items() if self._check_component(k, components, not_components)},
+            )
         return state
 
     # @_validate_algorithm_config_afterward

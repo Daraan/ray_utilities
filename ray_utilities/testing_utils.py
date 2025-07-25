@@ -587,8 +587,8 @@ class TestHelpers(unittest.TestCase):
             config_dict2 = trainable2.algorithm_config.to_dict()
             config_dict2.pop("class", None)
             self.assertDictEqual(config_dict2, config_dict1)
-            setup_data1 = trainable._setup.save()  # does not compare setup itself
-            setup_data2 = trainable2._setup.save()
+            setup_data1 = trainable._setup.get_state()  # does not compare setup itself
+            setup_data2 = trainable2._setup.get_state()
             # check all keys
             self.assertEqual(setup_data1.keys(), setup_data2.keys())
             keys = set(setup_data1.keys())
