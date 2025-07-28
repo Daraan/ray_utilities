@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from unittest import skip
 
 from ray import tune
@@ -36,6 +36,9 @@ logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 32
 MINIBATCH_SIZE = 32
+
+if TYPE_CHECKING:
+    from ray.rllib.algorithms import AlgorithmConfig  # noqa: F401
 
 
 class TestTuner(InitRay, TestHelpers, DisableLoggers):
@@ -174,9 +177,9 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
         )
         self.assertTrue(os.path.exists(checkpoints[0]), "Checkpoint file does not exist: " + checkpoints[0])
 
-        class TrainableWithChecks(DefaultTrainable[Any, AlgorithmConfig, Any]):
-            def setup(self, config, *, overwrite_algorithm=None):
-                super().setup(config, overwrite_algorithm=overwrite_algorithm)
+        class TrainableWithChecks(DefaultTrainable[Any, "AlgorithmConfig", Any]):
+            def setup(self, config, *, algorithm_overrides=None):
+                super().setup(config, algorithm_overrides=algorithm_overrides)
                 assert self._iteration == 1, "Trainable should be setup with iteration 1"
 
             def step(self):

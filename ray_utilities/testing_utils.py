@@ -225,7 +225,7 @@ class TestHelpers(unittest.TestCase):
             env_seed = self._env_seed_rng.randint(0, 2**15 - 1)
         trainable = self.TrainableClass({"env_seed": env_seed}, algorithm_overrides=overrides)
         self._created_trainables.append(trainable)
-        self.assertEqual(trainable._overwrite_algorithm, overrides)
+        self.assertEqual(trainable._algorithm_overrides, overrides)
         self.assertEqual(overrides.keys(), OVERRIDE_KEYS)
         self.assertEqual(trainable.algorithm_config.num_env_runners, num_env_runners)
         self.assertEqual(trainable.algorithm_config.minibatch_size, 32)

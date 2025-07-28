@@ -30,6 +30,11 @@ from ray_utilities.testing_utils import (
 from ray_utilities.training.default_class import DefaultTrainable
 from test._mp_trainable import remote_process
 
+try:
+    from ray.train._internal.session import _TrainingResult
+except ImportError:
+    _TrainingResult = None
+
 if TYPE_CHECKING:
     from ray_utilities.typing.trainable_return import TrainableReturnData
 
@@ -187,11 +192,12 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
             with self.subTest(num_env_runners=num_env_runners):
                 with tempfile.TemporaryDirectory() as tmpdir:
-                    training_result = trainable.save(tmpdir)  # calls save_checkpoint
+                    training_result: _TrainingResult = trainable.save(tmpdir)  # pyright: ignore[reportInvalidTypeForm] # calls save_checkpoint
                     with patch_args():  # make sure that args do not influence the restore
                         trainable2 = self.TrainableClass()
                         with self.subTest("Restore trainable from dict"):
-                            self.assertIsInstance(training_result, dict)
+                            if _TrainingResult is not None:
+                                self.assertIsInstance(training_result, _TrainingResult)
                             trainable2.restore(deepcopy(training_result))  # calls load_checkpoint
                             self.compare_trainables(trainable, trainable2, "from dict", num_env_runners=num_env_runners)
                             trainable2.stop()

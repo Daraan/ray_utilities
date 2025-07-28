@@ -471,7 +471,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             ValueError: If the config is already frozen. That is, after `create_trainable`
                 has already be called.
         """
-        if not kwargs:
+        if not kwargs or not hasattr(self, "config"):
             return self._config_overrides or {}
         if self.config._is_frozen:
             raise ValueError(
@@ -536,6 +536,9 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 )
                 warnings.warn(msg, UserWarning, stacklevel=1)
                 logger.warning(msg)
+            # to make overrides have a higher priority than args:
+            # overrides = old_overwrites | overrides
+            # self.config_overrides(**overrides)
         # classmethod, but _retrieved_callbacks might be set on instance
         if overrides:
             self.config.update_from_dict(overrides)
@@ -1066,6 +1069,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
     def __exit__(self, exc_type, exc_value, traceback):
         """Finishes the setup and creates the trainable"""
         self.__open_config.__exit__(exc_type, exc_value, traceback)
+        del self.__open_config
         if self._config_overrides:
             self._unfreeze_config()
             self.config.update_from_dict(self._config_overrides)
@@ -1084,15 +1088,3 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
     #    self,
     # ) -> TypeForm[type[TypedDict]] | Sequence[str] | dict[str, Any] | TrainableReturnData:
     #    """Keys or a TypedDict of the return type of the trainable function."""
-
-
-# case 1
-A = {"x": 1, "y": "default", "z": 3.14}
-Ax = {"x": 1, "z": 3.14}
-B = {"x": "default", "y": "default", "z": "default"}
-# only x is explicitly set as default
-Bx = {
-    "x": "default",
-}  # <-- how do I know this
-
-want = {"x": "default", "y": "default", "z": 3.14}

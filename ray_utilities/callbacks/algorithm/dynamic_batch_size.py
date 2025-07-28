@@ -27,7 +27,7 @@ class DynamicGradientAccumulation(StepCounterMixin, BudgetMixin, DynamicHyperpar
     # TODO:  As body is rather simple can just pass function as updater
     def _update_gradient_accumulation(
         self,
-        algorithm: "Algorithm",
+        algorithm: Algorithm,
         metrics_logger: Optional[MetricsLogger] = None,
         *,
         global_step: int,
@@ -79,7 +79,7 @@ class DynamicGradientAccumulation(StepCounterMixin, BudgetMixin, DynamicHyperpar
     def on_algorithm_init(
         self,
         *,
-        algorithm: "Algorithm",
+        algorithm: Algorithm,
         metrics_logger: Optional[MetricsLogger] = None,
         **kwargs,
     ) -> None:
@@ -101,7 +101,7 @@ class DynamicGradientAccumulation(StepCounterMixin, BudgetMixin, DynamicHyperpar
     def on_train_result(
         self,
         *,
-        algorithm: "Algorithm",
+        algorithm: Algorithm,
         metrics_logger: Optional[MetricsLogger] = None,
         result: dict,
         **kwargs,

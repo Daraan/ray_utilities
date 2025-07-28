@@ -1,10 +1,11 @@
+from __future__ import annotations
+
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Optional, cast
 
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
 from ray.rllib.utils.metrics import EVALUATION_RESULTS
-from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 
 from ray_utilities.constants import EVALUATED_THIS_STEP
 from ray_utilities.discrete_evaluation import discrete_evaluate_on_local_env_runner
@@ -14,6 +15,7 @@ if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
     from ray.rllib.policy.sample_batch import MultiAgentBatch, SampleBatch
+    from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
     from ray.rllib.utils.typing import ResultDict
 
 __all__ = ["DiscreteEvalCallback"]
@@ -32,7 +34,7 @@ class DiscreteEvalCallback(DefaultCallbacks):
     def on_evaluate_end(
         self,
         *,
-        algorithm: "Algorithm",
+        algorithm: Algorithm,
         metrics_logger: Optional[MetricsLogger] = None,
         evaluation_metrics: dict,
         **kwargs,  # noqa: ARG002

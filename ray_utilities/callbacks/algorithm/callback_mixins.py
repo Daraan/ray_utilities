@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING, Any, Generic, Mapping, Optional, TypeVar
 from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.utils.metrics import (
     ALL_MODULES,  # pyright: ignore[reportPrivateImportUsage]
-    LEARNER_RESULTS,
     ENV_RUNNER_RESULTS,
+    LEARNER_RESULTS,
 )
 
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
@@ -69,7 +69,7 @@ class BudgetMixin(Generic[T]):
     def _set_budget_on_algorithm_init(
         self,
         *,
-        algorithm: "Algorithm",
+        algorithm: Algorithm,
         **kwargs,  # noqa: ARG002
     ) -> None:
         assert algorithm.config
@@ -134,7 +134,7 @@ class StepCounterMixin(GetGlobalStepMixin):
     def _set_step_counter_on_algorithm_init(
         self,
         *,
-        algorithm: "Algorithm",
+        algorithm: Algorithm,
         metrics_logger: Optional[MetricsLogger] = None,
     ) -> None:
         assert algorithm.config
@@ -149,7 +149,7 @@ class StepCounterMixin(GetGlobalStepMixin):
     def _set_step_counter_on_train_result(
         self,
         *,
-        algorithm: "Algorithm",
+        algorithm: Algorithm,
         metrics_logger: MetricsLogger,
     ) -> None:
         self._training_iterations += 1
@@ -169,7 +169,7 @@ class StepCounterMixin(GetGlobalStepMixin):
     def _set_step_counter_on_checkpoint_loaded(
         self,
         *,
-        algorithm: "Algorithm",
+        algorithm: Algorithm,
         metrics_logger: MetricsLogger,
     ) -> None:
         # TODO

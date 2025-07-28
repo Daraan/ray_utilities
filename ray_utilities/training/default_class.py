@@ -94,6 +94,7 @@ class TrainableStateDict(TypedDict):
     # TODO: What with own state, e.g. hparams passed?, not contained in get_state
 
     algorithm: NotRequired[StateDict]  # component; can be ignored
+    """Als Algorithm is a Checkpointable an"""
     algorithm_config: StateDict
     iteration: int
     pbar_state: RayTqdmState | TqdmState | RangeState
@@ -209,10 +210,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         algorithm_overrides: Optional[AlgorithmConfig | dict[str, Any]] = None,
         **kwargs,
     ):
-        self._overwrite_algorithm = algorithm_overrides
-        if self._overwrite_algorithm and self.setup_class._fixed_argv:
+        self._algorithm_overrides = algorithm_overrides
+        if self._algorithm_overrides and self.setup_class._fixed_argv:
             _logger.warning(
-                "Using a Trainable with fixed argv on the setup_class and overwrite_algorithm, "
+                "Using a Trainable with fixed argv on the setup_class and algorithm_overrides, "
                 "might result in unexpected values after a restore. Test carefully."
             )
             # NOTE: Use get_ctor_args_and_kwargs to include the overwrites on a reload
@@ -223,7 +224,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
     @override(tune.Trainable)
     def setup(
-        self, config: dict[str, Any], *, overwrite_algorithm: Optional[AlgorithmConfig | dict[str, Any]] = None
+        self, config: dict[str, Any], *, algorithm_overrides: Optional[AlgorithmConfig | dict[str, Any]] = None
     ) -> None:
         """
         Sets:
@@ -240,18 +241,18 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 f"setup_class is not set on {self}. "
                 f"Use TrainableCls = {self.__class__.__name__}.define(setup_class) to set it.",
             )
-        if overwrite_algorithm is not None and self._overwrite_algorithm is not None:
-            if overwrite_algorithm != self._overwrite_algorithm:
+        if algorithm_overrides is not None and self._algorithm_overrides is not None:
+            if algorithm_overrides != self._algorithm_overrides:
                 _logger.warning(
-                    "Both `overwrite_algorithm` and `self._overwrite_algorithm` (during __init__) are set. "
-                    "Consider passing only one. Overwriting self._overwrite_algorithm with new value."
+                    "Both `algorithm_overrides` and `self._algorithm_overrides` (during __init__) are set. "
+                    "Consider passing only one. Overwriting self._algorithm_overrides with new value."
                 )
             else:
                 _logger.error(
-                    "Both `overwrite_algorithm` and `self._overwrite_algorithm` (during __init__) "
-                    "and do not match. Overwriting self._overwrite_algorithm with new value from setup(). \n %s != %s "
+                    "Both `algorithm_overrides` and `self._algorithm_overrides` (during __init__) "
+                    "and do not match. Overwriting self._algorithm_overrides with new value from setup(). \n %s != %s "
                 )
-            self._overwrite_algorithm = overwrite_algorithm
+            self._algorithm_overrides = algorithm_overrides
         assert self.setup_class.parse_known_only is True
         _logger.debug("Setting up %s with config: %s", self.__class__.__name__, config)
         if isclass(self.setup_class):
@@ -270,7 +271,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             hparams=config,
             setup=self._setup,
             setup_class=self.setup_class if isclass(self.setup_class) else None,
-            overwrite_config=self._overwrite_algorithm,
+            config_overrides=self._algorithm_overrides,
         )
         self._pbar: tqdm | range | tqdm_ray.tqdm = episode_iterator(args, config, use_pbar=self.use_pbar)
         self._iteration: int = 0
@@ -379,7 +380,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     checkpoint["algorithm_checkpoint_dir"],
                 )
             # Is set_state even needed?
-            # Test loaded algo state:
+            # Test loaded algo state
             loaded_algo_state = self.algorithm.get_state(
                 components=self._get_subcomponents("algorithm", None),
                 not_components=force_list(self._get_subcomponents("algorithm", None)),
@@ -387,8 +388,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             keys_to_process.remove("algorithm_checkpoint_dir")
             # TODO: Remove tests when safe
             # can add algorithm_state to check correctness
-            # equality check will likely fail because of nan/float differences
-            if checkpoint["state"]["algorithm"] and checkpoint["state"]["algorithm"] != loaded_algo_state:
+            # algorithm likely not in state as it is a Checkpointable
+            if (
+                "algorithm" in checkpoint["state"]
+                and checkpoint["state"]["algorithm"]
+                and checkpoint["state"]["algorithm"] != loaded_algo_state
+            ):
+                # equality check will likely fail because of nan/float differences
                 try:
                     from ray_utilities.testing_utils import TestHelpers
 
@@ -666,10 +672,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # NOTE: evaluation_config might also not be set!
         keys_to_process.remove("algorithm_config")
         self._setup = self._setup.from_saved(state["setup"], init_trainable=False)
-        # NOTE: setup.config can differ from new_algo_config when overwrite_algorithm is used!
+        # NOTE: setup.config can differ from new_algo_config when algorithm_overrides is used!
         # self._setup.config = new_algo_config  # TODO: Possible unset setup._config to not confuse configs
         keys_to_process.remove("setup")
 
+        # algorithm might not be in state as it is a checkpointable component and was not pickled
         if "algorithm" in state:
             for component in COMPONENT_ENV_RUNNER, COMPONENT_EVAL_ENV_RUNNER, COMPONENT_LEARNER_GROUP:
                 if component not in state["algorithm"]:
@@ -692,7 +699,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # TODO: This likely has no effect at all; possibly sync metrics with custom function
         if self.algorithm.env_runner_group:
             self.algorithm.env_runner_group.sync_env_runner_states(config=self.algorithm_config)
-        keys_to_process.remove("algorithm")
+        keys_to_process.discard("algorithm")
 
         self._pbar = restore_pbar(state["pbar_state"])
         if is_pbar(self._pbar):
@@ -729,7 +736,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             construct `self` from its class constructor.
         """
         config = self.config.copy()
-        kwargs = {"config": config, "overwrite_algorithm": self._overwrite_algorithm}  # possibly add setup_class
+        kwargs = {"config": config, "algorithm_overrides": self._algorithm_overrides}  # possibly add setup_class
         args = ()
         return args, kwargs
 

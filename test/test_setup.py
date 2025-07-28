@@ -592,6 +592,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                     self.assertEqual(restored_trainable._setup.args.seed, cli_seed)
                     self.assertEqual(restored_trainable.algorithm_config.num_env_runners, num_env_runners)
                     self.assertEqual(restored_trainable._setup.config.num_env_runners, num_env_runners)
+                    self.assertEqual(restored_trainable._setup.config.minibatch_size, 5)
                     tune_results[num_env_runners]["trainables"].append(restored_trainable)
             self.assertGreater(len(tune_results[0]["trainables"]), 0)
             try:

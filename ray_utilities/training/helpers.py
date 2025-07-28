@@ -163,7 +163,7 @@ def setup_trainable(
     hparams: dict[str, Any],
     setup: Optional["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"] = None,
     setup_class: Optional[type["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"]] = None,
-    overwrite_config: Optional[ConfigType_co | dict[str, Any]] = None,
+    config_overrides: Optional[ConfigType_co | dict[str, Any]] = None,
 ) -> tuple[dict[str, Any], "ConfigType_co", "AlgorithmType_co", "RewardUpdaters"]:
     """
     Sets up the trainable by getting the args and config from the given hparams, setup or setup_class.
@@ -190,10 +190,10 @@ def setup_trainable(
         setup=setup,
         setup_class=setup_class,
     )
-    if overwrite_config:
-        if isinstance(overwrite_config, AlgorithmConfig):
-            overwrite_config = overwrite_config.to_dict()
-        config = config.update_from_dict(overwrite_config)
+    if config_overrides:
+        if isinstance(config_overrides, AlgorithmConfig):
+            config_overrides = config_overrides.to_dict()
+        config = config.update_from_dict(config_overrides)
     if not args["from_checkpoint"]:
         try:
             # new API; Note: copies config!

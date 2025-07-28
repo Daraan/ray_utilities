@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import logging
 import random
-from typing import TypeVar, overload
+from typing import TYPE_CHECKING, TypeVar, overload
 
 from ray_utilities.constants import GYM_V_0_26
+
+if TYPE_CHECKING:
+    import gymnasium as gym
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +36,7 @@ def _split_seed(seed: _IntOrNone, n=2) -> tuple[_IntOrNone, ...]:
     return tuple(gen.randrange(2**32) for _ in range(n))  # pyright: ignore[reportReturnType]
 
 
-def seed_everything(env, seed: _IntOrNone, *, torch_manual=False, torch_deterministic=None) -> _IntOrNone:
+def seed_everything(env: gym.Env, seed: _IntOrNone, *, torch_manual=False, torch_deterministic=None) -> _IntOrNone:
     """
     Args:
         torch_manual: If True, will set torch.manual_seed and torch.cuda.manual_seed_all
@@ -71,10 +74,14 @@ def seed_everything(env, seed: _IntOrNone, *, torch_manual=False, torch_determin
     except ImportError:
         pass
     else:
+        if TYPE_CHECKING:
+            import keras
+        else:
+            from tensorflow import keras
         seed, next_seed = _split_seed(next_seed)
         tf.random.set_seed(seed)
         seed, next_seed = _split_seed(next_seed)
-        tf.keras.utils.set_random_seed(seed)  # pyright: ignore
+        keras.utils.set_random_seed(seed)
         tf.config.experimental.enable_op_determinism()
 
     if env:
