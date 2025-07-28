@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from ray.rllib.algorithms.ppo import PPO, PPOConfig
 from typing_extensions import TypeVar
@@ -11,7 +11,6 @@ from ray_utilities.config.create_algorithm import create_algorithm_config
 from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
 from ray_utilities.setup.extensions import SetupWithDynamicBatchSize, SetupWithDynamicBuffer
 from ray_utilities.training.default_class import DefaultTrainable
-from ray_utilities.training.helpers import get_current_step
 
 if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
@@ -58,7 +57,7 @@ class AlgorithmSetup(
         return DefaultTrainable.define(self)
 
     @classmethod
-    def _config_from_args(cls, args) -> ConfigType_co:
+    def _config_from_args(cls, args, base: Optional[ConfigType_co] = None) -> ConfigType_co:
         config, _module_spec = create_algorithm_config(
             args=args,
             module_class=None,
@@ -66,6 +65,7 @@ class AlgorithmSetup(
             model_config=None,
             framework="torch",
             config_class=cls.config_class,
+            base=base,
         )
         config.evaluation(evaluation_interval=1)  # required to not fail on the cheap default trainable
         add_callbacks_to_config(config, cls.get_callbacks_from_args(args))

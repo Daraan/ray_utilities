@@ -83,7 +83,7 @@ class TestTrainable(TestHelpers, DisableLoggers, DisableGUIBreakpoints):
         # Kind of like setUp for the other tests but with default args
         TrainableClass = DefaultTrainable.define(PPOSetup.typed())
         trainable = TrainableClass(
-            overwrite_algorithm=AlgorithmConfig.overrides(
+            algorithm_overrides=AlgorithmConfig.overrides(
                 num_epochs=2, minibatch_size=32, train_batch_size_per_learner=64
             )
         )
@@ -96,7 +96,7 @@ class TestTrainable(TestHelpers, DisableLoggers, DisableGUIBreakpoints):
     @patch_args()
     def test_train(self):
         self.TrainableClass = DefaultTrainable.define(PPOSetup.typed())
-        trainable = self.TrainableClass(overwrite_algorithm=AlgorithmConfig.overrides(evaluation_interval=1))
+        trainable = self.TrainableClass(algorithm_overrides=AlgorithmConfig.overrides(evaluation_interval=1))
         result = trainable.train()
         self.assertIn(EVALUATION_RESULTS, result)
         self.assertGreater(len(result[EVALUATION_RESULTS]), 0)
@@ -105,32 +105,61 @@ class TestTrainable(TestHelpers, DisableLoggers, DisableGUIBreakpoints):
         with tempfile.TemporaryDirectory() as tmpdir:
             batch_size1 = 40
             with patch_args(
-                "--total_steps", "80", "--batch_size", batch_size1, "--minibatch_size", "20", "--comment", "A"
-            ):
-                trainable = AlgorithmSetup().trainable_class()
+                "--total_steps", "80",
+                "--batch_size", batch_size1,
+                "--minibatch_size", "20",
+                "--comment", "A",
+                "--tags", "test",
+            ):  # fmt: off
+                with AlgorithmSetup() as setup:
+                    setup.config.evaluation(evaluation_interval=1)
+                    setup.config.training(
+                        num_epochs=2,
+                        minibatch_size=10,  # overwrite CLI
+                    )
+                trainable = setup.trainable_class(algorithm_overrides=AlgorithmConfig.overrides(gamma=0.11, lr=2.0))
                 self.assertEqual(trainable._total_steps["total_steps"], 80)
                 self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 40)
-                self.assertEqual(trainable.algorithm_config.minibatch_size, 20)
+                self.assertEqual(trainable.algorithm_config.minibatch_size, 10)
+                self.assertEqual(trainable.algorithm_config.num_epochs, 2)
+                self.assertEqual(trainable.algorithm_config.gamma, 0.11)
+                self.assertEqual(trainable.algorithm_config.lr, 2.0)
                 self.assertEqual(trainable._setup.args.comment, "A")
+                self.assertEqual(trainable._setup.args.tags, ["test"])
                 for i in range(1, 3):
                     result = trainable.step()
                     self.assertEqual(result["training_iteration"], i)
                     self.assertEqual(result["current_step"], batch_size1 * i)
                 trainable.save(tmpdir)
                 trainable.stop()
+            del trainable
+            del setup
             with patch_args(
                 "--total_steps", 80 + 120,
                 "--batch_size", "60",
                 "--comment", "B",
                 "--from_checkpoint", tmpdir,
             ):  # fmt: off
-                trainable2 = AlgorithmSetup().trainable_class()
+                with AlgorithmSetup(init_trainable=False) as setup2:
+                    setup2.config.training(
+                        num_epochs=5,
+                    )
+                trainable2 = setup2.trainable_class(
+                    # algorithm_overrides=AlgorithmConfig.overrides(gamma=0.22, grad_clip=4.321)
+                )
+                self.assertEqual(trainable2._setup.args.comment, "B")
                 # left unchanged
-                self.assertEqual(trainable2.algorithm_config.minibatch_size, 20)
+                self.assertEqual(trainable2.algorithm_config.minibatch_size, 10)
+                self.assertEqual(trainable2.algorithm_config.lr, 2.0)
                 # Should change
+                # From CLI
                 self.assertEqual(trainable2.algorithm_config.train_batch_size_per_learner, 60)
                 self.assertEqual(trainable2._total_steps["total_steps"], 80 + 120)
-                self.assertEqual(trainable2._setup.args.comment, "B")
+                # from override
+                self.assertEqual(trainable2.algorithm_config.gamma, 0.22)
+                self.assertEqual(trainable2.algorithm_config.grad_clip, 4.321)
+                # From manual adjustment
+                self.assertEqual(trainable2.algorithm_config.num_epochs, 5)
 
 
 class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):

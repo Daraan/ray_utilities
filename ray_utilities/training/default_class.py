@@ -108,7 +108,6 @@ class PartialTrainableStateDict(TypedDict, total=False):
 
     trainable: StateDict
     """The state obtained by tune.Trainable.get_state()."""
-    # TODO: What with own state, e.g. hparams passed?, not contained in get_state
 
     algorithm: StateDict
     algorithm_config: StateDict
@@ -207,10 +206,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         self,
         config: Optional[dict[str, Any]] = None,
         *,
-        overwrite_algorithm: Optional[AlgorithmConfig | dict[str, Any]] = None,
+        algorithm_overrides: Optional[AlgorithmConfig | dict[str, Any]] = None,
         **kwargs,
     ):
-        self._overwrite_algorithm = overwrite_algorithm
+        self._overwrite_algorithm = algorithm_overrides
         if self._overwrite_algorithm and self.setup_class._fixed_argv:
             _logger.warning(
                 "Using a Trainable with fixed argv on the setup_class and overwrite_algorithm, "
@@ -278,15 +277,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         self.log_stats: LogStatsChoices = args[LOG_STATS]
         assert self.algorithm.config
         # calculate total steps once
-        self._total_steps = {"total_steps": get_total_steps(args, self.algorithm.config), "iterations": "auto"}
         # After components have been setup up load checkpoint if requested
         if "cli_args" in config and config["cli_args"].get("from_checkpoint") not in (None, ""):
             _logger.info("At end of setup(), loading from checkpoint: %s", config["cli_args"]["from_checkpoint"])
             # calls restore from path; from_checkpoint could also be a dict here
             self.load_checkpoint(config["cli_args"]["from_checkpoint"])
-            # FIXME: This restored the original cli args and overwrites do not take effect
-            # Problem: Figure out which are "default (old)" to keep and which are "new" to overwrite
-            return
+
+        self._total_steps = {"total_steps": get_total_steps(args, self.algorithm.config), "iterations": "auto"}
 
     @property
     def algorithm_config(self) -> _ConfigType:
@@ -337,10 +334,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # A returned dict will be serialized
         # can return dict_or_path
         # NOTE: Do not rely on absolute paths in the implementation of
-        state = self.get_state()  # TODO: check components
+        state = self.get_state()
         # save in subdir
         algo_save_dir = (Path(checkpoint_dir) / "algorithm").as_posix()
-        self.save_to_path(checkpoint_dir)  # saves components
+        assert isinstance(state, dict)
+        self.save_to_path(checkpoint_dir, state=cast("dict[str, Any]", state))  # saves components
         save = {
             "state": state,  # contains most information
             "algorithm_checkpoint_dir": algo_save_dir,
@@ -348,12 +346,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         return save
 
     @override(tune.Trainable)
-    def load_checkpoint(self, checkpoint: Optional[dict] | str):
+    def load_checkpoint(self, checkpoint: Optional[dict] | str, *, ignore_config: bool = False, **kwargs) -> None:
         # NOTE: from_checkpoint is a classmethod, this isn't
         # set pbar
         # set weights
         # set iterations
         # set reward_updaters
+        algo_kwargs: dict[str, Any] = {**kwargs} if ignore_config else {"config": self._setup.config, **kwargs}
+
         if isinstance(checkpoint, dict):
             # TODO
             keys_to_process = set(checkpoint.keys())  # Sanity check if processed all keys
@@ -365,7 +365,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # if checkpoint["algorithm_checkpoint_dir"] is a tempdir (e.g. from tune, this is wrong)
             # However, self.set_state should have take care of algorithm already even if checkpoint dir is missing
             if os.path.exists(checkpoint["algorithm_checkpoint_dir"]):
-                self.algorithm = self.algorithm.from_checkpoint(checkpoint["algorithm_checkpoint_dir"])
+                self.algorithm = self.algorithm.from_checkpoint(checkpoint["algorithm_checkpoint_dir"], **algo_kwargs)
             elif "algorithm_state" in checkpoint:
                 _logger.error(
                     "Algorithm checkpoint directory %s does not exist, will restore from state",
@@ -505,7 +505,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
             assert len(keys_to_process) == 0, f"Not all keys were processed during load_checkpoint: {keys_to_process}"
         elif checkpoint is not None:
-            self.restore_from_path(checkpoint)
+            self.restore_from_path(checkpoint, **algo_kwargs)
         else:
             raise ValueError(f"Checkpoint must be a dict or a path. Not {type(checkpoint)}")
 
@@ -802,7 +802,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         path = pathlib.Path(path)
 
         # Get the class constructor to call and its args/kwargs.
-        # Try reading the pickle file first.
+        # Try reading the pickle file first, ray fails silently in case of an error.
         try:
             assert filesystem is not None
             with filesystem.open_input_stream((path / cls.CLASS_AND_CTOR_ARGS_FILE_NAME).as_posix()) as f:

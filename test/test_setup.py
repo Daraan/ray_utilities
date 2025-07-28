@@ -4,12 +4,16 @@ from __future__ import annotations
 import argparse
 import os
 
+import pyarrow as pa
+
 os.environ["RAY_DEBUG"] = "legacy"
 
+from pathlib import Path
+import cloudpickle
 import tempfile
 import unittest
 from inspect import isclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import tree
 import typing_extensions as te
@@ -208,7 +212,7 @@ class TestSetupClasses(SetupDefaults):
             self.assertEqual(setup.config.minibatch_size, 444)
             self.assertEqual(setup.config.train_batch_size_per_learner, 1234)
             trainable = setup.trainable_class(
-                overwrite_algorithm=AlgorithmConfig.overrides(
+                algorithm_overrides=AlgorithmConfig.overrides(
                     num_epochs=22,
                     minibatch_size=321,
                 )
@@ -238,6 +242,107 @@ class TestSetupClasses(SetupDefaults):
                 "minibatch_size",
             ],
         )
+
+    def test_args_config_after_restore(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            batch_size1: Final[int] = 40
+            default_timeout: Final[float] = self._DEFAULT_SETUP.config.evaluation_sample_timeout_s  # pyright: ignore[reportAssignmentType, reportGeneralTypeIssues]
+            eval_unit_default = self._DEFAULT_SETUP.config.evaluation_duration_unit
+            eval_unit_other = "episodes" if eval_unit_default == "timesteps" else "timesteps"
+            assert eval_unit_default != eval_unit_other
+            with patch_args(
+                "--total_steps", "80",
+                "--batch_size", batch_size1,
+                "--minibatch_size", "20",
+                "--comment", "A",
+                "--extra", "abc", # nargs
+                "--env_seeding_strategy", "constant",
+                "--wandb", "offline",  # possibly do not restore
+            ):  # fmt: off
+                with AlgorithmSetup(init_trainable=False) as setup:
+                    # These depend on args and CANNOT be restored!
+                    setup.config.training(minibatch_size=10, num_epochs=2)
+                    # Use non-default value
+                    setup.config.evaluation(
+                        evaluation_sample_timeout_s=default_timeout + 120,
+                        evaluation_duration_unit=eval_unit_other,  # check that this is restored from config
+                    )
+
+                self.assertEqual(setup.config.train_batch_size_per_learner, setup.args.train_batch_size_per_learner)
+                self.assertEqual(setup.config.train_batch_size_per_learner, 40)  # batch_size1
+
+                self.assertNotEqual(setup.config.minibatch_size, setup.args.minibatch_size)
+                self.assertEqual(setup.config.minibatch_size, 10)
+                self.assertEqual(setup.args.total_steps, 80)
+                self.assertEqual(setup.args.comment, "A")
+                self.assertEqual(setup.args.extra, ["abc"])  # nargs
+                self.assertEqual(setup.args.env_seeding_strategy, "constant")
+                self.assertEqual(setup.args.wandb, "offline")
+
+                setup_state = setup.get_state()
+                # Check saved state
+                self.assertEqual(setup_state["config"].minibatch_size, 10)
+                self.assertDictEqual(
+                    setup_state["config_overrides"],
+                    {
+                        "num_epochs": 2,
+                        "evaluation_duration_unit": eval_unit_other,
+                        "evaluation_sample_timeout_s": default_timeout + 120,
+                        "minibatch_size": 10,
+                    },
+                )
+                # save state:
+                filename = Path(tmpdir) / "state.pkl"
+                filesystem, path = pa.fs.FileSystem.from_uri(tmpdir)  # pyright: ignore[reportAttributeAccessIssue]
+                with filesystem.open_output_stream(filename.as_posix()) as f:
+                    state = {"setup": setup_state}
+                    cloudpickle.dump(state, f)
+            del setup  # avoid mistakes
+
+            with patch_args(
+                "--total_steps", 80 + 120,
+                "--batch_size", "60",
+                "--comment", "B",
+                "--from_checkpoint", tmpdir,
+                "--env_seeding_strategy", "sequential",  # default value
+            ):  # fmt: off
+                # Test if setup1.args are merged with setup2.args
+                loaded_config, *_ = AlgorithmSetup._config_from_checkpoint(tmpdir)
+                self.assertEqual(loaded_config.train_batch_size_per_learner, batch_size1)
+                self.assertEqual(loaded_config.minibatch_size, 10)
+                with AlgorithmSetup(init_trainable=False) as setup2:
+                    setup2.config.training(num_epochs=5)
+                    # Use default value
+                    setup2.config.evaluation(evaluation_sample_timeout_s=default_timeout)
+                self.assertDictEqual(
+                    setup2.get_state()["config_overrides"],
+                    {
+                        # NOT restored override
+                        # "minibatch_size": 10,
+                        # "evaluation_duration_unit": eval_unit_other,
+                        # new overrides
+                        "evaluation_sample_timeout_s": default_timeout,
+                        "num_epochs": 5,
+                    },
+                )
+                # Changed values
+                self.assertEqual(setup2.config.train_batch_size_per_learner, setup2.args.train_batch_size_per_learner)
+                self.assertEqual(setup2.config.train_batch_size_per_learner, 60)
+                self.assertEqual(setup2.args.comment, "B")
+                self.assertEqual(setup2.args.total_steps, 80 + 120)
+                self.assertEqual(setup2.args.env_seeding_strategy, "sequential")
+                self.assertEqual(setup2.config.num_epochs, 5)
+                # restored from 1st
+                self.assertEqual(setup2.args.extra, ["abc"])
+                # TODO: we possibly do NOT want to restore wandb and certain values.
+                self.assertEqual(setup2.args.wandb, "offline")
+                # Changed manually
+                self.assertEqual(setup2.config.evaluation_sample_timeout_s, default_timeout)
+
+                # Attention: These are NOT the overrides as values are explicitly overwritten by config_from_args
+                self.assertEqual(setup2.config.minibatch_size, 20)
+                self.assertNotEqual(setup2.config.evaluation_duration_unit, eval_unit_other)
+                self.assertEqual(setup2.config.evaluation_duration_unit, eval_unit_default)
 
 
 ENV_STEPS_PER_ITERATION = 10

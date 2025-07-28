@@ -223,7 +223,7 @@ class TestHelpers(unittest.TestCase):
             if not hasattr(self, "_env_seed_rng"):
                 self.setUp()
             env_seed = self._env_seed_rng.randint(0, 2**15 - 1)
-        trainable = self.TrainableClass({"env_seed": env_seed}, overwrite_algorithm=overrides)
+        trainable = self.TrainableClass({"env_seed": env_seed}, algorithm_overrides=overrides)
         self._created_trainables.append(trainable)
         self.assertEqual(trainable._overwrite_algorithm, overrides)
         self.assertEqual(overrides.keys(), OVERRIDE_KEYS)

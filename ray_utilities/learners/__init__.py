@@ -39,7 +39,17 @@ def mix_learners(learners: Sequence[type[Learner | Any]]):
     if len(learners) == 1:
         return learners[0]
 
-    class MixedLearner(*learners, metaclass=_MixedLearnerMeta):
+    # when a learner is already a MixedLearner use its bases
+    base_learners = []
+    for learner in learners:
+        if isinstance(learner, _MixedLearnerMeta):
+            for base in learner.__bases__:
+                if base not in base_learners:
+                    base_learners.append(base)
+        elif learner not in base_learners:
+            base_learners.append(learner)
+
+    class MixedLearner(*base_learners, metaclass=_MixedLearnerMeta):
         pass
 
     return MixedLearner
