@@ -313,7 +313,8 @@ class TestReTuning(
         self.assertEqual(result2.metrics[TRAINING_ITERATION], NUM_ITERS_2 + 1)
         self.assertEqual(result2.metrics["iterations_since_restore"], NUM_ITERS_2)
         self.assertEqual(
-            result2.metrics[NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME], BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE
+            result2.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME],
+            BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE,
         )
 
         # Change batch size change:
