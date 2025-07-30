@@ -190,7 +190,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
                 checkpoint_score_order="max",
                 checkpoint_score_attribute=self.eval_metric,
                 checkpoint_frequency=0,  # No automatic checkpointing
-                checkpoint_at_end=True,
+                # checkpoint_at_end=True,  # will raise error if used with function
             ),
             stop=stopper,
         )
