@@ -41,7 +41,8 @@ from typing_extensions import Final, NotRequired, Required, Sentinel, get_origin
 
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
-from ray_utilities.training.default_class import DefaultTrainable
+from ray_utilities.training.default_class import DefaultTrainable, TrainableStateDict
+from ray_utilities.training.helpers import _remove_values_on_tensor_stats, nan_to_zero_hist_leaves
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -341,7 +342,7 @@ class TestHelpers(unittest.TestCase):
         ignore: Collection[str] = (),
         ignore_leaves: Collection[str] = (),
     ):
-        """Check if two states are equivalent."""
+        """Check if two JAX Train States states are equivalent."""
         # Check if the parameters and indices are equal
         if isinstance(ignore, str):
             ignore = {ignore}
@@ -388,6 +389,8 @@ class TestHelpers(unittest.TestCase):
                     self.assertTrue(
                         comp.all(), f"Attribute '{attr}' not equal in both states: {attr1}\n!=\n{attr2}\n{msg}"
                     )
+                else:
+                    self.assertTrue(comp, f"Attribute '{attr}' not equal in both states: {attr1}\n!=\n{attr2}\n{msg}")
 
         # NOTE: Apply gradients modifies state
 
@@ -556,6 +559,129 @@ class TestHelpers(unittest.TestCase):
             with self.subTest("Compare evaluation configs"):
                 self.compare_configs(config1_eval, config2_eval, ignore=ignore)
 
+    def _compare_metrics_logger_states(self, state1, state2, *, key: str):
+        """Tensors get their values removed on set_state, furthermore cannot compare nan==nan"""
+        self.assertDictEqual(
+            nan_to_zero_hist_leaves(
+                _remove_values_on_tensor_stats(
+                    state1,
+                ),
+                remove_all=True,
+            ),
+            nan_to_zero_hist_leaves(
+                _remove_values_on_tensor_stats(state2),
+                remove_all=True,
+            ),
+            f"Algorithm state[{key}]['metrics_logger'] in checkpoint differs from current algorithm state.",
+        )
+
+    def compare_algorithm_states(
+        self,
+        algorithm_state1: dict,
+        algorithm_state2: dict,
+    ):
+        for key in algorithm_state1.keys() | algorithm_state2.keys():
+            if isinstance(algorithm_state1[key], dict) and isinstance(
+                algorithm_state2[key], dict
+            ):  # Check if both are dicts
+                if key == "metrics_logger":
+                    # Special handling for metrics_logger
+                    for metric_key in algorithm_state1[key]["stats"].keys():
+                        d1 = algorithm_state2[key]["stats"][metric_key]
+                        d2 = algorithm_state1[key]["stats"][metric_key]
+                        if "throughput_stats" in d2:  # there might be more values present
+                            # values repeated for each env_runner
+                            d1["throughput_stats"].clear()
+                            d2["throughput_stats"].clear()
+                        self.assertEqual(
+                            # use str to avoid nan!=nan and floating point errors
+                            str(d1),
+                            str(d2),
+                            f"Algorithm state[{key}]['stats'][{metric_key}] in checkpoint "
+                            "differs from current algorithm state.",
+                        )
+                elif key == "learner_group":
+                    # currently learner only key, but forward compatible
+                    self.assertDictEqual(
+                        {k: v for k, v in algorithm_state2[key].items() if k not in ("learner")},
+                        {k: v for k, v in algorithm_state1[key].items() if k not in ("learner")},
+                    )
+                    checkpoint_learner_state = algorithm_state2[key]["learner"]
+                    loaded_learner_state = algorithm_state1[key]["learner"]
+                    self.assertDictEqual(
+                        {
+                            k: v
+                            for k, v in checkpoint_learner_state.items()
+                            if k not in ("metrics_logger", "optimizer", "rl_module")
+                        },
+                        {
+                            k: v
+                            for k, v in loaded_learner_state.items()
+                            if k not in ("metrics_logger", "optimizer", "rl_module")
+                        },
+                    )
+                    self.compare_weights(
+                        checkpoint_learner_state["rl_module"],
+                        loaded_learner_state["rl_module"],
+                        f"Algorithm state[{key}]['learner']['rl_module'] in checkpoint "
+                        "differs from current algorithm state.",
+                    )
+                    # NOTE about inequality:
+                    # As `values` could contain tensors they are not reinstated on set_state,
+                    # but saved as such in the checkpoint
+
+                    self._compare_metrics_logger_states(
+                        checkpoint_learner_state["metrics_logger"]["stats"],
+                        loaded_learner_state["metrics_logger"]["stats"],
+                        key=f"{key}]['learner'",
+                    )
+                    self.compare_weights(
+                        checkpoint_learner_state["optimizer"],
+                        loaded_learner_state["optimizer"],
+                        f"Algorithm state[{key}]['learner']['optimizer'] in checkpoint "
+                        "differs from current algorithm state.",
+                        almost=True,
+                    )
+
+                else:
+                    try:
+                        self.assertDictEqual(
+                            algorithm_state2[key],
+                            algorithm_state1[key],
+                            f"Algorithm state[{key}] in checkpoint differs from current algorithm state.",
+                        )
+                    except ValueError as e:
+                        print("Cannot compare dicts for key %s: %s" % (key, e))
+                        raise
+                    except AssertionError:
+                        if key != "eval_env_runner":
+                            raise
+                        print(
+                            "eval_env_runner state differs, ignoring for now. "
+                            "This is due to Ray syncing the eval worker with the train worker on set_state"
+                        )
+            else:
+                self.assertEqual(
+                    algorithm_state2[key],
+                    algorithm_state1[key],
+                    f"Algorithm state[{key}] in checkpoint differs from current algorithm state.",
+                )
+
+    def compare_trainable_state(
+        self,
+        state1: dict[str, Any] | TrainableStateDict,
+        state2: dict[str, Any] | TrainableStateDict,
+        msg: str = "",
+    ):
+        try:
+            self.assertDictEqual(state1, state2, msg=msg)
+        except ValueError:
+            pass
+        else:
+            return
+        self.compare_algorithm_states(state1.get("algorithm", {}), state2.get("algorithm", {}))
+        keys_to_compare = (state1.keys() | state2.keys()) - {"algorithm"}
+
     def compare_trainables(
         self,
         trainable: DefaultTrainable["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
@@ -574,6 +700,11 @@ class TestHelpers(unittest.TestCase):
         """
         self.set_max_diff(60_000)
         with self.subTest("Step 1: Compare trainables " + msg, **subtest_kwargs):
+            self.compare_trainable_state(
+                trainable.get_state(),
+                trainable2.get_state(),
+                msg=msg,
+            )
             if hasattr(trainable, "_args") or hasattr(trainable2, "_args"):
                 self.assertDictEqual(trainable2._args, trainable._args)  # type: ignore[attr-defined]
             self.assertEqual(trainable.algorithm_config.minibatch_size, minibatch_size)

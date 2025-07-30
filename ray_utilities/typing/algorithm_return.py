@@ -28,6 +28,18 @@ class EnvRunnersResultsDict(TypedDict, closed=False):
     """Amount of sampling steps taken for the training of the agent"""
     num_env_steps_sampled: int
     """Amount of sampling steps taken for the training of the agent in this iteration"""
+    num_env_steps_passed_to_learner: NotRequired[int]
+    """
+    Amount of steps passed to the learner in this iteration
+
+    Custom key added by exact_sampling_callback.
+    """
+    num_env_steps_passed_to_learner_lifetime: NotRequired[int]
+    """
+    Amount of steps passed to the learner in this iteration
+
+    Custom key added by exact_sampling_callback.
+    """
 
 
 if _PEP_728_AVAILABLE or TYPE_CHECKING:

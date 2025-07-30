@@ -528,7 +528,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
             assert len(keys_to_process) == 0, f"Not all keys were processed during load_checkpoint: {keys_to_process}"
         elif checkpoint is not None:
+            components = {c[0] for c in self.get_checkpointable_components()}
+            components.discard("algorithm")
+            # Restore from path does not account for new algorithm_config; so this merely sets the state
             self.restore_from_path(checkpoint, **algo_kwargs)
+            # return
+            # for component in components:
+            #    self.restore_from_path(checkpoint, component=component, **algo_kwargs)
+            self.algorithm = self.algorithm.from_checkpoint((Path(checkpoint) / "algorithm").as_posix(), **algo_kwargs)
         else:
             raise ValueError(f"Checkpoint must be a dict or a path. Not {type(checkpoint)}")
 
@@ -659,11 +666,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # NOTE: When coming from restore_from_path, the components have already be restored
         # TODO: are they possible more correct?
         keys_to_process = set(state.keys())
+        assert state["trainable"]["iteration"] == state["iteration"]
         try:
             super(Checkpointable, self).set_state(state.get("trainable", {}))  # pyright: ignore
         except AttributeError:
             # Currently no set_state method
             trainable_state = state["trainable"]
+            self._iteration = trainable_state["iteration"]
             self._timesteps_total = trainable_state["timesteps_total"]
             self._time_total = trainable_state["time_total"]
             self._episodes_total = trainable_state["episodes_total"]

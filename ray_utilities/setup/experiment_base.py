@@ -314,6 +314,14 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             for action in new_parser._actions:
                 # TODO: do not restore certain actions, e.g. wandb, render_mode; make a list of always default values
                 action.default = restored_args.get(action.dest, action.default)  # set new default values
+                # These are changed in process_args. Problem we do not know if we should
+                # restore them their value or "auto". e.g. --iterations 10 -> need to change iterations
+                if action.dest == "iterations":
+                    logger.debug(
+                        "Resetting the parsers iterations default value to 'auto' after checkpoint restore. "
+                        "It will be recreated from the total_steps argument."
+                    )
+                    action.default = "auto"
             self.parser = new_parser
             parsed = self.parser.parse_args()
 
