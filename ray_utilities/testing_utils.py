@@ -294,7 +294,7 @@ class TestHelpers(unittest.TestCase):
             compare_results: If False, some keys are ignored in the comparison.
         """
         key_difference = set(metrics_0.keys()).symmetric_difference(metrics_1.keys())
-        print("Key differences for metrics:", sorted(key_difference))
+        # print("Key differences for metrics:", sorted(key_difference))
         same_keys = set(metrics_0.keys()).intersection(metrics_1.keys())
         all_keys = same_keys | key_difference
         if not strict:
