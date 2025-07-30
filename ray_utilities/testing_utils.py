@@ -603,6 +603,8 @@ class TestHelpers(unittest.TestCase):
             param_space1 = setup_data1["param_space"]
             param_space2 = setup_data2["param_space"]
             keys.remove("param_space")
+            self.assertDictEqual(setup_data1["config_overrides"], setup_data2["config_overrides"])
+            keys.remove("config_overrides")
             self.assertEqual(len(keys), 0, f"Unchecked keys: {keys}")  # checked all params
             self.assertCountEqual(param_space1, param_space2)
             self.assertDictEqual(param_space1["cli_args"], param_space2["cli_args"])

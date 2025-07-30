@@ -96,6 +96,7 @@ class TrainableStateDict(TypedDict):
     algorithm: NotRequired[StateDict]  # component; can be ignored
     """Als Algorithm is a Checkpointable an"""
     algorithm_config: StateDict
+    algorithm_overrides: Optional[dict[str, Any]]
     iteration: int
     pbar_state: RayTqdmState | TqdmState | RangeState
 
@@ -337,36 +338,49 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # NOTE: Do not rely on absolute paths in the implementation of
         state = self.get_state()
         # save in subdir
-        algo_save_dir = (Path(checkpoint_dir) / "algorithm").as_posix()
         assert isinstance(state, dict)
-        self.save_to_path(checkpoint_dir, state=cast("dict[str, Any]", state))  # saves components
+        if self._storage:
+            # Assume we are used with a Tuner and StorageContext handles checkpoints.
+            # NOTE: This is a fixed path as relative paths are not well supported by restore
+            # which just passes a temp dir here.
+
+            # Checkpoint index is updated after this function returns
+            self._storage.current_checkpoint_index += 1
+            algorithm_checkpoint_dir = (Path(self._storage.checkpoint_fs_path) / "algorithm").as_posix()
+            self._storage.current_checkpoint_index -= 1
+        else:  # Assume checkpoint_dir is a temporary path
+            algorithm_checkpoint_dir = (Path(checkpoint_dir) / "algorithm").as_posix()
+
+        self.save_to_path(
+            (Path(checkpoint_dir)).absolute().as_posix(), state=cast("dict[str, Any]", state)
+        )  # saves components
         save = {
             "state": state,  # contains most information
-            "algorithm_checkpoint_dir": algo_save_dir,
+            "algorithm_checkpoint_dir": algorithm_checkpoint_dir,
         }
         return save
 
     @override(tune.Trainable)
-    def load_checkpoint(self, checkpoint: Optional[dict] | str, *, ignore_config: bool = False, **kwargs) -> None:
+    def load_checkpoint(self, checkpoint: Optional[dict] | str, *, ignore_setup: bool = False, **kwargs) -> None:
         # NOTE: from_checkpoint is a classmethod, this isn't
         # set pbar
         # set weights
         # set iterations
         # set reward_updaters
-        algo_kwargs: dict[str, Any] = {**kwargs} if ignore_config else {"config": self._setup.config, **kwargs}
+        # config comes from new setup
+        algo_kwargs: dict[str, Any] = {**kwargs} if ignore_setup else {"config": self._setup.config, **kwargs}
 
         if isinstance(checkpoint, dict):
             # TODO
             keys_to_process = set(checkpoint.keys())  # Sanity check if processed all keys
 
-            self.set_state(checkpoint["state"])
-            keys_to_process.remove("state")
-
             # from_checkpoint calls restore_from_path which calls set state
             # if checkpoint["algorithm_checkpoint_dir"] is a tempdir (e.g. from tune, this is wrong)
             # However, self.set_state should have take care of algorithm already even if checkpoint dir is missing
             if os.path.exists(checkpoint["algorithm_checkpoint_dir"]):
-                self.algorithm = self.algorithm.from_checkpoint(checkpoint["algorithm_checkpoint_dir"], **algo_kwargs)
+                self.algorithm = self.algorithm.from_checkpoint(
+                    Path(checkpoint["algorithm_checkpoint_dir"]).absolute().as_posix(), **algo_kwargs
+                )
             elif "algorithm_state" in checkpoint:
                 _logger.error(
                     "Algorithm checkpoint directory %s does not exist, will restore from state",
@@ -376,9 +390,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             else:
                 _logger.critical(
                     "Algorithm checkpoint directory %s does not exist, (possibly temporary path was saved) "
-                    "and no state provided. Restored algorithm might be in an unexpected state.",
+                    "and no state provided. Cannot restore algorithm.",
                     checkpoint["algorithm_checkpoint_dir"],
                 )
+                raise FileNotFoundError(None, "algorithm_checkpoint_dir", checkpoint["algorithm_checkpoint_dir"])
             # Is set_state even needed?
             # Test loaded algo state
             loaded_algo_state = self.algorithm.get_state(
@@ -390,7 +405,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # can add algorithm_state to check correctness
             # algorithm likely not in state as it is a Checkpointable
             if (
-                "algorithm" in checkpoint["state"]
+                "algorithm" in checkpoint["state"]  # key is removed as it is a checkpointable
                 and checkpoint["state"]["algorithm"]
                 and checkpoint["state"]["algorithm"] != loaded_algo_state
             ):
@@ -508,6 +523,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             else:
                 # loaded from checkpoint
                 _logger.debug("No algorithm state found in checkpoint.")
+            self.set_state(checkpoint["state"])
+            keys_to_process.remove("state")
 
             assert len(keys_to_process) == 0, f"Not all keys were processed during load_checkpoint: {keys_to_process}"
         elif checkpoint is not None:
@@ -607,12 +624,17 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             assert pbar_state
         state: TrainableStateDict = {
             "trainable": trainable_state,
+            "algorithm": algo_state,  # might be removed by save_to_path
             "algorithm_config": algorithm_config_state,
+            "algorithm_overrides": (
+                self._algorithm_overrides.to_dict()
+                if isinstance(self._algorithm_overrides, AlgorithmConfig)
+                else self._algorithm_overrides
+            ),
             "iteration": self._iteration,
             "pbar_state": pbar_state,
             "reward_updaters": reward_updaters_state,
             "setup": setup_state,
-            "algorithm": algo_state,
         }
         # Filter out components not in the components list
         if components is not None or not_components is not None:
@@ -676,6 +698,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # self._setup.config = new_algo_config  # TODO: Possible unset setup._config to not confuse configs
         keys_to_process.remove("setup")
 
+        algorithm_overrides = state.get("algorithm_overrides", None)
+        if algorithm_overrides:
+            self._algorithm_overrides = algorithm_overrides
+        keys_to_process.remove("algorithm_overrides")
+
         # algorithm might not be in state as it is a checkpointable component and was not pickled
         if "algorithm" in state:
             for component in COMPONENT_ENV_RUNNER, COMPONENT_EVAL_ENV_RUNNER, COMPONENT_LEARNER_GROUP:
@@ -691,7 +718,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         config1_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm_config.to_dict())
         config2_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm.env_runner.config.to_dict())
         if self.algorithm.env_runner and (config1_dict != config2_dict):
-            _logger.warning(
+            _logger.info(  # Sync below will make configs match
                 "Updating env_runner config after restore, old did not match: %s",
                 dict_diff_message(config1_dict, config2_dict),
             )

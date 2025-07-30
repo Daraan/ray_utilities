@@ -993,7 +993,9 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         config: ConfigType_co | Literal[False] = data.get("config", False)
         new.param_space = data["param_space"]
         if data["__init_config__"] and config:
-            logger.error("Passing __init_config__=True while also passing config ignores the passed config object")
+            logger.error(
+                "Having __init_config__=True in the state while also passing config ignores the passed config object"
+            )
         if config:
             new.config = config
         new.args = data["args"]

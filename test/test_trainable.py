@@ -373,6 +373,8 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                             step=step,
                         )
                         trainable_restore = DefaultTrainable.define(setup)()
+                        # Problem restore uses load_checkpoint, which passes a dict to load_checkpoint
+                        # however the checkpoint dir is unknown inside the loaded dict
                         trainable_restore.restore(checkpoint)
                         self.assertEqual(trainable_restore.algorithm.iteration, step)
                         self.assertIsInstance(checkpoint, str)
