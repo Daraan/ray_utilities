@@ -19,5 +19,6 @@ setup(
         "python-dotenv",
         "torch",
         "jax",
+        "debugpy",
     ],
 )
