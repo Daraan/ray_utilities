@@ -1,10 +1,11 @@
 from __future__ import annotations
+# pyright: enableExperimentalFeatures=true
 
 import logging
-from typing import Any, Optional, get_args
+from typing import Any, Optional, TypeVar
 
 from tap import Tap
-from typing_extensions import Literal
+from typing_extensions import Annotated, Literal, get_type_hints, get_args, get_origin, Sentinel
 
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, split_timestep_budget
 
@@ -15,14 +16,105 @@ def _auto_int_transform(x) -> int | Literal["auto"]:
     return int(x) if x != "auto" else x
 
 
+_T = TypeVar("_T")
+
+_NO_DEFAULT = Sentinel("_NO_DEFAULT")
+NO_VALUE = Sentinel("NO_VALUE")
+
+NeverRestore = Annotated[_T, "NeverRestore"]
+"""Marks a field that is never restored and always reset to its default value when restoring from a checkpoint."""
+AlwaysRestore = Annotated[_T, "AlwaysRestore"]
+"""
+Marks a field that should always be restored and not ignored
+e.g. it should not be superseeded by a get_args_from_config.
+"""
+RestoreIfDefault = Annotated[_T, "RestoreIf", NO_VALUE]
+
+
+class SupportsRestoreParser(Tap):
+    def configure(self) -> None:
+        super().configure()
+        complete_annotations = self._get_from_self_and_super(
+            extract_func=lambda super_class: dict(get_type_hints(super_class, include_extras=True))
+        )
+        always_restore: Literal["AlwaysRestore"] = get_args(AlwaysRestore)[-1]
+        self._always_restore: set[str] = {
+            k for k, v in complete_annotations.items() if get_origin(v) is Annotated and always_restore in get_args(v)
+        }
+        never_restore: Literal["NeverRestore"] = get_args(NeverRestore)[-1]
+        self._never_restore: set[str] = {
+            k for k, v in complete_annotations.items() if get_origin(v) is Annotated and never_restore in get_args(v)
+        }
+        for k in self._never_restore:
+            if getattr(self, k, _NO_DEFAULT) is _NO_DEFAULT:
+                raise ValueError(
+                    f"Argument '{k}' is annotated with NeverRestore but has no default value set. "
+                    "Please provide a default value or remove the NeverRestore annotation."
+                )
+
+    def get_to_restore_values(self):
+        return self._always_restore
+
+    def restore_arg(self, name: str, *, restored_value: Any | NO_VALUE, default: Any = NO_VALUE) -> Any | NO_VALUE:
+        """
+        If a value is annotated with NeverRestore its default value is returned as defined in the class.
+        An argument with AlwaysRestore will ignore the value stored on this instance and
+        return the `restored_value` instead.
+
+        Use the attribute stored on this parser?
+
+        AlwaysRestore: Return restored_value
+        NeverRestore: return default or the default value set in the class
+        Otherwise: return the restored_value of the argument.
+            However if it is explicitly set to NO_VALUE, return the current_value.
+            In case the attribute does not exist return the `default` value.
+            This might be the Sentinel value NO_VALUE.
+
+        Note:
+            Depending on the setup, e.g. when config_from_args is used, AlwaysRestore
+            values need to be checked again afterwards.
+        """
+        current_value = getattr(self, name, NO_VALUE)
+        current_value_is_default = current_value == getattr(type(self), name, None)
+        if name in self._always_restore:
+            if current_value is not NO_VALUE and current_value != restored_value:
+                logger.log(
+                    logging.DEBUG if current_value_is_default else logging.WARNING,
+                    "Restoring AlwaysRestore argument '%s' from checkpoint: replacing %s (%s) with %s",
+                    name,
+                    current_value,
+                    "default" if current_value_is_default else "explicitly passed",
+                    restored_value,
+                )
+            return restored_value
+        if name in self._never_restore:
+            # return default
+            if default is not NO_VALUE:
+                return default
+            default = getattr(type(self), name, NO_VALUE)
+            if default is not NO_VALUE:
+                return default
+            raise ValueError(
+                f"Argument '{name}' is annotated with NeverRestore but has no default value set. "
+                "Please provide a default value or remove the NeverRestore annotation."
+            )
+        if restored_value is NO_VALUE:
+            if current_value is not NO_VALUE:
+                return current_value
+            if default is not NO_VALUE:
+                return default
+            return getattr(type(self), name, NO_VALUE)
+        return restored_value
+
+
 class _DefaultSetupArgumentParser(Tap):
-    agent_type: str = "mlp"
+    agent_type: AlwaysRestore[str] = "mlp"
     """Agent Architecture"""
 
-    env_type: str = "cart"
+    env_type: AlwaysRestore[str] = "cart"
     """Environment to run on"""
 
-    iterations: int | Literal["auto"] = 1000  # NOTE: Overwritten by Extra
+    iterations: NeverRestore[int | Literal["auto"]] = 1000  # NOTE: Overwritten by Extra
     """
     How many iterations to run.
 
@@ -32,7 +124,7 @@ class _DefaultSetupArgumentParser(Tap):
     total_steps: int = 1_000_000  # NOTE: Overwritten by Extra
 
     seed: int | None = None
-    test: bool = False
+    test: NeverRestore[bool] = False
 
     extra: Optional[list[str]] = None
 
@@ -69,7 +161,7 @@ class RLlibArgumentParser(Tap):
 
     def process_args(self):
         if self.minibatch_size > self.train_batch_size_per_learner:
-            logger.error(
+            logger.warning(
                 "minibatch_size %d is larger than train_batch_size_per_learner %d, this can result in an error. "
                 "Reducing the minibatch_size to the train_batch_size_per_learner.",
                 self.minibatch_size,
@@ -80,18 +172,18 @@ class RLlibArgumentParser(Tap):
 
 
 class DefaultResourceArgParser(Tap):
-    num_jobs: int = 5
+    num_jobs: NeverRestore[int] = 5
     """Trials to run in parallel"""
 
-    num_samples: int
+    num_samples: NeverRestore[int] = 1
     """Number of samples to run in parallel, if None, same as num_jobs"""
 
-    gpu: bool = False
+    gpu: NeverRestore[bool] = False
 
-    parallel: bool = False
+    parallel: NeverRestore[bool] = False
     """Use multiple CPUs per worker"""
 
-    not_parallel: bool = False
+    not_parallel: NeverRestore[bool] = False
     """
     Do not run multiple models in parallel, i.e. the Tuner will execute one job only.
     This is similar to num_jobs=1, but one might skip the Tuner setup.
@@ -112,7 +204,7 @@ class DefaultResourceArgParser(Tap):
 
 
 class DefaultEnvironmentArgParser(Tap):
-    render_mode: Optional[Literal["human", "rgb_array", "ansi"]] = None
+    render_mode: NeverRestore[Optional[Literal["human", "rgb_array", "ansi"]]] = None
     """Render mode"""
 
     env_seeding_strategy: Literal["random", "constant", "same", "sequential"] = "sequential"
@@ -133,7 +225,6 @@ class DefaultEnvironmentArgParser(Tap):
 
                     make_seeded_env_callback(env_seed)
                     seed_environments_for_config(config, env_seed)
-
     """
 
     def configure(self) -> None:
@@ -164,9 +255,9 @@ LOG_STATS = "log_stats"
 
 
 class DefaultLoggingArgParser(Tap):
-    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
-    wandb: OnlineLoggingOption = False
-    comet: OnlineLoggingOption = False
+    log_level: NeverRestore[Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]] = "INFO"
+    wandb: NeverRestore[OnlineLoggingOption] = False
+    comet: NeverRestore[OnlineLoggingOption] = False
     comment: Optional[str] = None
     tags: list[str] = []  # noqa: RUF012
     log_stats: LogStatsChoices = "minimal"
@@ -226,27 +317,27 @@ class DefaultExtraArgs(Tap):
 
 
 class OptionalExtensionsArgs(RLlibArgumentParser):
-    dynamic_buffer: bool = False
+    dynamic_buffer: AlwaysRestore[bool] = False
     """Use DynamicBufferCallback"""
 
-    dynamic_batch: bool = False
+    dynamic_batch: AlwaysRestore[bool] = False
     """Use dynamic batch"""
 
-    iterations: int | Literal["auto"] = "auto"
+    iterations: NeverRestore[int | Literal["auto"]] = "auto"
     total_steps: int = 1_000_000
     min_step_size: int = 32
     """min_dynamic_buffer_size"""
     max_step_size: int = 8192
     """max_dynamic_buffer_size"""
 
-    use_exact_total_steps: bool = False
+    use_exact_total_steps: AlwaysRestore[bool] = False
     """
     If True, the total_steps are a lower bound, independently of dynamic_buffer are they adjusted to
     be divisible by max_step_size and min_step_size. In case of a dynamic buffer, this results in
     evenly distributed fractions of the total_steps size for each dynamic batch size.
     """
 
-    no_exact_sampling: bool = False
+    no_exact_sampling: AlwaysRestore[bool] = False
     """
     Set to not add the exact_sampling_callback to the AlgorithmConfig.
 
@@ -255,7 +346,7 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
     For exactness this callback will trim the sampled data to the exact batch size.
     """
 
-    keep_masked_samples: bool = False
+    keep_masked_samples: AlwaysRestore[bool] = False
     """
     Wether to not add the RemoveMaskedSamplesConnector to the AlgorithmConfig.
 
@@ -302,8 +393,8 @@ def _parse_tune_choices(
 
 
 class OptunaArgumentParser(Tap):
-    optimize_config: bool = False  # legacy argument name; possible replace with --tune later
-    tune: list[Literal["batch_size", "rollout_size", "all"]] | Literal[False] = False
+    optimize_config: NeverRestore[bool] = False  # legacy argument name; possible replace with --tune later
+    tune: NeverRestore[list[Literal["batch_size", "rollout_size", "all"]] | Literal[False]] = False
     """List of dynamic parameters to be tuned"""
 
     def configure(self) -> None:
@@ -325,6 +416,7 @@ class OptunaArgumentParser(Tap):
 
 
 class DefaultArgumentParser(
+    SupportsRestoreParser,
     OptionalExtensionsArgs,  # Needs to be before _DefaultSetupArgumentParser
     RLlibArgumentParser,
     OptunaArgumentParser,
@@ -335,4 +427,4 @@ class DefaultArgumentParser(
     DefaultExtraArgs,
 ):
     def configure(self) -> None:
-        return super().configure()
+        super().configure()

@@ -193,7 +193,7 @@ def setup_trainable(
     if config_overrides:
         if isinstance(config_overrides, AlgorithmConfig):
             config_overrides = config_overrides.to_dict()
-        config = config.update_from_dict(config_overrides)
+        config = cast("ConfigType_co", config.update_from_dict(config_overrides))
     if not args["from_checkpoint"]:
         try:
             # new API; Note: copies config!
@@ -202,7 +202,8 @@ def setup_trainable(
             algo = config.build()
     # Load from checkpoint
     elif checkpoint_loader := (setup or setup_class):
-        algo = checkpoint_loader.algorithm_from_checkpoint(args["from_checkpoint"])
+        algo = checkpoint_loader.algorithm_from_checkpoint(args["from_checkpoint"], config=config)
+        sync_env_runner_states_after_reload(algo)
         if config.algo_class is not None and not isinstance(algo, config.algo_class):
             logger.warning(
                 "Loaded algorithm from checkpoint is not of the expected type %s, got %s. "
@@ -283,7 +284,9 @@ def split_sum_stats_over_env_runners(
     return struct
 
 
-def nan_to_zero_hist_leaves(struct: Any, path: tuple[str, ...] = (), parent=None, *, remove_all: bool = False) -> Any:
+def nan_to_zero_hist_leaves(
+    struct: Any, path: tuple[str, ...] = (), parent=None, *, key: Optional[str] = "_hist", remove_all: bool = False
+) -> Any:
     """
     With a bug in ray updating a metric with -= value, where value could be NaN,
     replace such leafes with 0.
@@ -291,10 +294,12 @@ def nan_to_zero_hist_leaves(struct: Any, path: tuple[str, ...] = (), parent=None
     Also usefull for testing where nan != nan.
     """
     if isinstance(struct, dict):
-        return {k: nan_to_zero_hist_leaves(v, (*path, k), struct, remove_all=remove_all) for k, v in struct.items()}
+        return {
+            k: nan_to_zero_hist_leaves(v, (*path, k), struct, key=key, remove_all=remove_all) for k, v in struct.items()
+        }
     if isinstance(struct, list):
-        return [nan_to_zero_hist_leaves(v, path, parent, remove_all=remove_all) for v in struct]
-    if path and path[-1] == "_hist":
+        return [nan_to_zero_hist_leaves(v, path, parent, key=key, remove_all=remove_all) for v in struct]
+    if path and (key is None or path[-1] == key):
         # Only modify if parent has "reduce" == "sum"
         if remove_all or (
             parent is not None

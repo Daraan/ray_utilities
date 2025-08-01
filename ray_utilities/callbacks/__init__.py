@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Iterable, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, TypeVar, cast, overload
 
 if TYPE_CHECKING:
     import argparse
@@ -31,7 +31,7 @@ Keys that should not be processed by logging callbacks
 
 @overload
 def remove_ignored_args(  # pyright: ignore[reportOverlappingOverload]
-    args: dict[_K, _V], *, remove: Iterable[_K | str] = LOG_IGNORE_ARGS
+    args: dict[_K, _V | Callable], *, remove: Iterable[_K | str] = LOG_IGNORE_ARGS
 ) -> dict[_K, _V]: ...
 
 
@@ -42,8 +42,8 @@ def remove_ignored_args(
 
 
 def remove_ignored_args(
-    args: dict[_K, _V] | Tap | argparse.Namespace | Any, *, remove: Iterable[_K | str] = LOG_IGNORE_ARGS
-) -> dict[_K, _V] | dict[str, Any]:
+    args: Mapping[_K, Any] | Tap | argparse.Namespace | Any, *, remove: Iterable[_K | str] = LOG_IGNORE_ARGS
+) -> Mapping[_K, Any] | dict[str, Any]:
     """
     Remove ignored keys from args
 
@@ -53,10 +53,10 @@ def remove_ignored_args(
     Returns:
         dict: Arguments with ignored keys removed
     """
-    if not isinstance(args, dict):
+    if not isinstance(args, (dict, Mapping)):
         if hasattr(args, "as_dict"):  # Tap
             args = args.as_dict()
         else:
             args = vars(args)
         args = cast("dict[str, Any]", args)
-    return {k: v for k, v in args.items() if k not in remove}
+    return {k: v for k, v in args.items() if k not in remove and not callable(v)}

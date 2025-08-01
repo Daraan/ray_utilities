@@ -37,6 +37,7 @@ from typing_extensions import Self, TypedDict, TypeVar, deprecated
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.comet import CometArchiveTracker
 from ray_utilities.config import DefaultArgumentParser
+from ray_utilities.config.typed_argument_parser import SupportsRestoreParser
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.environment import create_env
 from ray_utilities.misc import get_trainable_name
@@ -292,6 +293,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             if "'known_only' is an invalid invalid keyword" not in str(e):
                 raise
             if known_only:
+                # NOTE: In this case parsed is not self.parser!
                 parsed, extra_args = self.parser.parse_known_args(args)
             else:
                 parsed = self.parser.parse_args(args)
@@ -312,8 +314,12 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             self.parser = new_parser
             restored_args: dict[str, Any] = vars(state["setup"]["args"])
             for action in new_parser._actions:
-                # TODO: do not restore certain actions, e.g. wandb, render_mode; make a list of always default values
-                action.default = restored_args.get(action.dest, action.default)  # set new default values
+                if isinstance(parsed, DefaultArgumentParser):
+                    action.default = parsed.restore_arg(
+                        action.dest, restored_value=restored_args.get(action.dest, action.default)
+                    )
+                else:
+                    action.default = restored_args.get(action.dest, action.default)  # set new default values
                 # These are changed in process_args. Problem we do not know if we should
                 # restore them their value or "auto". e.g. --iterations 10 -> need to change iterations
                 if action.dest == "iterations":
@@ -533,7 +539,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         self.config = self._create_config(base=base)
         overrides = self.config_overrides()
         if hasattr(self.config, "_restored_overrides"):
-            old_overwrites = self.config._restored_overrides  # pyright: ignore[reportAttributeAccessIssue]
+            old_overwrites: dict[str, Any] = self.config._restored_overrides  # pyright: ignore[reportAttributeAccessIssue]
             different_keys = set(old_overwrites) - set(overrides)
             if different_keys:
                 msg = (
@@ -544,9 +550,14 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 )
                 warnings.warn(msg, UserWarning, stacklevel=1)
                 logger.warning(msg)
+            # always restore values will be added to the overrides
+
             # to make overrides have a higher priority than args:
-            # overrides = old_overwrites | overrides
-            # self.config_overrides(**overrides)
+            if isinstance(self.parser, SupportsRestoreParser):
+                overrides = {
+                    k: v for k, v in old_overwrites.items() if k in self.parser.get_to_restore_values()
+                } | overrides
+                self.config_overrides(**overrides)
         # classmethod, but _retrieved_callbacks might be set on instance
         if overrides:
             self.config.update_from_dict(overrides)
