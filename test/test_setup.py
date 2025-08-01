@@ -29,7 +29,7 @@ from ray.rllib.utils.metrics import (
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
 
-from ray_utilities.config import DefaultArgumentParser
+from ray_utilities.config import DefaultArgumentParser, logger as parser_logger
 from ray_utilities.constants import (
     EVAL_METRIC_RETURN_MEAN,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
@@ -334,8 +334,8 @@ class TestSetupClasses(SetupDefaults):
                 self.assertEqual(setup2.config.num_epochs, 5)
                 # restored from 1st
                 self.assertEqual(setup2.args.extra, ["abc"])
-                # TODO: we possibly do NOT want to restore wandb and certain values.
-                self.assertEqual(setup2.args.wandb, "offline")
+                # NeverRestore; wandb is the defaul value again
+                self.assertEqual(setup2.args.wandb, DefaultArgumentParser.wandb)
                 # Changed manually
                 self.assertEqual(setup2.config.evaluation_sample_timeout_s, default_timeout)
 
@@ -343,6 +343,54 @@ class TestSetupClasses(SetupDefaults):
                 self.assertEqual(setup2.config.minibatch_size, 20)
                 self.assertNotEqual(setup2.config.evaluation_duration_unit, eval_unit_other)
                 self.assertEqual(setup2.config.evaluation_duration_unit, eval_unit_default)
+
+    def test_parser_restore_annotations(self):
+        with patch_args(
+            "--batch_size",
+            "1234",
+            "--num_jobs",
+            DefaultArgumentParser.num_jobs + 2,  # NeverRestore
+            "--log_level",
+            "DEBUG",  # NeverRestore
+            "--env_type",
+            "cart",  # AlwaysRestore
+            "--actor_type",
+            "mlp",
+        ):
+            setup = AlgorithmSetup()
+            self.assertEqual(setup.args.log_level, "DEBUG")
+            Trainable = setup.create_trainable()
+        assert isclass(Trainable)
+        trainable = Trainable()
+        assert trainable.algorithm_config.minibatch_size is not None
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trainable.save_to_path(tmpdir)
+            with patch_args(
+                "--from_checkpoint", tmpdir,
+                "-a", "a new value",
+            ):  # fmt: off
+                with self.assertLogs(
+                    parser_logger,
+                    "WARNING",
+                ) as context:
+                    AlgorithmSetup()
+                self.assertIn(
+                    "Restoring AlwaysRestore argument 'agent_type' from checkpoint: "
+                    "replacing a new value (explicitly passed) with mlp",
+                    context.output[0],
+                    msg=context.output,
+                )
+            with patch_args(
+                "--from_checkpoint", tmpdir,
+                "--minibatch_size", trainable.algorithm_config.minibatch_size * 2,
+                "--seed", (trainable._setup.config.seed or 1234) * 2
+            ):  # fmt: off
+                setup2 = AlgorithmSetup()
+                # Not annotated value, restored
+                self.assertEqual(setup2.config.train_batch_size_per_learner, 1234)
+                # Never restored
+                self.assertNotEqual(setup2.args.log_level, "DEBUG")
+                self.assertEqual(setup2.args.num_jobs, DefaultArgumentParser.num_jobs)
 
 
 ENV_STEPS_PER_ITERATION = 10
@@ -656,10 +704,6 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                 for step in range(len(tune_results[0]["trainables"])):
                     tune_results[0]["trainables"][step].cleanup()
                     tune_results[1]["trainables"][step].cleanup()
-
-    @unittest.skip("Implementation Missing")
-    def test_metrics_further_tuning(self):
-        pass
 
     def _test_algo_checkpointing(
         self,

@@ -42,3 +42,9 @@ jobs:
     - name: Test trainable with Tuner 2/2 (might deadlock)
       run: |
         pytest -k "test_tuner_checkpointing" -v --fast  --timeout_method=thread
+    - name: Test trainable multiple EnvRunners 1/2
+      run: |
+        pytest -k "test_trainable and not test_tuner_checkpointing and not test_validate_save_restore"  -v --timeout_method=thread --mp-only
+    - name: Test trainable multiple EnvRunners with Tuner 2/2 (might deadlock)
+      run: |
+        pytest -k "test_tuner_checkpointing" -v --mp-only --timeout_method=thread

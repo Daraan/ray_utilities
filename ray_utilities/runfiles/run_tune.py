@@ -52,7 +52,7 @@ def _run_without_tuner(
         assert tuner._local_tuner
         stopper = tuner._local_tuner.get_run_config().stop
         while True:
-            result = trainable_instance.step()
+            result = trainable_instance.train()
             if callable(stopper):
                 # If stop is a callable, call it with the result
                 if stopper("NA", result):  # pyright: ignore[reportArgumentType]

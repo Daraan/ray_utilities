@@ -34,6 +34,7 @@ from ray_utilities.testing_utils import (
     TestHelpers,
     format_result_errors,
     patch_args,
+    remote_breakpoint,  # noqa: F401
 )
 from ray_utilities.training.default_class import DefaultTrainable
 from ray_utilities.training.functional import training_step
@@ -198,11 +199,8 @@ class TestReTuning(
                 assert self.algorithm_config.train_batch_size_per_learner == BATCH_SIZE * 2, (
                     f"Batch size should be 2x the original batch size, not {self.algorithm_config.train_batch_size_per_learner}"
                 )
-                # print("starting debugpy")
-                # import debugpy
-                # debugpy.listen(5678)
-                # debugpy.wait_for_client()
-                # breakpoint()
+                # remote_breakpoint()
+
                 result, metrics, rewards = training_step(
                     self.algorithm,
                     reward_updaters=self._reward_updaters,
@@ -214,12 +212,21 @@ class TestReTuning(
                     "Should start with at least 1 iteration. Should now be at least 2"
                 )
                 expected = 2 * BATCH_SIZE
+                expected_lifetime = (
+                    expected * (result["training_iteration"] - 1) + BATCH_SIZE
+                )  # first step + 2 iterations
                 assert (value := result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED]) == expected, (
                     f"Expected {expected} env steps sampled, got {value}"
                 )
-                assert (value := result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER]) == expected, (
-                    f"Expected {expected} env steps passed to learner, got {value}"
+                assert (value := result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]) == expected_lifetime, (
+                    f"Expected {expected_lifetime} env steps sampled, got {value}"
                 )
+                assert NUM_ENV_STEPS_PASSED_TO_LEARNER in result[ENV_RUNNER_RESULTS]
+                value = result[ENV_RUNNER_RESULTS].get(NUM_ENV_STEPS_PASSED_TO_LEARNER, None)
+                assert value == expected, f"Expected {expected} env steps passed to learner, got {value}"
+                assert (
+                    value := result[ENV_RUNNER_RESULTS].get(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, None)
+                ) == expected_lifetime, f"Expected {expected_lifetime} env steps passed to learner, got {value}"
                 metrics["_checking_class_"] = True  # pyright: ignore[reportGeneralTypeIssues]
 
                 return metrics
@@ -312,15 +319,15 @@ class TestReTuning(
         self.assertEqual(result2.metrics["current_step"], BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE)
         self.assertEqual(result2.metrics[TRAINING_ITERATION], NUM_ITERS_2 + 1)
         self.assertEqual(result2.metrics["iterations_since_restore"], NUM_ITERS_2)
-        self.assertEqual(
-            result2.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME],
-            BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE,
-        )
 
         # Change batch size change:
         self.assertEqual(
             result2.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME],
             BATCH_SIZE + (BATCH_SIZE * 2) * NUM_ITERS_2,
+            self.assertEqual(
+                result2.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME],
+                BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE,
+            ),
         )
         checkpoint_dir2, checkpoints2 = self.get_checkpoint_dirs(results2[0])
         self.assertEqual(

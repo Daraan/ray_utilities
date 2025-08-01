@@ -233,7 +233,7 @@ class TestProcessing(unittest.TestCase):
 
         with self.assertLogs(
             logger,
-            logging.ERROR,
+            logging.WARNING,
         ) as ctx:
             setup = AlgorithmSetup(init_trainable=False)
         self.assertEqual(setup.args.minibatch_size, 64)

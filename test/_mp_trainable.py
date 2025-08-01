@@ -8,14 +8,14 @@ if TYPE_CHECKING:
     from multiprocessing import connection
 
 
-def remote_process(path_conn, conn: connection.Connection | None = None):
+def remote_process(path_conn, conn: connection.Connection | None = None, num_env_runners: int = 0):
     if isinstance(path_conn, tuple):
         path, conn = path_conn
     else:
         path = path_conn
     print("Creating trainable in remote process")
     helper = TestHelpers()
-    trainable, _ = helper.get_trainable(num_env_runners=0)
+    trainable, _ = helper.get_trainable(num_env_runners=num_env_runners)
     print("Saving trainable to", path)
     trainable.save(path)
 
