@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 def remote_process(path_conn, conn: connection.Connection | None = None, num_env_runners: int = 0):
     if isinstance(path_conn, tuple):
-        path, conn = path_conn
+        path, conn, num_env_runners = path_conn
     else:
         path = path_conn
     print("Creating trainable in remote process")
