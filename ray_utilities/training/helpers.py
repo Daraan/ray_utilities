@@ -260,6 +260,7 @@ def _clear_nan_stats(stat: dict[str, Any | list[list[float]]]):
         hist: list[list[float]] = v
         for i, h in enumerate(hist):
             hist[i] = [0.0 if (isinstance(x, float) and math.isnan(x)) else x for x in h]
+    return stat
 
 
 def split_sum_stats_over_env_runners(

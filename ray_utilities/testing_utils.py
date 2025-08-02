@@ -878,8 +878,8 @@ class TestHelpers(unittest.TestCase):
 
             # Compare states
             self.compare_trainable_state(
-                trainable.get_state(),
-                trainable2.get_state(),
+                nan_to_zero_hist_leaves(trainable.get_state(), key=None, remove_all=True),
+                nan_to_zero_hist_leaves(trainable2.get_state(), key=None, remove_all=True),
                 msg=msg,
                 ignore_env_runner_state=ignore_env_runner_state,
                 ignore_timers=ignore_timers,
