@@ -43,7 +43,11 @@ from typing_extensions import Final, NotRequired, Required, Sentinel, get_origin
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.training.default_class import DefaultTrainable, TrainableStateDict
-from ray_utilities.training.helpers import _remove_values_on_tensor_stats, nan_to_zero_hist_leaves
+from ray_utilities.training.helpers import (
+    _remove_throughput_stats,
+    _remove_values_on_tensor_stats,
+    nan_to_zero_hist_leaves,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -578,9 +582,14 @@ class TestHelpers(unittest.TestCase):
 
     def _compare_metrics_logger_states(self, state1, state2, *, key: str, ignore_timers: bool = False):
         """Tensors get their values removed on set_state, furthermore cannot compare nan==nan"""
+
+        def not_a_timer_key(k: str) -> bool:
+            return "timer" not in k and "duration" not in k and not k.endswith(("_throughput", "env_runners--sample"))
+
         if ignore_timers:
-            state1 = {k: v for k, v in state1.items() if "timer" not in k}
-            state2 = {k: v for k, v in state2.items() if "timer" not in k}
+            state1 = _remove_throughput_stats({k: v for k, v in state1.items() if not_a_timer_key(k)})
+            state2 = _remove_throughput_stats({k: v for k, v in state2.items() if not_a_timer_key(k)})
+
         self.assertDictEqual(
             nan_to_zero_hist_leaves(
                 _remove_values_on_tensor_stats(
@@ -609,20 +618,12 @@ class TestHelpers(unittest.TestCase):
             ):  # Check if both are dicts
                 if key == "metrics_logger":
                     # Special handling for metrics_logger
-                    for metric_key in algorithm_state1[key]["stats"].keys():
-                        d1 = algorithm_state2[key]["stats"][metric_key]
-                        d2 = algorithm_state1[key]["stats"][metric_key]
-                        if "throughput_stats" in d2:  # there might be more values present
-                            # values repeated for each env_runner
-                            d1["throughput_stats"].clear()
-                            d2["throughput_stats"].clear()
-                        self.assertEqual(
-                            # use str to avoid nan!=nan and floating point errors
-                            str(d1),
-                            str(d2),
-                            f"Algorithm state[{key}]['stats'][{metric_key}] in checkpoint "
-                            "differs from current algorithm state.",
-                        )
+                    self._compare_metrics_logger_states(
+                        algorithm_state1[key]["stats"],
+                        algorithm_state2[key]["stats"],
+                        key=key,
+                        ignore_timers=ignore_timers,
+                    )
                 elif key == "learner_group":
                     # currently learner only key, but forward compatible
                     self.assertDictEqual(
@@ -733,6 +734,29 @@ class TestHelpers(unittest.TestCase):
 
         self.compare_param_space(setup_state1.pop("param_space"), setup_state2.pop("param_space"))
         self.compare_configs(setup_state1.pop("config"), setup_state2.pop("config"))
+        trainable_state1 = state1.pop("trainable", {}).copy()
+        trainable_state2 = state2.pop("trainable", {}).copy()
+        if ignore_timers:
+            trainable_state1.pop("time_total")
+            trainable_state2.pop("time_total")
+            last_result1 = {
+                k: v
+                for k, v in trainable_state1.pop("last_result", {}).items()
+                if k not in ("date", "time_since_restore", "time_this_iter_s", "time_total_s", "timestamp")
+            }
+            last_result2 = {
+                k: v
+                for k, v in trainable_state2.pop("last_result", {}).items()
+                if k not in ("date", "time_since_restore", "time_this_iter_s", "time_total_s", "timestamp")
+            }
+        else:
+            last_result1 = trainable_state1.pop("last_result", {})
+            last_result2 = trainable_state2.pop("last_result", {})
+        last_result1.pop("pid", None)
+        last_result2.pop("pid", None)
+        self.assertDictEqual(last_result1, last_result2, f"Last result in trainable state differs: {msg}")
+        self.assertDictEqual(trainable_state1, trainable_state2, f"Trainable state differs: {msg}")
+
         self.assertDictEqual(
             nan_to_zero_hist_leaves(state1, key=None, remove_all=True),
             nan_to_zero_hist_leaves(state2, key=None, remove_all=True),
@@ -781,6 +805,7 @@ class TestHelpers(unittest.TestCase):
         msg: str = "",
         *,
         ignore_env_runner_state: bool = True,
+        ignore_timers: bool = False,
         iteration_after_step=2,
         minibatch_size=32,
         **subtest_kwargs,
@@ -857,6 +882,7 @@ class TestHelpers(unittest.TestCase):
                 trainable2.get_state(),
                 msg=msg,
                 ignore_env_runner_state=ignore_env_runner_state,
+                ignore_timers=ignore_timers,
             )
 
             # Step 2

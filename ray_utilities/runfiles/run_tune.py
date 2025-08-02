@@ -94,7 +94,9 @@ def run_tune(
     if args.seed is not None:
         logger.debug("Setting seed to %s", args.seed)
         _next_seed = seed_everything(env=None, seed=args.seed, torch_manual=True, torch_deterministic=True)
-        setup.config.seed = args.seed
+        if setup.config.seed != args.seed:
+            with setup.open_config():  # config is frozen
+                setup.config.seed = args.seed
     trainable = setup.trainable or setup.create_trainable()
 
     # -- Test --

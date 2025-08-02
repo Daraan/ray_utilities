@@ -403,9 +403,9 @@ class TestOptunaTuner(SetupDefaults):
                 def _create_trainable(self):  # type: ignore[override]
                     return trainable
 
-            setup = RandomParamsSetup()
-            setup.config.training(num_epochs=2, train_batch_size_per_learner=64, minibatch_size=64)
-            setup.config.evaluation(evaluation_interval=1)
+            with RandomParamsSetup() as setup:
+                setup.config.training(num_epochs=2, train_batch_size_per_learner=64, minibatch_size=64)
+                setup.config.evaluation(evaluation_interval=1)
             from ray_utilities.setup import optuna_setup
 
             with self.assertLogs(optuna_setup._logger, level="INFO") as log:

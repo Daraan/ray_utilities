@@ -692,7 +692,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         if self.algorithm.env_runner_group:
             # Does not sync config!, recreate env_runner_group or force sync. Best via reference
             self.algorithm.env_runner_group.sync_env_runner_states(config=self.algorithm_config)
-            if self.algorithm_config.num_env_runners > 0:
+            if (self.algorithm_config.num_env_runners or 0) > 0:
                 remote_config_ref = ray.put(self.algorithm_config)
                 self.algorithm.env_runner_group._remote_config_obj_ref = remote_config_ref
                 self.algorithm.env_runner_group._remote_config = self.algorithm_config.copy(copy_frozen=True)

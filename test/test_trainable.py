@@ -396,17 +396,17 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                 # Compare with default trainable:
                 print("Create new default trainable")
                 self._disable_tune_loggers.start()
-                trainable, _ = self.get_trainable()
+                trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
                 self.compare_trainables(
-                    trainable,
-                    trainable_restored,
+                    trainable, trainable_restored, num_env_runners=num_env_runners, ignore_timers=True
                 )
                 print("Compareing restored trainable with pickled trainable")
-                if pickled_trainable is not None:
+                if pickled_trainable is not None:  # TODO: Use cloudpickle
                     trainable_restored2 = pickle.loads(pickled_trainable)
                     self.compare_trainables(
                         trainable_restored,  # <-- need new trainable here
                         trainable_restored2,
+                        num_env_runners=num_env_runners,
                     )
 
     @Cases(ENV_RUNNER_TESTS)
