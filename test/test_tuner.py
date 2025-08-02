@@ -218,15 +218,18 @@ class TestReTuning(
                 assert (value := result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED]) == expected, (
                     f"Expected {expected} env steps sampled, got {value}"
                 )
-                assert (value := result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]) == expected_lifetime, (
-                    f"Expected {expected_lifetime} env steps sampled, got {value}"
+                lifetime_value = result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]
+                assert lifetime_value == expected_lifetime, (
+                    f"Expected {expected_lifetime} env steps sampled lifetime, got {lifetime_value}"
                 )
                 assert NUM_ENV_STEPS_PASSED_TO_LEARNER in result[ENV_RUNNER_RESULTS]
                 value = result[ENV_RUNNER_RESULTS].get(NUM_ENV_STEPS_PASSED_TO_LEARNER, None)
                 assert value == expected, f"Expected {expected} env steps passed to learner, got {value}"
                 assert (
                     value := result[ENV_RUNNER_RESULTS].get(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, None)
-                ) == expected_lifetime, f"Expected {expected_lifetime} env steps passed to learner, got {value}"
+                ) == expected_lifetime, (
+                    f"Expected {expected_lifetime} env steps passed to learner lifetime, got {value}"
+                )
                 metrics["_checking_class_"] = True  # pyright: ignore[reportGeneralTypeIssues]
 
                 return metrics

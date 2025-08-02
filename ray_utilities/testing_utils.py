@@ -942,6 +942,7 @@ class TestHelpers(unittest.TestCase):
 class SetupDefaults(TestHelpers, DisableLoggers):
     @clean_args
     def setUp(self):
+        AlgorithmSetup.project_name = "TESTING"
         super().setUp()
         env = gym.make("CartPole-v1")
 

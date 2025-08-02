@@ -36,7 +36,9 @@ def _split_seed(seed: _IntOrNone, n=2) -> tuple[_IntOrNone, ...]:
     return tuple(gen.randrange(2**32) for _ in range(n))  # pyright: ignore[reportReturnType]
 
 
-def seed_everything(env: gym.Env, seed: _IntOrNone, *, torch_manual=False, torch_deterministic=None) -> _IntOrNone:
+def seed_everything(
+    env: gym.Env | None, seed: _IntOrNone, *, torch_manual=False, torch_deterministic=None
+) -> _IntOrNone:
     """
     Args:
         torch_manual: If True, will set torch.manual_seed and torch.cuda.manual_seed_all

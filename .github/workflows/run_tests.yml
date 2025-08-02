@@ -28,8 +28,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install pytest pytest-timeout debugpy
         pip install .
-    - name: Test with pytest
+    - name: Pretest - fails only online
+      run: |
+        pytest -k "test_retune_with_different_config"  -v
       # Disable checkpoint tests until Ray's issues with checkpoint loading is solved
+    - name: Test with pytest
       run: |
         export KEEP_MAX_DIFF=1
         export DISABLE_BREAKPOINTS=1
