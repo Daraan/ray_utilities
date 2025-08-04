@@ -286,20 +286,29 @@ def split_sum_stats_over_env_runners(
 
 
 def nan_to_zero_hist_leaves(
-    struct: Any, path: tuple[str, ...] = (), parent=None, *, key: Optional[str] = "_hist", remove_all: bool = False
+    struct: Any,
+    path: tuple[str, ...] = (),
+    parent=None,
+    *,
+    key: Optional[str] = "_hist",
+    remove_all: bool = False,
+    replace: Any = 0.0,
 ) -> Any:
     """
     With a bug in ray updating a metric with -= value, where value could be NaN,
-    replace such leafes with 0.
+    replace such leafs with `replace`, 0 by default.
 
-    Also usefull for testing where nan != nan.
+    Also useful for testing where nan != nan.
     """
     if isinstance(struct, dict):
         return {
-            k: nan_to_zero_hist_leaves(v, (*path, k), struct, key=key, remove_all=remove_all) for k, v in struct.items()
+            k: nan_to_zero_hist_leaves(v, (*path, k), struct, key=key, remove_all=remove_all, replace=replace)
+            for k, v in struct.items()
         }
     if isinstance(struct, list):
-        return [nan_to_zero_hist_leaves(v, path, parent, key=key, remove_all=remove_all) for v in struct]
+        return [
+            nan_to_zero_hist_leaves(v, path, parent, key=key, remove_all=remove_all, replace=replace) for v in struct
+        ]
     if path and (key is None or path[-1] == key):
         # Only modify if parent has "reduce" == "sum"
         if remove_all or (
@@ -308,7 +317,7 @@ def nan_to_zero_hist_leaves(
             and parent["clear_on_reduce"] is False
             and parent["window"] in (None, float("inf"))
         ):
-            return 0.0 if (isinstance(struct, float) and math.isnan(struct)) else struct
+            return replace if (isinstance(struct, float) and math.isnan(struct)) else struct
     return struct
 
 

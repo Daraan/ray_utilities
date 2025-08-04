@@ -758,8 +758,8 @@ class TestHelpers(unittest.TestCase):
         self.assertDictEqual(trainable_state1, trainable_state2, f"Trainable state differs: {msg}")
 
         self.assertDictEqual(
-            nan_to_zero_hist_leaves(state1, key=None, remove_all=True),
-            nan_to_zero_hist_leaves(state2, key=None, remove_all=True),
+            nan_to_zero_hist_leaves(state1, key=None, remove_all=True, replace="NaN"),
+            nan_to_zero_hist_leaves(state2, key=None, remove_all=True, replace="NaN"),
         )
         self.assertDictEqual(setup_state1, setup_state2)
 

@@ -85,6 +85,15 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
                 params = setup.sample_params()
                 _result = trainable(params)
 
+    def test_get_trainable_util(self):
+        trainable1, _ = self.get_trainable(num_env_runners=0, env_seed=5)
+        trainable2, _ = self.get_trainable(num_env_runners=0, env_seed=5)
+        self.compare_trainables(trainable1, trainable2, num_env_runners=0, ignore_timers=True)
+
+        trainable1_1, _ = self.get_trainable(num_env_runners=1, env_seed=5)
+        trainable2_1, _ = self.get_trainable(num_env_runners=1, env_seed=5)
+        self.compare_trainables(trainable1_1, trainable2_1, num_env_runners=1, ignore_timers=True)
+
     @patch_args()
     def test_trainable_class_and_overrides(self):
         # Kind of like setUp for the other tests but with default args
@@ -388,21 +397,29 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             with tempfile.TemporaryDirectory() as tmpdir:
                 # pool works
                 pool = Pool(1)
-                pickled_trainable = pool.map(remote_process, [(tmpdir, None, num_env_runners)])[0]
+                data = {
+                    "dir": tmpdir,
+                    "connection": None,
+                    "num_env_runners": num_env_runners,
+                    "env_seed": 5,
+                }
+                pickled_trainable = pool.map(remote_process, [data])[0]
                 # pickled_trainable_2 = parent_conn.recv()
                 pool.close()
                 print("Restoring trainable from saved data")
                 trainable_restored = DefaultTrainable.define(PPOSetup.typed()).from_checkpoint(tmpdir)
                 # Compare with default trainable:
-                print("Create new default trainable")
+                print(f"Create new default trainable num_env_runners={num_env_runners}")
                 self._disable_tune_loggers.start()
-                trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
+                trainable, _ = self.get_trainable(num_env_runners=num_env_runners, env_seed=data["env_seed"])
                 self.compare_trainables(
                     trainable, trainable_restored, num_env_runners=num_env_runners, ignore_timers=True
                 )
-                print("Compareing restored trainable with pickled trainable")
                 if pickled_trainable is not None:  # TODO: Use cloudpickle
-                    trainable_restored2 = pickle.loads(pickled_trainable)
+                    print("Comparing restored trainable with pickled trainable")
+                    import cloudpickle
+
+                    trainable_restored2 = cloudpickle.loads(pickled_trainable)
                     self.compare_trainables(
                         trainable_restored,  # <-- need new trainable here
                         trainable_restored2,

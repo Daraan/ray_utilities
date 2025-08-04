@@ -20,7 +20,7 @@ class _MixedLearnerMeta(ABCMeta):
         return sum(hash(base) for base in cls.__bases__) + hash(cls.__name__)
 
     def __repr__(cls):
-        return f"MixedLearner({', '.join(base.__name__ for base in cls.__bases__)})"
+        return f"<class MixedLearner({', '.join(base.__name__ for base in cls.__bases__)})>"
 
 
 def mix_learners(learners: Sequence[type[Learner | Any]]):

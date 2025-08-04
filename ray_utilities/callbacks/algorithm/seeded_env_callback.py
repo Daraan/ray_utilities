@@ -49,8 +49,10 @@ class _SeededEnvCallbackMeta(_CallbackMeta):  # pyright: ignore[reportGeneralTyp
         return False
 
     def __hash__(cls):  # pyright: ignore[reportSelfClsParameterName]
-        # Jonas
         return hash(DefaultCallbacks) + hash(cls.env_seed) + hash(cls.__name__)
+
+    def __repr__(cls):  # pyright: ignore[reportSelfClsParameterName]
+        return f"<class {cls.__name__} env_seed={cls.env_seed}>"
 
 
 class SeedEnvsCallback(DefaultCallbacks):
