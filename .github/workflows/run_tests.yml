@@ -33,14 +33,14 @@ jobs:
         export KEEP_MAX_DIFF=1
         export DISABLE_BREAKPOINTS=1
         # Split tests because of deadlock
-        pytest -k "not test_trainable"  -v
+        pytest -k "not test_trainable" -v --fast
     - name: Test trainable 1/2 (might deadlock)
       run: |
         pytest -k "test_validate_save_restore" -v --fast --timeout_method=thread
         pytest -k "test_trainable and not test_tuner_checkpointing and not test_validate_save_restore"  -v --fast
     - name: Test trainable with Tuner 2/2 (might deadlock)
       run: |
-        pytest -k "test_tuner_checkpointing" -v --fast  --timeout_method=thread
+        pytest -k "test_tuner_checkpointing" -v --fast --timeout_method=thread
     - name: Test trainable multiple EnvRunners 1/2
       run: |
         ray status
@@ -48,4 +48,5 @@ jobs:
         pytest -k "test_trainable and not test_tuner_checkpointing and not test_validate_save_restore"  -v --timeout_method=thread --mp-only
     - name: Test trainable multiple EnvRunners with Tuner 2/2 (might deadlock)
       run: |
+        pytest -k "TestMetricsRestored and test_with_tuner" --mp-only
         pytest -k "test_tuner_checkpointing" -v --mp-only --timeout_method=thread

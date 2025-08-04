@@ -325,6 +325,8 @@ class TestHelpers(unittest.TestCase):
         *,
         strict: bool = False,
         compare_results: bool | None = None,
+        ignore: Collection[str] = (),
+        seed_subset_ok=False,
     ):
         """
         Args:
@@ -360,14 +362,25 @@ class TestHelpers(unittest.TestCase):
             all_keys.discard("episode_return_mean")
             all_keys.discard("num_episodes_lifetime")  # needs same sampling
         all_keys.discard("num_episodes_lifetime")  # Remove because of metrics restore bug # 54324
+        all_keys.difference_update(ignore)
         self.set_max_diff(None)
-        # compare nan values
+        # compare nan values, some int values might be (not) cast to float
         self.assertEqual(
-            {k: math.isnan(v) for k in all_keys if isinstance(v := metrics_0[k], float)},
-            {k: math.isnan(v) for k in all_keys if isinstance(v := metrics_1[k], float)},
-            msg=f"NaN values differ: {metrics_0} != {metrics_1} {msg}",
+            {k: math.isnan(v) for k in all_keys if isinstance(v := metrics_0[k], (float, int))},
+            {k: math.isnan(v) for k in all_keys if isinstance(v := metrics_1[k], (float, int))},
+            msg=(msg or "") + f" NaN values differ: {metrics_0}\n!=\n{metrics_1} {msg}",
         )
         # not nans
+        if "environments" in metrics_0 and seed_subset_ok:
+            metrics_0 = deepcopy(metrics_0)
+            metrics_1 = deepcopy(metrics_1)
+            seeds0 = metrics_0["environments"]["seeds"]
+            seeds1 = metrics_1["environments"]["seeds"]
+            # when having multiple env runners the seed sequence might be
+            seq0 = set(seeds0.pop("seed_sequence"))  # A
+            seq1 = set(seeds1.pop("seed_sequence"))  # A B
+            self.assertTrue(seq0 <= seq1 or seq0 >= seq1)
+
         self.assertDictEqual(
             {k: v for k in all_keys if not (isinstance(v := metrics_0[k], float) and math.isnan(v))},
             {k: v for k in all_keys if not (isinstance(v := metrics_1[k], float) and math.isnan(v))},
