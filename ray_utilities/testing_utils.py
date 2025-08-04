@@ -1,7 +1,7 @@
 # pyright: reportOptionalMemberAccess=information
 from __future__ import annotations
 
-# pyright: reportOptionalMemberAccess=none
+from collections import deque
 import difflib
 import math
 import os
@@ -36,6 +36,7 @@ from ray.rllib.utils.metrics import (
     LEARNER_RESULTS,
     TIMERS,
 )
+from ray.rllib.utils.metrics.stats import Stats
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.search.sample import Categorical, Domain, Float, Integer
 from typing_extensions import Final, NotRequired, Required, Sentinel, get_origin, get_type_hints
@@ -45,7 +46,6 @@ from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.training.default_class import DefaultTrainable, TrainableStateDict
 from ray_utilities.training.helpers import (
     _remove_throughput_stats,
-    _remove_values_on_tensor_stats,
     nan_to_zero_hist_leaves,
 )
 
@@ -71,6 +71,11 @@ clean_args = mock.patch.object(sys, "argv", ["file.py", "-a", "NA"])
 """Use when comparing to CLIArgs"""
 
 _C = TypeVar("_C", bound="Callable[[Any, mock.MagicMock], Any]")
+
+# pyright: enableExperimentalFeatures=true
+_NOT_PROVIDED = Sentinel(
+    "_NOT_PROVIDED",
+)
 
 
 @final
@@ -135,12 +140,12 @@ def get_optional_keys(cls):
     return cls.__optional__keys - get_explicit_required_keys(cls)
 
 
-NOT_FOUND = object()
+_NOT_FOUND = object()
 
 
 def get_leafpath_value(leaf: LeafType):
     """Returns the path value of a leaf, could be index (list), key (dict), or name (attribute)."""
-    return getattr(leaf, "name", getattr(leaf, "key", getattr(leaf, "idx", NOT_FOUND)))
+    return getattr(leaf, "name", getattr(leaf, "key", getattr(leaf, "idx", _NOT_FOUND)))
 
 
 class DisableLoggers(unittest.TestCase):
@@ -191,10 +196,30 @@ class InitRay(unittest.TestCase):
 
 OVERRIDE_KEYS: Final[set[str]] = {"num_env_runners", "num_epochs", "minibatch_size", "train_batch_size_per_learner"}
 
-# pyright: enableExperimentalFeatures=true
-_NOT_PROVIDED = Sentinel(
-    "_NOT_PROVIDED",
-)
+
+def _remove_values_on_tensor_stats(struct, path: tuple[str, ...] = (), parent: dict[str, Any] | None = None):
+    if isinstance(struct, dict):
+        return {k: _remove_values_on_tensor_stats(v, (*path, k), struct) for k, v in struct.items()}
+    if isinstance(struct, list):
+        return [_remove_values_on_tensor_stats(v, path, parent) for v in struct]
+    if path and path[-1] == "values" and parent is not None and parent.get("_is_tensor"):
+        if isinstance(struct, deque):
+            return deque(maxlen=struct.maxlen)
+    elif path and path[-1] == "_is_tensor":
+        return False
+    return struct
+
+
+def _fix_throughput_stats(stats: dict[str, Any]) -> dict[str, Any]:
+    """Using > 1 num_env_runners will save > 1 value in throughput_stats, get_state will reduce them however"""
+    stats = stats.copy()
+    for k, stat in stats.items():
+        if "throughput_stats" not in stat:
+            continue
+        stats[k] = stat = stat.copy()  # noqa: PLW2901
+        t_stat = Stats.from_state(stat["throughput_stats"])
+        stat["throughput_stats"]["values"] = t_stat.peek()
+    return stats
 
 
 class TestHelpers(unittest.TestCase):
@@ -589,6 +614,11 @@ class TestHelpers(unittest.TestCase):
         if ignore_timers:
             state1 = _remove_throughput_stats({k: v for k, v in state1.items() if not_a_timer_key(k)})
             state2 = _remove_throughput_stats({k: v for k, v in state2.items() if not_a_timer_key(k)})
+        else:
+            # when having >= 2 env_runners get_state will store two values, set_state however uses peek
+            # and saves only one value in the new state.
+            state1 = _fix_throughput_stats(state1)
+            state2 = _fix_throughput_stats(state2)
 
         self.assertDictEqual(
             nan_to_zero_hist_leaves(
@@ -601,7 +631,7 @@ class TestHelpers(unittest.TestCase):
                 _remove_values_on_tensor_stats(state2),
                 remove_all=True,
             ),
-            f"Algorithm state[{key}]['metrics_logger'] in checkpoint differs from current algorithm state.",
+            f"Algorithm state['{key}']['metrics_logger'] in checkpoint differs from current algorithm state.",
         )
 
     def compare_algorithm_states(
@@ -611,6 +641,7 @@ class TestHelpers(unittest.TestCase):
         *,
         ignore_timers: bool = False,
         ignore_env_runner_state: bool = False,
+        ignore_multiple_throughput_stats: bool = True,
     ):
         for key in algorithm_state1.keys() | algorithm_state2.keys():
             if isinstance(algorithm_state1[key], dict) and isinstance(

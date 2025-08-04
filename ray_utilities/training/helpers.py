@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import math
-from collections import deque
 from functools import partial
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, Optional, cast, overload
@@ -318,19 +317,6 @@ def nan_to_zero_hist_leaves(
             and parent["window"] in (None, float("inf"))
         ):
             return replace if (isinstance(struct, float) and math.isnan(struct)) else struct
-    return struct
-
-
-def _remove_values_on_tensor_stats(struct, path: tuple[str, ...] = (), parent: dict[str, Any] | None = None):
-    if isinstance(struct, dict):
-        return {k: _remove_values_on_tensor_stats(v, (*path, k), struct) for k, v in struct.items()}
-    if isinstance(struct, list):
-        return [_remove_values_on_tensor_stats(v, path, parent) for v in struct]
-    if path and path[-1] == "values" and parent is not None and parent.get("_is_tensor"):
-        if isinstance(struct, deque):
-            return deque(maxlen=struct.maxlen)
-    elif path and path[-1] == "_is_tensor":
-        return False
     return struct
 
 
