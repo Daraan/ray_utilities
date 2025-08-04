@@ -484,7 +484,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                             iteration_after_step=step + 1,
                             step=step,
                         )
-                        trainable_from_path.stop()
+                        trainable_from_ckpt.stop()
                         trainable_restore = DefaultTrainable.define(setup)()
                         # Problem restore uses load_checkpoint, which passes a dict to load_checkpoint
                         # however the checkpoint dir is unknown inside the loaded dict
