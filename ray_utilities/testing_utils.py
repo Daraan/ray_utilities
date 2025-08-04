@@ -61,6 +61,21 @@ if TYPE_CHECKING:
 
     LeafType: TypeAlias = pytree.SequenceKey | pytree.DictKey | pytree.GetAttrKey
 
+if "--fast" in sys.argv:
+    TWO_ENV_RUNNER_CASES: list[tuple[int, int]] = [(0, 1)]
+elif "--mp-only" in sys.argv:
+    TWO_ENV_RUNNER_CASES = [(1, 2)]
+else:
+    TWO_ENV_RUNNER_CASES = [(0, 1), (1, 2)]
+
+if "--fast" in sys.argv:
+    ENV_RUNNER_CASES: list[int] = [0]
+elif "--mp-only" in sys.argv:
+    ENV_RUNNER_CASES = [1, 2]
+else:
+    ENV_RUNNER_CASES = [0, 1]
+
+
 args_train_no_tuner = mock.patch.object(
     sys, "argv", ["file.py", "--a", "NA", "--no-render_env", "-J", "1", "-it", "2", "-np"]
 )
@@ -552,7 +567,8 @@ class TestHelpers(unittest.TestCase):
         algo_config_dict = algo.config.to_dict()
         algo_restored_config_dict = algo_restored.config.to_dict()
         assertCleanDictEqual(algo_restored_config_dict, algo_config_dict)
-        if algo.config.num_env_runners == 0:  # pyright: ignore[reportOptionalMemberAccess]
+        assert algo.config
+        if algo.config.num_env_runners == 0:
             self.assertEqual(algo_restored.config.num_env_runners, 0)  # pyright: ignore[reportOptionalMemberAccess]
             assertCleanDictEqual(
                 (algo.env_runner.config.to_dict()),

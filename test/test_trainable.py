@@ -17,6 +17,7 @@ from ray.util.multiprocessing import Pool
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.testing_utils import (
+    ENV_RUNNER_CASES,
     Cases,
     DisableGUIBreakpoints,
     DisableLoggers,
@@ -36,13 +37,6 @@ except ImportError:
 
 if TYPE_CHECKING:
     from ray_utilities.typing.trainable_return import TrainableReturnData
-
-if "--fast" in sys.argv:
-    ENV_RUNNER_TESTS = [0]
-elif "--mp-only" in sys.argv:
-    ENV_RUNNER_TESTS = [1, 2]
-else:
-    ENV_RUNNER_TESTS = [0, 1]
 
 
 class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
@@ -204,7 +198,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
     def setUp(self):
         super().setUp()
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases(ENV_RUNNER_CASES)
     def test_save_checkpoint(self, cases):
         # NOTE: In this test attributes are shared BY identity, this is just a weak test.
         for num_env_runners in iter_cases(cases):
@@ -220,7 +214,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable.stop()
             trainable2.stop()
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases(ENV_RUNNER_CASES)
     def test_save_restore_dict(self, cases):
         for num_env_runners in iter_cases(cases):
             trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
@@ -237,7 +231,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                             trainable2.stop()
             trainable.stop()
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases(ENV_RUNNER_CASES)
     def test_save_restore_path(self, cases):
         for num_env_runners in iter_cases(cases):
             trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
@@ -252,7 +246,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                         trainable3.stop()
             trainable.stop()
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases(ENV_RUNNER_CASES)
     def test_1_get_set_state(self, cases):
         # If this test fails all others will most likely fail too, run it first.
         self.maxDiff = None
@@ -269,17 +263,13 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable.stop()
             trainable2.stop()
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases(ENV_RUNNER_CASES)  # might deadlock with num_env_runners >= 2
     def test_safe_to_path(self, cases):
         """Test that the trainable can be saved to a path and restored."""
         for num_env_runners in iter_cases(cases):
             trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
             with tempfile.TemporaryDirectory() as tmpdir:
                 trainable.save_to_path(tmpdir)
-                import os
-
-                print(os.listdir(tmpdir))
-                print(os.listdir(tmpdir + "/algorithm"))
                 with patch_args():
                     trainable2 = self.TrainableClass()
                     trainable2.restore_from_path(tmpdir)
@@ -300,7 +290,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             validate_save_restore(PPOTrainable)
             trainable.stop()
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases(ENV_RUNNER_CASES)
     def test_interchange_save_checkpoint_restore_from_path(self, cases):
         """Test if methods can be used interchangeably."""
         # NOTE: restore_from_path currently does not set (local) env_runner state when num_env_runners > 0
@@ -322,7 +312,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable.stop()
             trainable_from_path.stop()
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases(ENV_RUNNER_CASES)
     def test_interchange_save_checkpoint_from_checkpoint(self, cases):
         """Test if methods can be used interchangeably."""
         for num_env_runners in iter_cases(cases):
@@ -345,7 +335,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable.stop()
             trainable_from_checkpoint.stop()
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases(ENV_RUNNER_CASES)
     def test_interchange_save_to_path_restore_from_path(self, cases):
         """Test if methods can be used interchangeably."""
         # NOTE: restore_from_path currently does not set (local) env_runner state when num_env_runners > 0
@@ -369,7 +359,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable.stop()
             trainable_from_path.stop()
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases(ENV_RUNNER_CASES)
     def test_interchange_save_to_path_from_checkpoint(self, cases):
         """Test if methods can be used interchangeably."""
         for num_env_runners in iter_cases(cases):
@@ -395,7 +385,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable.stop()
             trainable_from_checkpoint.stop()
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases(ENV_RUNNER_CASES)
     def test_restore_multiprocessing(self, cases):
         for num_env_runners in iter_cases(cases):
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -433,7 +423,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                     trainable_restored2.stop()
                 trainable_restored.stop()
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases(ENV_RUNNER_CASES)
     def test_tuner_checkpointing(self, cases):
         # self.enable_loggers()
         with patch_args(

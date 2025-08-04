@@ -27,12 +27,14 @@ from ray_utilities.runfiles import run_tune
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner
 from ray_utilities.testing_utils import (
-    DisableGUIBreakpoints,
+    ENV_RUNNER_CASES,
+    Cases,
     DisableLoggers,
     InitRay,
     SetupDefaults,
     TestHelpers,
     format_result_errors,
+    iter_cases,
     patch_args,
     remote_breakpoint,  # noqa: F401
 )
@@ -157,38 +159,10 @@ class TestReTuning(
     TestHelpers,
     DisableLoggers,
 ):
-    def test_retune_with_different_config(self):
-        self.enable_loggers()
+    @Cases([0])  # FIXME somehow deadlock in tuner2 with  num_env_runners > 0
+    def test_retune_with_different_config(self, cases):
+        # self.enable_loggers()
         NUM_ITERS_2 = 3
-        with patch_args(
-            "--num_samples", "1",
-            "--num_jobs", "1",
-            "--batch_size", BATCH_SIZE,  # overwrite
-            "--minibatch_size", MINIBATCH_SIZE, # keep
-            "--iterations", "1",  # overwrite
-        ):  # fmt: off
-            with AlgorithmSetup() as setup1:
-                setup1.config.env_runners(num_env_runners=0)
-        tuner1 = setup1.create_tuner()
-        tuner1._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
-            checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
-            checkpoint_score_order="max",
-            checkpoint_frequency=1,
-        )
-        results1 = tuner1.fit()
-        self.assertEqual(results1.num_errors, 0, "Encountered errors: " + format_result_errors((results1.errors)))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
-        # Check metrics:
-        result1 = results1[0]
-        assert result1.metrics
-        self.assertEqual(result1.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME], BATCH_SIZE)  # pyright: ignore[reportOptionalSubscript]
-        self.assertEqual(result1.metrics[TRAINING_ITERATION], 1)  # pyright: ignore[reportOptionalSubscript]
-        checkpoint_dir, checkpoints = self.get_checkpoint_dirs(results1[0])
-        self.assertEqual(
-            len(checkpoints),
-            1,
-            f"Checkpoints were not created. Found: {os.listdir(checkpoint_dir)} in {checkpoint_dir}",
-        )
-        self.assertTrue(os.path.exists(checkpoints[0]), "Checkpoint file does not exist: " + checkpoints[0])
 
         class TrainableWithChecks(DefaultTrainable[Any, "AlgorithmConfig", Any]):
             def setup(self, config, *, algorithm_overrides=None):
@@ -202,6 +176,7 @@ class TestReTuning(
                 )
                 # remote_breakpoint()
 
+                print("TRACE Training step", self.iteration)
                 result, metrics, rewards = training_step(
                     self.algorithm,
                     reward_updaters=self._reward_updaters,
@@ -210,7 +185,7 @@ class TestReTuning(
                     log_stats=self.log_stats,
                 )
                 assert result["training_iteration"] >= 2, (
-                    "Should start with at least 1 iteration. Should now be at least 2"
+                    f"Expected training_iteration to be at least 2, got {result['training_iteration']}"
                 )
                 expected = 2 * BATCH_SIZE
                 expected_lifetime = (
@@ -235,111 +210,152 @@ class TestReTuning(
 
                 return metrics
 
-        class Setup(AlgorithmSetup):
+        class SetupWithChecks(AlgorithmSetup):
             def _create_trainable(self):
                 return TrainableWithChecks.define(self)
 
-        with patch_args(
-            "--num_samples", "1",
-            "--num_jobs", "1",
-            "--batch_size",
-            BATCH_SIZE * 2,
-            "--minibatch_size",
-            MINIBATCH_SIZE,
-            "--total_steps",
-            BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE,  # 1 + NUM_ITERS_2 iterations
-            "--from_checkpoint", checkpoints[0],
-            "--log_stats", "most",
-        ):  # fmt: off
-            with Setup() as setup2, Setup() as setup2b:  # second setup to make sure no side-effects are tested
-                setup2.config.env_runners(num_env_runners=0)
-                setup2b.config.env_runners(num_env_runners=0)
-            self.assertEqual(setup2.args.total_steps, BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE)
-            # Auto iteration will be 4; but only 3 new should be done.
-            self.assertEqual(setup2.args.train_batch_size_per_learner, BATCH_SIZE * 2)
-        Trainable2 = setup2b.create_trainable()
-        if TYPE_CHECKING:
-            Trainable2 = setup2b.trainable_class
-        trainable2_local = Trainable2(setup2b.param_space)
-        if trainable2_local.algorithm_config.callbacks_on_sample_end and isinstance(
-            trainable2_local.algorithm_config.callbacks_on_sample_end, Iterable
-        ):
-            self.assertEqual(
-                len(
-                    {
-                        cb
-                        for cb in trainable2_local.algorithm_config.callbacks_on_sample_end
-                        if cb.__name__ == exact_sampling_callback.__name__.split(".")[-1]
-                    }
-                ),
-                1,
-            )
-        self.maxDiff = None
-        self.compare_configs(
-            trainable2_local.algorithm_config.to_dict(),
-            setup2.config.to_dict(),
-        )
-        self.assertEqual(trainable2_local.algorithm_config.train_batch_size_per_learner, BATCH_SIZE * 2)
+        for num_env_runners in iter_cases(cases):
+            with self.subTest(num_env_runners=num_env_runners):
+                with patch_args(
+                    "--num_samples", "1",
+                    "--num_jobs", "1",
+                    "--batch_size", BATCH_SIZE,  # overwrite
+                    "--minibatch_size", MINIBATCH_SIZE, # keep
+                    "--iterations", "1",  # overwrite
+                ):  # fmt: off
+                    with AlgorithmSetup() as setup1:
+                        setup1.config.env_runners(num_env_runners=num_env_runners)
+                tuner1 = setup1.create_tuner()
+                tuner1._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
+                    checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
+                    checkpoint_score_order="max",
+                    checkpoint_frequency=1,
+                )
+                results1 = tuner1.fit()
+                del tuner1
+                self.assertEqual(
+                    results1.num_errors, 0, "Encountered errors: " + format_result_errors((results1.errors))
+                )  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+                # Check metrics:
+                result1 = results1[0]
+                assert result1.metrics and result1.config
+                self.assertEqual(result1.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME], BATCH_SIZE)  # pyright: ignore[reportOptionalSubscript]
+                self.assertEqual(result1.metrics[TRAINING_ITERATION], 1)  # pyright: ignore[reportOptionalSubscript]
+                checkpoint_dir, checkpoints = self.get_checkpoint_dirs(results1[0])
+                self.assertEqual(
+                    len(checkpoints),
+                    1,
+                    f"Checkpoints were not created. Found: {os.listdir(checkpoint_dir)} in {checkpoint_dir}",
+                )
+                self.assertTrue(os.path.exists(checkpoints[0]), "Checkpoint file does not exist: " + checkpoints[0])
 
-        tuner2 = setup2.create_tuner()
-        tuner2._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
-            checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
-            checkpoint_score_order="max",
-            checkpoint_frequency=1,
-        )
-        assert tuner2._local_tuner
-        # assert that the stopper stops not too early, e.g. because parser.args.iterations was not updated.
-        stoppers = tuner2._local_tuner.get_run_config().stop
-        if isinstance(stoppers, (dict, Mapping)):
-            self.assertEqual(stoppers.get("training_iteration"), NUM_ITERS_2 + 1)
-        elif stoppers is None:
-            pass
-        else:
-            if not isinstance(stoppers, list):
-                if isinstance(stoppers, Iterable):
-                    stoppers = list(stoppers)
+                with patch_args(
+                    "--num_samples", "1",
+                    "--num_jobs", "1",
+                    "--batch_size",
+                    BATCH_SIZE * 2,
+                    "--minibatch_size",
+                    MINIBATCH_SIZE,
+                    "--total_steps",
+                    BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE,  # 1 + NUM_ITERS_2 iterations
+                    "--from_checkpoint", checkpoints[0],
+                    "--log_stats", "most",
+                ):  # fmt: off
+                    with (
+                        SetupWithChecks() as setup2,
+                        SetupWithChecks() as setup2b,
+                    ):  # second setup to make sure no side-effects are tested
+                        setup2.config.env_runners(num_env_runners=num_env_runners)
+                        setup2b.config.env_runners(num_env_runners=num_env_runners)
+                    self.assertEqual(setup2.args.total_steps, BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE)
+                    # Auto iteration will be 4; but only 3 new should be done.
+                    self.assertEqual(setup2.args.train_batch_size_per_learner, BATCH_SIZE * 2)
+                Trainable2 = setup2b.create_trainable()
+                if TYPE_CHECKING:
+                    Trainable2 = setup2b.trainable_class
+                trainable2_local = Trainable2(setup2b.param_space)
+                if trainable2_local.algorithm_config.callbacks_on_sample_end and isinstance(
+                    trainable2_local.algorithm_config.callbacks_on_sample_end, Iterable
+                ):
+                    # check that exactly one callback is an exact_sampling_cb
+                    self.assertEqual(
+                        len(
+                            {
+                                cb
+                                for cb in trainable2_local.algorithm_config.callbacks_on_sample_end
+                                if cb.__name__ == exact_sampling_callback.__name__.split(".")[-1]
+                            }
+                        ),
+                        1,
+                    )
+                self.maxDiff = None
+                self.compare_configs(
+                    trainable2_local.algorithm_config.to_dict(),
+                    setup2.config.to_dict(),
+                )
+                self.assertEqual(trainable2_local.algorithm_config.train_batch_size_per_learner, BATCH_SIZE * 2)
+                trainable2_local.stop()
+
+                tuner2 = setup2.create_tuner()
+                tuner2._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
+                    checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
+                    checkpoint_score_order="max",
+                    checkpoint_frequency=1,
+                )
+                assert tuner2._local_tuner
+                # assert that the stopper stops not too early, e.g. because parser.args.iterations was not updated.
+                stoppers = tuner2._local_tuner.get_run_config().stop
+                if isinstance(stoppers, (dict, Mapping)):
+                    self.assertEqual(stoppers.get("training_iteration"), NUM_ITERS_2 + 1)
+                elif stoppers is None:
+                    pass
                 else:
-                    stoppers = [stoppers]
-            while stoppers:
-                stopper = stoppers.pop()
-                if isinstance(stopper, MaximumIterationStopper):
-                    self.assertEqual(stopper._max_iter, NUM_ITERS_2 + 1)
-                    break
-                if isinstance(stopper, CombinedStopper):
-                    for s in stopper._stoppers:
-                        if isinstance(s, MaximumIterationStopper):
-                            self.assertEqual(s._max_iter, NUM_ITERS_2 + 1)
+                    if not isinstance(stoppers, list):
+                        if isinstance(stoppers, Iterable):
+                            stoppers = list(stoppers)
+                        else:
+                            stoppers = [stoppers]
+                    while stoppers:
+                        stopper = stoppers.pop()
+                        if isinstance(stopper, MaximumIterationStopper):
+                            self.assertEqual(stopper._max_iter, NUM_ITERS_2 + 1)
                             break
-        results2 = tuner2.fit()
-        self.assertEqual(results2.num_errors, 0, "Encountered errors: " + format_result_errors(results2.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
-        result2 = results2[0]
-        assert result2.metrics
-        self.assertIn(
-            "_checking_class_",
-            result2.metrics,
-            "Metrics should contain '_checking_class_'. Custom class was likely not used",
-        )
-        # Check iterations change
-        self.assertEqual(result2.metrics["current_step"], BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE)
-        self.assertEqual(result2.metrics[TRAINING_ITERATION], NUM_ITERS_2 + 1)
-        self.assertEqual(result2.metrics["iterations_since_restore"], NUM_ITERS_2)
+                        if isinstance(stopper, CombinedStopper):
+                            for s in stopper._stoppers:
+                                if isinstance(s, MaximumIterationStopper):
+                                    self.assertEqual(s._max_iter, NUM_ITERS_2 + 1)
+                                    break
+                results2 = tuner2.fit()
 
-        # Change batch size change:
-        self.assertEqual(
-            result2.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME],
-            BATCH_SIZE + (BATCH_SIZE * 2) * NUM_ITERS_2,
-            self.assertEqual(
-                result2.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME],
-                BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE,
-            ),
-        )
-        checkpoint_dir2, checkpoints2 = self.get_checkpoint_dirs(results2[0])
-        self.assertEqual(
-            len(checkpoints2),
-            NUM_ITERS_2,  # 2 checkpoints as in total 3 steps; or does it save ?
-            f"Checkpoints were not created. Found: {os.listdir(checkpoint_dir2)} in {checkpoint_dir2}",
-        )
-        self.assertTrue(os.path.exists(checkpoints2[0]), "Checkpoint file does not exist: " + checkpoints2[0])
+                self.assertEqual(results2.num_errors, 0, "Encountered errors: " + format_result_errors(results2.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+                result2 = results2[0]
+                assert result2.metrics
+                self.assertIn(
+                    "_checking_class_",
+                    result2.metrics,
+                    "Metrics should contain '_checking_class_'. Custom class was likely not used",
+                )
+                # Check iterations change
+                self.assertEqual(result2.metrics["current_step"], BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE)
+                self.assertEqual(result2.metrics[TRAINING_ITERATION], NUM_ITERS_2 + 1)
+                self.assertEqual(result2.metrics["iterations_since_restore"], NUM_ITERS_2)
+
+                # Change batch size change:
+                self.assertEqual(
+                    result2.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME],
+                    BATCH_SIZE + (BATCH_SIZE * 2) * NUM_ITERS_2,
+                    self.assertEqual(
+                        result2.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME],
+                        BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE,
+                    ),
+                )
+                checkpoint_dir2, checkpoints2 = self.get_checkpoint_dirs(results2[0])
+                self.assertEqual(
+                    len(checkpoints2),
+                    NUM_ITERS_2,  # 2 checkpoints as in total 3 steps; or does it save ?
+                    f"Checkpoints were not created. Found: {os.listdir(checkpoint_dir2)} in {checkpoint_dir2}",
+                )
+                self.assertTrue(os.path.exists(checkpoints2[0]), "Checkpoint file does not exist: " + checkpoints2[0])
 
 
 class TestOptunaTuner(SetupDefaults):

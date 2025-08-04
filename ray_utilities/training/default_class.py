@@ -274,7 +274,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         import sys
 
         print("Sys argv during Trainable.setup()", sys.argv)
-        print(self._setup.args)
+        print("args are", self._setup.args)
         # NOTE: args is a dict, self._setup.args a Namespace | Tap
         self._reward_updaters: RewardUpdaters
         args, _algo_config, self.algorithm, self._reward_updaters = setup_trainable(

@@ -43,6 +43,7 @@ from ray_utilities.random import seed_everything
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger
 from ray_utilities.testing_utils import (
+    TWO_ENV_RUNNER_CASES,
     Cases,
     DisableGUIBreakpoints,
     InitRay,
@@ -56,14 +57,6 @@ from ray_utilities.training.default_class import DefaultTrainable, TrainableBase
 if TYPE_CHECKING:
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
-
-
-if "--fast" in sys.argv:
-    ENV_RUNNER_TESTS = [(0, 1)]
-elif "--mp-only" in sys.argv:
-    ENV_RUNNER_TESTS = [(1, 2)]
-else:
-    ENV_RUNNER_TESTS = [(0, 1), (1, 2)]
 
 
 class TestSetupClasses(SetupDefaults):
@@ -596,7 +589,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             metrics=[NUM_ENV_STEPS_SAMPLED_LIFETIME, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME],
         )
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases(TWO_ENV_RUNNER_CASES)
     def test_with_tuner(self, cases):
         """Test if key stats are restored correctly - does not test further training and metrics"""
         frequency = 5
@@ -1029,7 +1022,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             }
         }
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases(TWO_ENV_RUNNER_CASES)
     def test_trainable_checkpointing(self, cases):
         """Test if trainable can be checkpointed and restored."""
         for num_env_runners_a, num_env_runners_b in iter_cases(cases):
