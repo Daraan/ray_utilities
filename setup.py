@@ -19,6 +19,6 @@ setup(
         "python-dotenv",
         "torch",
         "jax",
-        "debugpy",
     ],
+    extras_require={"test": ["pytest", "pytest-timeout", "debugpy"]},
 )
