@@ -28,10 +28,6 @@ jobs:
         python -m pip install --upgrade pip
         pip install pytest pytest-timeout debugpy
         pip install .
-    - name: Pretest - fails only online
-      run: |
-        pytest -k "test_retune_with_different_config"  -v
-      # Disable checkpoint tests until Ray's issues with checkpoint loading is solved
     - name: Test with pytest
       run: |
         export KEEP_MAX_DIFF=1
@@ -47,6 +43,8 @@ jobs:
         pytest -k "test_tuner_checkpointing" -v --fast  --timeout_method=thread
     - name: Test trainable multiple EnvRunners 1/2
       run: |
+        ray status
+        ray stop
         pytest -k "test_trainable and not test_tuner_checkpointing and not test_validate_save_restore"  -v --timeout_method=thread --mp-only
     - name: Test trainable multiple EnvRunners with Tuner 2/2 (might deadlock)
       run: |

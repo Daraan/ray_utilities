@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import pickle
 import sys
 import tempfile
 from copy import deepcopy
@@ -218,7 +217,8 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                     trainable2 = self.TrainableClass()
                     trainable2.load_checkpoint(saved_ckpt)
             self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
-            trainable2.cleanup()
+            trainable.stop()
+            trainable2.stop()
 
     @Cases(ENV_RUNNER_TESTS)
     def test_save_restore_dict(self, cases):
@@ -235,6 +235,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                             trainable2.restore(deepcopy(training_result))  # calls load_checkpoint
                             self.compare_trainables(trainable, trainable2, "from dict", num_env_runners=num_env_runners)
                             trainable2.stop()
+            trainable.stop()
 
     @Cases(ENV_RUNNER_TESTS)
     def test_save_restore_path(self, cases):
@@ -249,6 +250,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                         trainable3.restore(tmpdir)  # calls load_checkpoint
                         self.compare_trainables(trainable, trainable3, "from path", num_env_runners=num_env_runners)
                         trainable3.stop()
+            trainable.stop()
 
     @Cases(ENV_RUNNER_TESTS)
     def test_get_set_state(self, cases):
@@ -263,8 +265,8 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable2.set_state(deepcopy(state))
             # class is missing in config dict
             self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
-            # trainable.cleanup()
-            trainable2.cleanup()
+            trainable.stop()
+            trainable2.stop()
 
     @Cases(ENV_RUNNER_TESTS)
     def test_safe_to_path(self, cases):
@@ -281,6 +283,8 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                     trainable2 = self.TrainableClass()
                     trainable2.restore_from_path(tmpdir)
             self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
+            trainable.stop()
+            trainable2.stop()
 
     def test_validate_save_restore(self):
         """Basically test if TRAINING_ITERATION is set correctly."""
@@ -293,8 +297,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             self.assertEqual(trainable._setup.args.iterations, 5)
             self.assertEqual(trainable._setup.args.total_steps, 320)
             validate_save_restore(PPOTrainable)
-            trainable.cleanup()
-        # ray.shutdown()
+            trainable.stop()
 
     @Cases(ENV_RUNNER_TESTS)
     def test_interchange_save_checkpoint_restore_from_path(self, cases):
@@ -415,6 +418,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                 self.compare_trainables(
                     trainable, trainable_restored, num_env_runners=num_env_runners, ignore_timers=True
                 )
+                trainable.stop()
                 if pickled_trainable is not None:  # TODO: Use cloudpickle
                     print("Comparing restored trainable with pickled trainable")
                     import cloudpickle
@@ -425,6 +429,8 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                         trainable_restored2,
                         num_env_runners=num_env_runners,
                     )
+                    trainable_restored2.stop()
+                trainable_restored.stop()
 
     @Cases(ENV_RUNNER_TESTS)
     def test_tuner_checkpointing(self, cases):
@@ -477,6 +483,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                             iteration_after_step=step + 1,
                             step=step,
                         )
+                        trainable_from_path.stop()
                         trainable_restore = DefaultTrainable.define(setup)()
                         # Problem restore uses load_checkpoint, which passes a dict to load_checkpoint
                         # however the checkpoint dir is unknown inside the loaded dict
@@ -491,6 +498,8 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                             iteration_after_step=step + 1,
                             step=step,
                         )
+                        trainable_from_path.stop()
+                        trainable_restore.stop()
 
     @skip("TODO implement")
     def check_dynamic_settings_on_reload(self):

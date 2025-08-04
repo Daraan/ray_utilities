@@ -197,7 +197,8 @@ class TestReTuning(
 
             def step(self):
                 assert self.algorithm_config.train_batch_size_per_learner == BATCH_SIZE * 2, (
-                    f"Batch size should be 2x the original batch size, not {self.algorithm_config.train_batch_size_per_learner}"
+                    "Batch size should be 2x the original batch size, "
+                    f"not {self.algorithm_config.train_batch_size_per_learner}"
                 )
                 # remote_breakpoint()
 
