@@ -3,18 +3,21 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 
 import pyarrow as pa
 
 os.environ["RAY_DEBUG"] = "legacy"
+# os.environ["RAY_DEBUG"]="0"
 
-from pathlib import Path
-import cloudpickle
+
 import tempfile
 import unittest
 from inspect import isclass
-from typing import TYPE_CHECKING, Any, Final, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Final, Optional, cast
 
+import cloudpickle
 import tree
 import typing_extensions as te
 from ray import tune
@@ -29,7 +32,8 @@ from ray.rllib.utils.metrics import (
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
 
-from ray_utilities.config import DefaultArgumentParser, logger as parser_logger
+from ray_utilities.config import DefaultArgumentParser
+from ray_utilities.config import logger as parser_logger
 from ray_utilities.constants import (
     EVAL_METRIC_RETURN_MEAN,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
@@ -38,7 +42,15 @@ from ray_utilities.constants import (
 from ray_utilities.random import seed_everything
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger
-from ray_utilities.testing_utils import DisableGUIBreakpoints, InitRay, SetupDefaults, format_result_errors, patch_args
+from ray_utilities.testing_utils import (
+    Cases,
+    DisableGUIBreakpoints,
+    InitRay,
+    SetupDefaults,
+    format_result_errors,
+    iter_cases,
+    patch_args,
+)
 from ray_utilities.training.default_class import DefaultTrainable, TrainableBase
 
 if TYPE_CHECKING:
@@ -46,7 +58,12 @@ if TYPE_CHECKING:
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 
 
-# os.environ["RAY_DEBUG"]="0"
+if "--fast" in sys.argv:
+    ENV_RUNNER_TESTS = [(0, 1)]
+elif "--mp-only" in sys.argv:
+    ENV_RUNNER_TESTS = [(1, 2)]
+else:
+    ENV_RUNNER_TESTS = [(0, 1), (1, 2)]
 
 
 class TestSetupClasses(SetupDefaults):
@@ -710,6 +727,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
         algo_0_runner: Algorithm | TrainableBase,
         algo_1_runner: Algorithm | TrainableBase,
         metrics: list[str],
+        num_env_runners_expected: tuple[int, int] = (0, 1),
+        msg: Optional[str] = None,
     ) -> dict[str, dict[int, dict[str, Any]]]:
         eval_metrics = [m for m in metrics if "learner" not in m]  # strip learner metrics
         if isinstance(algo_0_runner, Algorithm) and isinstance(algo_1_runner, Algorithm):
@@ -730,8 +749,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
         else:
             raise TypeError("Algo runners must be of type Algorithm or DefaultTrainable")
 
-        self.assertEqual(algorithm_config_0.num_env_runners, 0)
-        self.assertEqual(algorithm_config_1.num_env_runners, 1)
+        self.assertEqual(algorithm_config_0.num_env_runners, num_env_runners_expected[0])
+        self.assertEqual(algorithm_config_1.num_env_runners, num_env_runners_expected[1])
         # --- Step 1 ---
         result_algo_0_step1 = algo_0_runner.step()
         result_algo_1_step1 = algo_1_runner.step()
@@ -976,12 +995,12 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
 
         return {
             "env_runners": {
-                0: {
+                num_env_runners_expected[0]: {
                     "step_1": result_algo_0_step1[ENV_RUNNER_RESULTS],
                     "step_2": result_algo_0_step2[ENV_RUNNER_RESULTS],
                     "step_3": result_algo_0_step3[ENV_RUNNER_RESULTS],
                 },
-                1: {
+                num_env_runners_expected[1]: {
                     "step_1": result_algo_1_step1[ENV_RUNNER_RESULTS],
                     "step_2": result_algo_1_step2[ENV_RUNNER_RESULTS],
                     "step_3": result_algo_1_step3[ENV_RUNNER_RESULTS],
@@ -989,67 +1008,71 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             }
         }
 
-    # @unittest.skip("Needs to be fixed in ray first")
-    def test_trainable_checkpointing(self):
+    @Cases(ENV_RUNNER_TESTS)
+    def test_trainable_checkpointing(self, cases):
         """Test if trainable can be checkpointed and restored."""
-        with patch_args(
-            "--batch_size",
-            str(ENV_STEPS_PER_ITERATION),
-            "--log_stats",
-            "most",  # increase log stats to assure necessary keys are present
-        ):
-            setup = AlgorithmSetup(init_trainable=False)
-            config = setup.config
-            config.debugging(seed=11)
-            config.environment(env="CartPole-v1")
-            config.training(
-                train_batch_size_per_learner=ENV_STEPS_PER_ITERATION,
-                num_epochs=2,
-                minibatch_size=ENV_STEPS_PER_ITERATION // 2,
-            )
-            config.env_runners(num_env_runners=0)
-            config.evaluation(
-                evaluation_interval=1,
-                evaluation_duration=100,
-                evaluation_num_env_runners=0,
-                evaluation_duration_unit="timesteps",
-            )
-            Trainable0 = setup.create_trainable()
-            setup = AlgorithmSetup(init_trainable=False)
-            config = setup.config
-            config.debugging(seed=11)
-            config.environment(env="CartPole-v1")
-            config.training(
-                train_batch_size_per_learner=ENV_STEPS_PER_ITERATION,
-                num_epochs=2,
-                minibatch_size=ENV_STEPS_PER_ITERATION // 2,
-            )
-            config.env_runners(num_env_runners=1)
-            config.evaluation(
-                evaluation_interval=1,
-                evaluation_duration=100,
-                evaluation_num_env_runners=0,
-                evaluation_duration_unit="timesteps",
+        for num_env_runners_a, num_env_runners_b in iter_cases(cases):
+            with patch_args(
+                "--batch_size",
+                str(ENV_STEPS_PER_ITERATION),
+                "--log_stats",
+                "most",  # increase log stats to assure necessary keys are present
+            ):
+                setup = AlgorithmSetup(init_trainable=False)
+                config = setup.config
+                config.debugging(seed=11)
+                config.environment(env="CartPole-v1")
+                config.training(
+                    train_batch_size_per_learner=ENV_STEPS_PER_ITERATION,
+                    num_epochs=2,
+                    minibatch_size=ENV_STEPS_PER_ITERATION // 2,
+                )
+                config.env_runners(num_env_runners=num_env_runners_a)
+                config.evaluation(
+                    evaluation_interval=1,
+                    evaluation_duration=100,
+                    evaluation_num_env_runners=0,
+                    evaluation_duration_unit="timesteps",
+                )
+                Trainable0 = setup.create_trainable()
+                setup = AlgorithmSetup(init_trainable=False)
+                config = setup.config
+                config.debugging(seed=11)
+                config.environment(env="CartPole-v1")
+                config.training(
+                    train_batch_size_per_learner=ENV_STEPS_PER_ITERATION,
+                    num_epochs=2,
+                    minibatch_size=ENV_STEPS_PER_ITERATION // 2,
+                )
+                config.env_runners(num_env_runners=num_env_runners_b)
+                config.evaluation(
+                    evaluation_interval=1,
+                    evaluation_duration=100,
+                    evaluation_num_env_runners=0,
+                    evaluation_duration_unit="timesteps",
+                )
+
+                Trainable1 = setup.create_trainable()
+            assert isclass(Trainable0) and isclass(Trainable1)
+            trainable0 = Trainable0()
+            trainable1 = Trainable1()
+            self.assertEqual(trainable0.algorithm_config.num_env_runners, num_env_runners_a)
+            self.assertEqual(trainable1.algorithm_config.num_env_runners, num_env_runners_b)
+
+            results = self._test_algo_checkpointing(
+                trainable0,
+                trainable1,
+                num_env_runners_expected=(num_env_runners_a, num_env_runners_b),
+                metrics=[
+                    NUM_ENV_STEPS_SAMPLED_LIFETIME,
+                    NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
+                ],
             )
 
-            Trainable1 = setup.create_trainable()
-        assert isclass(Trainable0) and isclass(Trainable1)
-        trainable0 = Trainable0()
-        trainable1 = Trainable1()
-
-        results = self._test_algo_checkpointing(
-            trainable0,
-            trainable1,
-            metrics=[
-                NUM_ENV_STEPS_SAMPLED_LIFETIME,
-                NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
-            ],
-        )
-
-        self._test_checkpoint_values(
-            results["env_runners"][0]["step_3"],
-            results["env_runners"][1]["step_3"],
-        )
+            self._test_checkpoint_values(
+                results["env_runners"][num_env_runners_a]["step_3"],
+                results["env_runners"][num_env_runners_b]["step_3"],
+            )
 
     @unittest.skip("Needs to be fixed in ray first")
     def test_algorithm_checkpointing(self):

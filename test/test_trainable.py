@@ -253,7 +253,8 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable.stop()
 
     @Cases(ENV_RUNNER_TESTS)
-    def test_get_set_state(self, cases):
+    def test_1_get_set_state(self, cases):
+        # If this test fails all others will most likely fail too, run it first.
         self.maxDiff = None
         for num_env_runners in iter_cases(cases):
             trainable, _ = self.get_trainable(num_env_runners=num_env_runners)

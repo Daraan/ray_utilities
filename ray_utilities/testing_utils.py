@@ -1,7 +1,6 @@
 # pyright: reportOptionalMemberAccess=information
 from __future__ import annotations
 
-from collections import deque
 import difflib
 import math
 import os
@@ -11,11 +10,12 @@ import random
 import sys
 import unittest
 import unittest.util
+from collections import deque
 from contextlib import nullcontext
 from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Collection, Iterable, TypeAlias, TypeVar, final
+from typing import TYPE_CHECKING, Any, ClassVar, Collection, Generic, Iterable, TypeAlias, TypeVar, final
 from unittest import mock
 
 import debugpy  # noqa: T100
@@ -44,10 +44,7 @@ from typing_extensions import Final, NotRequired, Required, Sentinel, get_origin
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.training.default_class import DefaultTrainable, TrainableStateDict
-from ray_utilities.training.helpers import (
-    _remove_throughput_stats,
-    nan_to_zero_hist_leaves,
-)
+from ray_utilities.training.helpers import nan_to_zero_hist_leaves
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -219,6 +216,16 @@ def _fix_throughput_stats(stats: dict[str, Any]) -> dict[str, Any]:
         stats[k] = stat = stat.copy()  # noqa: PLW2901
         t_stat = Stats.from_state(stat["throughput_stats"])
         stat["throughput_stats"]["values"] = t_stat.peek()
+    return stats
+
+
+def _remove_throughput_stats(stats: dict[str, Any]):
+    stats = stats.copy()
+    for k, stat in stats.items():
+        if "throughput_stats" not in stat:
+            continue
+        stats[k] = stat = stat.copy()  # noqa: PLW2901
+        del stat["throughput_stats"]
     return stats
 
 

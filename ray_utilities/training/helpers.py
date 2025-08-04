@@ -320,16 +320,6 @@ def nan_to_zero_hist_leaves(
     return struct
 
 
-def _remove_throughput_stats(struct, path: tuple[str, ...] = (), parent: dict[str, Any] | None = None):
-    if isinstance(struct, dict):
-        return {k: _remove_throughput_stats(v, (*path, k), struct) for k, v in struct.items()}
-    if isinstance(struct, list):
-        return [_remove_throughput_stats(v, path, parent) for v in struct]
-    if len(path) >= 2 and path[-2] == "throughput_stats":
-        return {}
-    return struct
-
-
 def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
     """
     Syncs metric states for env runners, fixing a bug with restored metrics
