@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 
 import pyarrow as pa
+import pytest
 
 os.environ["RAY_DEBUG"] = "legacy"
 # os.environ["RAY_DEBUG"]="0"
@@ -125,6 +125,7 @@ class TestSetupClasses(SetupDefaults):
         with patch_args("--train_batch_size_per_learner", "456"):
             self.assertEqual(AlgorithmSetup().config.train_batch_size_per_learner, 456)
 
+    @pytest.mark.tuner
     def test_dynamic_param_spaces(self):
         # Test warning and failure
         with patch_args("--tune", "dynamic_buffer"):
@@ -469,6 +470,7 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
         algo = self._DEFAULT_SETUP_LOW_RES.build_algo()
         algo.train()
 
+    @pytest.mark.tuner
     def test_stopper_with_checkpoint(self):
         from copy import deepcopy
 
@@ -590,6 +592,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
         )
 
     @Cases(TWO_ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
     def test_with_tuner(self, cases):
         """Test if key stats are restored correctly - does not test further training and metrics"""
         frequency = 5
@@ -1023,6 +1026,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
         }
 
     @Cases(TWO_ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
     def test_trainable_checkpointing(self, cases):
         """Test if trainable can be checkpointed and restored."""
         for num_env_runners_a, num_env_runners_b in iter_cases(cases):

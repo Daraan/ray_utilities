@@ -7,6 +7,7 @@ from copy import deepcopy
 from typing import TYPE_CHECKING
 from unittest import mock, skip
 
+import pytest
 from ray import tune
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core import COMPONENT_ENV_RUNNER
@@ -199,6 +200,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
         super().setUp()
 
     @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
     def test_save_checkpoint(self, cases):
         # NOTE: In this test attributes are shared BY identity, this is just a weak test.
         for num_env_runners in iter_cases(cases):
@@ -215,6 +217,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable2.stop()
 
     @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
     def test_save_restore_dict(self, cases):
         for num_env_runners in iter_cases(cases):
             trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
@@ -232,6 +235,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable.stop()
 
     @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
     def test_save_restore_path(self, cases):
         for num_env_runners in iter_cases(cases):
             trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
@@ -247,6 +251,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable.stop()
 
     @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
     def test_1_get_set_state(self, cases):
         # If this test fails all others will most likely fail too, run it first.
         self.maxDiff = None
@@ -263,7 +268,8 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable.stop()
             trainable2.stop()
 
-    @Cases(ENV_RUNNER_CASES)  # might deadlock with num_env_runners >= 2
+    @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases  # might deadlock with num_env_runners >= 2
     def test_safe_to_path(self, cases):
         """Test that the trainable can be saved to a path and restored."""
         for num_env_runners in iter_cases(cases):
@@ -291,6 +297,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable.stop()
 
     @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
     def test_interchange_save_checkpoint_restore_from_path(self, cases):
         """Test if methods can be used interchangeably."""
         # NOTE: restore_from_path currently does not set (local) env_runner state when num_env_runners > 0
@@ -313,6 +320,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable_from_path.stop()
 
     @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
     def test_interchange_save_checkpoint_from_checkpoint(self, cases):
         """Test if methods can be used interchangeably."""
         for num_env_runners in iter_cases(cases):
@@ -336,6 +344,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable_from_checkpoint.stop()
 
     @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
     def test_interchange_save_to_path_restore_from_path(self, cases):
         """Test if methods can be used interchangeably."""
         # NOTE: restore_from_path currently does not set (local) env_runner state when num_env_runners > 0
@@ -360,6 +369,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable_from_path.stop()
 
     @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
     def test_interchange_save_to_path_from_checkpoint(self, cases):
         """Test if methods can be used interchangeably."""
         for num_env_runners in iter_cases(cases):
@@ -386,6 +396,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable_from_checkpoint.stop()
 
     @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
     def test_restore_multiprocessing(self, cases):
         for num_env_runners in iter_cases(cases):
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -424,6 +435,8 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                 trainable_restored.stop()
 
     @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
+    @pytest.mark.tuner
     def test_tuner_checkpointing(self, cases):
         # self.enable_loggers()
         with patch_args(

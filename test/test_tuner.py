@@ -4,6 +4,7 @@ from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 from unittest import skip
 
+import pytest
 from ray import tune
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
@@ -69,6 +70,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers):
             assert tuner2._local_tuner and tuner2._local_tuner._tune_config
             self.assertNotIsInstance(tuner2._local_tuner._tune_config.search_alg, OptunaSearch)
 
+    @pytest.mark.tuner
     def test_run_tune_function(self):
         with patch_args("--num_samples", "3", "--num_jobs", "2", "--batch_size", BATCH_SIZE, "--iterations", "3"):
             with AlgorithmSetup(init_trainable=False) as setup:
@@ -85,6 +87,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers):
 
 
 class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
+    @pytest.mark.tuner
     def test_checkpoint_auto(self):
         # self.enable_loggers()
         with patch_args(
@@ -111,6 +114,7 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
             f"Checkpoints were not created. Found: {os.listdir(checkpoint_dir)} in {checkpoint_dir}",
         )
 
+    @pytest.mark.tuner
     def test_checkpoint_manually(self):
         # self.enable_loggers()
         with patch_args(
