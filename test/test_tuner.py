@@ -339,10 +339,10 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 self.assertEqual(
                     result2.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME],
                     BATCH_SIZE + (BATCH_SIZE * 2) * NUM_ITERS_2,
-                    self.assertEqual(
-                        result2.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME],
-                        BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE,
-                    ),
+                )
+                self.assertEqual(
+                    result2.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME],
+                    BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE,
                 )
                 checkpoint_dir2, checkpoints2 = self.get_checkpoint_dirs(results2[0])
                 self.assertEqual(
