@@ -1104,6 +1104,6 @@ def remote_breakpoint(port=5678):
     """
     if not debugpy.is_client_connected():
         print("starting debugpy. Listening on port:", port)
-        debugpy.listen(port)  # noqa: T100
+        debugpy.listen(("localhost", port))  # noqa: T100
     debugpy.wait_for_client()  # noqa: T100
     breakpoint()  # noqa: T100
