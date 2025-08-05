@@ -96,7 +96,7 @@ class TrainableStateDict(TypedDict):
     # TODO: What with own state, e.g. hparams passed?, not contained in get_state
 
     algorithm: NotRequired[StateDict]  # component; can be ignored
-    """Als Algorithm is a Checkpointable an"""
+    """Als Algorithm is a Checkpointable its state might not be saved here"""
     algorithm_config: StateDict
     algorithm_overrides: Optional[dict[str, Any]]
     iteration: int
@@ -273,9 +273,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # TODO: Possible unset setup._config to not confuse configs (or remove setup totally?)
         # use args = config["cli_args"] # XXX
         import sys
+        from pprint import pformat
 
         print("Sys argv during Trainable.setup()", sys.argv)
-        print("args are", self._setup.args)
+        print("args (in config) are:\n", pformat(config["cli_args"]))
         # NOTE: args is a dict, self._setup.args a Namespace | Tap
         self._reward_updaters: RewardUpdaters
         args, _algo_config, self.algorithm, self._reward_updaters = setup_trainable(

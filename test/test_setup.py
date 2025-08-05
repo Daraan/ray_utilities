@@ -1,4 +1,4 @@
-# pyright: reportOptionalMemberAccess=none
+# pyright: reportOptionalMemberAccess=information
 from __future__ import annotations
 
 import argparse
@@ -6,6 +6,7 @@ import os
 
 import pyarrow as pa
 import pytest
+
 
 os.environ["RAY_DEBUG"] = "legacy"
 # os.environ["RAY_DEBUG"]="0"
@@ -266,7 +267,7 @@ class TestSetupClasses(SetupDefaults):
                 "--batch_size", batch_size1,
                 "--minibatch_size", "20",
                 "--comment", "A",
-                "--extra", "abc", # nargs
+                "--extra", "abc",  # nargs
                 "--env_seeding_strategy", "constant",
                 "--wandb", "offline",  # possibly do not restore
             ):  # fmt: off
@@ -836,6 +837,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
                 metrics_0_restored = algo_0_runner_restored.metrics
             else:
                 metrics_0_restored = algo_0_runner_restored.algorithm.metrics
+            assert metrics_0_restored is not None
 
             if isinstance(algo_1_runner_restored, Algorithm):
                 metrics_1_restored = algo_1_runner_restored.metrics

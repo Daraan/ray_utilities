@@ -250,13 +250,7 @@ def get_total_steps(args: dict[str, Any], config: "AlgorithmConfig") -> int | No
 
 def _set_env_runner_state(env_runner: EnvRunner, state: dict[str, Any]):
     if COMPONENT_METRICS_LOGGER not in state:
-        raise KeyError(
-            f"State dictionary missing required key '{COMPONENT_METRICS_LOGGER}'."
-        )
-    if env_runner.metrics is None:
-        raise ValueError(
-            "env_runner.metrics is None. Cannot set state on a None metrics object."
-        )
+        raise KeyError(f"State dictionary missing required key '{COMPONENT_METRICS_LOGGER}'.")
     env_runner.metrics.set_state(state[COMPONENT_METRICS_LOGGER])
 
 
@@ -276,6 +270,12 @@ def split_sum_stats_over_env_runners(
     """
     As sum values are aggregated over all env runners, split them evenly over the env runners
     again for every to have roughly its own metric.
+
+    Args:
+        struct: The structure to split, can be a dict or a list.
+        path: private, used to track the path in the structure.
+        parent: private, used to track the parent structure.
+        num_env_runners: The number of env runners to split the stats over.
     """
     if num_env_runners <= 1:
         return struct  # No need to split if only one env runner
