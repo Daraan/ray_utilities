@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import difflib
+import logging
 import math
 import os
 import pathlib
@@ -15,7 +16,7 @@ from contextlib import nullcontext
 from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Collection, Generic, Iterable, TypeAlias, TypeVar, final
+from typing import TYPE_CHECKING, Any, ClassVar, Collection, Iterable, Optional, TypeAlias, TypeVar, final
 from unittest import mock
 
 import debugpy  # noqa: T100
@@ -66,7 +67,7 @@ if "--fast" in sys.argv:
 elif "--mp-only" in sys.argv:
     TWO_ENV_RUNNER_CASES = [(1, 2)]
 else:
-    TWO_ENV_RUNNER_CASES = [(0, 1), (1, 2)]
+    TWO_ENV_RUNNER_CASES = [(0, 1), (0, 2), (1, 2)]
 
 if "--fast" in sys.argv:
     ENV_RUNNER_CASES: list[int] = [0]
@@ -88,6 +89,8 @@ _C = TypeVar("_C", bound="Callable[[Any, mock.MagicMock], Any]")
 _NOT_PROVIDED = Sentinel(
     "_NOT_PROVIDED",
 )
+
+logger = logging.getLogger(__name__)
 
 
 @final
@@ -114,9 +117,11 @@ def iter_cases(cases: type[Cases] | mock.MagicMock):
     try:
         while True:
             if isinstance(cases, mock.MagicMock):
-                yield cases()
+                next_case = cases()
             else:
-                yield cases.next()
+                next_case = cases.next()
+            logger.info("======= NEXT CASE: %s =======", next_case)
+            yield next_case
     except StopIteration:
         return
     except BaseException:
@@ -195,6 +200,7 @@ class InitRay(unittest.TestCase):
             ray.init(
                 include_dashboard=False,
                 ignore_reinit_error=True,
+                num_cpus=cls._num_cpus,
             )
         super().setUpClass()
 
@@ -204,6 +210,10 @@ class InitRay(unittest.TestCase):
         if ray.is_initialized():
             ray.shutdown()
         super().tearDownClass()
+
+    def __init_subclass__(cls, num_cpus: Optional[int] = None, *args, **kwargs) -> None:
+        cls._num_cpus = num_cpus
+        super().__init_subclass__(*args, **kwargs)
 
 
 OVERRIDE_KEYS: Final[set[str]] = {"num_env_runners", "num_epochs", "minibatch_size", "train_batch_size_per_learner"}
@@ -801,8 +811,8 @@ class TestHelpers(unittest.TestCase):
 
         self.compare_param_space(setup_state1.pop("param_space"), setup_state2.pop("param_space"))
         self.compare_configs(setup_state1.pop("config"), setup_state2.pop("config"))
-        trainable_state1 = state1.pop("trainable", {}).copy()
-        trainable_state2 = state2.pop("trainable", {}).copy()
+        trainable_state1 = state1.pop("trainable", {}).copy()  # pyright: ignore[reportAttributeAccessIssue]
+        trainable_state2 = state2.pop("trainable", {}).copy()  # pyright: ignore[reportAttributeAccessIssue]
         if ignore_timers:
             trainable_state1.pop("time_total")
             trainable_state2.pop("time_total")

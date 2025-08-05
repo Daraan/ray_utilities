@@ -525,7 +525,7 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
             self.assertEqual(result_grid[0].metrics["evaluation/env_runners/episode_return_mean"], 512 // 128 - 1)
 
 
-class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
+class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpus=4):
     def _test_checkpoint_values(self, result1: dict[str, Any], result2: dict[str, Any], msg: Optional[str] = None):
         """Test NUM_ENV_STEPS_SAMPLED and NUM_ENV_STEPS_PASSED_TO_LEARNER values of two training results."""
         env_runner1 = result1
@@ -745,6 +745,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
         metrics: list[str],
         num_env_runners_expected: tuple[int, int] = (0, 1),
         msg: Optional[str] = None,
+        *,
+        stop_trainable: bool = True,
     ) -> dict[str, dict[int, dict[str, Any]]]:
         eval_metrics = [m for m in metrics if "learner" not in m]  # strip learner metrics
         if isinstance(algo_0_runner, Algorithm) and isinstance(algo_1_runner, Algorithm):
@@ -820,6 +822,10 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                 eval_metrics,
                 "Evaluation: Check {} after step 3",
             )
+            if stop_trainable:
+                # Stop trainable to free resources
+                algo_0_runner.stop()
+                algo_1_runner.stop()
 
             # Load and train from checkpoint
 
@@ -912,6 +918,12 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
             #    compare_results=True,
             # )
 
+            # Step 3 from restored
+            result_algo_0_step3_restored = algo_0_runner_restored.step()
+            result_algo_1_step3_restored = algo_1_runner_restored.step()
+            algo_0_runner_restored.stop()
+            algo_1_runner_restored.stop()
+
             # Test after restoring a second time
             # Load Restored from step 2
             algo_0_restored_x2: Algorithm | TrainableBase = BaseClass.from_checkpoint(checkpoint_0_step2_restored)  # pyright: ignore[reportAssignmentType]
@@ -942,11 +954,11 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults):
                         f"Restored x2 num_env_runners=1: {metric} does not match expected value "
                         f"{ENV_STEPS_PER_ITERATION * 2}",
                     )
-            # Step 3 from restored
-            result_algo_0_step3_restored = algo_0_runner_restored.step()
-            result_algo_1_step3_restored = algo_1_runner_restored.step()
+            # Step 3 from restored x2
             result_algo_0_step3_restored_x2 = algo_0_restored_x2.step()
             result_algo_1_step3_restored_x2 = algo_1_restored_x2.step()
+            algo_0_restored_x2.stop()
+            algo_1_restored_x2.stop()
 
             # Test that all results after step 3 are have 3x steps
             #  -- num_env_runners=0 --

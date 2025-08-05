@@ -25,6 +25,7 @@ from ray_utilities.constants import (
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
 )
 from ray_utilities.runfiles import run_tune
+from ray_utilities.setup import optuna_setup
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner
 from ray_utilities.testing_utils import (
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
     from ray.rllib.algorithms import AlgorithmConfig  # noqa: F401
 
 
+@pytest.mark.tuner
 class TestTuner(InitRay, TestHelpers, DisableLoggers):
     def test_tuner_setup(self):
         with patch_args("--optimize_config", "--num_samples", "1"):
@@ -70,7 +72,6 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers):
             assert tuner2._local_tuner and tuner2._local_tuner._tune_config
             self.assertNotIsInstance(tuner2._local_tuner._tune_config.search_alg, OptunaSearch)
 
-    @pytest.mark.tuner
     def test_run_tune_function(self):
         with patch_args("--num_samples", "3", "--num_jobs", "2", "--batch_size", BATCH_SIZE, "--iterations", "3"):
             with AlgorithmSetup(init_trainable=False) as setup:
@@ -86,8 +87,8 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers):
             self.assertEqual(results.num_errors, 0, "Encountered errors: " + format_result_errors(results.errors))
 
 
+@pytest.mark.tuner
 class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
-    @pytest.mark.tuner
     def test_checkpoint_auto(self):
         # self.enable_loggers()
         with patch_args(
@@ -114,7 +115,6 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
             f"Checkpoints were not created. Found: {os.listdir(checkpoint_dir)} in {checkpoint_dir}",
         )
 
-    @pytest.mark.tuner
     def test_checkpoint_manually(self):
         # self.enable_loggers()
         with patch_args(
@@ -158,6 +158,7 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
     def test_checkpoint_and_load(self): ...
 
 
+@pytest.mark.tuner
 class TestReTuning(
     InitRay,
     TestHelpers,
@@ -179,7 +180,7 @@ class TestReTuning(
                     f"not {self.algorithm_config.train_batch_size_per_learner}"
                 )
                 # remote_breakpoint()
-
+                # Deadlock does not even reach here.
                 print("TRACE Training step", self.iteration)
                 result, metrics, rewards = training_step(
                     self.algorithm,
@@ -389,6 +390,7 @@ class TestOptunaTuner(SetupDefaults):
             self.assertNotIsInstance(tuner2._local_tuner._tune_config.search_alg, OptunaSearch)
             self.assertNotIsInstance(tuner2._local_tuner.get_run_config().stop, OptunaSearchWithPruner)
 
+    @pytest.mark.tune
     def test_pruning(self):
         """
         Test might fail due to bad luck, low numbers first then high.
@@ -397,11 +399,12 @@ class TestOptunaTuner(SetupDefaults):
             Remember Optuna might not prune the first 10 trials.
             Reduce num_jobs or adjust seed and test again.
         """
-        with patch_args("--optimize_config", "--num_samples", "20", "--num_jobs", "4", "--seed", "42"):
+        MAX_STEP = 15
+        with patch_args("--optimize_config", "--num_samples", "15", "--num_jobs", "4", "--seed", "42"):
 
             def trainable(params: dict[str, Any]) -> TrainableReturnData:
                 logger.info("Running trainable with value: %s", params["fake_result"])
-                for i in range(20):
+                for i in range(MAX_STEP):
                     tune.report(
                         {
                             "current_step": i,
@@ -410,7 +413,7 @@ class TestOptunaTuner(SetupDefaults):
                     )
                 return {
                     "done": True,
-                    "current_step": 20,
+                    "current_step": MAX_STEP,
                     EVALUATION_RESULTS: {ENV_RUNNER_RESULTS: {EPISODE_RETURN_MEAN: params["fake_result"]}},
                 }
 
@@ -419,7 +422,7 @@ class TestOptunaTuner(SetupDefaults):
 
                 def create_param_space(self):
                     return {
-                        "fake_result": tune.grid_search([*[1] * 4, *[2] * 4, *[3] * 4, *[4] * 4, *[5] * 4]),
+                        "fake_result": tune.grid_search([*[1] * 3, *[2] * 3, *[3] * 3, *[4] * 3, *[5] * 3]),
                         "module": "OptunaTest",
                         "env": "CartPole-v1",
                     }
@@ -430,7 +433,6 @@ class TestOptunaTuner(SetupDefaults):
             with RandomParamsSetup() as setup:
                 setup.config.training(num_epochs=2, train_batch_size_per_learner=64, minibatch_size=64)
                 setup.config.evaluation(evaluation_interval=1)
-            from ray_utilities.setup import optuna_setup
 
             with self.assertLogs(optuna_setup._logger, level="INFO") as log:
                 _results = run_tune(setup)
@@ -440,5 +442,8 @@ class TestOptunaTuner(SetupDefaults):
                 "Logger did not report a pruned trial, searching for 'Optuna pruning trial' in:\n"
                 + "\n".join(log.output),
             )
-            self.assertGreaterEqual(len([result for result in _results if result.metrics["current_step"] < 20]), 3)  # pyright: ignore[reportOptionalSubscript,reportAttributeAccessIssue]
+            self.assertGreaterEqual(
+                len([result for result in _results if result.metrics["current_step"] < MAX_STEP]),  # pyright: ignore[reportOptionalSubscript,reportAttributeAccessIssue]
+                3,
+            )
             # NOTE: This can be OK even if runs fail!
