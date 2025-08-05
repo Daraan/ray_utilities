@@ -153,12 +153,8 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
 
 
 @pytest.mark.tuner
-class TestReTuning(
-    InitRay,
-    TestHelpers,
-    DisableLoggers,
-):
-    @Cases([0])  # FIXME somehow deadlock in tuner2 with  num_env_runners > 0
+class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
+    @Cases(ENV_RUNNER_CASES)
     def test_retune_with_different_config(self, cases):
         # self.enable_loggers()
         NUM_ITERS_2 = 3
