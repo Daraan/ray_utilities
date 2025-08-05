@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import sys
 import tempfile
 from copy import deepcopy
 from typing import TYPE_CHECKING
@@ -195,7 +194,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
                 self.assertEqual(trainable2.algorithm_config.minibatch_size, 20)
 
 
-class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
+class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints, num_cpus=4):
     def setUp(self):
         super().setUp()
 
@@ -489,17 +488,16 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                         )
                         trainable_from_ckpt.stop()
                         trainable_restore = DefaultTrainable.define(setup)()
-                        # Problem restore uses load_checkpoint, which passes a dict to load_checkpoint
-                        # however the checkpoint dir is unknown inside the loaded dict
+                        # Problem restore uses load_checkpoint, which passes a dict to load_checkpoint                        # however the checkpoint dir is unknown inside the loaded dict
                         trainable_restore.restore(checkpoint)
                         self.assertEqual(trainable_restore.algorithm.iteration, step)
                         self.assertIsInstance(checkpoint, str)
                         # load a second time to test as well
                         # NOTE: reuse: Currently this does not set some states correctly on the metrics_logger
                         # https://github.com/ray-project/ray/issues/55248, larger batch_size should fix it
-                        trainable_from_path.algorithm.metrics.reset()  # HACK s.a. # pyright: ignore[reportOptionalMemberAccess]
+                        # HACK: Only one might contain mean/max/min stats for env_runners--(module/agent)episode_return
+                        trainable_from_path.algorithm.metrics.reset()  # pyright: ignore[reportOptionalMemberAccess]
                         trainable_from_path.restore_from_path(checkpoint)
-                        # TODO: One of them might contain mean/max/min stat values for env_runners--(module/agent)episode_return
                         self.compare_trainables(
                             trainable_restore,
                             trainable_from_path,

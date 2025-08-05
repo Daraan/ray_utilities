@@ -258,6 +258,7 @@ class TestHelpers(unittest.TestCase):
     # region setups
 
     def setUp(self):
+        AlgorithmSetup.PROJECT = "TESTING"
         super().setUp()
         self._env_seed_rng = random.Random(111)
 
@@ -677,7 +678,9 @@ class TestHelpers(unittest.TestCase):
                 _remove_values_on_tensor_stats(state2),
                 remove_all=True,
             ),
-            f"Algorithm state['{key}']['metrics_logger'] in checkpoint differs from current algorithm state.",
+            f"Algorithm state['{key}']"
+            + ("['metrics_logger']" if "metrics_logger" not in key else "")
+            + " in checkpoint differs from current algorithm state.",
         )
 
     def compare_algorithm_states(
@@ -1019,7 +1022,6 @@ class TestHelpers(unittest.TestCase):
 class SetupDefaults(TestHelpers, DisableLoggers):
     @clean_args
     def setUp(self):
-        AlgorithmSetup.project_name = "TESTING"
         super().setUp()
         env = gym.make("CartPole-v1")
 

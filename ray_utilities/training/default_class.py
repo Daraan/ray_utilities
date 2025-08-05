@@ -423,6 +423,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # if checkpoint["algorithm_checkpoint_dir"] is a tempdir (e.g. from tune, this is wrong)
             # However, self.set_state should have take care of algorithm already even if checkpoint dir is missing
             if os.path.exists(checkpoint["algorithm_checkpoint_dir"]):
+                self.algorithm.stop()  # free resources first
                 self.algorithm = self.algorithm.from_checkpoint(
                     Path(checkpoint["algorithm_checkpoint_dir"]).absolute().as_posix(), **algo_kwargs
                 )
@@ -475,6 +476,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # return
             # for component in components:
             #    self.restore_from_path(checkpoint, component=component, **algo_kwargs)
+            # free resources first
+            self.algorithm.stop()
             self.algorithm = self.algorithm.from_checkpoint((Path(checkpoint) / "algorithm").as_posix(), **algo_kwargs)
             sync_env_runner_states_after_reload(self.algorithm)
         else:
