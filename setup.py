@@ -20,5 +20,5 @@ setup(
         "torch",
         "jax",
     ],
-    extras_require={"test": ["pytest", "pytest-timeout", "debugpy"]},
+    extras_require={"test": ["pytest", "pytest-timeout", "pytest-subtests", "debugpy"]},
 )

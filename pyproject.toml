@@ -133,3 +133,7 @@ reportUnnecessaryCast = "warning"
 [tool.pytest.ini_options]
 timeout = 240
 session_timeout = 900
+markers = [
+   "tuner",
+   "env_runner_cases: ",
+]

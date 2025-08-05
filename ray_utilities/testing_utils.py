@@ -74,7 +74,7 @@ if "--fast" in sys.argv:
 elif "--mp-only" in sys.argv:
     ENV_RUNNER_CASES = [1, 2]
 else:
-    ENV_RUNNER_CASES = [0, 1]
+    ENV_RUNNER_CASES = [0, 1, 2]
 
 
 args_train_no_tuner = mock.patch.object(

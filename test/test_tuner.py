@@ -151,12 +151,6 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
             f"Checkpoints were not created. Found: {os.listdir(checkpoint_dir)} in {checkpoint_dir}",
         )
 
-    @skip("This test is not implemented yet")
-    def test_checkpoint_standard(self): ...
-
-    @skip("This test is not implemented yet")
-    def test_checkpoint_and_load(self): ...
-
 
 @pytest.mark.tuner
 class TestReTuning(
@@ -390,7 +384,7 @@ class TestOptunaTuner(SetupDefaults):
             self.assertNotIsInstance(tuner2._local_tuner._tune_config.search_alg, OptunaSearch)
             self.assertNotIsInstance(tuner2._local_tuner.get_run_config().stop, OptunaSearchWithPruner)
 
-    @pytest.mark.tune
+    @pytest.mark.tuner
     def test_pruning(self):
         """
         Test might fail due to bad luck, low numbers first then high.
