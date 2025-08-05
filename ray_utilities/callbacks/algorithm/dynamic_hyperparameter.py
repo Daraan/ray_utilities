@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class UpdateFunction(Protocol):
     def __call__(
         self: DynamicHyperparameterCallback | Any,
-        algorithm: "Algorithm",
+        algorithm: Algorithm,
         metrics_logger: Optional[MetricsLogger] = None,
         *,
         global_step: int,
@@ -49,7 +49,7 @@ class DynamicHyperparameterCallback(GetGlobalStepMixin, DefaultCallbacks, abc.AB
 
     @classmethod
     def _update_algorithm(
-        cls, algorithm: "Algorithm", *, key: str, value: Any, update_env_runners=True, update_learner=True
+        cls, algorithm: Algorithm, *, key: str, value: Any, update_env_runners=True, update_learner=True
     ) -> None:
         """
         Update the algorithm's configuration and optionally the environment runners and learner as well.
@@ -72,7 +72,7 @@ class DynamicHyperparameterCallback(GetGlobalStepMixin, DefaultCallbacks, abc.AB
 
     @classmethod
     def _update_learner_config(
-        cls, algorithm: "Algorithm", *, key: str | None = None, value: Any = None, update_env_runners=True, **kwargs
+        cls, algorithm: Algorithm, *, key: str | None = None, value: Any = None, update_env_runners=True, **kwargs
     ) -> None:
         """
         Update the algorithm's configuration and optionally the environment runners and learner as well.
@@ -108,7 +108,7 @@ class DynamicHyperparameterCallback(GetGlobalStepMixin, DefaultCallbacks, abc.AB
     def on_algorithm_init(
         self,
         *,
-        algorithm: "Algorithm",
+        algorithm: Algorithm,
         metrics_logger: Optional[MetricsLogger] = None,
         **kwargs,
     ) -> None:

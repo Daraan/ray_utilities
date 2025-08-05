@@ -24,7 +24,7 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
 
     def _update_eval_interval(
         self,
-        algorithm: "Algorithm",
+        algorithm: Algorithm,
         metrics_logger: Optional[MetricsLogger] = None,
         *,
         global_step: int,
@@ -75,7 +75,7 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         self._set_budget_on__init__(learner_config_dict=learner_config_dict)
         super().__init__(update_function or self._update_eval_interval, "TBA - DynamicBufferUpdate")
 
-    def _set_evaluation_intervals(self, algorithm: "Algorithm") -> None:
+    def _set_evaluation_intervals(self, algorithm: Algorithm) -> None:
         """Sets: self._evaluation_intervals"""
         self._evaluation_intervals: dict[int, int] = dict(
             zip(
@@ -107,7 +107,7 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
     def on_algorithm_init(
         self,
         *,
-        algorithm: "Algorithm",
+        algorithm: Algorithm,
         metrics_logger: Optional[MetricsLogger] = None,
         **kwargs,
     ) -> None:
@@ -122,7 +122,7 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
     def on_train_result(
         self,
         *,
-        algorithm: "Algorithm",
+        algorithm: Algorithm,
         metrics_logger: Optional[MetricsLogger] = None,
         **kwargs,
     ) -> None:

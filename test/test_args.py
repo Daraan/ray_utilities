@@ -1,11 +1,16 @@
+import argparse
 import logging
 import sys
 import unittest
+from inspect import isclass
+
+from typing_extensions import get_args
 
 from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradientAccumulation
 from ray_utilities.callbacks.algorithm.dynamic_buffer_callback import DynamicBufferUpdate
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
 from ray_utilities.callbacks.algorithm.exact_sampling_callback import exact_sampling_callback
+from ray_utilities.config.typed_argument_parser import LogStatsChoices
 from ray_utilities.connectors.remove_masked_samples_connector import RemoveMaskedSamplesConnector
 from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
@@ -228,7 +233,7 @@ class TestProcessing(unittest.TestCase):
 
         with self.assertLogs(
             logger,
-            logging.ERROR,
+            logging.WARNING,
         ) as ctx:
             setup = AlgorithmSetup(init_trainable=False)
         self.assertEqual(setup.args.minibatch_size, 64)
@@ -240,3 +245,20 @@ class TestProcessing(unittest.TestCase):
             ctx.output[0],
             "Expected an error log when minibatch_size is larger than train_batch_size_per_learner",
         )
+
+    def test_log_stats(self):
+        for choice in get_args(LogStatsChoices):
+            with self.subTest(f"Testing log_stats with choice: {choice}"):
+                with patch_args(
+                    "--log_stats", choice, "--minibatch_size", "8", "--batch_size", "8", "--num_epochs", "1"
+                ):
+                    setup = AlgorithmSetup()
+                    self.assertEqual(setup.args.log_stats, choice)
+                    if isclass(setup.trainable):
+                        _result = setup.trainable_class().train()
+                    else:
+                        _result = setup.trainable(setup.param_space)
+            with patch_args("--log_stats", "invalid_choice"):
+                with self.assertRaises(SystemExit) as context:
+                    AlgorithmSetup()
+                self.assertIsInstance(context.exception.__context__, argparse.ArgumentError)

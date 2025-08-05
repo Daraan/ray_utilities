@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import logging
+import sys
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, cast
 
+if sys.version_info < (3, 11):
+    from exceptiongroup import ExceptionGroup
 import gymnasium as gym
 from gymnasium.envs.registration import VectorizeMode
 from ray.rllib.algorithms.callbacks import DefaultCallbacks, make_multi_callbacks
@@ -44,9 +47,10 @@ def create_algorithm_config(
     catalog_class: Optional[type[Catalog | CatalogWithConfig[_ModelConfig]]],
     learner_class: Optional[type["Learner"]] = None,
     model_config: dict[str, Any] | _ModelConfig,
-    config_class: type[_ConfigType] = PPOConfig,
+    config_class: Optional[type[_ConfigType]] = PPOConfig,
     framework: Literal["torch", "tf2"],
     discrete_eval: bool = False,
+    base: Optional[_ConfigType] = None,
 ) -> tuple[_ConfigType, RLModuleSpec]:
     """
     Creates a basic algorithm
@@ -61,7 +65,16 @@ def create_algorithm_config(
         model_config: Configuration dict describing the torch/tf implemented model, by the module_class
         config_class: Config class of the Algorithm, defaults to PPOConfig
         discrete_eval: Wether to add the DiscreteEvalCallback
+        base: Optional config instance to update instead of creating a new one.
     """
+    if not base and not isinstance(config_class, type):
+        raise ExceptionGroup(
+            "base or config_class must be provided",
+            [
+                ValueError("base or config_class must be provided"),
+                TypeError(f"config_class must be a type, not {type(config_class)}"),
+            ],
+        )
     if not isinstance(args, dict):
         if hasattr(args, "as_dict"):  # Tap
             args = cast("dict[str, Any]", args.as_dict())
@@ -72,7 +85,18 @@ def create_algorithm_config(
     env_spec: Final = env_type or args["env_type"]
     del env_type
     assert env_spec, "No environment specified"
-    config = config_class()
+    if base:
+        config = base
+        if config_class and not issubclass(config_class, type(base)):
+            logger.warning(
+                "base config of type %s is not a subclass of config_class %s, "
+                "change config_class or set config_class to None to avoid this warning.",
+                type(base),
+                config_class,
+            )
+    else:
+        assert config_class is not None
+        config = config_class()
 
     env_config: dict[str, Any] = {}  # kwargs for environment __init__
     if args["render_mode"]:

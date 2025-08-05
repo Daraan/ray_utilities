@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import io
 import os
-import pickle
-import sys
 import tempfile
 from copy import deepcopy
 from typing import TYPE_CHECKING
 from unittest import mock, skip
 
+import pytest
 from ray import tune
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core import COMPONENT_ENV_RUNNER
@@ -19,27 +17,29 @@ from ray.util.multiprocessing import Pool
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.testing_utils import (
+    ENV_RUNNER_CASES,
     Cases,
     DisableGUIBreakpoints,
     DisableLoggers,
     InitRay,
     TestHelpers,
+    format_result_errors,
     iter_cases,
     patch_args,
 )
 from ray_utilities.training.default_class import DefaultTrainable
 from test._mp_trainable import remote_process
 
+try:
+    from ray.train._internal.session import _TrainingResult
+except ImportError:
+    _TrainingResult = None
+
 if TYPE_CHECKING:
     from ray_utilities.typing.trainable_return import TrainableReturnData
 
-if "--fast" in sys.argv:
-    ENV_RUNNER_TESTS = [0]
-else:
-    ENV_RUNNER_TESTS = [0, 1, 2]
 
-
-class TestTrainable(TestHelpers, DisableLoggers, DisableGUIBreakpoints):
+class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
     def test_1_subclass_check(self):
         """This test should run first as it has side-effects concerning ABCMeta"""
         TrainableClass = DefaultTrainable.define(PPOSetup.typed())
@@ -78,12 +78,21 @@ class TestTrainable(TestHelpers, DisableLoggers, DisableGUIBreakpoints):
                 params = setup.sample_params()
                 _result = trainable(params)
 
+    def test_get_trainable_util(self):
+        trainable1, _ = self.get_trainable(num_env_runners=0, env_seed=5)
+        trainable2, _ = self.get_trainable(num_env_runners=0, env_seed=5)
+        self.compare_trainables(trainable1, trainable2, num_env_runners=0, ignore_timers=True)
+
+        trainable1_1, _ = self.get_trainable(num_env_runners=1, env_seed=5)
+        trainable2_1, _ = self.get_trainable(num_env_runners=1, env_seed=5)
+        self.compare_trainables(trainable1_1, trainable2_1, num_env_runners=1, ignore_timers=True)
+
     @patch_args()
     def test_trainable_class_and_overrides(self):
         # Kind of like setUp for the other tests but with default args
         TrainableClass = DefaultTrainable.define(PPOSetup.typed())
         trainable = TrainableClass(
-            overwrite_algorithm=AlgorithmConfig.overrides(
+            algorithm_overrides=AlgorithmConfig.overrides(
                 num_epochs=2, minibatch_size=32, train_batch_size_per_learner=64
             )
         )
@@ -96,17 +105,101 @@ class TestTrainable(TestHelpers, DisableLoggers, DisableGUIBreakpoints):
     @patch_args()
     def test_train(self):
         self.TrainableClass = DefaultTrainable.define(PPOSetup.typed())
-        trainable = self.TrainableClass(overwrite_algorithm=AlgorithmConfig.overrides(evaluation_interval=1))
+        trainable = self.TrainableClass(algorithm_overrides=AlgorithmConfig.overrides(evaluation_interval=1))
         result = trainable.train()
         self.assertIn(EVALUATION_RESULTS, result)
         self.assertGreater(len(result[EVALUATION_RESULTS]), 0)
 
+    def test_overrides_after_restore(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            batch_size1 = 40
+            with patch_args(
+                "--total_steps", "80",
+                "--batch_size", batch_size1,
+                "--minibatch_size", "20",
+                "--comment", "A",
+                "--tags", "test",
+            ):  # fmt: off
+                with AlgorithmSetup() as setup:
+                    setup.config.evaluation(evaluation_interval=1)
+                    setup.config.training(
+                        num_epochs=2,
+                        minibatch_size=10,  # overwrite CLI
+                    )
+                trainable = setup.trainable_class(algorithm_overrides=AlgorithmConfig.overrides(gamma=0.11, lr=2.0))
+                self.assertEqual(trainable._total_steps["total_steps"], 80)
+                self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 40)
+                self.assertEqual(trainable.algorithm_config.minibatch_size, 10)
+                self.assertEqual(trainable.algorithm_config.num_epochs, 2)
+                self.assertEqual(trainable.algorithm_config.gamma, 0.11)
+                self.assertEqual(trainable.algorithm_config.lr, 2.0)
+                self.assertEqual(trainable._setup.args.comment, "A")
+                self.assertEqual(trainable._setup.args.tags, ["test"])
+                for i in range(1, 3):
+                    result = trainable.train()
+                    self.assertEqual(result["training_iteration"], i)
+                    self.assertEqual(result["current_step"], batch_size1 * i)
+                    self.assertEqual(trainable._iteration, i)
+                    self.assertEqual(trainable.get_state()["trainable"]["iteration"], i)
+                trainable.save(tmpdir)
+                trainable.stop()
+            del trainable
+            del setup
+            with patch_args(
+                "--total_steps", 80 + 120,  # Should be divisible by new batch_size
+                "--batch_size", "60",
+                "--comment", "B",
+                "--from_checkpoint", tmpdir,
+            ):  # fmt: off
+                with AlgorithmSetup(init_trainable=False) as setup2:
+                    setup2.config.training(
+                        num_epochs=5,
+                    )
+                    setup2.config_overrides(num_epochs=5)
+                self.assertDictEqual(
+                    setup2.config_overrides(),
+                    {
+                        "num_epochs": 5,
+                    },
+                )
+                # self.assertEqual(setup2.args.total_steps % setup2.args.train_batch_size_per_learner, 0)
+                trainable2 = setup2.trainable_class(
+                    setup2.param_space, algorithm_overrides=AlgorithmConfig.overrides(gamma=0.22, grad_clip=4.321)
+                )
+                assert trainable2._algorithm_overrides is not None
+                self.assertDictEqual(
+                    trainable2._algorithm_overrides,
+                    {
+                        "gamma": 0.22,
+                        "grad_clip": 4.321,
+                    },
+                )
+                assert trainable2._algorithm_overrides
+                self.assertEqual(setup2.args.comment, "B")
+                self.assertEqual(trainable2._iteration, 2)
+                # Do not trust restored setup; still original args
+                self.assertEqual(trainable2._setup.args.comment, "A")
+                self.assertEqual(trainable2.algorithm_config.lr, 0.001)  # default value
+                # left unchanged
+                # From manual adjustment
+                self.assertEqual(trainable2.algorithm_config.num_epochs, 5)
+                # Should change
+                # from override
+                self.assertEqual(trainable2.algorithm_config.gamma, 0.22)
+                self.assertEqual(trainable2.algorithm_config.grad_clip, 4.321)
+                # From CLI
+                self.assertEqual(trainable2.algorithm_config.train_batch_size_per_learner, 60)
+                self.assertEqual(trainable2._total_steps["total_steps"], 80 + 120)
+                # NOT restored as set by config_from_args
+                self.assertEqual(trainable2.algorithm_config.minibatch_size, 20)
 
-class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
+
+class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints, num_cpus=4):
     def setUp(self):
         super().setUp()
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
     def test_save_checkpoint(self, cases):
         # NOTE: In this test attributes are shared BY identity, this is just a weak test.
         for num_env_runners in iter_cases(cases):
@@ -114,38 +207,53 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             with tempfile.TemporaryDirectory() as tmpdir:
                 # NOTE This loads some parts by identity!
                 saved_ckpt = trainable.save_checkpoint(tmpdir)
-                saved_ckpt = deepcopy(saved_ckpt)  # make sure we do not modify the original
-                # pickle and load
-                if False:
-                    # fails because of:  AttributeError: Can't pickle local object 'mix_learners.<locals>.MixedLearner'
-                    # Serialize saved_ckpt to a BytesIO object
-                    buf = io.BytesIO()
-                    pickle.dump(saved_ckpt, buf)
-                    buf.seek(0)
-                    # Deserialize from BytesIO
-                    saved_ckpt = pickle.load(buf)
+                saved_ckpt = deepcopy(saved_ckpt)  # assure to not compare by identity
                 with patch_args():  # make sure that args do not influence the restore
                     trainable2 = self.TrainableClass()
                     trainable2.load_checkpoint(saved_ckpt)
             self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
-            trainable2.cleanup()
+            trainable.stop()
+            trainable2.stop()
 
-    @Cases(ENV_RUNNER_TESTS)
-    def test_save_restore(self, cases):
+    @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
+    def test_save_restore_dict(self, cases):
         for num_env_runners in iter_cases(cases):
             trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
             with self.subTest(num_env_runners=num_env_runners):
                 with tempfile.TemporaryDirectory() as tmpdir:
-                    training_result = trainable.save(tmpdir)  # calls save_checkpoint
-                    print(f"Saved training result: {training_result}")
+                    training_result: _TrainingResult = trainable.save(tmpdir)  # pyright: ignore[reportInvalidTypeForm] # calls save_checkpoint
                     with patch_args():  # make sure that args do not influence the restore
                         trainable2 = self.TrainableClass()
-                        trainable2.restore(deepcopy(training_result))  # calls load_checkpoint
-                        self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
-                        trainable2.cleanup()
+                        with self.subTest("Restore trainable from dict"):
+                            if _TrainingResult is not None:
+                                self.assertIsInstance(training_result, _TrainingResult)
+                            trainable2.restore(deepcopy(training_result))  # calls load_checkpoint
+                            self.compare_trainables(trainable, trainable2, "from dict", num_env_runners=num_env_runners)
+                            trainable2.stop()
+            trainable.stop()
 
-    @Cases(ENV_RUNNER_TESTS)
-    def test_get_set_state(self, cases):
+    @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
+    def test_save_restore_path(self, cases):
+        for num_env_runners in iter_cases(cases):
+            trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
+            with self.subTest(num_env_runners=num_env_runners):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    trainable.save(tmpdir)  # calls save_checkpoint
+                    with patch_args():  # make sure that args do not influence the restore
+                        trainable3 = self.TrainableClass()
+                        self.assertIsInstance(tmpdir, str)
+                        trainable3.restore(tmpdir)  # calls load_checkpoint
+                        self.compare_trainables(trainable, trainable3, "from path", num_env_runners=num_env_runners)
+                        trainable3.stop()
+            trainable.stop()
+
+    @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
+    def test_1_get_set_state(self, cases):
+        # If this test fails all others will most likely fail too, run it first.
+        self.maxDiff = None
         for num_env_runners in iter_cases(cases):
             trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
             state = trainable.get_state()
@@ -156,24 +264,23 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             trainable2.set_state(deepcopy(state))
             # class is missing in config dict
             self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
-            # trainable.cleanup()
-            trainable2.cleanup()
+            trainable.stop()
+            trainable2.stop()
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases  # might deadlock with num_env_runners >= 2
     def test_safe_to_path(self, cases):
         """Test that the trainable can be saved to a path and restored."""
         for num_env_runners in iter_cases(cases):
             trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
             with tempfile.TemporaryDirectory() as tmpdir:
                 trainable.save_to_path(tmpdir)
-                import os
-
-                print(os.listdir(tmpdir))
-                print(os.listdir(tmpdir + "/algorithm"))
                 with patch_args():
                     trainable2 = self.TrainableClass()
                     trainable2.restore_from_path(tmpdir)
             self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
+            trainable.stop()
+            trainable2.stop()
 
     def test_validate_save_restore(self):
         """Basically test if TRAINING_ITERATION is set correctly."""
@@ -186,75 +293,158 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             self.assertEqual(trainable._setup.args.iterations, 5)
             self.assertEqual(trainable._setup.args.total_steps, 320)
             validate_save_restore(PPOTrainable)
-            trainable.cleanup()
-        # ray.shutdown()
+            trainable.stop()
 
-    @Cases([0])
-    def test_interface_interchangeability(self, cases):
+    @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
+    def test_interchange_save_checkpoint_restore_from_path(self, cases):
+        """Test if methods can be used interchangeably."""
+        # NOTE: restore_from_path currently does not set (local) env_runner state when num_env_runners > 0
+        for num_env_runners in iter_cases(cases):
+            trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
+            # Save to save_checkpoint saves less data; i.e. no class and kwargs
+            with self.subTest("save_checkpoint -> restore_from_path", num_env_runners=num_env_runners):
+                with tempfile.TemporaryDirectory() as tmpdir1:
+                    trainable.save_checkpoint(tmpdir1)
+                    with patch_args():
+                        trainable_from_path = self.TrainableClass()
+                        trainable_from_path.restore_from_path(tmpdir1)
+                self.compare_trainables(
+                    trainable,
+                    trainable_from_path,
+                    "save_checkpoint -> restore_from_path",
+                    num_env_runners=num_env_runners,
+                )
+            trainable.stop()
+            trainable_from_path.stop()
+
+    @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
+    def test_interchange_save_checkpoint_from_checkpoint(self, cases):
         """Test if methods can be used interchangeably."""
         for num_env_runners in iter_cases(cases):
-            # create two trainables as compare_trainables takes a step
-            trainable_a, _ = self.get_trainable(num_env_runners=num_env_runners)
-            trainable_b, _ = self.get_trainable(num_env_runners=num_env_runners)
+            trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
             # Save to save_checkpoint saves less data; i.e. no class and kwargs
-            with self.subTest("save_checkpoint -> restore_from_path"):
-                with tempfile.TemporaryDirectory() as tmpdir1, tempfile.TemporaryDirectory() as tmpdir2:
-                    trainable_a.save_checkpoint(tmpdir1)
-                    trainable_b.save_checkpoint(tmpdir2)
+            with self.subTest("save_checkpoint -> from_checkpoint", num_env_runners=num_env_runners):
+                with tempfile.TemporaryDirectory() as tmpdir1:
+                    trainable.save_checkpoint(tmpdir1)
                     with patch_args():
-                        trainable2 = self.TrainableClass()
-                        trainable2.restore_from_path(tmpdir1)
-                        trainable2_b: DefaultTrainable = self.TrainableClass.from_checkpoint(tmpdir2)  # pyright: ignore[reportAssignmentType]
-                self.compare_trainables(trainable_a, trainable2, num_env_runners=num_env_runners)
-                self.compare_trainables(trainable_b, trainable2_b, num_env_runners=num_env_runners)
-            del trainable2
-            del trainable2_b
-            del trainable_a
-            del trainable_b
-            with self.subTest("save_to_path -> load_checkpoint"):
-                trainable_c, _ = self.get_trainable(num_env_runners=num_env_runners)
-                trainable_d, _ = self.get_trainable(num_env_runners=num_env_runners)
-                with tempfile.TemporaryDirectory() as tmpdir1, tempfile.TemporaryDirectory() as tmpdir2:
-                    trainable_c.save_to_path(tmpdir1)
-                    trainable_d.save_to_path(tmpdir2)
-                    with patch_args():
-                        trainable3 = self.TrainableClass()
-                        trainable3.load_checkpoint(tmpdir1)
-                        trainable3_b: DefaultTrainable = self.TrainableClass.from_checkpoint(tmpdir2)  # pyright: ignore[reportAssignmentType]
-                self.compare_trainables(trainable_c, trainable3, num_env_runners=num_env_runners)
-                self.compare_trainables(trainable_d, trainable3_b, num_env_runners=num_env_runners)
-
-    def test_restore_multiprocessing(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # pool works
-            pool = Pool(1)
-            pickled_trainable = pool.map(remote_process, [(tmpdir, None)])[0]
-            # pickled_trainable_2 = parent_conn.recv()
-            pool.close()
-            print("Restoring trainable from saved data")
-            trainable_restored = DefaultTrainable.define(PPOSetup.typed()).from_checkpoint(tmpdir)
-            # Compare with default trainable:
-            print("Create new default trainable")
-            self._disable_loggers.start()
-            trainable, _ = self.get_trainable()
-            self.compare_trainables(
-                trainable,
-                trainable_restored,
-            )
-            print("Compareing restored trainable with pickled trainable")
-            if pickled_trainable is not None:
-                trainable_restored2 = pickle.loads(pickled_trainable)
+                        trainable_from_checkpoint: DefaultTrainable = self.TrainableClass.from_checkpoint(tmpdir1)
                 self.compare_trainables(
-                    trainable_restored,  # <-- need new trainable here
-                    trainable_restored2,
+                    trainable,
+                    trainable_from_checkpoint,
+                    "save_checkpoint -> from_checkpoint",
+                    num_env_runners=num_env_runners,
+                    # NOTE: from_checkpoint loads the local env_runner state correctly, but it reflects remote
+                    # the restore_from_path variant does not do that
+                    ignore_env_runner_state=num_env_runners > 0,
                 )
+            trainable.stop()
+            trainable_from_checkpoint.stop()
 
-    @Cases(ENV_RUNNER_TESTS)
+    @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
+    def test_interchange_save_to_path_restore_from_path(self, cases):
+        """Test if methods can be used interchangeably."""
+        # NOTE: restore_from_path currently does not set (local) env_runner state when num_env_runners > 0
+        for num_env_runners in iter_cases(cases):
+            trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
+            # Save to save_checkpoint saves less data; i.e. no class and kwargs
+            with self.subTest("save_to_path -> restore_from_path", num_env_runners=num_env_runners):
+                with tempfile.TemporaryDirectory() as tmpdir1:
+                    trainable.save_to_path(tmpdir1)
+                    with patch_args():
+                        trainable_from_path = self.TrainableClass()
+                        trainable_from_path.restore_from_path(tmpdir1)
+                self.compare_trainables(
+                    trainable,
+                    trainable_from_path,
+                    "save_to_path -> restore_from_path",
+                    num_env_runners=num_env_runners,
+                    # NOTE: from_checkpoint loads the local env_runner state correctly, but it reflects remote
+                    ignore_env_runner_state=num_env_runners > 0,
+                )
+            trainable.stop()
+            trainable_from_path.stop()
+
+    @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
+    def test_interchange_save_to_path_from_checkpoint(self, cases):
+        """Test if methods can be used interchangeably."""
+        for num_env_runners in iter_cases(cases):
+            trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
+            # Save to save_checkpoint saves less data; i.e. no class and kwargs
+            with self.subTest("save_to_path -> from_checkpoint", num_env_runners=num_env_runners):
+                with tempfile.TemporaryDirectory() as tmpdir1:
+                    trainable.save_to_path(tmpdir1)
+                    with patch_args():
+                        trainable_from_checkpoint: DefaultTrainable = self.TrainableClass.from_checkpoint(tmpdir1)
+                if num_env_runners > 0:
+                    assert trainable_from_checkpoint.algorithm.env_runner_group
+                    remote_configs = trainable_from_checkpoint.algorithm.env_runner_group.foreach_env_runner(
+                        lambda r: r.config
+                    )
+                self.compare_trainables(
+                    trainable,
+                    trainable_from_checkpoint,
+                    "save_to_path -> from_checkpoint",
+                    num_env_runners=num_env_runners,
+                    ignore_env_runner_state=num_env_runners > 0,
+                )
+            trainable.stop()
+            trainable_from_checkpoint.stop()
+
+    @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
+    def test_restore_multiprocessing(self, cases):
+        for num_env_runners in iter_cases(cases):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # pool works
+                pool = Pool(1)
+                data = {
+                    "dir": tmpdir,
+                    "connection": None,
+                    "num_env_runners": num_env_runners,
+                    "env_seed": 5,
+                }
+                pickled_trainable = pool.map(remote_process, [data])[0]
+                # pickled_trainable_2 = parent_conn.recv()
+                pool.close()
+                print("Restoring trainable from saved data")
+                trainable_restored = DefaultTrainable.define(PPOSetup.typed()).from_checkpoint(tmpdir)
+                # Compare with default trainable:
+                print(f"Create new default trainable num_env_runners={num_env_runners}")
+                self._disable_tune_loggers.start()
+                trainable, _ = self.get_trainable(num_env_runners=num_env_runners, env_seed=data["env_seed"])
+                self.compare_trainables(
+                    trainable, trainable_restored, num_env_runners=num_env_runners, ignore_timers=True
+                )
+                trainable.stop()
+                if pickled_trainable is not None:  # TODO: Use cloudpickle
+                    print("Comparing restored trainable with pickled trainable")
+                    import cloudpickle
+
+                    trainable_restored2 = cloudpickle.loads(pickled_trainable)
+                    self.compare_trainables(
+                        trainable_restored,  # <-- need new trainable here
+                        trainable_restored2,
+                        num_env_runners=num_env_runners,
+                    )
+                    trainable_restored2.stop()
+                trainable_restored.stop()
+
+    @Cases(ENV_RUNNER_CASES)
+    @pytest.mark.env_runner_cases
+    @pytest.mark.tuner
     def test_tuner_checkpointing(self, cases):
         # self.enable_loggers()
         with patch_args(
-            "--num_samples", "1", "--num_jobs", "1", "--batch_size", "32", "--minibatch_size", "16", "--iterations", "3"
-        ):
+            "--num_samples", "1",
+            "--num_jobs", "1",
+            "--batch_size", "32",
+            "--minibatch_size", "16",
+            "--iterations", "3",
+        ):  # fmt: off
             for num_env_runners in iter_cases(cases):
                 with self.subTest(num_env_runners=num_env_runners):
                     setup = AlgorithmSetup(init_trainable=False)
@@ -270,7 +460,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                         # NOTE: num_keep does not appear to work here
                     )
                     result = tuner.fit()
-                    self.assertEqual(result.num_errors, 0, "Encountered errors: " + str(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+                    self.assertEqual(result.num_errors, 0, format_result_errors(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
                     checkpoint_dir, checkpoints = self.get_checkpoint_dirs(result[0])
                     self.assertEqual(
                         len(checkpoints),
@@ -296,10 +486,18 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                             iteration_after_step=step + 1,
                             step=step,
                         )
+                        trainable_from_ckpt.stop()
                         trainable_restore = DefaultTrainable.define(setup)()
+                        # Problem restore uses load_checkpoint, which passes a dict to load_checkpoint                        # however the checkpoint dir is unknown inside the loaded dict
                         trainable_restore.restore(checkpoint)
                         self.assertEqual(trainable_restore.algorithm.iteration, step)
-                        trainable_from_path.restore_from_path(checkpoint)  # load a second time to test as well
+                        self.assertIsInstance(checkpoint, str)
+                        # load a second time to test as well
+                        # NOTE: reuse: Currently this does not set some states correctly on the metrics_logger
+                        # https://github.com/ray-project/ray/issues/55248, larger batch_size should fix it
+                        # HACK: Only one might contain mean/max/min stats for env_runners--(module/agent)episode_return
+                        trainable_from_path.algorithm.metrics.reset()  # pyright: ignore[reportOptionalMemberAccess]
+                        trainable_from_path.restore_from_path(checkpoint)
                         self.compare_trainables(
                             trainable_restore,
                             trainable_from_path,
@@ -307,6 +505,8 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                             iteration_after_step=step + 1,
                             step=step,
                         )
+                        trainable_from_path.stop()
+                        trainable_restore.stop()
 
     @skip("TODO implement")
     def check_dynamic_settings_on_reload(self):

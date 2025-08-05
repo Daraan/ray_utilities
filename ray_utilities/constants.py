@@ -103,3 +103,11 @@ passed to the learner."""
 NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME = "num_env_steps_passed_to_learner_lifetime"
 """When using exact sampling the key for the logger to log the number of environment steps actually
 passed to the learner over the lifetime of the algorithm."""
+
+CURRENT_STEP = "current_step"
+"""
+The current step in the training process, at the top level of the metrics dict.
+
+With exact sampling aligns with `NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME` otherwise
+with `NUM_ENV_STEPS_SAMPLED_LIFETIME`.
+"""

@@ -1,24 +1,33 @@
 # pyright: reportOptionalMemberAccess=information
 from __future__ import annotations
 
-# pyright: reportOptionalMemberAccess=none
+import difflib
+import logging
+import math
 import os
 import pathlib
+import pprint
 import random
 import sys
 import unittest
+import unittest.util
+from collections import deque
 from contextlib import nullcontext
 from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Collection, Iterable, TypeAlias, TypeVar, final
+from typing import TYPE_CHECKING, Any, ClassVar, Collection, Iterable, Optional, TypeAlias, TypeVar, final
 from unittest import mock
 
+import debugpy  # noqa: T100
 import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import numpy.testing as npt
 import ray
+import ray.tune
+import ray.tune.logger
+import ray.tune.logger.unified
 import tree
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
@@ -28,16 +37,18 @@ from ray.rllib.utils.metrics import (
     LEARNER_RESULTS,
     TIMERS,
 )
+from ray.rllib.utils.metrics.stats import Stats
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.search.sample import Categorical, Domain, Float, Integer
 from typing_extensions import Final, NotRequired, Required, Sentinel, get_origin, get_type_hints
 
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
-from ray_utilities.training.default_class import DefaultTrainable
+from ray_utilities.training.default_class import DefaultTrainable, TrainableStateDict
+from ray_utilities.training.helpers import nan_to_zero_hist_leaves
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     import chex
     from flax.training.train_state import TrainState
@@ -51,6 +62,21 @@ if TYPE_CHECKING:
 
     LeafType: TypeAlias = pytree.SequenceKey | pytree.DictKey | pytree.GetAttrKey
 
+if "--fast" in sys.argv:
+    TWO_ENV_RUNNER_CASES: list[tuple[int, int]] = [(0, 1)]
+elif "--mp-only" in sys.argv:
+    TWO_ENV_RUNNER_CASES = [(1, 2)]
+else:
+    TWO_ENV_RUNNER_CASES = [(0, 1), (0, 2), (1, 2)]
+
+if "--fast" in sys.argv:
+    ENV_RUNNER_CASES: list[int] = [0]
+elif "--mp-only" in sys.argv:
+    ENV_RUNNER_CASES = [1, 2]
+else:
+    ENV_RUNNER_CASES = [0, 1, 2]
+
+
 args_train_no_tuner = mock.patch.object(
     sys, "argv", ["file.py", "--a", "NA", "--no-render_env", "-J", "1", "-it", "2", "-np"]
 )
@@ -58,6 +84,13 @@ clean_args = mock.patch.object(sys, "argv", ["file.py", "-a", "NA"])
 """Use when comparing to CLIArgs"""
 
 _C = TypeVar("_C", bound="Callable[[Any, mock.MagicMock], Any]")
+
+# pyright: enableExperimentalFeatures=true
+_NOT_PROVIDED = Sentinel(
+    "_NOT_PROVIDED",
+)
+
+logger = logging.getLogger(__name__)
 
 
 @final
@@ -84,20 +117,22 @@ def iter_cases(cases: type[Cases] | mock.MagicMock):
     try:
         while True:
             if isinstance(cases, mock.MagicMock):
-                yield cases()
+                next_case = cases()
             else:
-                yield cases.next()
+                next_case = cases.next()
+            logger.info("======= NEXT CASE: %s =======", next_case)
+            yield next_case
     except StopIteration:
         return
     except BaseException:
         raise
 
 
-def patch_args(*args: str):
+def patch_args(*args: str | int):
     patch = [
         "file.py",
         *(("-a", "no_actor_provided by patch_args") if ("-a" not in args and "--actor_type" not in args) else ()),
-        *args,
+        *map(str, args),
     ]
     return mock.patch.object(
         sys,
@@ -122,12 +157,12 @@ def get_optional_keys(cls):
     return cls.__optional__keys - get_explicit_required_keys(cls)
 
 
-NOT_FOUND = object()
+_NOT_FOUND = object()
 
 
 def get_leafpath_value(leaf: LeafType):
     """Returns the path value of a leaf, could be index (list), key (dict), or name (attribute)."""
-    return getattr(leaf, "name", getattr(leaf, "key", getattr(leaf, "idx", NOT_FOUND)))
+    return getattr(leaf, "name", getattr(leaf, "key", getattr(leaf, "idx", _NOT_FOUND)))
 
 
 class DisableLoggers(unittest.TestCase):
@@ -135,14 +170,21 @@ class DisableLoggers(unittest.TestCase):
 
     def enable_loggers(self):
         """Enable loggers after disabling them in setUp."""
-        self._disable_loggers.stop()
+        self._disable_tune_loggers.stop()
+        self._disable_file_loggers.stop()
+        self._disable_file_loggers2.stop()
         self._mock_env.stop()
 
     def setUp(self):
         self._mock_env = mock.patch.dict("os.environ", {"TUNE_DISABLE_AUTO_CALLBACK_LOGGERS": "1"})
         self._mock_env.start()
-        self._disable_loggers = mock.patch("ray_utilities.callbacks.tuner.create_tuner_callbacks", return_value=[])
-        self._disable_loggers.start()
+        self._disable_tune_loggers = mock.patch("ray_utilities.callbacks.tuner.create_tuner_callbacks", return_value=[])
+        self._disable_tune_loggers.start()
+        self._disable_file_loggers = mock.patch.object(ray.tune.logger, "DEFAULT_LOGGERS", ())
+        self._disable_file_loggers.start()
+        self._disable_file_loggers2 = mock.patch.object(ray.tune.logger.unified, "DEFAULT_LOGGERS", ())
+        """Disable local copy used by UnifiedLogger"""
+        self._disable_file_loggers2.start()
         super().setUp()
 
     def tearDown(self):
@@ -158,6 +200,7 @@ class InitRay(unittest.TestCase):
             ray.init(
                 include_dashboard=False,
                 ignore_reinit_error=True,
+                num_cpus=cls._num_cpus,
             )
         super().setUpClass()
 
@@ -168,19 +211,54 @@ class InitRay(unittest.TestCase):
             ray.shutdown()
         super().tearDownClass()
 
+    def __init_subclass__(cls, num_cpus: Optional[int] = None, *args, **kwargs) -> None:
+        cls._num_cpus = num_cpus
+        super().__init_subclass__(*args, **kwargs)
+
 
 OVERRIDE_KEYS: Final[set[str]] = {"num_env_runners", "num_epochs", "minibatch_size", "train_batch_size_per_learner"}
 
-# pyright: enableExperimentalFeatures=true
-_NOT_PROVIDED = Sentinel(
-    "_NOT_PROVIDED",
-)
+
+def _remove_values_on_tensor_stats(struct, path: tuple[str, ...] = (), parent: dict[str, Any] | None = None):
+    if isinstance(struct, dict):
+        return {k: _remove_values_on_tensor_stats(v, (*path, k), struct) for k, v in struct.items()}
+    if isinstance(struct, list):
+        return [_remove_values_on_tensor_stats(v, path, parent) for v in struct]
+    if path and path[-1] == "values" and parent is not None and parent.get("_is_tensor"):
+        if isinstance(struct, deque):
+            return deque(maxlen=struct.maxlen)
+    elif path and path[-1] == "_is_tensor":
+        return False
+    return struct
+
+
+def _fix_throughput_stats(stats: dict[str, Any]) -> dict[str, Any]:
+    """Using > 1 num_env_runners will save > 1 value in throughput_stats, get_state will reduce them however"""
+    stats = stats.copy()
+    for k, stat in stats.items():
+        if "throughput_stats" not in stat:
+            continue
+        stats[k] = stat = stat.copy()  # noqa: PLW2901
+        t_stat = Stats.from_state(stat["throughput_stats"])
+        stat["throughput_stats"]["values"] = t_stat.peek()
+    return stats
+
+
+def _remove_throughput_stats(stats: dict[str, Any]):
+    stats = stats.copy()
+    for k, stat in stats.items():
+        if "throughput_stats" not in stat:
+            continue
+        stats[k] = stat = stat.copy()  # noqa: PLW2901
+        del stat["throughput_stats"]
+    return stats
 
 
 class TestHelpers(unittest.TestCase):
     # region setups
 
     def setUp(self):
+        AlgorithmSetup.PROJECT = "TESTING"
         super().setUp()
         self._env_seed_rng = random.Random(111)
 
@@ -192,8 +270,12 @@ class TestHelpers(unittest.TestCase):
         super().tearDown()
 
     @patch_args(
-        "--iterations", "5", "--total_steps", "320", "--batch_size", "64", "--comment", "running tests", "--seed", "42"
-    )
+        "--iterations", "5",
+        "--total_steps", "320",
+        "--batch_size", "64",
+        "--comment", "created by TestHelpers.get_trainable",
+        "--seed", "42",
+    )  # fmt: off
     def get_trainable(self, *, num_env_runners: int = 0, env_seed: int | None | _NOT_PROVIDED = _NOT_PROVIDED):
         # NOTE: In this test attributes are shared BY identity, this is just a weak test.
         self.TrainableClass: type[DefaultTrainable[DefaultArgumentParser, PPOConfig, PPO]] = DefaultTrainable.define(
@@ -209,9 +291,9 @@ class TestHelpers(unittest.TestCase):
             if not hasattr(self, "_env_seed_rng"):
                 self.setUp()
             env_seed = self._env_seed_rng.randint(0, 2**15 - 1)
-        trainable = self.TrainableClass({"env_seed": env_seed}, overwrite_algorithm=overrides)
+        trainable = self.TrainableClass({"env_seed": env_seed}, algorithm_overrides=overrides)
         self._created_trainables.append(trainable)
-        self.assertEqual(trainable._overwrite_algorithm, overrides)
+        self.assertEqual(trainable._algorithm_overrides, overrides)
         self.assertEqual(overrides.keys(), OVERRIDE_KEYS)
         self.assertEqual(trainable.algorithm_config.num_env_runners, num_env_runners)
         self.assertEqual(trainable.algorithm_config.minibatch_size, 32)
@@ -221,7 +303,7 @@ class TestHelpers(unittest.TestCase):
         self.assertEqual(trainable._setup.args.total_steps, 320)
         self.assertEqual(trainable._setup.args.train_batch_size_per_learner, 64)  # not overwritten
 
-        result1 = trainable.step()
+        result1 = trainable.train()
         return trainable, result1
 
     # endregion
@@ -261,7 +343,7 @@ class TestHelpers(unittest.TestCase):
                     val1, val2, err_msg=f"Attribute '{attr_checked}.{path1}' not equal in both states {msg}"
                 )
 
-    def util_test_compare_env_runner_results(
+    def compare_env_runner_results(
         self,
         metrics_0: dict[str, Any],
         metrics_1: dict[str, Any],
@@ -269,6 +351,8 @@ class TestHelpers(unittest.TestCase):
         *,
         strict: bool = False,
         compare_results: bool | None = None,
+        ignore: Collection[str] = (),
+        seed_subset_ok=False,
     ):
         """
         Args:
@@ -280,13 +364,15 @@ class TestHelpers(unittest.TestCase):
             compare_results: If False, some keys are ignored in the comparison.
         """
         key_difference = set(metrics_0.keys()).symmetric_difference(metrics_1.keys())
-        print("Key differences for metrics:", sorted(key_difference))
+        # print("Key differences for metrics:", sorted(key_difference))
         same_keys = set(metrics_0.keys()).intersection(metrics_1.keys())
         all_keys = same_keys | key_difference
         if not strict:
             all_keys.discard("env_to_module_sum_episodes_length_in")  # might be wrong due to restore
             all_keys.discard("env_to_module_sum_episodes_length_out")
             all_keys.difference_update(key_difference)
+        # remove timer stats
+        all_keys = {k for k in all_keys if not k.endswith("_throughput")}
         if compare_results is None:
             compare_results = strict
         if not compare_results:
@@ -302,8 +388,30 @@ class TestHelpers(unittest.TestCase):
             all_keys.discard("episode_return_mean")
             all_keys.discard("num_episodes_lifetime")  # needs same sampling
         all_keys.discard("num_episodes_lifetime")  # Remove because of metrics restore bug # 54324
+        all_keys.difference_update(ignore)
         self.set_max_diff(None)
-        self.assertDictEqual({k: metrics_0[k] for k in all_keys}, {k: metrics_1[k] for k in all_keys}, msg=msg)
+        # compare nan values, some int values might be (not) cast to float
+        self.assertEqual(
+            {k: math.isnan(v) for k in all_keys if isinstance(v := metrics_0[k], (float, int))},
+            {k: math.isnan(v) for k in all_keys if isinstance(v := metrics_1[k], (float, int))},
+            msg=(msg or "") + f" NaN values differ: {metrics_0}\n!=\n{metrics_1} {msg}",
+        )
+        # not nans
+        if "environments" in metrics_0 and seed_subset_ok:
+            metrics_0 = deepcopy(metrics_0)
+            metrics_1 = deepcopy(metrics_1)
+            seeds0 = metrics_0["environments"]["seeds"]
+            seeds1 = metrics_1["environments"]["seeds"]
+            # when having multiple env runners the seed sequence might be
+            seq0 = set(seeds0.pop("seed_sequence"))  # A
+            seq1 = set(seeds1.pop("seed_sequence"))  # A B
+            self.assertTrue(seq0 <= seq1 or seq0 >= seq1)
+
+        self.assertDictEqual(
+            {k: v for k in all_keys if not (isinstance(v := metrics_0[k], float) and math.isnan(v))},
+            {k: v for k in all_keys if not (isinstance(v := metrics_1[k], float) and math.isnan(v))},
+            msg=msg,
+        )
 
     def util_test_state_equivalence(
         self,
@@ -314,7 +422,7 @@ class TestHelpers(unittest.TestCase):
         ignore: Collection[str] = (),
         ignore_leaves: Collection[str] = (),
     ):
-        """Check if two states are equivalent."""
+        """Check if two JAX Train States states are equivalent."""
         # Check if the parameters and indices are equal
         if isinstance(ignore, str):
             ignore = {ignore}
@@ -361,11 +469,37 @@ class TestHelpers(unittest.TestCase):
                     self.assertTrue(
                         comp.all(), f"Attribute '{attr}' not equal in both states: {attr1}\n!=\n{attr2}\n{msg}"
                     )
+                else:
+                    self.assertTrue(comp, f"Attribute '{attr}' not equal in both states: {attr1}\n!=\n{attr2}\n{msg}")
 
         # NOTE: Apply gradients modifies state
 
+    def compare_metrics_in_results(
+        self,
+        result1: Mapping,
+        result2: Mapping,
+        expected: float | Iterable[Any],
+        metrics: Collection[str],
+        msg: str | None = None,
+    ):
+        """Check that the metrics in both results are equal."""
+        if not isinstance(expected, Iterable):
+            expected = [expected] * len(metrics)  # same result
+        for expected_value, metric in zip(expected, metrics):
+            self.assertIn(metric, result1)
+            self.assertIn(metric, result2)
+            with self.subTest(msg.format(metric), metric=metric):
+                self.assertEqual(
+                    result1[metric],
+                    result2[metric],
+                )
+                self.assertEqual(
+                    result1[metric],
+                    expected_value,
+                )
+
     @staticmethod
-    def _filter_incompatible_remote_config(config: dict[str, Any]) -> dict[str, Any]:
+    def filter_incompatible_remote_config(config: dict[str, Any]) -> dict[str, Any]:
         if "tf_session_args" in config:
             config["tf_session_args"]["inter_op_parallelism_threads"] = "removed_key_for_test"
             config["tf_session_args"]["intra_op_parallelism_threads"] = "removed_key_for_test"
@@ -380,7 +514,13 @@ class TestHelpers(unittest.TestCase):
         return config
 
     def compare_weights(
-        self, weights1: dict[str, Any], weights2: dict[str, Any], msg: str = "", ignore: Collection[str] = ()
+        self,
+        weights1: dict[str, Any],
+        weights2: dict[str, Any],
+        msg: str = "",
+        ignore: Collection[str] = (),
+        *,
+        almost: bool = False,
     ):
         keys1 = set(weights1.keys()) - set(ignore)
         keys2 = set(weights2.keys()) - set(ignore)
@@ -390,28 +530,56 @@ class TestHelpers(unittest.TestCase):
                 continue
             self.assertEqual(type(w1), type(weights2[key]), f"Weight '{key}' type does not match: {msg}")
             if isinstance(weights2[key], dict) and isinstance(w1, dict):
-                self.compare_weights(w1, weights2[key], f"Weight '{key}' does not match: {msg}")
+                self.compare_weights(w1, weights2[key], f"Weight '{key}' does not match: {msg}", almost=almost)
                 continue
-            npt.assert_array_equal(
-                w1,
-                weights2[key],
-                err_msg=f"Key '{key}' not equal in both states {msg}",
-            )
+            if isinstance(w1, str):  # if other structures are present
+                self.assertEqual(w1, weights2[key], f"Key '{key}' not equal in both states {msg}")
+                continue
+            if isinstance(w1, list) and any(isinstance(x, dict) for x in w1):
+                # If list contains dicts, compare dicts
+                try:
+                    self.assertListEqual(w1, weights2[key], f"Key '{key}' not equal in both states {msg}")
+                except (ValueError, AssertionError):  # could be almost equal
+                    self.assertEqual(len(w1), len(weights2[key]), f"Key '{key}' not equal in both states {msg}")
+                    for i, item in enumerate(w1):
+                        self.compare_weights(
+                            item, weights2[key][i], f"Key '{key}[{i}]' not equal in both states {msg}", almost=almost
+                        )
+                    continue
+                else:
+                    continue
+            if w1 is None:
+                self.assertIsNone(weights2[key], f"Key '{key}' not equal in both states {msg}")
+                continue
+            if almost:
+                # Use almost equal for floats, arrays, etc.
+                npt.assert_array_almost_equal(
+                    w1,
+                    weights2[key],
+                    err_msg=f"Key '{key}' not equal in both states {msg}",
+                )
+            else:
+                npt.assert_array_equal(
+                    w1,
+                    weights2[key],
+                    err_msg=f"Key '{key}' not equal in both states {msg}",
+                )
 
     # region tests
 
-    def compare_env_runner_configs(self, algo: Algorithm, algo_restored: Algorithm):
-        self.set_max_diff(max(self.maxDiff or 0, 13000))
+    def compare_env_runner_configs(self, algo: Algorithm, algo_restored: Algorithm, *, local_runner=True):
+        self.set_max_diff(self.maxDiff and max(self.maxDiff or 0, 20000))
 
         def assertCleanDictEqual(a, b, *args, **kwargs):  # noqa: N802
             self.assertDictEqual(
-                self._filter_incompatible_remote_config(a), self._filter_incompatible_remote_config(b), *args, **kwargs
+                self.filter_incompatible_remote_config(a), self.filter_incompatible_remote_config(b), *args, **kwargs
             )
 
         algo_config_dict = algo.config.to_dict()
         algo_restored_config_dict = algo_restored.config.to_dict()
         assertCleanDictEqual(algo_restored_config_dict, algo_config_dict)
-        if algo.config.num_env_runners == 0:  # pyright: ignore[reportOptionalMemberAccess]
+        assert algo.config
+        if algo.config.num_env_runners == 0:
             self.assertEqual(algo_restored.config.num_env_runners, 0)  # pyright: ignore[reportOptionalMemberAccess]
             assertCleanDictEqual(
                 (algo.env_runner.config.to_dict()),
@@ -421,31 +589,48 @@ class TestHelpers(unittest.TestCase):
             assertCleanDictEqual(restored_env_runner_config_dict, algo_restored_config_dict)
             assertCleanDictEqual(algo_config_dict, restored_env_runner_config_dict)
 
-        remote_configs = algo.env_runner_group.foreach_env_runner(lambda r: r.config.to_dict())
+        remote_configs = algo.env_runner_group.foreach_env_runner(lambda r: r.config.to_dict(), local_env_runner=False)
+        local_config = algo.env_runner_group.local_env_runner.config.to_dict()
+
         # Possible ignore local env_runner here when using remotes
-        for i, config in enumerate(remote_configs):
+        for i, config in enumerate((local_config, *remote_configs), start=1):
             assertCleanDictEqual(
-                config, algo_config_dict, f"Remote config {i}/{len(remote_configs)} does not match algo config"
+                config,
+                algo_config_dict,
+                ("Local config" if config is local_config else "Remote config")
+                + f" {i}/{len(remote_configs)} does not match algo config",
             )
-        remote_configs_restored = algo_restored.env_runner_group.foreach_env_runner(lambda r: r.config.to_dict())
-        for i, config in enumerate(remote_configs_restored):
+        remote_configs_restored = algo_restored.env_runner_group.foreach_env_runner(
+            lambda r: r.config.to_dict(), local_env_runner=False
+        )
+        local_config_restored = algo_restored.env_runner_group.local_env_runner.config.to_dict()
+        for i, config in enumerate((local_config_restored, *remote_configs_restored), start=1):
             assertCleanDictEqual(
                 config,
                 algo_restored_config_dict,
-                f"Remote config {i}/{len(remote_configs_restored)} does not match restored config",
+                ("Local config" if config is local_config_restored else "Remote config")
+                + f" {i}/{len(remote_configs_restored) + 1} does not match restored config",
             )
             assertCleanDictEqual(
-                config, algo_config_dict, f"Remote config {i}/{len(remote_configs_restored)} does not match algo config"
+                config,
+                algo_config_dict,
+                ("Local config" if config is local_config_restored else "Remote config")
+                + f" {i}/{len(remote_configs_restored) + 1} does not match algo config",
             )
 
     def compare_configs(
         self, config1: AlgorithmConfig | dict, config2: AlgorithmConfig | dict, *, ignore: Collection[str] = ()
     ):
+        config1_eval = None
+        config2_eval = None
         if isinstance(config1, AlgorithmConfig):
+            if config1.evaluation_config:
+                config1_eval = config1.evaluation_config
             config1 = config1.to_dict()
         else:
             config1 = config1.copy()
         if isinstance(config2, AlgorithmConfig):
+            config2_eval = config2.evaluation_config
             config2 = config2.to_dict()
         else:
             config2 = config2.copy()
@@ -461,6 +646,237 @@ class TestHelpers(unittest.TestCase):
         config1.pop("simple_optimizer", None)
         config2.pop("simple_optimizer", None)
         self.assertDictEqual(config1, config2)  # ConfigType
+        if config1_eval or config2_eval:
+            if not config1_eval or not config2_eval:
+                self.fail("One of the configs has no evaluation_config")
+            with self.subTest("Compare evaluation configs"):
+                self.compare_configs(config1_eval, config2_eval, ignore=ignore)
+
+    def _compare_metrics_logger_states(self, state1, state2, *, key: str, ignore_timers: bool = False):
+        """Tensors get their values removed on set_state, furthermore cannot compare nan==nan"""
+
+        def not_a_timer_key(k: str) -> bool:
+            return "timer" not in k and "duration" not in k and not k.endswith(("_throughput", "env_runners--sample"))
+
+        if ignore_timers:
+            state1 = _remove_throughput_stats({k: v for k, v in state1.items() if not_a_timer_key(k)})
+            state2 = _remove_throughput_stats({k: v for k, v in state2.items() if not_a_timer_key(k)})
+        else:
+            # when having >= 2 env_runners get_state will store two values, set_state however uses peek
+            # and saves only one value in the new state.
+            state1 = _fix_throughput_stats(state1)
+            state2 = _fix_throughput_stats(state2)
+
+        self.assertDictEqual(
+            nan_to_zero_hist_leaves(
+                _remove_values_on_tensor_stats(
+                    state1,
+                ),
+                remove_all=True,
+            ),
+            nan_to_zero_hist_leaves(
+                _remove_values_on_tensor_stats(state2),
+                remove_all=True,
+            ),
+            f"Algorithm state['{key}']"
+            + ("['metrics_logger']" if "metrics_logger" not in key else "")
+            + " in checkpoint differs from current algorithm state.",
+        )
+
+    def compare_algorithm_states(
+        self,
+        algorithm_state1: dict,
+        algorithm_state2: dict,
+        *,
+        ignore_timers: bool = False,
+        ignore_env_runner_state: bool = False,
+        ignore_multiple_throughput_stats: bool = True,
+    ):
+        for key in algorithm_state1.keys() | algorithm_state2.keys():
+            if isinstance(algorithm_state1[key], dict) and isinstance(
+                algorithm_state2[key], dict
+            ):  # Check if both are dicts
+                if key == "metrics_logger":
+                    # Special handling for metrics_logger
+                    self._compare_metrics_logger_states(
+                        algorithm_state1[key]["stats"],
+                        algorithm_state2[key]["stats"],
+                        key=key,
+                        ignore_timers=ignore_timers,
+                    )
+                elif key == "learner_group":
+                    # currently learner only key, but forward compatible
+                    self.assertDictEqual(
+                        {k: v for k, v in algorithm_state2[key].items() if k not in ("learner")},
+                        {k: v for k, v in algorithm_state1[key].items() if k not in ("learner")},
+                    )
+                    checkpoint_learner_state = algorithm_state2[key]["learner"]
+                    loaded_learner_state = algorithm_state1[key]["learner"]
+                    self.assertDictEqual(
+                        {
+                            k: v
+                            for k, v in checkpoint_learner_state.items()
+                            if k not in ("metrics_logger", "optimizer", "rl_module")
+                        },
+                        {
+                            k: v
+                            for k, v in loaded_learner_state.items()
+                            if k not in ("metrics_logger", "optimizer", "rl_module")
+                        },
+                    )
+                    self.compare_weights(
+                        checkpoint_learner_state["rl_module"],
+                        loaded_learner_state["rl_module"],
+                        f"Algorithm state[{key}]['learner']['rl_module'] in checkpoint "
+                        "differs from current algorithm state.",
+                    )
+                    # NOTE about inequality:
+                    # As `values` could contain tensors they are not reinstated on set_state,
+                    # but saved as such in the checkpoint
+
+                    self._compare_metrics_logger_states(
+                        checkpoint_learner_state["metrics_logger"]["stats"],
+                        loaded_learner_state["metrics_logger"]["stats"],
+                        key=f"{key}]['learner'",
+                        ignore_timers=ignore_timers,
+                    )
+                    self.compare_weights(
+                        checkpoint_learner_state["optimizer"],
+                        loaded_learner_state["optimizer"],
+                        f"Algorithm state[{key}]['learner']['optimizer'] in checkpoint "
+                        "differs from current algorithm state.",
+                        almost=True,
+                    )
+                else:
+                    try:
+                        self.assertDictEqual(
+                            algorithm_state2[key],
+                            algorithm_state1[key],
+                            f"Algorithm state[{key}] in checkpoint differs from current algorithm state.",
+                        )
+                    except ValueError as e:
+                        print("Cannot compare dicts for key %s: %s" % (key, e))
+                        raise
+                    except AssertionError:
+                        if key == "eval_env_runner":
+                            print(
+                                "eval_env_runner state differs, ignoring for now. "
+                                "This is due to Ray syncing the eval worker with the train worker on set_state"
+                            )
+                            continue
+                        if key == "env_runner" and ignore_env_runner_state:
+                            print("env_runner states differ, but ignoring as ignore_env_runner_state is True")
+                            continue
+                        raise
+            else:
+                self.assertEqual(
+                    algorithm_state2[key],
+                    algorithm_state1[key],
+                    f"Algorithm state[{key}] in checkpoint differs from current algorithm state.",
+                )
+
+    def compare_trainable_state(
+        self,
+        state1: dict[str, Any] | TrainableStateDict,
+        state2: dict[str, Any] | TrainableStateDict,
+        *,
+        ignore_env_runner_state: bool = True,
+        ignore_timers: bool = False,
+        msg: str = "",
+    ):
+        """
+        Args:
+            ignore_env_runner_state: If True, do not compare the env_runner state.
+                This might need to be chosen when using num_env_runners > 0 as the original
+                local env_runner (that is contained in get_state) is not in sync with the remote
+                env_runner that we care about. On restore the local env_runner is updated with
+                necessary states of the former remote env runners. Hence, they do not align.
+            ignore_timers: If True, do not compare the timers in the state.
+        """
+        try:
+            self.assertDictEqual(state1, state2, msg=msg)
+        except (ValueError, AssertionError):  # ValueError because of Numpy, AssertionError for Distributions
+            pass
+        else:
+            return
+        state1 = state1.copy()
+        state2 = state2.copy()
+        self.compare_algorithm_states(
+            state1.pop("algorithm", {}),
+            state2.pop("algorithm", {}),
+            ignore_timers=ignore_timers,
+            ignore_env_runner_state=ignore_env_runner_state,
+        )
+        self.compare_configs(state1.pop("algorithm_config"), state2.pop("algorithm_config"))  # pyright: ignore[reportArgumentType]
+        self.compare_pbar_state(state1.pop("pbar_state"), state2.pop("pbar_state"))  # pyright: ignore[reportArgumentType]
+        setup_state1: dict[str, Any] = state1.pop("setup").copy()  # pyright: ignore[reportAttributeAccessIssue]
+        setup_state2: dict[str, Any] = state2.pop("setup").copy()  # pyright: ignore[reportAttributeAccessIssue]
+
+        self.compare_param_space(setup_state1.pop("param_space"), setup_state2.pop("param_space"))
+        self.compare_configs(setup_state1.pop("config"), setup_state2.pop("config"))
+        trainable_state1 = state1.pop("trainable", {}).copy()  # pyright: ignore[reportAttributeAccessIssue]
+        trainable_state2 = state2.pop("trainable", {}).copy()  # pyright: ignore[reportAttributeAccessIssue]
+        if ignore_timers:
+            trainable_state1.pop("time_total")
+            trainable_state2.pop("time_total")
+            last_result1 = {
+                k: v
+                for k, v in trainable_state1.pop("last_result", {}).items()
+                if k not in ("date", "time_since_restore", "time_this_iter_s", "time_total_s", "timestamp")
+            }
+            last_result2 = {
+                k: v
+                for k, v in trainable_state2.pop("last_result", {}).items()
+                if k not in ("date", "time_since_restore", "time_this_iter_s", "time_total_s", "timestamp")
+            }
+        else:
+            last_result1 = trainable_state1.pop("last_result", {})
+            last_result2 = trainable_state2.pop("last_result", {})
+        last_result1.pop("pid", None)
+        last_result2.pop("pid", None)
+        self.assertDictEqual(last_result1, last_result2, f"Last result in trainable state differs: {msg}")
+        self.assertDictEqual(trainable_state1, trainable_state2, f"Trainable state differs: {msg}")
+
+        self.assertDictEqual(
+            nan_to_zero_hist_leaves(state1, key=None, remove_all=True, replace="NaN"),
+            nan_to_zero_hist_leaves(state2, key=None, remove_all=True, replace="NaN"),
+        )
+        self.assertDictEqual(setup_state1, setup_state2)
+
+    def compare_param_space(self, param_space1: dict[str, Any], param_space2: dict[str, Any]):
+        self.assertCountEqual(param_space1, param_space2)
+        self.assertEqual(param_space1.keys(), param_space2.keys())
+        self.assertDictEqual(param_space1["cli_args"], param_space2["cli_args"])
+        for key in param_space1.keys():  # noqa: PLC0206
+            value1 = param_space1[key]
+            value2 = param_space2[key]
+            if isinstance(value1, Domain) or isinstance(value2, Domain):
+                # Domain is not hashable, so we cannot compare them directly
+                self.assertIs(type(value1), type(value2))
+                if isinstance(value1, Categorical):
+                    assert isinstance(value2, Categorical)
+                    self.assertListEqual(value1.categories, value2.categories)
+                elif isinstance(value1, (Integer, Float)):
+                    assert isinstance(value2, type(value1))
+                    self.assertEqual(value1.lower, value2.lower)
+                    self.assertEqual(value1.upper, value2.upper)
+                else:
+                    # This will likely fail, need to compare attributes
+                    try:
+                        self.assertEqual(value1, value2, f"Domain {key} differs: {value1} != {value2}")
+                    except AssertionError:
+                        self.assertDictEqual(
+                            value1.__dict__, value2.__dict__, f"Domain {key} differs: {value1} != {value2}"
+                        )
+            else:
+                self.assertEqual(value1, value2, f"Parameter {key} differs: {value1} != {value2}")
+
+    def compare_pbar_state(self, state1: dict[str, Any] | tuple[Any, ...], state2: dict[str, Any] | tuple[Any, ...]):
+        if isinstance(state1, dict):
+            self.assertIsInstance(state2, dict, "Both states should be dicts")
+            state1 = {k: v for k, v in state1.items() if k not in ("desc", "uuid")}
+            state2 = {k: v for k, v in state2.items() if k not in ("desc", "uuid")}  # pyright: ignore[reportAttributeAccessIssue]
+        self.assertEqual(state1, state2)
 
     def compare_trainables(
         self,
@@ -468,6 +884,8 @@ class TestHelpers(unittest.TestCase):
         trainable2: DefaultTrainable["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
         msg: str = "",
         *,
+        ignore_env_runner_state: bool = True,
+        ignore_timers: bool = False,
         iteration_after_step=2,
         minibatch_size=32,
         **subtest_kwargs,
@@ -475,10 +893,19 @@ class TestHelpers(unittest.TestCase):
         """
         Test functions for trainables obtained in different ways
 
+        Args:
+            trainable: The original trainable or one variant.
+            trainable2: The trainable to compare with the original.
+            ignore_env_runner_state: If True, do not compare the env_runner key in get_state()
+                For num_env_runners > 0 the key of the original trainable does not reflect the remote
+                set to False to avoid this False positive in that case. For more see compare_trainable_state.
+            iteration_after_step: The expected iteration after the step.
+            minibatch_size: The expected minibatch size.
+
         Attention:
             Does perform a step on each trainable
         """
-        self.set_max_diff(60_000)
+        self.maxDiff = None
         with self.subTest("Step 1: Compare trainables " + msg, **subtest_kwargs):
             if hasattr(trainable, "_args") or hasattr(trainable2, "_args"):
                 self.assertDictEqual(trainable2._args, trainable._args)  # type: ignore[attr-defined]
@@ -493,8 +920,8 @@ class TestHelpers(unittest.TestCase):
             config_dict2 = trainable2.algorithm_config.to_dict()
             config_dict2.pop("class", None)
             self.assertDictEqual(config_dict2, config_dict1)
-            setup_data1 = trainable._setup.save()  # does not compare setup itself
-            setup_data2 = trainable2._setup.save()
+            setup_data1 = trainable._setup.get_state()  # does not compare setup itself
+            setup_data2 = trainable2._setup.get_state()
             # check all keys
             self.assertEqual(setup_data1.keys(), setup_data2.keys())
             keys = set(setup_data1.keys())
@@ -506,35 +933,13 @@ class TestHelpers(unittest.TestCase):
             assert setup_data1["config"] and setup_data2["config"]
             self.compare_configs(setup_data1["config"], setup_data2["config"])
             keys.remove("config")
+            self.assertDictEqual(setup_data1["config_overrides"], setup_data2["config_overrides"])
+            keys.remove("config_overrides")
             param_space1 = setup_data1["param_space"]
             param_space2 = setup_data2["param_space"]
             keys.remove("param_space")
             self.assertEqual(len(keys), 0, f"Unchecked keys: {keys}")  # checked all params
-            self.assertCountEqual(param_space1, param_space2)
-            self.assertDictEqual(param_space1["cli_args"], param_space2["cli_args"])
-            for key in param_space1.keys() | param_space2.keys():
-                value1 = param_space1[key]
-                value2 = param_space2[key]
-                if isinstance(value1, Domain) or isinstance(value2, Domain):
-                    # Domain is not hashable, so we cannot compare them directly
-                    self.assertIs(type(value1), type(value2))
-                    if isinstance(value1, Categorical):
-                        assert isinstance(value2, Categorical)
-                        self.assertListEqual(value1.categories, value2.categories)
-                    elif isinstance(value1, (Integer, Float)):
-                        assert isinstance(value2, type(value1))
-                        self.assertEqual(value1.lower, value2.lower)
-                        self.assertEqual(value1.upper, value2.upper)
-                    else:
-                        # This will likely fail, need to compare attributes
-                        try:
-                            self.assertEqual(value1, value2, f"Domain {key} differs: {value1} != {value2}")
-                        except AssertionError:
-                            self.assertDictEqual(
-                                value1.__dict__, value2.__dict__, f"Domain {key} differs: {value1} != {value2}"
-                            )
-                else:
-                    self.assertEqual(value1, value2, f"Parameter {key} differs: {value1} != {value2}")
+            self.compare_param_space(param_space1, param_space2)
 
             # Compare attrs
             self.assertIsNot(trainable2._reward_updaters, trainable._reward_updaters)
@@ -549,19 +954,25 @@ class TestHelpers(unittest.TestCase):
             self.assertIsNot(trainable2._pbar, trainable._pbar)
             self.assertIs(type(trainable2._pbar), type(trainable._pbar))
             if isinstance(trainable2._pbar, tqdm_ray.tqdm):
-                pbar1_state = trainable2._pbar._get_state()
-                pbar2_state = trainable._pbar._get_state()  # type: ignore
-                pbar1_state = {k: v for k, v in pbar1_state.items() if k not in ("desc", "uuid")}
-                pbar2_state = {k: v for k, v in pbar2_state.items() if k not in ("desc", "uuid")}
-                self.assertEqual(pbar1_state, pbar2_state)
+                self.compare_pbar_state(trainable._pbar._get_state(), trainable2._pbar._get_state())  # pyright: ignore[reportAttributeAccessIssue]
+
+            # Compare states
+            self.compare_trainable_state(
+                nan_to_zero_hist_leaves(trainable.get_state(), key=None, remove_all=True),
+                nan_to_zero_hist_leaves(trainable2.get_state(), key=None, remove_all=True),
+                msg=msg,
+                ignore_env_runner_state=ignore_env_runner_state,
+                ignore_timers=ignore_timers,
+            )
 
             # Step 2
-            result2 = trainable.step()
-            result2_restored = trainable2.step()
+            result2 = trainable.train()
+            result2_restored = trainable2.train()
             self.assertEqual(result2[TRAINING_ITERATION], result2_restored[TRAINING_ITERATION], msg)
             self.assertEqual(result2[TRAINING_ITERATION], iteration_after_step, msg)
 
         # Compare env_runners
+        self.maxDiff = None
         with self.subTest("Step 2 Compare env_runner configs " + msg, **subtest_kwargs):
             if trainable.algorithm.env_runner or trainable2.algorithm.env_runner:
                 assert trainable.algorithm.env_runner and trainable2.algorithm.env_runner
@@ -664,3 +1075,35 @@ class DisableGUIBreakpoints(unittest.TestCase):
         else:
             self._disabled_breakpoints = mock.patch("builtins.breakpoint")
             print("enabled breakpoint")
+
+
+def dict_diff_message(d1: Any, d2: Any) -> str:
+    standardMsg = "%s != %s" % unittest.util._common_shorten_repr(d1, d2)
+    diff = "\n" + "\n".join(difflib.ndiff(pprint.pformat(d1).splitlines(), pprint.pformat(d2).splitlines()))
+    return standardMsg + diff
+
+
+def format_result_errors(errors):
+    return str(errors).replace(r"\n", "\n")
+
+
+def remote_breakpoint(port=5678):
+    """
+    A breakpoint implementation that works on remote workers
+
+    Use VSCode debug Configuration:
+    {
+        "name": "Remote Debug Port 5678",
+        "type": "debugpy",
+        "request": "attach",
+        "connect": {
+            "host": "localhost",
+            "port": 5678
+        },
+    }
+    """
+    if not debugpy.is_client_connected():
+        print("starting debugpy. Listening on port:", port)
+        debugpy.listen(("localhost", port))  # noqa: T100
+    debugpy.wait_for_client()  # noqa: T100
+    breakpoint()  # noqa: T100

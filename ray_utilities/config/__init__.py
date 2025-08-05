@@ -51,8 +51,22 @@ def add_callbacks_to_config(
             assert event != "callbacks_class", "Pass types and not a dictionary."
             if present_callbacks := getattr(config, "callbacks_" + event):
                 # add  multiple or a single new one to existing one or multiple ones
+                if present_callbacks is callback:
+                    logger.debug("Not adding present callback %s=%s twice", event, callback, stacklevel=2)
+                    continue  # already present
                 callback_list = [callback] if callable(callback) else callback
                 if callable(present_callbacks):
+                    if (
+                        callable(callback)
+                        and callback.__name__.split(".")[-1] == present_callbacks.__name__.split(".")[-1]
+                    ):
+                        # NOTE: With cloudpickle an identical, but not by id, callback might be added
+                        logger.warning(
+                            "A callback with the same name as %s already exists. This might be a duplicate by cloudpickle. "
+                            "Still adding second callback %s",
+                            present_callbacks.__name__,
+                            callback.__name__,
+                        )
                     if remove_existing(present_callbacks):
                         logger.debug(
                             "Replacing existing callback %s with new one %s for event %s",

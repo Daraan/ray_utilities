@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import logging
+import os
+import pickle
+import warnings
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 
 # pyright: enableExperimentalFeatures=true
 from inspect import isclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
     ClassVar,
+    Generator,
     Generic,
     Literal,
     Optional,
@@ -26,11 +32,12 @@ from ray import tune
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core.rl_module import MultiRLModuleSpec
 from tap.tap import Tap
-from typing_extensions import Self, TypedDict, TypeVar
+from typing_extensions import Self, TypedDict, TypeVar, deprecated
 
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.comet import CometArchiveTracker
 from ray_utilities.config import DefaultArgumentParser
+from ray_utilities.config.typed_argument_parser import SupportsRestoreParser
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.environment import create_env
 from ray_utilities.misc import get_trainable_name
@@ -75,6 +82,9 @@ ConfigType_co = TypeVar("ConfigType_co", bound="AlgorithmConfig", covariant=True
 AlgorithmType_co = TypeVar("AlgorithmType_co", bound="Algorithm", covariant=True, default="PPO")
 """TypeVar for the Algorithm type of a Setup, e.g. PPO, DQN, etc; defaults to PPO."""
 
+_MaybeNone = Any
+"""Attribute might be None when trainable is not set up"""
+
 
 class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, AlgorithmType_co]):
     """
@@ -86,9 +96,11 @@ class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, Algor
     """Duck-typed SimpleNamespace"""
     param_space: dict[str, Any]
     setup_class: type[ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]]
-    config: ConfigType_co | Literal[False]
+    config: ConfigType_co
     __init_config__: bool
     """If True, the config is initialized from the args, `config` is ignored and should be unset"""
+    config_overrides: dict[str, Any]
+    """Hold the current dict created by updating config_overrides"""
 
 
 class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmType_co]):
@@ -189,6 +201,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             - self.create_parser(): Creates and assigns the argument parser.
             - self.setup(): Performs further setup based on initialization flags.
         """
+        self._config_overrides: Optional[dict[str, Any]] = None
         self.parser: Parser[ParserType_co]
         self.parser = self.create_parser()
         self.setup(
@@ -218,9 +231,10 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             self.create_trainable()
         else:
             self.trainable = None
+            self._unfreeze_config()
         if init_param_space:
             # relies on trainable to get its name
-            self.param_space = self.create_param_space()
+            self.param_space: dict[str, Any] | _MaybeNone = self.create_param_space()
         if hasattr(self, "args") and self.args.comet:
             self.comet_tracker = CometArchiveTracker()
         else:
@@ -260,7 +274,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         return self.args
 
     def parse_args(
-        self, args: Sequence[str] | None = None, *, known_only: bool | None = None
+        self, args: Sequence[str] | None = None, *, known_only: bool | None = None, checkpoint: Optional[str] = None
     ) -> NamespaceType[ParserType_co]:
         """
         Raises:
@@ -279,6 +293,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             if "'known_only' is an invalid invalid keyword" not in str(e):
                 raise
             if known_only:
+                # NOTE: In this case parsed is not self.parser!
                 parsed, extra_args = self.parser.parse_known_args(args)
             else:
                 parsed = self.parser.parse_args(args)
@@ -288,6 +303,34 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 "The following arguments were not recognized by the parser: %s.",
                 extra_args,
             )
+        # Merge args from a checkpoint:
+        checkpoint = checkpoint or parsed.from_checkpoint
+        if checkpoint:
+            path = Path(checkpoint)
+            with open(path / "state.pkl", "rb") as f:
+                state: dict[str, Any] = pickle.load(f)
+            # Create a patched parser with the old values as default values
+            new_parser = self.create_parser()
+            self.parser = new_parser
+            restored_args: dict[str, Any] = vars(state["setup"]["args"])
+            for action in new_parser._actions:
+                if isinstance(parsed, DefaultArgumentParser):
+                    action.default = parsed.restore_arg(
+                        action.dest, restored_value=restored_args.get(action.dest, action.default)
+                    )
+                else:
+                    action.default = restored_args.get(action.dest, action.default)  # set new default values
+                # These are changed in process_args. Problem we do not know if we should
+                # restore them their value or "auto". e.g. --iterations 10 -> need to change iterations
+                if action.dest == "iterations":
+                    logger.debug(
+                        "Resetting the parsers iterations default value to 'auto' after checkpoint restore. "
+                        "It will be recreated from the total_steps argument."
+                    )
+                    action.default = "auto"
+            self.parser = new_parser
+            parsed = self.parser.parse_args()
+
         self.args = self.postprocess_args(parsed)
         return self.args
 
@@ -426,9 +469,54 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     # region config and trainable
 
-    def _create_config(self):
+    def config_overrides(self, *, update=False, **kwargs) -> dict[str, Any]:
+        """
+        Override the algorithm configuration with the given keyword arguments.
+        Or just get the current overrides when no kwargs are given.
+
+        Args:
+            update: If True, updates the existing config overrides instead of replacing them.
+            kwargs: The keyword arguments to override in the algorithm configuration.
+
+        Returns:
+            The current configuration overrides.
+
+        Raises:
+            ValueError: If the config is already frozen. That is, after `create_trainable`
+                has already be called.
+        """
+        if not kwargs or not hasattr(self, "config"):
+            return self._config_overrides or {}
+        if self.config._is_frozen:
+            raise ValueError(
+                "Cannot override algorithm configuration as the config is already frozen. "
+                "Use this function in a `with setup` block or call `unset_trainable()` first."
+            )
+        overrides = self.config_class.overrides(**kwargs)
+        if not self._config_overrides or not update:
+            self._config_overrides = overrides
+        else:
+            self._config_overrides.update(overrides)
+        return self._config_overrides
+
+    def _unfreeze_config(self_or_config: Self | AlgorithmConfig):  # pyright: ignore[reportSelfClsParameterName] # noqa: N805
+        """
+        Unfreeze the configuration to allow further modifications.
+        This is useful when you want to change the configuration after it has been frozen.
+        """
+        if isinstance(self_or_config, AlgorithmConfig):
+            config = self_or_config
+        else:
+            if not hasattr(self_or_config, "config") or not self_or_config.config:
+                return
+            config = self_or_config.config
+        config._is_frozen = False
+        if isinstance(config.evaluation_config, AlgorithmConfig):
+            config.evaluation_config._is_frozen = False
+
+    def _create_config(self, base: Optional[ConfigType_co] = None) -> ConfigType_co:
         # Overwrite if config_from_args is not sufficient.
-        return self.config_from_args(self.args)
+        return self.config_from_args(self.args, base=base)
 
     def _learner_config_dict_defaults(self):
         """Sets values in the learner_config_dict that are used in this packages if not already set."""
@@ -438,16 +526,43 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         self.config.learner_config_dict.setdefault("accumulate_gradients_every", 1)
 
     @final
-    def create_config(self) -> ConfigType_co:
+    def create_config(self, base: Optional[ConfigType_co] = None) -> ConfigType_co:
         """
         Creates the config for the experiment.
 
         Attention:
             Do not overwrite this method. Overwrite _create_config / config_from_args instead.
+
+        Args:
+            config: Optional config to update based on args, instead of creating a new one.
         """
-        self.config = self._create_config()
-        self._learner_config_dict_defaults()
+        self.config = self._create_config(base=base)
+        overrides = self.config_overrides()
+        if hasattr(self.config, "_restored_overrides"):
+            old_overwrites: dict[str, Any] = self.config._restored_overrides  # pyright: ignore[reportAttributeAccessIssue]
+            different_keys = set(old_overwrites) - set(overrides)
+            if different_keys:
+                msg = (
+                    f"The config has been restored from a checkpoint with config overrides {old_overwrites}, "
+                    f"but the current config does not set the same keys ({overrides}). "
+                    "Restoring the config is ambiguous - priority of (new) config_from_args vs. (old) config_overrides."
+                    " Old overwrites will not be enforced and might be overwritten. Verify that the config is correct!"
+                )
+                warnings.warn(msg, UserWarning, stacklevel=1)
+                logger.warning(msg)
+            # always restore values will be added to the overrides
+
+            # to make overrides have a higher priority than args:
+            if isinstance(self.parser, SupportsRestoreParser):
+                overrides = {
+                    k: v for k, v in old_overwrites.items() if k in self.parser.get_to_restore_values()
+                } | overrides
+                self.config_overrides(**overrides)
         # classmethod, but _retrieved_callbacks might be set on instance
+        if overrides:
+            self.config.update_from_dict(overrides)
+        self._learner_config_dict_defaults()
+        self.config.freeze()
         self._check_callbacks_requested.__func__(self)  # pyright: ignore[reportFunctionMemberAccess]
         self._retrieved_callbacks = False  # Reset for next call
         type(self)._retrieved_callbacks = False
@@ -455,13 +570,19 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     @classmethod
     @abstractmethod
-    def _config_from_args(cls, args: ParserType_co | argparse.Namespace) -> ConfigType_co:
+    def _config_from_args(
+        cls, args: ParserType_co | argparse.Namespace, base: Optional[ConfigType_co] = None
+    ) -> ConfigType_co:
         """
         Create an algorithm configuration; similar to `create_config` but as a `classmethod`.
 
         Tip:
             This method is useful if you do not have access to the setup instance, e.g.
             inside the trainable function.
+
+        Args:
+            args: The parsed arguments from the command line.
+            base: Optional a config to update based on the args.
 
         Usage:
             .. code-block:: python
@@ -484,9 +605,29 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             ```
         """
 
+    @classmethod
+    def _config_from_checkpoint(cls, path: str) -> tuple[ConfigType_co, bool, dict[str, Any]]:
+        """
+        Load the config from a checkpoint.
+
+        Args:
+            path: The path to the checkpoint file.
+        """
+        # likely need cloudpickle
+        with open(Path(path) / "state.pkl", "rb") as f:
+            state: dict[str, Any] = pickle.load(f)
+        setup_state: SetupCheckpointDict = state["setup"]
+        config = setup_state["config"]
+        init_config = setup_state["__init_config__"]
+        overrides = setup_state["config_overrides"]
+        cls._unfreeze_config(config)
+        return config, init_config, overrides
+
     @final
     @classmethod
-    def config_from_args(cls, args: NamespaceType[ParserType_co]) -> ConfigType_co:
+    def config_from_args(
+        cls, args: NamespaceType[ParserType_co], base: Optional[ConfigType_co] = None
+    ) -> ConfigType_co:
         """
         Create an algorithm configuration; similar to `create_config` but as a `classmethod`.
 
@@ -494,12 +635,31 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             This method is useful if you do not have access to the setup instance, e.g.
             inside the trainable function.
 
+        Args:
+            args: The parsed arguments from the command line.
+            base: Optional a config to update based on the args.
+
         Usage:
             .. code-block:: python
 
                 algo: AlgorithmConfig = Setup.config_from_args(args)
         """
-        config = cls._config_from_args(args)
+        overrides = None
+        if args.from_checkpoint:
+            # init_config tells setup if init_config should be called; here we are passed that
+            loaded_config, init_config, overrides = cls._config_from_checkpoint(args.from_checkpoint)
+            if not init_config:
+                logger.debug("Not updating config from checkpoint, init_config is False.")
+            else:
+                if loaded_config and base:
+                    raise ValueError("Cannot load a config from checkpoint and update a base at the same time.")
+                if not loaded_config:
+                    logger.info("from_checkpoint is set, but no config found in the checkpoint.")
+                base = base or loaded_config
+            base._restored_overrides = overrides  # pyright: ignore[reportOptionalMemberAccess]
+
+        config = cls._config_from_args(args, base=base)
+
         # callbacks should be added in _config_from_args; but might be easier done here
         cls._check_callbacks_requested()
         # do not reset as we also check in create_config
@@ -528,7 +688,18 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         return config
 
     @classmethod
-    def algorithm_from_checkpoint(cls, path: str) -> AlgorithmType_co:
+    def algorithm_from_checkpoint(
+        cls, path: str, *, config: Optional[ConfigType_co] = None, **kwargs
+    ) -> AlgorithmType_co:
+        """
+        Load an algorithm from a checkpoint.
+
+        Args:
+            path: The path to the checkpoint directory.
+            ignore_config: Whether to ignore the Setup's config and restore the config from the
+                checkpoint or overwrite it with the config obtained by `create_config`.
+                Defaults to False.
+        """
         # Algorithm.from_checkpoint is not typed as Self, but as Algorithm
 
         try:
@@ -543,7 +714,13 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 cls.config_class().algo_class,
                 cls.algo_class,
             )
-        return cast("AlgorithmType_co", cls.algo_class.from_checkpoint(path))
+        if config is not None:
+            kwargs = {"config": config, **kwargs}
+        try:
+            # Algorithm checkpoint is likely in subdir.
+            return cast("AlgorithmType_co", cls.algo_class.from_checkpoint(os.path.join(path, "algorithm"), **kwargs))
+        except ValueError:
+            return cast("AlgorithmType_co", cls.algo_class.from_checkpoint(path, **kwargs))
 
     def build_algo(self) -> AlgorithmType_co:
         try:
@@ -586,8 +763,10 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         assert not isinstance(self.config._rl_module_spec, MultiRLModuleSpec)
         return self.config._rl_module_spec
 
+    @deprecated("Use get_rl_module_spec on the config instead")
     def create_config_and_module_spec(
         self,
+        base: Optional[ConfigType_co] = None,
         *,
         env: Optional[EnvType] = None,
         spaces: Optional[dict[str, tuple[gym.Space, gym.Space]]] = None,
@@ -599,8 +778,14 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         Warning:
             The returned module_spec can be a copy. Modifying it will not result in a change when
             calling config.build() again.
+
+        Args:
+            base: Optional config to update instead of creating a new one.
+            env: Optional environment to use for the module spec.
+            spaces: Optional spaces to use for the module spec.
+            inference_only: If True, the module spec will be created for inference only.
         """
-        config = self.create_config()
+        config = self.create_config(base=base)
         module_spec = config.get_rl_module_spec(env=env, spaces=spaces, inference_only=inference_only)
         if not module_spec.action_space:
             logger.warning(
@@ -654,13 +839,15 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         Attention:
             Do not overwrite this method. Overwrite _create_trainable instead.
         """
-        self.trainable = self._create_trainable()
-        if isclass(self.trainable):
-            logger.info(
-                "create_trainable returns a class '%s'. To prevent errors the config will be frozen.",
-                self.trainable.__name__,
-            )
-            self.config.freeze()
+        self.trainable: (
+            Callable[[dict[str, Any]], TrainableReturnData]
+            | type[TrainableBase[ParserType_co, ConfigType_co, AlgorithmType_co]]
+            | _MaybeNone
+        ) = self._create_trainable()
+        logger.debug(
+            "create_trainable called. To prevent errors the config will be frozen.",
+        )
+        self.config.freeze()
         if hasattr(self, "param_space") and self.param_space is not None:
             self.param_space["trainable_name"] = get_trainable_name(self.trainable)
 
@@ -670,15 +857,15 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         """
         Unsets the trainable for the experiment, this unfreezes the config
         until the next create_trainable call.
+
+        Using the setup as a context manager is often a better alternative to this function.
         """
         self.trainable = None
         if hasattr(self, "config"):
             if copy_config:
                 self.config = cast("ConfigType_co", self.config.copy(copy_frozen=False))
             else:
-                self.config._is_frozen = False
-                if isinstance(self.config.evaluation_config, AlgorithmConfig):
-                    self.config.evaluation_config._is_frozen = False
+                self._unfreeze_config()
 
     # endregion
 
@@ -778,7 +965,9 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     # endregion
 
-    def save(self) -> SetupCheckpointDict[ParserType_co, ConfigType_co, AlgorithmType_co]:
+    # region save and restore
+
+    def get_state(self) -> SetupCheckpointDict[ParserType_co, ConfigType_co, AlgorithmType_co]:
         """
         Saves the current setup state to a dictionary.
         Class can be restored from_saved. Does not save trainable state.
@@ -786,7 +975,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         data: SetupCheckpointDict[ParserType_co, ConfigType_co, AlgorithmType_co] = {
             "args": cast("ParserType_co", SimpleNamespace(**self.args_to_dict())),
             "config": self.config,
-            "__init_config__": False,
+            "config_overrides": self.config_overrides(),
+            "__init_config__": True,
             # Allows to recreate the config based on args
             "param_space": self.param_space,
             "setup_class": type(self),
@@ -798,26 +988,33 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         cls,
         data: SetupCheckpointDict[ParserType_co, ConfigType_co, AlgorithmType_co],
         *,
-        load_class: bool = True,
+        load_class: bool = False,
         init_trainable: bool = True,
     ) -> Self:
         # TODO: Why not a classmethod again?
-        setup_class = data.get("setup_class", cls) if load_class else cls
-        if setup_class is not cls:
+        saved_class = data.get("setup_class", cls)
+        setup_class = saved_class if load_class else cls
+        if saved_class is not cls:
             logger.warning(
                 "This class %s is not the same as the one used to save the data %s. "
+                "Will use this class %s to restore the setup. "
                 "This may lead to unexpected behavior. "
-                "Use `load_class=False` or call this method on another class to avoid this warning.",
+                "Use `load_class=True` to load the stored type "
+                "or call this method on another class to avoid this warning.",
                 cls,
+                saved_class,
                 setup_class,
                 stacklevel=2,
             )
         setup_class = cast("type[Self]", setup_class)
         new = setup_class(init_config=False, init_param_space=False, init_trainable=False, parse_args=False)
+        new.config_overrides(**data.get("config_overrides", {}))
         config: ConfigType_co | Literal[False] = data.get("config", False)
         new.param_space = data["param_space"]
         if data["__init_config__"] and config:
-            logger.error("Passing __init_config__=True while also passing config ignores the passed config object")
+            logger.error(
+                "Having __init_config__=True in the state while also passing config ignores the passed config object"
+            )
         if config:
             new.config = config
         new.args = data["args"]
@@ -830,6 +1027,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         )
         return new
 
+    # endregion
+
     @classmethod
     @final
     def typed(cls) -> type[Self]:
@@ -840,6 +1039,67 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         DefaultTrainable.define(Setup.typed) or similar methods that require a class as an argument.
         """
         return cls
+
+    # region contextmanager
+
+    @contextmanager
+    def open_config(self) -> Generator[ConfigType_co, Any, None]:
+        """
+        Contextmanager that unfreezes the setups config for editing.
+
+        Updates the config_overrides with the changes made within.
+        """
+        _was_frozen = self.config._is_frozen
+        config_before = self.config.to_dict()
+        self._unfreeze_config()
+        yield self.config
+        config_after = self.config.to_dict()
+        diff = {k: v for k, v in config_after.items() if config_before.get(k) != v}
+        if diff:
+            self._config_overrides = self.config_overrides(update=True, **diff)
+        if _was_frozen:
+            self.config.freeze()
+
+    def __enter__(self) -> Self:
+        """
+        When used as a context manager, the config can be modified at the end the
+        param_space and trainable will be created
+
+        Usage:
+            .. code-block:: python
+
+                # less overhead when setting these two to False, otherwise some overhead
+                with Setup(init_param_space=False, init_trainable=False) as setup:
+                    setup.config_overrides(
+                        num_env_runners=0,
+                        minibatch_size=64,
+                    )
+
+                This is roughly equivalent to:
+                setup = Setup(parse_args=True, init_config=True, init_param_space=False, init_trainable=False)
+                setup.config.env_runners(num_env_runners=0)
+                setup.config.training(minibatch_size=64)
+                setup.setup(parse_args=False, init_config=False, init_param_space=True, init_trainable=True)
+        """
+        self.unset_trainable()
+        self.param_space = None
+        self.__open_config = self.open_config()
+        self.__open_config.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        """Finishes the setup and creates the trainable"""
+        self.__open_config.__exit__(exc_type, exc_value, traceback)
+        del self.__open_config
+        if self._config_overrides:
+            self._unfreeze_config()
+            self.config.update_from_dict(self._config_overrides)
+        self.setup(
+            init_config=False,
+            init_param_space=True,
+            init_trainable=True,
+            parse_args=False,
+        )
 
     # Currently cannot use TypeForm[type[TypedDict]] as it is not included in the typing spec.
     # @property

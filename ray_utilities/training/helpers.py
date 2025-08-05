@@ -9,9 +9,11 @@ from typing import TYPE_CHECKING, Any, Literal, Optional, cast, overload
 
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
+from ray.rllib.core import COMPONENT_LEARNER, COMPONENT_METRICS_LOGGER, COMPONENT_RL_MODULE
 from ray.rllib.utils.metrics import (
     ALL_MODULES,  # pyright: ignore[reportPrivateImportUsage]
     ENV_RUNNER_RESULTS,
+    EVALUATION_RESULTS,
     LEARNER_RESULTS,
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
@@ -23,6 +25,7 @@ from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_steps
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
+    from ray.rllib.env.env_runner import EnvRunner
 
     from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
@@ -159,7 +162,7 @@ def setup_trainable(
     hparams: dict[str, Any],
     setup: Optional["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"] = None,
     setup_class: Optional[type["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"]] = None,
-    overwrite_config: Optional[ConfigType_co | dict[str, Any]] = None,
+    config_overrides: Optional[ConfigType_co | dict[str, Any]] = None,
 ) -> tuple[dict[str, Any], "ConfigType_co", "AlgorithmType_co", "RewardUpdaters"]:
     """
     Sets up the trainable by getting the args and config from the given hparams, setup or setup_class.
@@ -186,10 +189,10 @@ def setup_trainable(
         setup=setup,
         setup_class=setup_class,
     )
-    if overwrite_config:
-        if isinstance(overwrite_config, AlgorithmConfig):
-            overwrite_config = overwrite_config.to_dict()
-        config = config.update_from_dict(overwrite_config)
+    if config_overrides:
+        if isinstance(config_overrides, AlgorithmConfig):
+            config_overrides = config_overrides.to_dict()
+        config = cast("ConfigType_co", config.update_from_dict(config_overrides))
     if not args["from_checkpoint"]:
         try:
             # new API; Note: copies config!
@@ -198,7 +201,8 @@ def setup_trainable(
             algo = config.build()
     # Load from checkpoint
     elif checkpoint_loader := (setup or setup_class):
-        algo = checkpoint_loader.algorithm_from_checkpoint(args["from_checkpoint"])
+        algo = checkpoint_loader.algorithm_from_checkpoint(args["from_checkpoint"], config=config)
+        sync_env_runner_states_after_reload(algo)
         if config.algo_class is not None and not isinstance(algo, config.algo_class):
             logger.warning(
                 "Loaded algorithm from checkpoint is not of the expected type %s, got %s. "
@@ -242,3 +246,163 @@ def get_total_steps(args: dict[str, Any], config: "AlgorithmConfig") -> int | No
             * args["iterations"]
         )
     )
+
+
+def _set_env_runner_state(env_runner: EnvRunner, state: dict[str, Any]):
+    if COMPONENT_METRICS_LOGGER not in state:
+        raise KeyError(f"State dictionary missing required key '{COMPONENT_METRICS_LOGGER}'.")
+    env_runner.metrics.set_state(state[COMPONENT_METRICS_LOGGER])
+
+
+def _clear_nan_stats(stat: dict[str, Any | list[list[float]]]):
+    for k, v in stat.items():
+        if k != "_hist":
+            continue
+        hist: list[list[float]] = v
+        for i, h in enumerate(hist):
+            hist[i] = [0.0 if (isinstance(x, float) and math.isnan(x)) else x for x in h]
+    return stat
+
+
+def split_sum_stats_over_env_runners(
+    struct: Any, path: tuple[str, ...] = (), parent=None, *, num_env_runners: int
+) -> Any:
+    """
+    As sum values are aggregated over all env runners, split them evenly over the env runners
+    again for every to have roughly its own metric.
+
+    Args:
+        struct: The structure to split, can be a dict or a list.
+        path: private, used to track the path in the structure.
+        parent: private, used to track the parent structure.
+        num_env_runners: The number of env runners to split the stats over.
+    """
+    if num_env_runners <= 1:
+        return struct  # No need to split if only one env runner
+    if isinstance(struct, dict):
+        return {
+            k: split_sum_stats_over_env_runners(v, (*path, k), struct, num_env_runners=num_env_runners)
+            for k, v in struct.items()
+        }
+    if isinstance(struct, list):
+        return [split_sum_stats_over_env_runners(v, path, parent, num_env_runners=num_env_runners) for v in struct]
+    if parent is not None and parent["reduce"] == "sum" and parent["clear_on_reduce"] is False:
+        if path[-1] == "values" or (path[-1] == "_hist" and parent["window"] in (None, float("inf"))):
+            return struct / num_env_runners
+    return struct
+
+
+def nan_to_zero_hist_leaves(
+    struct: Any,
+    path: tuple[str, ...] = (),
+    parent=None,
+    *,
+    key: Optional[str] = "_hist",
+    remove_all: bool = False,
+    replace: Any = 0.0,
+) -> Any:
+    """
+    With a bug in ray updating a metric with -= value, where value could be NaN,
+    replace such leafs with `replace`, 0 by default.
+
+    Also useful for testing where nan != nan.
+    """
+    if isinstance(struct, dict):
+        return {
+            k: nan_to_zero_hist_leaves(v, (*path, k), struct, key=key, remove_all=remove_all, replace=replace)
+            for k, v in struct.items()
+        }
+    if isinstance(struct, list):
+        return [
+            nan_to_zero_hist_leaves(v, path, parent, key=key, remove_all=remove_all, replace=replace) for v in struct
+        ]
+    if path and (key is None or path[-1] == key):
+        # Only modify if parent has "reduce" == "sum"
+        if remove_all or (
+            parent is not None
+            and parent["reduce"] == "sum"
+            and parent["clear_on_reduce"] is False
+            and parent["window"] in (None, float("inf"))
+        ):
+            return replace if (isinstance(struct, float) and math.isnan(struct)) else struct
+    return struct
+
+
+def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
+    """
+    Syncs metric states for env runners, fixing a bug with restored metrics
+
+    See my PR: https://github.com/ray-project/ray/pull/54148
+    """
+    assert algorithm.learner_group is not None
+    assert algorithm.metrics
+    assert algorithm.config
+    assert algorithm.evaluation_config
+    rl_module_state = algorithm.learner_group.get_state(
+        components=COMPONENT_LEARNER + "/" + COMPONENT_RL_MODULE,
+        inference_only=True,
+    )[COMPONENT_LEARNER]
+
+    # Sync states, especially env_steps
+
+    metrics_state = algorithm.metrics.get_state()
+    # State keys are "--" joined
+    env_runner_metrics_state = {
+        COMPONENT_METRICS_LOGGER: {
+            "stats": {
+                k.removeprefix(ENV_RUNNER_RESULTS + "--"): split_sum_stats_over_env_runners(
+                    nan_to_zero_hist_leaves(v), num_env_runners=algorithm.config.num_env_runners or 1
+                )
+                for k, v in metrics_state["stats"].items()
+                if k.startswith(ENV_RUNNER_RESULTS + "--")
+            }
+        }
+    }
+    eval_stats = {
+        k.removeprefix(EVALUATION_RESULTS + "--" + ENV_RUNNER_RESULTS + "--"): split_sum_stats_over_env_runners(
+            nan_to_zero_hist_leaves(v), num_env_runners=algorithm.config.num_env_runners or 1
+        )
+        for k, v in metrics_state["stats"].items()
+        if k.startswith("--".join((EVALUATION_RESULTS, ENV_RUNNER_RESULTS)))
+    }
+    eval_runner_metrics = {COMPONENT_METRICS_LOGGER: {"stats": eval_stats}}
+
+    if algorithm.env_runner_group:
+        algorithm.env_runner_group.sync_env_runner_states(
+            config=algorithm.config,
+            env_steps_sampled=algorithm.metrics.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=0),
+            rl_module_state=rl_module_state,
+            env_to_module=algorithm.env_to_module_connector,
+            module_to_env=algorithm.module_to_env_connector,
+            # env_runner_metrics=env_runner_metrics,
+        )
+        # Sync metrics
+
+        algorithm.env_runner_group.foreach_env_runner(
+            partial(_set_env_runner_state, state=env_runner_metrics_state),
+            remote_worker_ids=None,  # pyright: ignore[reportArgumentType]
+            local_env_runner=True,
+            # kwargs is not save to use here, not used on all code paths
+            timeout_seconds=0.0,  # This is a state update -> Fire-and-forget.
+        )
+
+    if algorithm.eval_env_runner_group:  # XXX Why elif here in RLLib code?
+        algorithm.eval_env_runner_group.sync_env_runner_states(
+            config=algorithm.evaluation_config,
+            # NOTE: Ray does not use EVALUATION_RESULTS here!
+            env_steps_sampled=algorithm.metrics.peek(
+                (EVALUATION_RESULTS, ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=0
+            ),
+            rl_module_state=rl_module_state,
+            env_to_module=algorithm.env_to_module_connector,
+            module_to_env=algorithm.module_to_env_connector,
+            # env_runner_metrics=env_runner_metrics,
+        )
+        if eval_stats:
+            algorithm.eval_env_runner_group.foreach_env_runner(
+                partial(_set_env_runner_state, state=eval_runner_metrics),
+                remote_worker_ids=None,  # pyright: ignore[reportArgumentType]
+                local_env_runner=False,
+                # kwargs is not save to use here, not used on all code paths
+                timeout_seconds=0.0,  # This is a state update -> Fire-and-forget.
+            )

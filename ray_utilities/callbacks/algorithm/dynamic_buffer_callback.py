@@ -26,7 +26,7 @@ class DynamicBufferUpdate(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
 
     def _calculate_buffer_and_batch_size(
         self,
-        algorithm: "Algorithm",
+        algorithm: Algorithm,
         metrics_logger: Optional[MetricsLogger] = None,
         *,
         global_step: int,
@@ -134,7 +134,7 @@ class DynamicBufferUpdate(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
     def on_algorithm_init(
         self,
         *,
-        algorithm: "Algorithm",
+        algorithm: Algorithm,
         metrics_logger: Optional[MetricsLogger] = None,
         **kwargs,
     ) -> None:
@@ -151,7 +151,7 @@ class DynamicBufferUpdate(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
     def on_train_result(
         self,
         *,
-        algorithm: "Algorithm",
+        algorithm: Algorithm,
         metrics_logger: Optional[MetricsLogger] = None,
         result: dict,
         **kwargs,

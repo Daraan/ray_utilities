@@ -3,7 +3,7 @@ from setuptools import find_packages, setup
 # TODO: make some installations optional
 setup(
     name=r"ray_utilities",
-    version="0.0.11",
+    version="0.1.0",
     package_dir={"ray_utilities": "ray_utilities"},
     packages=find_packages(),
     include=["ray_utilities*"],
@@ -20,4 +20,5 @@ setup(
         "torch",
         "jax",
     ],
+    extras_require={"test": ["pytest", "pytest-timeout", "pytest-subtests", "debugpy"]},
 )
