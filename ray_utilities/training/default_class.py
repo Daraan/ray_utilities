@@ -276,7 +276,12 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         from pprint import pformat
 
         print("Sys argv during Trainable.setup()", sys.argv)
-        print("args (in config) are:\n", pformat(config["cli_args"]))
+        print(
+            "args",
+            "(in config)" if "cli_args" in config else "(on setup)",
+            "are:\n",
+            pformat(config.get("cli_args", self._setup.args)),
+        )
         # NOTE: args is a dict, self._setup.args a Namespace | Tap
         self._reward_updaters: RewardUpdaters
         args, _algo_config, self.algorithm, self._reward_updaters = setup_trainable(
