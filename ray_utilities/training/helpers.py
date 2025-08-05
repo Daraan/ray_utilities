@@ -249,6 +249,14 @@ def get_total_steps(args: dict[str, Any], config: "AlgorithmConfig") -> int | No
 
 
 def _set_env_runner_state(env_runner: EnvRunner, state: dict[str, Any]):
+    if COMPONENT_METRICS_LOGGER not in state:
+        raise KeyError(
+            f"State dictionary missing required key '{COMPONENT_METRICS_LOGGER}'."
+        )
+    if env_runner.metrics is None:
+        raise ValueError(
+            "env_runner.metrics is None. Cannot set state on a None metrics object."
+        )
     env_runner.metrics.set_state(state[COMPONENT_METRICS_LOGGER])
 
 
