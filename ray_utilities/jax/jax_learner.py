@@ -21,8 +21,7 @@ if TYPE_CHECKING:
     from ray.rllib.utils.typing import ModuleID, Optimizer, Param, ParamDict, TensorType
 
     from ray_utilities.jax.jax_module import JaxActorCriticStateDict, JaxModule, JaxStateDict
-    from rllib_port.core.sympol_module import SympolPPOModule  # FIXME: Uses downstream
-    from utils.utils import ActorTrainState
+    from ray_utilities.jax.ppo.jax_ppo_module import JaxPPOModule
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +78,7 @@ class JaxLearner(Learner):
                 # lr_or_lr_schedule=config.lr,
             )
 
-    def get_parameters(self, module: SympolPPOModule | Any) -> tuple[Sequence[Param], Sequence[Param]]:
+    def get_parameters(self, module: JaxPPOModule | Any) -> tuple[Sequence[Param], Sequence[Param]]:
         logger.warning("JaxLearner.get_parameters called which is not fully implemented", stacklevel=2)
         # module.states["actor"].params is a dict
         return list(module.states["actor"].params.values()), list(module.states["critic"].params.values())
@@ -136,7 +135,7 @@ class JaxLearner(Learner):
         logger.warning("_get_global_norm_function called which is not fully implemented")
         return super(JaxLearner)._get_global_norm_function()
 
-    def _get_tensor_variable(self, value: Any, dtype: Any = None, trainable: bool = False) -> TensorType:  # noqa
+    def _get_tensor_variable(self, value: Any, dtype: Any = None, trainable: bool = False) -> TensorType:  # noqa: FBT001, FBT002
         # TODO: is kl_coeffs a variable that is learned?
         logger.warning("_get_tensor_variable called which is not fully implemented", stacklevel=2)
         if 0:

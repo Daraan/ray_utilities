@@ -20,6 +20,7 @@ from ray.rllib.core import (
     COMPONENT_ENV_RUNNER,
     COMPONENT_EVAL_ENV_RUNNER,
     COMPONENT_LEARNER_GROUP,
+    COMPONENT_METRICS_LOGGER,
 )
 from ray.rllib.utils import force_list
 from ray.rllib.utils.annotations import override
@@ -45,8 +46,8 @@ from ray_utilities.typing.trainable_return import RewardUpdaters
 if TYPE_CHECKING:
     from ray.experimental import tqdm_ray
     from ray.rllib.algorithms import Algorithm
-    from ray.rllib.utils.typing import StateDict
     from ray.rllib.env.env_runner import EnvRunner
+    from ray.rllib.utils.typing import StateDict
     from tqdm import tqdm
     from typing_extensions import NotRequired
 
@@ -583,6 +584,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             "reward_updaters": reward_updaters_state,
             "setup": setup_state,
         }
+        # Current step is
+        # state["trainable"]["last_result"]["current_step"]
         # Filter out components not in the components list
         if components is not None or not_components is not None:
             return cast(
@@ -669,6 +672,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
         # algorithm might not be in state as it is a checkpointable component and was not pickled
         if "algorithm" in state:
+            if self.algorithm.metrics and COMPONENT_METRICS_LOGGER in state["algorithm"]:
+                self.algorithm.metrics.reset()
             for component in COMPONENT_ENV_RUNNER, COMPONENT_EVAL_ENV_RUNNER, COMPONENT_LEARNER_GROUP:
                 if component not in state["algorithm"]:
                     _logger.warning("Restoring algorithm without %s component in state.", component)
@@ -676,10 +681,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # NOTE: This sync env_runner -> eval_env_runner which causes wrong env_steps_sampled metric
         # TODO: What todo with config_overrides?
         # TODO: # XXX as algorithm is not in state and restored via components, state might not be correct
-        self.algorithm.set_state(state.get("algorithm", {"config": algorithm_config}))
+        algo_state = state.get("algorithm", {"config": algorithm_config})
+        if COMPONENT_METRICS_LOGGER in algo_state:
+            assert self.algorithm.metrics
+            self.algorithm.metrics.reset()
+        self.algorithm.set_state(algo_state)
         # Update env_runners after restore
         # check if config has been restored correctly - TODO: Remove after more testing
-        from ray_utilities.testing_utils import TestHelpers, dict_diff_message
+        from ray_utilities.testing_utils import TestHelpers
 
         config1_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm_config.to_dict())
         config2_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm.env_runner.config.to_dict())
@@ -881,6 +890,7 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
             disable_report=True,
             log_stats=self.log_stats,
         )
+        self._current_step = get_current_step(result)
         # Update progress bar
         if is_pbar(self._pbar):
             update_pbar(
@@ -888,7 +898,7 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
                 rewards=rewards,
                 metrics=metrics,
                 result=result,
-                current_step=get_current_step(result),
+                current_step=self._current_step,
                 total_steps=get_total_steps(self._total_steps, self.algorithm_config),
             )
             self._pbar.update()

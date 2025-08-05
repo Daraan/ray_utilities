@@ -494,7 +494,12 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                         trainable_restore.restore(checkpoint)
                         self.assertEqual(trainable_restore.algorithm.iteration, step)
                         self.assertIsInstance(checkpoint, str)
-                        trainable_from_path.restore_from_path(checkpoint)  # load a second time to test as well
+                        # load a second time to test as well
+                        # NOTE: reuse: Currently this does not set some states correctly on the metrics_logger
+                        # https://github.com/ray-project/ray/issues/55248, larger batch_size should fix it
+                        trainable_from_path.algorithm.metrics.reset()  # HACK s.a. # pyright: ignore[reportOptionalMemberAccess]
+                        trainable_from_path.restore_from_path(checkpoint)
+                        # TODO: One of them might contain mean/max/min stat values for env_runners--(module/agent)episode_return
                         self.compare_trainables(
                             trainable_restore,
                             trainable_from_path,

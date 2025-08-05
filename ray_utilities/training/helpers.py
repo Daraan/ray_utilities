@@ -378,7 +378,7 @@ def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
             timeout_seconds=0.0,  # This is a state update -> Fire-and-forget.
         )
 
-    if algorithm.eval_env_runner_group:  # TODO: # XXX Why elif here in RLLib code?
+    if algorithm.eval_env_runner_group:  # XXX Why elif here in RLLib code?
         algorithm.eval_env_runner_group.sync_env_runner_states(
             config=algorithm.evaluation_config,
             # NOTE: Ray does not use EVALUATION_RESULTS here!
