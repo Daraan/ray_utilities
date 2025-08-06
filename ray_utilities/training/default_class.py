@@ -450,12 +450,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     checkpoint["algorithm_checkpoint_dir"],
                 )
                 raise FileNotFoundError(None, "algorithm_checkpoint_dir", checkpoint["algorithm_checkpoint_dir"])
-            # Is set_state even needed?
-            # Test loaded algo state
-            loaded_algo_state = self.algorithm.get_state(
-                components=self._get_subcomponents("algorithm", None),
-                not_components=force_list(self._get_subcomponents("algorithm", None)),
-            )
             keys_to_process.remove("algorithm_checkpoint_dir")
             # can add algorithm_state to check correctness
             if "algorithm" not in checkpoint["state"]:

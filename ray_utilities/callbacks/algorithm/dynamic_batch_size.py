@@ -6,9 +6,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from ray_utilities.callbacks.algorithm.callback_mixins import BudgetMixin, StepCounterMixin
 from ray_utilities.callbacks.algorithm.dynamic_hyperparameter import DynamicHyperparameterCallback, UpdateFunction
-from ray_utilities.dynamic_config.dynamic_buffer_update import (
-    update_buffer_and_rollout_size,
-)
+from ray_utilities.dynamic_config.dynamic_buffer_update import update_buffer_and_rollout_size
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms.algorithm import Algorithm

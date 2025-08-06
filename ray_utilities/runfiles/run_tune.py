@@ -36,7 +36,7 @@ def _run_without_tuner(
     func_name = getattr(test_mode_func, "__name__", repr(test_mode_func)) if test_mode_func else trainable.__name__
     print(f"-- FULL TEST MODE running {func_name} --")
     logger.info("-- FULL TEST MODE --")
-    import ray.tune.search.sample
+    import ray.tune.search.sample  # noqa: PLC0415 # import lazy
 
     # Sample the parameters when not entering via tune
     params = {

@@ -1,4 +1,6 @@
 # pyright: reportOptionalMemberAccess=information
+# pyright: enableExperimentalFeatures=true
+
 from __future__ import annotations
 
 import difflib
@@ -16,7 +18,19 @@ from contextlib import nullcontext
 from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Collection, Iterable, Optional, TypeAlias, TypeVar, final
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    ClassVar,
+    Collection,
+    Iterable,
+    Optional,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    final,
+)
 from unittest import mock
 
 import debugpy  # noqa: T100
@@ -44,7 +58,8 @@ from typing_extensions import Final, NotRequired, Required, Sentinel, get_origin
 
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
-from ray_utilities.training.default_class import DefaultTrainable, TrainableStateDict
+from ray_utilities.training.default_class import DefaultTrainable, TrainableBase, TrainableStateDict
+from ray_utilities.training.functional import training_step
 from ray_utilities.training.helpers import nan_to_zero_hist_leaves
 
 if TYPE_CHECKING:
@@ -53,12 +68,15 @@ if TYPE_CHECKING:
     import chex
     from flax.training.train_state import TrainState
     from jaxlib.xla_extension import pytree  # pyright: ignore[reportMissingModuleSource,reportMissingImports] pyi file
+    from ray import tune
     from ray.rllib.algorithms import Algorithm
     from ray.rllib.algorithms.ppo.ppo import PPO, PPOConfig
     from ray.tune import Result
 
+    from build.lib.ray_utilities.typing.metrics import LogMetricsDict
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co
     from ray_utilities.training.default_class import TrainableBase
+    from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
 
     LeafType: TypeAlias = pytree.SequenceKey | pytree.DictKey | pytree.GetAttrKey
 
@@ -85,7 +103,6 @@ clean_args = mock.patch.object(sys, "argv", ["file.py", "-a", "NA"])
 
 _C = TypeVar("_C", bound="Callable[[Any, mock.MagicMock], Any]")
 
-# pyright: enableExperimentalFeatures=true
 _NOT_PROVIDED = Sentinel(
     "_NOT_PROVIDED",
 )
@@ -307,6 +324,10 @@ class TestHelpers(unittest.TestCase):
         return trainable, result1
 
     # endregion
+
+    def check_tune_result(self, result: tune.ResultGrid):
+        self.assertEqual(result.num_errors, 0, format_result_errors(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+        return True
 
     def set_max_diff(self, max_diff: int | None = None):
         """Changes the maxDiff only when environment variable KEEP_MAX_DIFF is not set."""
@@ -567,7 +588,7 @@ class TestHelpers(unittest.TestCase):
 
     # region tests
 
-    def compare_env_runner_configs(self, algo: Algorithm, algo_restored: Algorithm, *, local_runner=True):
+    def compare_env_runner_configs(self, algo: Algorithm, algo_restored: Algorithm):
         self.set_max_diff(self.maxDiff and max(self.maxDiff or 0, 20000))
 
         def assertCleanDictEqual(a, b, *args, **kwargs):  # noqa: N802
@@ -652,8 +673,20 @@ class TestHelpers(unittest.TestCase):
             with self.subTest("Compare evaluation configs"):
                 self.compare_configs(config1_eval, config2_eval, ignore=ignore)
 
-    def _compare_metrics_logger_states(self, state1, state2, *, key: str, ignore_timers: bool = False):
-        """Tensors get their values removed on set_state, furthermore cannot compare nan==nan"""
+    def _compare_metrics_logger_states(
+        self,
+        state1,
+        state2,
+        *,
+        key: str,
+        ignore_timers: bool = False,  # , ignore_episode_stats: bool = False
+    ):
+        """
+        Tensors get their values removed on set_state, furthermore cannot compare nan==nan
+
+        When having a small batch_size, one trainable might have completed an episode
+        which results in additional keys in the metrics_logger state, e.g. 'env_runners--episode_return_mean'
+        """
 
         def not_a_timer_key(k: str) -> bool:
             return "timer" not in k and "duration" not in k and not k.endswith(("_throughput", "env_runners--sample"))
@@ -666,6 +699,8 @@ class TestHelpers(unittest.TestCase):
             # and saves only one value in the new state.
             state1 = _fix_throughput_stats(state1)
             state2 = _fix_throughput_stats(state2)
+
+        # With a small batch_size one trainable might have completed an episode an additional keys
 
         self.assertDictEqual(
             nan_to_zero_hist_leaves(
@@ -690,7 +725,7 @@ class TestHelpers(unittest.TestCase):
         *,
         ignore_timers: bool = False,
         ignore_env_runner_state: bool = False,
-        ignore_multiple_throughput_stats: bool = True,
+        # ignore_multiple_throughput_stats: bool = True,
     ):
         for key in algorithm_state1.keys() | algorithm_state2.keys():
             if isinstance(algorithm_state1[key], dict) and isinstance(
@@ -1107,3 +1142,70 @@ def remote_breakpoint(port=5678):
         debugpy.listen(("localhost", port))  # noqa: T100
     debugpy.wait_for_client()  # noqa: T100
     breakpoint()  # noqa: T100
+
+
+class _TrainableWithCheckProto(Protocol):
+    def setup_check(self, config: dict[str, Any], algorithm_overrides: Optional[dict[str, Any]] = None): ...
+
+    def step_pre_check(self): ...
+    def step_post_check(self, result: StrictAlgorithmReturnData, metrics: LogMetricsDict, rewards: Any): ...
+
+    @classmethod
+    def define(cls, setup_cls: AlgorithmSetup) -> Any: ...
+
+
+def SetupWithCheck(check: type["TrainableWithChecks"]):  # noqa: N802
+    class SetupWithCheck(AlgorithmSetup):
+        _check_class = check
+
+        def _create_trainable(self):
+            return self._check_class.define(self)
+
+    return SetupWithCheck
+
+
+class TrainableWithChecks(DefaultTrainable[Any, "AlgorithmConfig", Any]):
+    """
+    Debug Variables:
+    - debug_setup
+    - debug_step
+    """
+
+    debug_step: ClassVar[bool] = False
+    debug_setup: ClassVar[bool] = False
+
+    def setup_check(self, config: dict[str, Any], algorithm_overrides: Optional[dict[str, Any]] = None):
+        pass
+
+    def step_pre_check(self):
+        pass
+
+    def step_post_check(self, result: StrictAlgorithmReturnData, metrics: LogMetricsDict, rewards: Any):
+        pass
+
+    def setup(self, config, *, algorithm_overrides=None):
+        if self.debug_setup:
+            print("Start breakpoint")
+            remote_breakpoint()
+        super().setup(config, algorithm_overrides=algorithm_overrides)
+        self.setup_check(config, algorithm_overrides=algorithm_overrides)
+
+    def step(self):
+        if self.debug_step:
+            print("Start breakpoint")
+            remote_breakpoint()
+        self.step_pre_check()
+        result, metrics, rewards = training_step(
+            self.algorithm,
+            reward_updaters=self._reward_updaters,
+            discrete_eval=self.discrete_eval,
+            disable_report=True,
+            log_stats=self.log_stats,
+        )
+        metrics["_checking_class_"] = True  # pyright: ignore[reportGeneralTypeIssues]
+        self.step_post_check(result, metrics, rewards)
+        return metrics
+
+
+if TYPE_CHECKING:
+    __: type[_TrainableWithCheckProto] = TrainableWithChecks

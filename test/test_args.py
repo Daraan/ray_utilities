@@ -229,7 +229,7 @@ class TestProcessing(unittest.TestCase):
     @patch_args("--batch_size", "64", "--minibatch_size", "128")
     def test_to_large_minibatch_size(self):
         """minibatch_size cannot be larger than train_batch_size_per_learner"""
-        from ray_utilities.config.typed_argument_parser import logger
+        from ray_utilities.config.typed_argument_parser import logger  # noqa: PLC0415
 
         with self.assertLogs(
             logger,

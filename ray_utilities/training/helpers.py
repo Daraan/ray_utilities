@@ -76,6 +76,32 @@ def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict) -> int:
     )
 
 
+def _patch_args_with_param_space(
+    args: dict[str, Any],
+    hparams: dict[str, Any],
+    config: AlgorithmConfig,
+) -> dict[str, Any]:
+    same_keys = set(args.keys()) & set(hparams.keys())
+    if not same_keys:
+        logger.debug("No keys to patch in args with hparams: %s", hparams)
+        return args
+    msg_dict = {k: f"{args[k]} -> {hparams[k]}" for k in same_keys}
+    if "train_batch_size_per_learner" in same_keys and config.minibatch_size < hparams["train_batch_size_per_learner"]:
+        logger.info(
+            "Overriding minibatch_size %d with train_batch_size_per_learner %d as it may not be higher",
+            config.minibatch_size,
+            hparams["train_batch_size_per_learner"],
+        )
+        msg_dict["minibatch_size"] = f"{config.minibatch_size} -> {hparams['train_batch_size_per_learner']}"
+        object.__setattr__(config, "minibatch_size", hparams["train_batch_size_per_learner"])
+
+    logger.info("Patching args with hparams: %s", msg_dict)
+    for key in same_keys:
+        args[key] = hparams[key]
+        object.__setattr__(config, key, hparams[key])
+    return args
+
+
 def get_args_and_config(
     hparams: dict,
     setup: Optional["ExperimentSetupBase[Any, ConfigType_co, Any]"] = None,
@@ -110,6 +136,7 @@ def get_args_and_config(
         config = setup_class.config_from_args(SimpleNamespace(**args))
     else:
         raise ValueError("Either setup or setup_class must be provided.")
+    _patch_args_with_param_space(args, hparams, config)
     # endregion
 
     # region seeding

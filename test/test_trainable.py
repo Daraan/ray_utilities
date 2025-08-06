@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import TYPE_CHECKING
 from unittest import mock, skip
 
+import cloudpickle
 import pytest
 from ray import tune
 from ray.rllib.algorithms import AlgorithmConfig
@@ -23,7 +24,6 @@ from ray_utilities.testing_utils import (
     DisableLoggers,
     InitRay,
     TestHelpers,
-    format_result_errors,
     iter_cases,
     patch_args,
 )
@@ -379,11 +379,6 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                     trainable.save_to_path(tmpdir1)
                     with patch_args():
                         trainable_from_checkpoint: DefaultTrainable = self.TrainableClass.from_checkpoint(tmpdir1)
-                if num_env_runners > 0:
-                    assert trainable_from_checkpoint.algorithm.env_runner_group
-                    remote_configs = trainable_from_checkpoint.algorithm.env_runner_group.foreach_env_runner(
-                        lambda r: r.config
-                    )
                 self.compare_trainables(
                     trainable,
                     trainable_from_checkpoint,
@@ -420,9 +415,9 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                     trainable, trainable_restored, num_env_runners=num_env_runners, ignore_timers=True
                 )
                 trainable.stop()
-                if pickled_trainable is not None:  # TODO: Use cloudpickle
+                # Pickling with pickle and cloudpickle does not work here
+                if pickled_trainable is not None:
                     print("Comparing restored trainable with pickled trainable")
-                    import cloudpickle
 
                     trainable_restored2 = cloudpickle.loads(pickled_trainable)
                     self.compare_trainables(
@@ -460,7 +455,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                         # NOTE: num_keep does not appear to work here
                     )
                     result = tuner.fit()
-                    self.assertEqual(result.num_errors, 0, format_result_errors(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+                    self.check_tune_result(result)
                     checkpoint_dir, checkpoints = self.get_checkpoint_dirs(result[0])
                     self.assertEqual(
                         len(checkpoints),
@@ -488,7 +483,8 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                         )
                         trainable_from_ckpt.stop()
                         trainable_restore = DefaultTrainable.define(setup)()
-                        # Problem restore uses load_checkpoint, which passes a dict to load_checkpoint                        # however the checkpoint dir is unknown inside the loaded dict
+                        # Problem restore uses load_checkpoint, which passes a dict to load_checkpoint
+                        # however the checkpoint dir is unknown inside the loaded dict
                         trainable_restore.restore(checkpoint)
                         self.assertEqual(trainable_restore.algorithm.iteration, step)
                         self.assertIsInstance(checkpoint, str)

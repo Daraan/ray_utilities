@@ -14,7 +14,6 @@ from ray_utilities.training.default_class import DefaultTrainable
 
 if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
-    from ray_utilities.typing import StrictAlgorithmReturnData
 
     from ray_utilities.typing import TrainableReturnData
 
@@ -22,6 +21,7 @@ __all__ = ["AlgorithmSetup", "AlgorithmType_co", "ConfigType_co", "PPOSetup", "P
 
 
 TrainableT = TypeVar("TrainableT", bound=Callable[..., "TrainableReturnData"] | type["DefaultTrainable"])
+"""TypeVar for the two trainable types. Note that default values of generic DefaultTrainable are applied here"""
 
 
 class AlgorithmSetup(

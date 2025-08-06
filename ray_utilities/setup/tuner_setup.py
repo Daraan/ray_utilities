@@ -158,12 +158,12 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             RunConfig = tune.RunConfig
             FailureConfig = tune.FailureConfig
             CheckpointConfig = tune.CheckpointConfig
-        except AttributeError:
+        except AttributeError:  # Use Old API instead
             RunConfig = train.RunConfig
             FailureConfig = train.FailureConfig
             CheckpointConfig = train.CheckpointConfig
         if TYPE_CHECKING:
-            from ray.air.config import RunConfig  # noqa: TC004
+            from ray.air.config import RunConfig  # noqa: PLC0415, TC004
 
             FailureConfig = tune.FailureConfig
             CheckpointConfig = tune.CheckpointConfig

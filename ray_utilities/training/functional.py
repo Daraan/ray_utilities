@@ -141,7 +141,7 @@ def create_default_trainable(
         disable_report=disable_report,
     )
     if verify_return:
-        from ray_utilities.typing import TrainableReturnData
+        from ray_utilities.typing import TrainableReturnData  # noqa: PLC0415
 
         return verify_return_type(TrainableReturnData)(trainable)
     return wraps(default_trainable)(trainable)
@@ -199,7 +199,7 @@ def training_step(
         try:
             tune.report(report_metrics, checkpoint=None)
         except AttributeError:
-            import ray.train
+            import ray.train  # noqa: PLC0415  # Old API
 
             ray.train.report(report_metrics, checkpoint=None)
     rewards: RewardsDict = {
