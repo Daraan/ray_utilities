@@ -242,7 +242,7 @@ class TestSetupClasses(SetupDefaults):
                                 == self._param_to_check
                             )
                             assert result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED] == self._param_to_check
-                        metrics["self._param_name"] = self._param_name  # pyright: ignore[reportGeneralTypeIssues]
+                        metrics[self._param_name] = self._param_name  # pyright: ignore[reportGeneralTypeIssues]
                         metrics["param_value"] = self._param_to_check  # pyright: ignore[reportGeneralTypeIssues]
 
                 Setup = SetupWithCheck(TrainableWithChecksB)
