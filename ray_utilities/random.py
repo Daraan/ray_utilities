@@ -4,6 +4,8 @@ import logging
 import random
 from typing import TYPE_CHECKING, TypeVar, overload
 
+import numpy as np
+
 from ray_utilities.constants import GYM_V_0_26
 
 if TYPE_CHECKING:
@@ -14,16 +16,18 @@ logger = logging.getLogger(__name__)
 
 _IntOrNone = TypeVar("_IntOrNone", bound=int | None)
 
-
-@overload
-def _split_seed(seed: None) -> tuple[None, None]: ...
+__all__ = ["seed_everything"]
 
 
 @overload
-def _split_seed(seed: int) -> tuple[int, int]: ...
+def split_seed(seed: None) -> tuple[None, None]: ...
 
 
-def _split_seed(seed: _IntOrNone, n=2) -> tuple[_IntOrNone, ...]:
+@overload
+def split_seed(seed: int) -> tuple[int, int]: ...
+
+
+def split_seed(seed: _IntOrNone, n=2) -> tuple[_IntOrNone, ...]:
     """
     Generate a pair of seeds from a single seed one to be consumed with the next call
     the other to generate further seeds.
@@ -44,17 +48,15 @@ def seed_everything(
         torch_manual: If True, will set torch.manual_seed and torch.cuda.manual_seed_all
             In some cases setting this causes bad models, so it is False by default
     """
-    import numpy as np
-
     # no not reuse seed if its not None
-    seed, next_seed = _split_seed(seed)
+    seed, next_seed = split_seed(seed)
     random.seed(seed)
 
-    seed, next_seed = _split_seed(next_seed)
+    seed, next_seed = split_seed(next_seed)
     np.random.seed(seed)
 
     try:
-        import torch
+        import torch  # noqa: PLC0415
     except ImportError:
         pass
     else:
@@ -62,35 +64,35 @@ def seed_everything(
             torch.seed()
             torch.cuda.seed()
         elif torch_manual:
-            seed, next_seed = _split_seed(next_seed)
+            seed, next_seed = split_seed(next_seed)
             torch.manual_seed(
                 seed,
             )  # setting torch manual seed causes bad models, # ok seed 124
-            seed, next_seed = _split_seed(next_seed)
+            seed, next_seed = split_seed(next_seed)
             torch.cuda.manual_seed_all(seed)
         if torch_deterministic is not None:
             logger.debug("Setting torch deterministic algorithms to %s", torch_deterministic)
             torch.use_deterministic_algorithms(torch_deterministic)
     try:
-        import tensorflow as tf
+        import tensorflow as tf  # noqa: PLC0415
     except ImportError:
         pass
     else:
         if TYPE_CHECKING:
-            import keras
+            import keras  # noqa: PLC0415
         else:
-            from tensorflow import keras
-        seed, next_seed = _split_seed(next_seed)
+            from tensorflow import keras  # noqa: PLC0415
+        seed, next_seed = split_seed(next_seed)
         tf.random.set_seed(seed)
-        seed, next_seed = _split_seed(next_seed)
+        seed, next_seed = split_seed(next_seed)
         keras.utils.set_random_seed(seed)
         tf.config.experimental.enable_op_determinism()
 
     if env:
-        if not GYM_V_0_26:  # gymnasium does not have this
-            seed, next_seed = _split_seed(next_seed)
-            env.seed(seed)
-        seed, next_seed = _split_seed(next_seed)
+        if not GYM_V_0_26:  # old original gym, gymnasium does not have this
+            seed, next_seed = split_seed(next_seed)
+            env.seed(seed)  # pyright: ignore[reportAttributeAccessIssue]
+        seed, next_seed = split_seed(next_seed)
         env.action_space.seed(seed)
 
     return next_seed
