@@ -798,7 +798,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     # endregion checkpoints
 
     def step(self) -> LogMetricsDict:
-        self._current_step += 1
+        # Update self._current_step in child class
         raise NotImplementedError("Subclasses must implement the `step` method.")
 
     def __del__(self):
