@@ -128,6 +128,8 @@ class _DefaultSetupArgumentParser(Tap):
 
     extra: Optional[list[str]] = None
 
+    from_checkpoint: NeverRestore[Optional[str]] = None
+
     def configure(self) -> None:
         # Short hand args
         super().configure()
@@ -137,14 +139,17 @@ class _DefaultSetupArgumentParser(Tap):
         # self.add_argument("--test", nargs="*", const=True, default=False)
         self.add_argument("--iterations", "-it", default="auto", type=_auto_int_transform)
         self.add_argument("--total_steps", "-ts")
+        self.add_argument(
+            "--from_checkpoint", "-cp", "-load", default=None, type=str, help="Path to the checkpoint to load from."
+        )
 
 
 class RLlibArgumentParser(Tap):
+    """Attributes of this class have to be attributes of the AlgorithmConfig."""
+
     train_batch_size_per_learner: int = 2048  # batch size that ray samples
     minibatch_size: int = 128
     """Minibatch size used for backpropagation/optimization"""
-
-    from_checkpoint: Optional[str] = None
 
     def configure(self) -> None:
         super().configure()
@@ -153,10 +158,6 @@ class RLlibArgumentParser(Tap):
             dest="train_batch_size_per_learner",
             type=int,
             required=False,
-        )
-
-        self.add_argument(
-            "--from_checkpoint", "-cp", "-load", default=None, type=str, help="Path to the checkpoint to load from."
         )
 
     def process_args(self):
@@ -316,6 +317,22 @@ class DefaultExtraArgs(Tap):
         self.add_argument("--extra", help="extra arguments", nargs="+")
 
 
+class CheckpointConfigArgumentParser(Tap):
+    checkpoint_frequency: int | None = 50_000
+    """Frequency of checkpoints in steps (or iterations, see checkpoint_frequency_unit), 0 or None for no checkpointing"""
+
+    checkpoint_frequency_unit: Literal["steps", "iterations"] = "steps"
+    """Unit for checkpoint_frequency, either after # steps or iterations"""
+
+    num_to_keep: int | None = None
+    """The number of checkpoints to keep. None to keep all checkpoints."""
+
+    def process_args(self) -> None:
+        if self.num_to_keep is not None and self.num_to_keep <= 0:
+            raise ValueError(f"num_to_keep must be a positive integer or None. Not {self.num_to_keep}.")
+        return super().process_args()
+
+
 class OptionalExtensionsArgs(RLlibArgumentParser):
     dynamic_buffer: AlwaysRestore[bool] = False
     """Use DynamicBufferCallback"""
@@ -421,6 +438,7 @@ class DefaultArgumentParser(
     RLlibArgumentParser,
     OptunaArgumentParser,
     _DefaultSetupArgumentParser,
+    CheckpointConfigArgumentParser,
     DefaultResourceArgParser,
     DefaultEnvironmentArgParser,
     DefaultLoggingArgParser,

@@ -20,6 +20,7 @@ from ray.tune.stopper import CombinedStopper
 from ray.tune.stopper.maximum_iteration import MaximumIterationStopper
 
 from ray_utilities.callbacks.algorithm import exact_sampling_callback
+from ray_utilities.callbacks.tuner.metric_checkpointer import StepCheckpointer
 from ray_utilities.constants import (
     EVAL_METRIC_RETURN_MEAN,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
@@ -35,18 +36,18 @@ from ray_utilities.testing_utils import (
     DisableLoggers,
     InitRay,
     SetupDefaults,
+    SetupWithCheck,
     TestHelpers,
+    TrainableWithChecks,
     format_result_errors,
     iter_cases,
     patch_args,
 )
-from ray_utilities.testing_utils import SetupWithCheck
-from ray_utilities.testing_utils import TrainableWithChecks
 from ray_utilities.training.default_class import DefaultTrainable
 
 if TYPE_CHECKING:
-    from build.lib.ray_utilities.typing.metrics import LogMetricsDict
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
+    from ray_utilities.typing.metrics import LogMetricsDict
     from ray_utilities.typing.trainable_return import TrainableReturnData
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,55 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers):
                 self.assertEqual(result.metrics["current_step"], 3 * BATCH_SIZE)
                 self.assertEqual(result.metrics[TRAINING_ITERATION], 3)
             self.assertEqual(results.num_errors, 0, "Encountered errors: " + format_result_errors(results.errors))
+
+    def test_step_checkpointing(self):
+        with patch_args(
+            "--num_samples",
+            "1",
+            "--num_jobs", "1",
+            "--batch_size",
+            BATCH_SIZE,
+            "--minibatch_size",
+            MINIBATCH_SIZE,
+            "--iterations", "5",
+            "--total_steps", BATCH_SIZE * 5,
+            "--checkpoint_frequency_unit", "steps",
+            "--checkpoint_frequency", BATCH_SIZE * 2,
+        ):  # fmt: off
+            # FIXME: new default steps does not align with other tests!
+            setup = AlgorithmSetup()
+            # Workaround for NOT working StepCheckpointer as it works on a copy of the result dict.
+            # AlgoStepCheckpointer is not added, hardcoded checkpointing!
+            # self.is_algorithm_callback_added(
+            #    setup.config,
+            #    AlgoStepCheckpointer.make_callback_class(checkpoint_frequency=setup.args.checkpoint_frequency),
+            # )
+            tuner = setup.create_tuner()
+            assert tuner._local_tuner
+            run_config = tuner._local_tuner.get_run_config()
+            run_config.checkpoint_config.checkpoint_at_end = False  # pyright: ignore[reportOptionalMemberAccess]
+            tune_callbacks = run_config.callbacks
+            assert tune_callbacks
+            self.assertTrue(any(isinstance(cb, StepCheckpointer) for cb in tune_callbacks))
+            results = tuner.fit()
+            path, checkpoints = self.get_checkpoint_dirs(results[0])
+            # restore latest checkpoint
+            self.assertEqual(
+                len(checkpoints),
+                2,  # + 1 for save at end?
+                "Expected 2 checkpoints, got: " + str(checkpoints) + " found " + str(os.listdir(path)),
+            )
+            checkpoints = sorted(checkpoints)
+            with patch_args(
+                "--from_checkpoint",
+                checkpoints[-1],
+                "--num_jobs",
+                "1",
+            ):
+                t2 = setup.trainable_class.from_checkpoint(checkpoints[-1])
+                assert t2._current_step == BATCH_SIZE * 4, (
+                    f"Expected current_step to be {BATCH_SIZE * 4}, got {t2._current_step}"
+                )
 
 
 @pytest.mark.tuner

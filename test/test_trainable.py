@@ -24,7 +24,6 @@ from ray_utilities.testing_utils import (
     DisableLoggers,
     InitRay,
     TestHelpers,
-    format_result_errors,
     iter_cases,
     patch_args,
 )

@@ -103,17 +103,7 @@ class TestExtensionsAdded(SetupDefaults):
         self.assertFalse(setup.args.dynamic_buffer)
         for config in (setup.config, setup.trainable_class().algorithm_config):
             with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
-                self.assertFalse(
-                    config.callbacks_class is DynamicBufferUpdate
-                    or (
-                        isinstance(config.callbacks_class, type)
-                        and issubclass(config.callbacks_class, DynamicBufferUpdate)
-                    )
-                    or (
-                        isinstance(config.callbacks_class, (list, tuple))
-                        and DynamicBufferUpdate in config.callbacks_class
-                    )
-                )
+                self.assertFalse(self.is_algorithm_callback_added(config, DynamicBufferUpdate))
 
         with patch_args("--dynamic_buffer"):
             setup = AlgorithmSetup()
@@ -124,15 +114,7 @@ class TestExtensionsAdded(SetupDefaults):
             for config in (setup.config, setup.trainable_class().algorithm_config):
                 with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
                     self.assertTrue(
-                        config.callbacks_class is DynamicBufferUpdate
-                        or (
-                            isinstance(config.callbacks_class, type)
-                            and issubclass(config.callbacks_class, DynamicBufferUpdate)
-                        )
-                        or (
-                            isinstance(config.callbacks_class, (list, tuple))
-                            and DynamicBufferUpdate in config.callbacks_class
-                        ),
+                        self.is_algorithm_callback_added(config, DynamicBufferUpdate),
                         "Expected DynamicBufferUpdate to be in callbacks_class when --dynamic_buffer is set.",
                     )
 
@@ -142,17 +124,7 @@ class TestExtensionsAdded(SetupDefaults):
         self.assertFalse(setup.args.dynamic_buffer)
         for config in (setup.config, setup.trainable_class().algorithm_config):
             with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
-                self.assertFalse(
-                    config.callbacks_class is DynamicGradientAccumulation
-                    or (
-                        isinstance(config.callbacks_class, type)
-                        and issubclass(config.callbacks_class, DynamicGradientAccumulation)
-                    )
-                    or (
-                        isinstance(config.callbacks_class, (list, tuple))
-                        and DynamicGradientAccumulation in config.callbacks_class
-                    )
-                )
+                self.assertFalse(self.is_algorithm_callback_added(config, DynamicGradientAccumulation))
 
         with patch_args("--dynamic_batch"):
             setup = AlgorithmSetup()
@@ -162,17 +134,7 @@ class TestExtensionsAdded(SetupDefaults):
             )
             for config in (setup.config, setup.trainable_class().algorithm_config):
                 with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
-                    self.assertTrue(
-                        config.callbacks_class is DynamicGradientAccumulation
-                        or (
-                            isinstance(config.callbacks_class, type)
-                            and issubclass(config.callbacks_class, DynamicGradientAccumulation)
-                        )
-                        or (
-                            isinstance(config.callbacks_class, (list, tuple))
-                            and DynamicGradientAccumulation in config.callbacks_class
-                        )
-                    )
+                    self.assertTrue(self.is_algorithm_callback_added(config, DynamicGradientAccumulation))
 
     @patch_args()
     def test_dynamic_eval_interval_added(self):
@@ -180,16 +142,7 @@ class TestExtensionsAdded(SetupDefaults):
         setup = AlgorithmSetup()
         for config in (setup.config, setup.trainable_class().algorithm_config):
             with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
-                self.assertFalse(
-                    (
-                        isinstance(config.callbacks_class, type)
-                        and issubclass(config.callbacks_class, DynamicEvalInterval)
-                    )
-                    or (
-                        isinstance(config.callbacks_class, (list, tuple))
-                        and DynamicEvalInterval in config.callbacks_class
-                    ),
-                )
+                self.assertFalse(self.is_algorithm_callback_added(config, DynamicEvalInterval))
         # Check that the DynamicEvalInterval is also added
         for args in ("--dynamic_buffer", "--dynamic_batch"):
             with patch_args(args), self.subTest(args=args):
@@ -197,14 +150,7 @@ class TestExtensionsAdded(SetupDefaults):
                 for config in (setup.config, setup.trainable_class().algorithm_config):
                     with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
                         self.assertTrue(
-                            (
-                                isinstance(config.callbacks_class, type)
-                                and issubclass(config.callbacks_class, DynamicEvalInterval)
-                            )
-                            or (
-                                isinstance(config.callbacks_class, (list, tuple))
-                                and DynamicEvalInterval in config.callbacks_class
-                            ),
+                            self.is_algorithm_callback_added(config, DynamicEvalInterval),
                             msg=f"Expected DynamicEvalInterval to be in callbacks_class when {args} is set.",
                         )
         # Check that only one is added

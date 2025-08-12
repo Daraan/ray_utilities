@@ -71,12 +71,13 @@ if TYPE_CHECKING:
     from ray import tune
     from ray.rllib.algorithms import Algorithm
     from ray.rllib.algorithms.ppo.ppo import PPO, PPOConfig
+    from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.tune import Result
 
-    from build.lib.ray_utilities.typing.metrics import LogMetricsDict
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co
     from ray_utilities.training.default_class import TrainableBase
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
+    from ray_utilities.typing.metrics import LogMetricsDict
 
     LeafType: TypeAlias = pytree.SequenceKey | pytree.DictKey | pytree.GetAttrKey
 
@@ -1013,6 +1014,9 @@ class TestHelpers(unittest.TestCase):
                 assert trainable.algorithm.env_runner and trainable2.algorithm.env_runner
                 self.compare_env_runner_configs(trainable.algorithm, trainable2.algorithm)
 
+    # endregion
+    # region utilities
+
     @staticmethod
     def get_checkpoint_dirs(result: Result) -> tuple[pathlib.Path, list[str]]:
         """Returns checkpoint dir of the result and found saved checkpoints"""
@@ -1052,6 +1056,25 @@ class TestHelpers(unittest.TestCase):
             return result
         result["evaluation"] = cls.clean_timer_logs(evaluation_dict)
         return result
+
+    def is_algorithm_callback_added(self, config: AlgorithmConfig, callback_class: type[RLlibCallback]) -> bool:
+        return (
+            config.callbacks_class is callback_class
+            or (
+                isinstance(callback_class, partial)
+                and (
+                    config.callbacks_class is callback_class.func
+                    or (
+                        isinstance(config.callbacks_class, partial)
+                        and config.callbacks_class.func is callback_class.func
+                    )
+                )
+            )
+            or (isinstance(config.callbacks_class, type) and issubclass(config.callbacks_class, callback_class))
+            or (isinstance(config.callbacks_class, (list, tuple)) and callback_class in config.callbacks_class)
+        )
+
+    # endregion
 
 
 class SetupDefaults(TestHelpers, DisableLoggers):

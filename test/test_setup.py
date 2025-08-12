@@ -59,8 +59,8 @@ if TYPE_CHECKING:
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 
-    from build.lib.ray_utilities.typing.metrics import LogMetricsDict
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
+    from ray_utilities.typing.metrics import LogMetricsDict
 
 
 class TestSetupClasses(SetupDefaults):

@@ -26,9 +26,11 @@ from ray.rllib.utils import force_list
 from ray.rllib.utils.annotations import override
 from ray.rllib.utils.checkpoints import Checkpointable
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME
+from ray.tune.result import SHOULD_CHECKPOINT
 from typing_extensions import Self, TypeAliasType
 
 from ray_utilities.callbacks.progress_bar import restore_pbar, save_pbar_state, update_pbar
+from ray_utilities.callbacks.tuner.metric_checkpointer import TUNE_RESULT_IS_A_COPY
 from ray_utilities.config.typed_argument_parser import LOG_STATS, LogStatsChoices
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.misc import is_pbar
@@ -105,6 +107,8 @@ class TrainableStateDict(TypedDict):
     reward_updaters: dict[str, list[float]]
 
     setup: SetupCheckpointDict[Any, Any, Any]
+
+    current_step: int
 
 
 class PartialTrainableStateDict(TypedDict, total=False):
@@ -233,6 +237,9 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             When restoring from a checkpoint, this reflects the *inital* setup, not the current one.
             Config and args hold by this object might differ from the current setup.
         """
+
+        self._current_step: int = 0
+        """The current env steps sampled by the trainable, updated by step()."""
 
     @override(tune.Trainable)
     def setup(self, config: dict[str, Any], *, algorithm_overrides: Optional[dict[str, Any]] = None) -> None:
@@ -586,6 +593,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             "pbar_state": pbar_state,
             "reward_updaters": reward_updaters_state,
             "setup": setup_state,
+            "current_step": self._current_step,
         }
         # Current step is
         # state["trainable"]["last_result"]["current_step"]
@@ -630,6 +638,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     ray.__version__,
                 )
         keys_to_process.remove("trainable")
+        self._current_step = state["current_step"]
+        keys_to_process.remove("current_step")
 
         self._iteration = state["iteration"]
         keys_to_process.remove("iteration")
@@ -788,6 +798,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     # endregion checkpoints
 
     def step(self) -> LogMetricsDict:
+        self._current_step += 1
         raise NotImplementedError("Subclasses must implement the `step` method.")
 
     def __del__(self):
@@ -885,6 +896,9 @@ class _TrainableSubclassMeta(ABCMeta):
 class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
     """Default trainable for ray.tune based on RLlib algorithms."""
 
+    _last_checkpoint_iteration = -1
+    _last_checkpoint_step = -1
+
     def step(self) -> LogMetricsDict:  # iteratively
         result, metrics, rewards = training_step(
             self.algorithm,
@@ -894,6 +908,24 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
             log_stats=self.log_stats,
         )
         self._current_step = get_current_step(result)
+        # HACK: as long as tune does not allow custom result checkpointing use this
+        if (
+            TUNE_RESULT_IS_A_COPY
+            and self._setup.args.checkpoint_frequency_unit == "steps"  # type: ignore
+            and self._setup.args.checkpoint_frequency  # type: ignore
+            and (_steps_since_last_checkpoint := self._current_step - self._last_checkpoint_step)
+            >= self._setup.args.checkpoint_frequency
+        ):
+            _logger.info(
+                "Creating checkpoint at step %s as last checkpoint was at step %s, difference %s >= %s (frequency)",
+                self._current_step,
+                self._last_checkpoint_step if self._last_checkpoint_step >= 0 else "Never",
+                _steps_since_last_checkpoint,
+                self._setup.args.checkpoint_frequency,
+            )
+            self._last_checkpoint_iteration = self._iteration  # iteration might be off by 1 as set after return
+            self._last_checkpoint_step = self._current_step
+            metrics[SHOULD_CHECKPOINT] = result[SHOULD_CHECKPOINT] = True
         # Update progress bar
         if is_pbar(self._pbar):
             update_pbar(
