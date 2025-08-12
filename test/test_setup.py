@@ -242,7 +242,7 @@ class TestSetupClasses(SetupDefaults):
                                 == self._param_to_check
                             )
                             assert result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED] == self._param_to_check
-                        metrics[self._param_name] = self._param_name  # pyright: ignore[reportGeneralTypeIssues]
+                        metrics["param_name"] = self._param_name  # pyright: ignore[reportGeneralTypeIssues]
                         metrics["param_value"] = self._param_to_check  # pyright: ignore[reportGeneralTypeIssues]
 
                 Setup = SetupWithCheck(TrainableWithChecksB)
@@ -265,7 +265,7 @@ class TestSetupClasses(SetupDefaults):
                     results[0].metrics,
                     "Metrics should contain '_checking_class_'. Custom class was likely not used",
                 )
-                self.assertEqual(results[0].metrics["param"], param)
+                self.assertEqual(results[0].metrics["param_name"], param)
                 choices = {r.metrics["param_value"] for r in results}  # pyright: ignore[reportOptionalSubscript]
                 self.assertEqual(len(choices), results.num_terminated)
                 if grid:
