@@ -14,6 +14,7 @@ import sys
 import unittest
 import unittest.util
 from collections import deque
+from collections.abc import Iterator, Sequence
 from contextlib import nullcontext
 from copy import deepcopy
 from functools import partial
@@ -43,6 +44,7 @@ import ray.tune
 import ray.tune.logger
 import ray.tune.logger.unified
 import tree
+from exceptiongroup import ExceptionGroup
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core import ALL_MODULES
@@ -53,6 +55,7 @@ from ray.rllib.utils.metrics import (
 )
 from ray.rllib.utils.metrics.stats import Stats
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
+from ray.tune.result_grid import ResultGrid
 from ray.tune.search.sample import Categorical, Domain, Float, Integer
 from typing_extensions import Final, NotRequired, Required, Sentinel, get_origin, get_type_hints
 
@@ -131,11 +134,16 @@ class Cases:
         return mock.patch.object(cls, "next", *args, side_effect=cases, **kwargs)
 
 
-def iter_cases(cases: type[Cases] | mock.MagicMock):
+def iter_cases(cases: type[Cases] | mock.MagicMock | Iterator[Any] | Iterable[Any]):
     try:
         while True:
             if isinstance(cases, mock.MagicMock):
                 next_case = cases()
+            elif isinstance(cases, Iterator):
+                next_case = next(cases)
+            elif isinstance(cases, Iterable):
+                yield from iter_cases(iter(cases))
+                return
             else:
                 next_case = cases.next()
             logger.info("======= NEXT CASE: %s =======", next_case)
@@ -1141,6 +1149,12 @@ def dict_diff_message(d1: Any, d2: Any) -> str:
     return standardMsg + diff
 
 
+def raise_result_errors(result: ResultGrid | Sequence[Exception]) -> None:
+    raise ExceptionGroup(
+        "Errors encountered during tuning", result.errors if isinstance(result, ResultGrid) else result
+    )
+
+
 def format_result_errors(errors):
     return str(errors).replace(r"\n", "\n")
 
@@ -1163,6 +1177,8 @@ def remote_breakpoint(port=5678):
     if not debugpy.is_client_connected():
         print("starting debugpy. Listening on port:", port)
         debugpy.listen(("localhost", port))  # noqa: T100
+    else:
+        print("debugpy already connected, waiting for client")
     debugpy.wait_for_client()  # noqa: T100
     breakpoint()  # noqa: T100
 

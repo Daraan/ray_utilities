@@ -82,6 +82,7 @@ def _patch_args_with_param_space(
     config: AlgorithmConfig,
 ) -> dict[str, Any]:
     same_keys = set(args.keys()) & set(hparams.keys())
+    args["__overwritten_keys__"] = {}
     if not same_keys:
         logger.debug("No keys to patch in args with hparams: %s", hparams)
         return args
@@ -94,11 +95,13 @@ def _patch_args_with_param_space(
         )
         msg_dict["minibatch_size"] = f"{config.minibatch_size} -> {hparams['train_batch_size_per_learner']}"
         object.__setattr__(config, "minibatch_size", hparams["train_batch_size_per_learner"])
+        args["__overwritten_keys__"]["minibatch_size"] = hparams["train_batch_size_per_learner"]
 
     logger.info("Patching args with hparams: %s", msg_dict)
     for key in same_keys:
         args[key] = hparams[key]
         object.__setattr__(config, key, hparams[key])
+        args["__overwritten_keys__"][key] = hparams[key]
     return args
 
 
@@ -227,7 +230,9 @@ def setup_trainable(
         except AttributeError:
             algo = config.build()
     # Load from checkpoint
-    elif checkpoint_loader := (setup or setup_class):
+    elif checkpoint_loader := (
+        setup or setup_class
+    ):  # TODO: possibly do not load algorithm and let Trainable handle it (should be an option)
         algo = checkpoint_loader.algorithm_from_checkpoint(args["from_checkpoint"], config=config)
         sync_env_runner_states_after_reload(algo)
         if config.algo_class is not None and not isinstance(algo, config.algo_class):

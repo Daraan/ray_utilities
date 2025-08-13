@@ -297,6 +297,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             setup_class=self.setup_class if isclass(self.setup_class) else None,
             config_overrides=self._algorithm_overrides,
         )
+        self._param_overrides: dict[str, Any] = args.get("__overwritten_keys__", {})
+        """Changed parameters via the hparams argument, e.g. passed by the tuner. See also: --tune"""
         self._pbar: tqdm | range | tqdm_ray.tqdm = episode_iterator(args, config, use_pbar=self.use_pbar)
         self._iteration: int = 0
         self.log_stats: LogStatsChoices = args[LOG_STATS]
@@ -422,12 +424,30 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             else {"config": self._setup.config, **kwargs}
         )
 
-        if "config" in algo_kwargs and self._algorithm_overrides:
+        if "config" in algo_kwargs and (self._algorithm_overrides or self._param_overrides):
+            config_overrides = (self._algorithm_overrides or {}) | self._param_overrides
             algo_kwargs["config"] = (
-                algo_kwargs["config"].copy(copy_frozen=False).update_from_dict(self._algorithm_overrides)
+                cast("AlgorithmConfig", algo_kwargs["config"])
+                .copy(copy_frozen=False)
+                .update_from_dict(config_overrides)
             )
+            # Fix batch_size < minibatch_size:
+            if (
+                algo_kwargs["config"].minibatch_size is not None
+                and algo_kwargs["config"].train_batch_size_per_learner < algo_kwargs["config"].minibatch_size
+            ):
+                _logger.warning(
+                    "minibatch_size %d is larger than train_batch_size_per_learner %d, this can result in an error. "
+                    "Reducing the minibatch_size to the train_batch_size_per_learner.",
+                    algo_kwargs["config"].minibatch_size,
+                    algo_kwargs["config"].train_batch_size_per_learner,
+                )
+                config_overrides["minibatch_size"] = algo_kwargs["config"].train_batch_size_per_learner
+                algo_kwargs["config"].minibatch_size = algo_kwargs["config"].train_batch_size_per_learner
             algo_kwargs["config"].freeze()
-        overrides_at_start = self._algorithm_overrides
+        else:
+            config_overrides = {}
+        overrides_at_start = self._algorithm_overrides or {}
         if isinstance(checkpoint, dict):
             # TODO
             keys_to_process = set(checkpoint.keys())  # Sanity check if processed all keys
@@ -472,13 +492,31 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # use from_checkpoint to do that
             self.restore_from_path(checkpoint, **algo_kwargs)
             # Restored overrides:
-            if self._algorithm_overrides and overrides_at_start != self._algorithm_overrides:
+            if (
+                "config" in algo_kwargs
+                and self._algorithm_overrides
+                and overrides_at_start != self._algorithm_overrides
+            ):
                 # Overrides at start should have higher priority
                 algo_kwargs["config"] = (
                     algo_kwargs["config"]
                     .copy(copy_frozen=False)
-                    .update_from_dict(self._algorithm_overrides | (overrides_at_start or {}))
+                    # Restored < algorithm_overrides < hparams
+                    .update_from_dict(self._algorithm_overrides | config_overrides)
                 )
+                # Fix minibatch size < batch_size if reloaded bad value
+                if (
+                    algo_kwargs["config"].minibatch_size is not None
+                    and algo_kwargs["config"].train_batch_size_per_learner < algo_kwargs["config"].minibatch_size
+                ):
+                    _logger.warning(
+                        "minibatch_size %d is larger than train_batch_size_per_learner %d, this can result in an error. "
+                        "Reducing the minibatch_size to the train_batch_size_per_learner.",
+                        algo_kwargs["config"].minibatch_size,
+                        algo_kwargs["config"].train_batch_size_per_learner,
+                    )
+                    config_overrides["minibatch_size"] = algo_kwargs["config"].train_batch_size_per_learner
+                    algo_kwargs["config"].minibatch_size = algo_kwargs["config"].train_batch_size_per_learner
                 algo_kwargs["config"].freeze()
             # return
             # for component in components:

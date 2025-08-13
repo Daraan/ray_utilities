@@ -42,6 +42,7 @@ from ray_utilities.testing_utils import (
     format_result_errors,
     iter_cases,
     patch_args,
+    raise_result_errors,
 )
 from ray_utilities.training.default_class import DefaultTrainable
 
@@ -87,7 +88,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers):
                 assert result.metrics
                 self.assertEqual(result.metrics["current_step"], 3 * BATCH_SIZE)
                 self.assertEqual(result.metrics[TRAINING_ITERATION], 3)
-            self.assertEqual(results.num_errors, 0, "Encountered errors: " + format_result_errors(results.errors))
+            raise_result_errors(results)
 
     def test_step_checkpointing(self):
         with patch_args(
@@ -159,7 +160,7 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
             # NOTE: num_keep does not appear to work here
         )
         results = tuner.fit()
-        self.assertEqual(results.num_errors, 0, "Encountered errors: " + format_result_errors(results.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+        raise_result_errors(results)
         checkpoint_dir, checkpoints = self.get_checkpoint_dirs(results[0])
         self.assertEqual(
             len(checkpoints),
@@ -390,13 +391,13 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 )
                 self.assertTrue(os.path.exists(checkpoints2[0]), "Checkpoint file does not exist: " + checkpoints2[0])
 
-    def test_retune_with_tune_argument(self):
+    def test_retune_with_tune_argument(self, cases=[0]):
         class TrainableWithChecksB(TrainableWithChecks):
-            debug = True
+            debug = False
 
         Setup = SetupWithCheck(TrainableWithChecksB)
 
-        for num_env_runners in [0]:  # iter_cases(cases):
+        for num_env_runners in iter_cases(cases):
             with self.subTest(num_env_runners=num_env_runners):
                 with patch_args(
                     "--num_samples", "1",
@@ -424,14 +425,18 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     f"Checkpoints were not created. Found: {os.listdir(checkpoint_dir)} in {checkpoint_dir}",
                 )
 
+                NUM_RUNS = 5
+                SAMPLE_SPACE = [16, 44, 66]
                 with patch_args(
-                    "--num_samples", "3",
-                    "--num_jobs", "1",
+                    "--num_samples", NUM_RUNS,
+                    "--num_jobs", 1 if num_env_runners > 0 else 2,
                     "--from_checkpoint", checkpoints[0],
                     "--log_stats", "most",
                     "--tune", "batch_size", "rollout_size",
                     "--iterations", "3",
                 ):  # fmt: off
+                    Setup.batch_size_sample_space = {"grid_search": SAMPLE_SPACE}
+                    Setup.rollout_size_sample_space = {"grid_search": SAMPLE_SPACE}
                     with Setup() as setup2:
                         setup2.config.env_runners(num_env_runners=num_env_runners)
                 tuner2 = setup2.create_tuner()
@@ -440,31 +445,40 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     checkpoint_score_order="max",
                     checkpoint_frequency=1,
                 )
+                # Tuner will sample parameter and feed is as input arg to the trainable
                 results2 = tuner2.fit()
+                raise_result_errors(results2)
                 self.assertEqual(
-                    results2.num_errors, 0, "Encountered errors: " + format_result_errors((results1.errors))
+                    results2.num_terminated, NUM_RUNS, f"Expected num_samples={NUM_RUNS} runs to be terminated"
                 )
-                self.assertEqual(results2.num_terminated, 3, "Expected num_samples=3 runs to be terminated")
-                self.assertEqual(len(results2), 3)
+                self.assertEqual(len(results2), NUM_RUNS)
                 batch_sizes = set()
                 rollout_sizes = set()
-                # Grid search, all results should differ
+
                 checkpoints = {}
-                return
                 for result in results2:
                     assert result.config
                     batch_sizes.add(result.config["train_batch_size_per_learner"])
                     rollout_sizes.add(result.config["rollout_size"])
                     checkpoints[result.checkpoint] = result
-                    assert result.metrics
+                # check that different values were added
+                if NUM_RUNS >= 7:
+                    self.assertEqual(batch_sizes, set(SAMPLE_SPACE), f"{batch_sizes} != {set(SAMPLE_SPACE)}")
+                else:
+                    self.assertLessEqual(
+                        batch_sizes, set(SAMPLE_SPACE), f"{batch_sizes} not a subset of {set(SAMPLE_SPACE)}"
+                    )
+                # check if values match expectations
+                for result in results2:
+                    assert result.metrics and result.config
                     self.assertEqual(result.metrics["training_iteration"], 3)
                     self.assertEqual(result.metrics["iterations_since_restore"], 2)
                     # Check that new batch_size was used
                     self.assertEqual(
-                        result.metrics["current_step"], result.config["train_batch_size_per_learner"] * 2 + BATCH_SIZE
+                        result.metrics["current_step"],
+                        result.config["train_batch_size_per_learner"] * 2 + BATCH_SIZE,
+                        "Expected current_step to be 2x the batch size + initial step",
                     )
-                self.assertEqual(len(results2), len(batch_sizes), "Batch sizes should be unique in results")
-                self.assertEqual(len(results2), len(rollout_sizes), "Rollout sizes should be unique in results")
 
 
 class TestOptunaTuner(SetupDefaults):

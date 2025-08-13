@@ -715,6 +715,15 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 cls.algo_class,
             )
         if config is not None:
+            if config.minibatch_size is not None and config.minibatch_size > config.train_batch_size_per_learner:
+                logger.warning(
+                    "minibatch_size %d is larger than train_batch_size_per_learner %d, this can result in an error. "
+                    "Reducing the minibatch_size to the train_batch_size_per_learner.",
+                    config.minibatch_size,
+                    config.train_batch_size_per_learner,
+                    stacklevel=2,
+                )
+                config.minibatch_size = config.train_batch_size_per_learner
             kwargs = {"config": config, **kwargs}
         try:
             # Algorithm checkpoint is likely in subdir.
