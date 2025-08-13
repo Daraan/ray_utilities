@@ -37,7 +37,7 @@ from typing_extensions import Self, TypedDict, TypeVar, deprecated
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.comet import CometArchiveTracker
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.config.typed_argument_parser import SupportsRestoreParser
+from ray_utilities.config.typed_argument_parser import SupportsMetaAnnotations
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.environment import create_env
 from ray_utilities.misc import get_trainable_name
@@ -384,7 +384,10 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     def clean_args_to_hparams(self, args: Optional[NamespaceType[ParserType_co]] = None) -> dict[str, Any]:
         args = args or self.get_args()
-        upload_args = remove_ignored_args(args, remove=(*LOG_IGNORE_ARGS, "process_number"))
+        to_remove: list[str] = [*LOG_IGNORE_ARGS, "process_number"]
+        if isinstance(args, SupportsMetaAnnotations):
+            to_remove.extend(args.get_non_cli_args())
+        upload_args = remove_ignored_args(args, remove=to_remove)
         return upload_args
 
     def get_trainable_name(self) -> str:
@@ -553,7 +556,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             # always restore values will be added to the overrides
 
             # to make overrides have a higher priority than args:
-            if isinstance(self.parser, SupportsRestoreParser):
+            if isinstance(self.parser, SupportsMetaAnnotations):
                 overrides = {
                     k: v for k, v in old_overwrites.items() if k in self.parser.get_to_restore_values()
                 } | overrides

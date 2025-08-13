@@ -201,10 +201,18 @@ class TestProcessing(unittest.TestCase):
                     setup = AlgorithmSetup()
                     self.assertEqual(setup.args.log_stats, choice)
                     if isclass(setup.trainable):
-                        _result = setup.trainable_class().train()
-                    else:
+                        _result = setup.trainable_class(setup.param_space).train()
+                    else:  # Otherwise call trainable function
                         _result = setup.trainable(setup.param_space)
             with patch_args("--log_stats", "invalid_choice"):
                 with self.assertRaises(SystemExit) as context:
                     AlgorithmSetup()
                 self.assertIsInstance(context.exception.__context__, argparse.ArgumentError)
+
+    def test_not_a_model_parameter_clean(self):
+        with patch_args("--not_parallel", "--optimize_config", "--tune", "batch_size", "--num-jobs", 3):
+            setup = AlgorithmSetup()
+            removable_params = setup.parser.get_non_cli_args()  # pyright: ignore[reportAttributeAccessIssue]
+            self.assertGreater(len(removable_params), 0)
+            for param in removable_params:
+                self.assertNotIn(param, setup.param_space, msg=f"Expected {param} to not be in param_space")

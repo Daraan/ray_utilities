@@ -391,7 +391,8 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 )
                 self.assertTrue(os.path.exists(checkpoints2[0]), "Checkpoint file does not exist: " + checkpoints2[0])
 
-    def test_retune_with_tune_argument(self, cases=[0]):
+    @Cases([0])  # more env runners should have no influence here
+    def test_retune_with_tune_argument(self, cases):
         class TrainableWithChecksB(TrainableWithChecks):
             debug = False
 
@@ -401,7 +402,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             with self.subTest(num_env_runners=num_env_runners):
                 with patch_args(
                     "--num_samples", "1",
-                    "--num_jobs", "1",
+                    "--num_jobs", 2 if num_env_runners==0 else 1,
                     "--batch_size", BATCH_SIZE,  # overwrite
                     "--minibatch_size", MINIBATCH_SIZE, # keep
                     "--iterations", "1",  # overwrite
