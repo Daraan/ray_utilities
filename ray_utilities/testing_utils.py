@@ -1149,10 +1149,18 @@ def dict_diff_message(d1: Any, d2: Any) -> str:
     return standardMsg + diff
 
 
-def raise_result_errors(result: ResultGrid | Sequence[Exception]) -> None:
-    raise ExceptionGroup(
-        "Errors encountered during tuning", result.errors if isinstance(result, ResultGrid) else result
-    )
+def raise_result_errors(
+    result: ResultGrid | Sequence[Exception], msg: str = "Errors encountered during tuning"
+) -> None:
+    if isinstance(result, ResultGrid):
+        if not result.errors:
+            return
+        if len(result.errors) == 1:
+            raise result.errors[0]
+        errors = result.errors
+    else:
+        errors = result
+    raise ExceptionGroup(msg, errors)
 
 
 def format_result_errors(errors):
