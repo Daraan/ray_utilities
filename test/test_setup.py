@@ -3,15 +3,19 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 
 import pyarrow as pa
 import pytest
+
+from ray_utilities.runfiles import run_tune
 
 os.environ["RAY_DEBUG"] = "legacy"
 # os.environ["RAY_DEBUG"]="0"
 
 import tempfile
 import unittest
+import unittest.mock
 from copy import deepcopy
 from inspect import isclass
 from pathlib import Path
@@ -481,6 +485,15 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 # Never restored
                 self.assertNotEqual(setup2.args.log_level, "DEBUG")
                 self.assertEqual(setup2.args.num_jobs, DefaultArgumentParser.num_jobs)
+
+    @unittest.mock.patch.object(subprocess, "run")
+    def test_wandb_upload(self, mock_run: unittest.mock.MagicMock):
+        mock_run.return_value = unittest.mock.Mock()
+        mock_run.return_value.stdout = "wandb: Syncing files..."
+        with patch_args("--wandb", "offline+upload", "--num_jobs", 1, "--iterations", 1, "--batch_size", 32):
+            setup = AlgorithmSetup()
+            _results = run_tune(setup)
+        mock_run.assert_called_once()
 
 
 ENV_STEPS_PER_ITERATION = 10

@@ -933,13 +933,19 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                     ["wandb", "sync", run_dir.as_posix()], check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
                 )
                 if exit.stdout:
-                    print(exit.stdout.decode("utf-8"))
-                if exit.returncode != 0:
+                    print(exit.stdout if isinstance(exit.stdout, str) else exit.stdout.decode("utf-8"))
+                if isinstance(exit.returncode, int) and exit.returncode != 0:  # use int check for mock
                     logger.error(
                         "Failed to upload wandb offline run %s with exit code %d. Output: %s",
                         run_dir,
                         exit.returncode,
-                        exit.stdout.decode("utf-8") if exit.stdout else "",
+                        (
+                            exit.stdout.decode("utf-8")
+                            if isinstance(exit.stdout, bytes)
+                            else exit.stdout
+                            if exit.stdout
+                            else ""
+                        ),
                     )
         logger.info("Uploaded %d wandb offline runs from %s.", num_uploaded, results.experiment_path)
 

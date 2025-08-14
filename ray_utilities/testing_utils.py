@@ -11,6 +11,7 @@ import os
 import pathlib
 import pprint
 import random
+import shutil
 import sys
 import unittest
 import unittest.util
@@ -311,11 +312,12 @@ class TestHelpers(unittest.TestCase):
             run_config = TunerSetup(setup=setup).create_run_config([])
             if run_config.storage_path is None:
                 return
-            storage_path = pathlib.Path(run_config.storage_path)
+            storage_path = pathlib.Path(run_config.storage_path) / run_config.name  # pyright: ignore[reportOperatorIssue]
             if storage_path.exists():
-                assert "TESTING" in storage_path.name
+                assert "TESTING" in storage_path.name, f"{storage_path} is not a TESTING storage path"
                 logger.info("Removing testing storage path: %s", storage_path)
-                pathlib.Path(storage_path).rmdir()
+
+                shutil.rmtree(storage_path.as_posix(), ignore_errors=True)
             else:
                 logger.info("Testing storage path does not exist: %s", storage_path)
         except OSError:
