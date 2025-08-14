@@ -112,7 +112,7 @@ def _patch_with_param_space(
         if config_inplace:
             object.__setattr__(config, key, hparams[key])
         args["__overwritten_keys__"][key] = hparams[key]
-    if config_inplace:
+    if not config_inplace:
         is_frozen = config._is_frozen
         config = cast("_AlgorithmConfigT", config.copy(copy_frozen=False))
         config.update_from_dict(args["__overwritten_keys__"])
