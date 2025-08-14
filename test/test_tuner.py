@@ -102,7 +102,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             "--total_steps", BATCH_SIZE * 5,
             "--checkpoint_frequency_unit", "steps",
             "--checkpoint_frequency", BATCH_SIZE * 2,
-        ):  # fmt: off
+        ):  # fmt: skip
             # FIXME: new default steps does not align with other tests!
             setup = AlgorithmSetup()
             # Workaround for NOT working StepCheckpointer as it works on a copy of the result dict.
@@ -239,7 +239,7 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
             "--batch_size", BATCH_SIZE,
             "--minibatch_size", MINIBATCH_SIZE,
             "--iterations", "4",
-        ):  # fmt: off
+        ):  # fmt: skip
             setup = AlgorithmSetup()
         tuner = setup.create_tuner()
         tuner._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
@@ -265,7 +265,7 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
             "--batch_size", BATCH_SIZE,
             "--minibatch_size", MINIBATCH_SIZE,
             "--iterations", "2",
-        ):  # fmt: off
+        ):  # fmt: skip
 
             class CheckpointSetup(AlgorithmSetup):
                 def _create_trainable(self):
@@ -345,7 +345,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     "--batch_size", BATCH_SIZE,  # overwrite
                     "--minibatch_size", MINIBATCH_SIZE,  # keep
                     "--iterations", "1",  # overwrite
-                ):  # fmt: off
+                ):  # fmt: skip
                     with AlgorithmSetup() as setup1:
                         setup1.config.env_runners(num_env_runners=num_env_runners)
                 tuner1 = setup1.create_tuner()
@@ -383,7 +383,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE,  # 1 + NUM_ITERS_2 iterations
                     "--from_checkpoint", checkpoints[0],
                     "--log_stats", "most",
-                ):  # fmt: off
+                ):  # fmt: skip
                     with (
                         Setup() as setup2,
                         Setup() as setup2b,
@@ -495,7 +495,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     "--batch_size", BATCH_SIZE,  # overwrite
                     "--minibatch_size", MINIBATCH_SIZE,  # keep
                     "--iterations", "1",  # overwrite
-                ):  # fmt: off
+                ):  # fmt: skip
                     with AlgorithmSetup() as setup1:
                         setup1.config.env_runners(num_env_runners=num_env_runners)
                 tuner1 = setup1.create_tuner()
@@ -524,7 +524,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     "--log_stats", "most",
                     "--tune", "batch_size", "rollout_size",
                     "--iterations", "3",
-                ):  # fmt: off
+                ):  # fmt: skip
                     Setup.batch_size_sample_space = {"grid_search": SAMPLE_SPACE}
                     Setup.rollout_size_sample_space = {"grid_search": SAMPLE_SPACE}
                     with Setup() as setup2:

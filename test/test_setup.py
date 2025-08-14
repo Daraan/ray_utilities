@@ -348,7 +348,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 "--extra", "abc",  # nargs
                 "--env_seeding_strategy", "constant",
                 "--wandb", "offline",  # possibly do not restore
-            ):  # fmt: off
+            ):  # fmt: skip
                 with AlgorithmSetup(init_trainable=False) as setup:
                     # These depend on args and CANNOT be restored!
                     setup.config.training(minibatch_size=10, num_epochs=2)
@@ -395,7 +395,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 "--comment", "B",
                 "--from_checkpoint", tmpdir,
                 "--env_seeding_strategy", "sequential",  # default value
-            ):  # fmt: off
+            ):  # fmt: skip
                 # Test if setup1.args are merged with setup2.args
                 loaded_config, *_ = AlgorithmSetup._config_from_checkpoint(tmpdir)
                 self.assertEqual(loaded_config.train_batch_size_per_learner, batch_size1)
@@ -458,7 +458,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             with patch_args(
                 "--from_checkpoint", tmpdir,
                 "-a", "a new value",
-            ):  # fmt: off
+            ):  # fmt: skip
                 with self.assertLogs(
                     parser_logger,
                     "WARNING",
@@ -474,7 +474,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 "--from_checkpoint", tmpdir,
                 "--minibatch_size", trainable.algorithm_config.minibatch_size * 2,
                 "--seed", (trainable._setup.config.seed or 1234) * 2
-            ):  # fmt: off
+            ):  # fmt: skip
                 setup2 = AlgorithmSetup()
                 # Not annotated value, restored
                 self.assertEqual(setup2.config.train_batch_size_per_learner, 1234)
@@ -687,7 +687,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
             "--iterations",
             str(frequency * num_checkpoints),
             "--seed", str(cli_seed),
-        ):  # fmt: off
+        ):  # fmt: skip
             for num_env_runners_a, num_env_runners_b in iter_cases(cases):
                 msg_prefix = f"num_env_runners=({num_env_runners_a} & {num_env_runners_b}) :"
                 with self.subTest(msg=msg_prefix):
