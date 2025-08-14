@@ -200,6 +200,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             discrete_eval = discrete_eval_
             use_pbar = use_pbar_
 
+        DefinedTrainable.__name__ = "Defined" + cls.__name__
+
         assert not TYPE_CHECKING or issubclass(DefinedTrainable, TrainableBase)
         assert DefinedTrainable._base_cls is cls
 

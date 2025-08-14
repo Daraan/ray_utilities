@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import atexit
 import difflib
 import logging
 import math
@@ -61,6 +62,7 @@ from typing_extensions import Final, NotRequired, Required, Sentinel, get_origin
 
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
+from ray_utilities.setup.tuner_setup import TunerSetup
 from ray_utilities.training.default_class import DefaultTrainable, TrainableBase, TrainableStateDict
 from ray_utilities.training.functional import training_step
 from ray_utilities.training.helpers import nan_to_zero_hist_leaves
@@ -298,12 +300,34 @@ class TestHelpers(unittest.TestCase):
         AlgorithmSetup.PROJECT = "TESTING"
         super().setUp()
         self._env_seed_rng = random.Random(111)
+        atexit.register(self._clean_output_dir)
+
+    @staticmethod
+    def _clean_output_dir():
+        # Remove TESTING storage path
+        try:
+            AlgorithmSetup.PROJECT = "TESTING"
+            setup = AlgorithmSetup(init_config=False, init_trainable=False, init_param_space=False)
+            run_config = TunerSetup(setup=setup).create_run_config([])
+            if run_config.storage_path is None:
+                return
+            storage_path = pathlib.Path(run_config.storage_path)
+            if storage_path.exists():
+                assert "TESTING" in storage_path.name
+                logger.info("Removing testing storage path: %s", storage_path)
+                pathlib.Path(storage_path).rmdir()
+            else:
+                logger.info("Testing storage path does not exist: %s", storage_path)
+        except OSError:
+            logger.exception("Failed to remove testing storage path")
+        except Exception:
+            logger.exception("Failed to remove testing storage path, unknown error")
 
     _created_trainables: ClassVar[list[TrainableBase]] = []
 
     def tearDown(self):
         for trainable in self._created_trainables:
-            trainable.cleanup()
+            trainable.stop()
         super().tearDown()
 
     @patch_args(
@@ -312,7 +336,7 @@ class TestHelpers(unittest.TestCase):
         "--batch_size", "64",
         "--comment", "created by TestHelpers.get_trainable",
         "--seed", "42",
-    )  # fmt: off
+    )  # fmt: skip
     def get_trainable(self, *, num_env_runners: int = 0, env_seed: int | None | _NOT_PROVIDED = _NOT_PROVIDED):
         # NOTE: In this test attributes are shared BY identity, this is just a weak test.
         self.TrainableClass: type[DefaultTrainable[DefaultArgumentParser, PPOConfig, PPO]] = DefaultTrainable.define(

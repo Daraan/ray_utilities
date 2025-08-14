@@ -46,7 +46,7 @@ def _run_without_tuner(
     # Possibly set RAY_DEBUG=legacy
     if isclass(trainable):
         # If trainable is a class, instantiate it with the sampled parameters
-        trainable_instance = trainable(**setup.sample_params())
+        trainable_instance = trainable(setup.sample_params())
         logger.warning("[TESTING] Using a Trainable class, without a Tuner, performing only one step")
         tuner = setup.create_tuner()
         assert tuner._local_tuner
@@ -106,7 +106,7 @@ def run_tune(
 
     tuner = setup.create_tuner()
     results = tuner.fit()
-    setup.upload_offline_experiments()
+    setup.upload_offline_experiments(results)
     return results
 
 

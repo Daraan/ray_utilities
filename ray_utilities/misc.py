@@ -33,6 +33,9 @@ def trial_name_creator(trial: Trial) -> str:
         start_time_str,
         trial.trial_id,
     ]
+    setup_cls = trial.config.get("setup_cls", None)
+    if setup_cls is not None:
+        fields.insert(0, setup_cls)
     return "_".join(fields)
 
 

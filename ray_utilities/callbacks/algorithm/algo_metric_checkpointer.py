@@ -67,15 +67,15 @@ class AlgoMetricCheckpointer(RLlibCallback):
                 self.metric_name,
                 self._last_checkpoint_value,
             )
-        else:
-            _logger.debug(
-                "Not checkpointing trial %s at iteration %s, step %d with: metric %s = %s",
-                trial.trial_id if trial else "",
-                iteration,
-                self._last_checkpoint_step,
-                self.metric_name,
-                result.get(self.metric_name, None),
-            )
+        # else:
+        #    _logger.debug(
+        #        "Not checkpointing trial %s at iteration %s, step %d with: metric %s = %s",
+        #        trial.trial_id if trial else "",
+        #        iteration,
+        #        self._last_checkpoint_step,
+        #        self.metric_name,
+        #        result.get(self.metric_name, None),
+        #    )
 
     @override(RLlibCallback)
     def on_train_result(

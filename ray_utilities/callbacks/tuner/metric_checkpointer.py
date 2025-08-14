@@ -76,15 +76,15 @@ class MetricCheckpointer(Callback):
                 self.metric_name,
                 self._last_checkpoint_value,
             )
-        else:
-            _logger.debug(
-                "Not checkpointing trial %s at iteration %s, step %d with: metric '%s' = %s",
-                trial.trial_id if trial else "",
-                iteration,
-                current_step,
-                self.metric_name,
-                result.get(self.metric_name, None),
-            )
+        # else:
+        #    _logger.debug(
+        #        "Not checkpointing trial %s at iteration %s, step %d with: metric '%s' = %s",
+        #        trial.trial_id if trial else "",
+        #        iteration,
+        #        current_step,
+        #        self.metric_name,
+        #        result.get(self.metric_name, None),
+        #    )
 
     @override(Callback)
     def on_trial_result(
