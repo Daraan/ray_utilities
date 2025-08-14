@@ -62,8 +62,8 @@ def add_callbacks_to_config(
                     ):
                         # NOTE: With cloudpickle an identical, but not by id, callback might be added
                         logger.warning(
-                            "A callback with the same name as %s already exists. This might be a duplicate by cloudpickle. "
-                            "Still adding second callback %s",
+                            "A callback with the same name as %s already exists. "
+                            "This might be a duplicate by cloudpickle. Still adding second callback %s",
                             present_callbacks.__name__,
                             callback.__name__,
                         )

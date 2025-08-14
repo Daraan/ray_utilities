@@ -7,6 +7,14 @@ from __future__ import annotations
 from functools import partial
 from typing import TYPE_CHECKING, Callable
 
+from ray.rllib.connectors.module_to_env import (
+    ListifyDataForVectorEnv,
+    ModuleToAgentUnmapping,
+    NormalizeAndClipActions,
+    RemoveSingleTsTimeRankFromBatch,
+    UnBatchToIndividualItems,
+)
+
 from ray_utilities.connectors.debug_connector import DebugConnector
 from ray_utilities.connectors.jax.get_actions import GetActionsJaxDistr
 
@@ -19,6 +27,11 @@ if TYPE_CHECKING:
     from ray_utilities.typing import EnvType
 
 
+__all__ = [
+    "make_jax_module_to_env_connector",
+]
+
+
 def _jax_module_to_env_connector(
     env: EnvType,  # noqa: ARG001
     rl_module: RLModule | None = None,  # noqa: ARG001
@@ -29,13 +42,6 @@ def _jax_module_to_env_connector(
     **kwargs,  # noqa: ARG001
 ) -> list["ConnectorV2"]:
     # NOTE: rl_module might not be used
-    from ray.rllib.connectors.module_to_env import (
-        ListifyDataForVectorEnv,
-        ModuleToAgentUnmapping,
-        NormalizeAndClipActions,
-        RemoveSingleTsTimeRankFromBatch,
-        UnBatchToIndividualItems,
-    )
 
     # Remove extra time-rank, if applicable.
     pipeline = []

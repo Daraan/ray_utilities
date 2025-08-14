@@ -16,6 +16,18 @@ class TestMeta(TestCase):
             self.assertEqual(r, i)
             tested.append(r)
         self.assertEqual(tested, [1, 2, 3])
+        # test list
+        tested = []
+        for i, r in enumerate(iter_cases([1, 2, 3]), start=1):
+            self.assertEqual(r, i)
+            tested.append(r)
+        self.assertEqual(tested, [1, 2, 3])
+        # Test iterator
+        tested = []
+        for i, r in enumerate(iter_cases(v for v in [1, 2, 3]), start=1):
+            self.assertEqual(r, i)
+            tested.append(r)
+        self.assertEqual(tested, [1, 2, 3])
 
     def test_env_config_merge(self):
         config = AlgorithmConfig()

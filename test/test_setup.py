@@ -7,13 +7,12 @@ import os
 import pyarrow as pa
 import pytest
 
-
 os.environ["RAY_DEBUG"] = "legacy"
 # os.environ["RAY_DEBUG"]="0"
 
-
 import tempfile
 import unittest
+from copy import deepcopy
 from inspect import isclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Optional, cast
@@ -49,7 +48,8 @@ from ray_utilities.testing_utils import (
     DisableGUIBreakpoints,
     InitRay,
     SetupDefaults,
-    format_result_errors,
+    SetupWithCheck,
+    TrainableWithChecks,
     iter_cases,
     patch_args,
 )
@@ -59,8 +59,11 @@ if TYPE_CHECKING:
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 
+    from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
+    from ray_utilities.typing.metrics import LogMetricsDict
 
-class TestSetupClasses(SetupDefaults):
+
+class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
     def test_frozen_config(self):
         with patch_args():
             setup = AlgorithmSetup()
@@ -142,9 +145,9 @@ class TestSetupClasses(SetupDefaults):
             with self.assertLogs(logger, level="WARNING") as cm:
                 AlgorithmSetup().create_param_space()
             self.assertIn("Unused dynamic tuning parameters: ['rollout_size']", cm.output[0])
-        th = te.get_type_hints(DefaultArgumentParser)["tune"]
-        self.assertIs(te.get_origin(th), te.Union)
-        th_args = te.get_args(th)
+        type_hints = te.get_type_hints(DefaultArgumentParser)["tune"]
+        self.assertIs(te.get_origin(type_hints), te.Union)
+        th_args = te.get_args(type_hints)
         th_lists = [
             literal
             for li in [te.get_args(arg)[0] for arg in th_args if te.get_origin(arg) is list]
@@ -157,7 +160,7 @@ class TestSetupClasses(SetupDefaults):
             with (
                 patch_args(
                     "--tune", param,
-                    "--num_jobs", "1",
+                    "--num_jobs", "4",
                     "--total_steps", "10",
                     "-it", "2",
                     "--num_samples", "16",
@@ -192,6 +195,81 @@ class TestSetupClasses(SetupDefaults):
                     len(grid),
                     f"Evaluated params do not match grid: {evaluated_params} != {grid}",
                 )
+
+    def test_dynamic_param_space_with_trainable(self):
+        type_hints = te.get_type_hints(DefaultArgumentParser)["tune"]
+        self.assertIs(te.get_origin(type_hints), te.Union)
+        th_args = te.get_args(type_hints)
+        th_lists = [
+            literal
+            for li in [te.get_args(arg)[0] for arg in th_args if te.get_origin(arg) is list]
+            for literal in te.get_args(li)
+            if literal != "all"
+        ]
+        self.assertIn("rollout_size", th_lists)
+        self.assertNotIn("all", th_lists)
+
+        for param in th_lists:
+            with (
+                patch_args(
+                    "--tune", param,
+                    "--num_jobs", "3",
+                    "-it", "2",
+                    "--num_samples", "3",
+                )  # ,
+                # self.assertNoLogs(logger, level="WARNING"),
+            ):  # fmt: skip
+                if param == "batch_size":  # shortcut name
+                    param = "train_batch_size_per_learner"  # noqa: PLW2901
+
+                class TrainableWithChecksB(TrainableWithChecks):
+                    debug_step = False
+                    debug_setup = False
+                    _param_name = param
+
+                    def setup_check(self, config: dict[str, Any], algorithm_overrides=None):
+                        self._param_to_check = config[self._param_name]
+                        if hasattr(self.algorithm_config, self._param_name):
+                            assert getattr(self.algorithm_config, self._param_name) == self._param_to_check, (
+                                f"Expected {self._param_to_check}, "
+                                f"but got {getattr(self.algorithm_config, self._param_name)}"
+                            )
+
+                    def step_post_check(self, result: StrictAlgorithmReturnData, metrics: LogMetricsDict, rewards: Any):
+                        if self._param_name == "train_batch_size_per_learner":
+                            assert (
+                                result[ENV_RUNNER_RESULTS].get(NUM_ENV_STEPS_PASSED_TO_LEARNER, None)
+                                == self._param_to_check
+                            )
+                            assert result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED] == self._param_to_check
+                        metrics["param_name"] = self._param_name  # pyright: ignore[reportGeneralTypeIssues]
+                        metrics["param_value"] = self._param_to_check  # pyright: ignore[reportGeneralTypeIssues]
+
+                Setup = SetupWithCheck(TrainableWithChecksB)
+
+                with Setup() as setup:
+                    setup.config.minibatch_size = 8  # prevent ValueErrors
+                param_space = setup.param_space
+                self.assertIn(param, param_space)
+                self.assertIsNotNone(param_space[param])  # dict with list
+                if "grid_search" in param_space[param]:
+                    grid = param_space[param]["grid_search"]
+                else:
+                    grid = []
+                tuner = setup.create_tuner()
+                results = tuner.fit()
+                self.check_tune_result(results)
+                assert results[0].metrics
+                self.assertIn(
+                    "_checking_class_",
+                    results[0].metrics,
+                    "Metrics should contain '_checking_class_'. Custom class was likely not used",
+                )
+                self.assertEqual(results[0].metrics["param_name"], param)
+                choices = {r.metrics["param_value"] for r in results}  # pyright: ignore[reportOptionalSubscript]
+                self.assertEqual(len(choices), results.num_terminated)
+                if grid:
+                    self.assertLessEqual(choices, set(grid), f"Choices {choices} not in grid {grid}")
 
     def test_config_overrides_via_setup(self):
         with patch_args("--batch_size", "1234", "--minibatch_size", "444"):
@@ -473,8 +551,6 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults):
 
     @pytest.mark.tuner
     def test_stopper_with_checkpoint(self):
-        from copy import deepcopy
-
         setup = deepcopy(self._DEFAULT_SETUP_LOW_RES)
         config = setup.config
         setup.args.num_jobs = 1
@@ -594,6 +670,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
 
     @Cases(TWO_ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
+    @pytest.mark.length("medium")
     def test_with_tuner(self, cases):
         """Test if key stats are restored correctly - does not test further training and metrics"""
         frequency = 5
@@ -649,7 +726,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
                         )
                         seed_everything(None, setup_seed)
                         result = tuner.fit()
-                        self.assertEqual(result.num_errors, 0, format_result_errors(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+                        self.check_tune_result(result)
                         checkpoint_dir, checkpoints = self.get_checkpoint_dirs(result[0])
                         self.assertEqual(
                             len(checkpoints),
@@ -736,8 +813,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
                                 )
                     finally:
                         for step in range(len(tune_results[num_env_runners_a]["trainables"])):
-                            tune_results[num_env_runners_a]["trainables"][step].cleanup()
-                            tune_results[num_env_runners_b]["trainables"][step].cleanup()
+                            tune_results[num_env_runners_a]["trainables"][step].stop()
+                            tune_results[num_env_runners_b]["trainables"][step].stop()
 
     def _test_algo_checkpointing(
         self,
@@ -912,8 +989,9 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
                 eval_metrics,
                 "Evaluation: (Checkpointed) Check {} after step 2, env_runners=1",
             )
-            # Some metrics like: 'num_agent_steps_sampled_lifetime': {'default_agent': 200}
+            # Some evaluation metrics like: 'num_agent_steps_sampled_lifetime': {'default_agent': 200}
             # do not align, or num_env_steps_sampled_lifetime can be missing
+            # This might still be a bug in ray that evaluation metrics are not restored
             # self.compare_env_runner_results(
             #    result_algo_0_step2[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],  # pyright: ignore[reportArgumentType]
             #    result_algo0_step2_restored[EVALUATION_RESULTS][ENV_RUNNER_RESULTS],  # pyright: ignore[reportArgumentType]

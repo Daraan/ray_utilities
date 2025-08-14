@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import enum
-from typing import Optional, Sequence, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Sequence
 
 import gymnasium as gym
 import numpy as np
 import tree
 from gymnasium import spaces
 from gymnasium.spaces import Box, Discrete
+from ray.rllib.utils.error import UnsupportedSpaceException
 from ray.rllib.utils.spaces.simplex import Simplex
 from ray.rllib.utils.spaces.space_utils import flatten_space, get_base_struct_from_space
 
@@ -23,8 +24,8 @@ from ray_utilities.jax.distributions.jax_distributions import (
 )
 
 if TYPE_CHECKING:
-    from ray.rllib.models.distributions import Distribution
     from ray.rllib.core.models.catalog import Catalog
+    from ray.rllib.models.distributions import Distribution
 
 __all__ = ["get_jax_dist_cls_from_action_space"]
 
@@ -102,8 +103,6 @@ def get_jax_dist_cls_from_action_space(
                 "Box(..., `int`) action spaces are not supported. Use MultiDiscrete  or Box(..., `float`)."
             )
         if len(action_space.shape) > 1:
-            from ray.rllib.utils.error import UnsupportedSpaceException
-
             raise UnsupportedSpaceException(
                 f"Action space has multiple dimensions {action_space.shape}. "
                 f"Consider reshaping this into a single dimension, using a "

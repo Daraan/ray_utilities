@@ -1,7 +1,9 @@
 import argparse
+import io
 import logging
 import sys
 import unittest
+from contextlib import redirect_stderr
 from inspect import isclass
 
 from typing_extensions import get_args
@@ -103,17 +105,7 @@ class TestExtensionsAdded(SetupDefaults):
         self.assertFalse(setup.args.dynamic_buffer)
         for config in (setup.config, setup.trainable_class().algorithm_config):
             with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
-                self.assertFalse(
-                    config.callbacks_class is DynamicBufferUpdate
-                    or (
-                        isinstance(config.callbacks_class, type)
-                        and issubclass(config.callbacks_class, DynamicBufferUpdate)
-                    )
-                    or (
-                        isinstance(config.callbacks_class, (list, tuple))
-                        and DynamicBufferUpdate in config.callbacks_class
-                    )
-                )
+                self.assertFalse(self.is_algorithm_callback_added(config, DynamicBufferUpdate))
 
         with patch_args("--dynamic_buffer"):
             setup = AlgorithmSetup()
@@ -124,15 +116,7 @@ class TestExtensionsAdded(SetupDefaults):
             for config in (setup.config, setup.trainable_class().algorithm_config):
                 with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
                     self.assertTrue(
-                        config.callbacks_class is DynamicBufferUpdate
-                        or (
-                            isinstance(config.callbacks_class, type)
-                            and issubclass(config.callbacks_class, DynamicBufferUpdate)
-                        )
-                        or (
-                            isinstance(config.callbacks_class, (list, tuple))
-                            and DynamicBufferUpdate in config.callbacks_class
-                        ),
+                        self.is_algorithm_callback_added(config, DynamicBufferUpdate),
                         "Expected DynamicBufferUpdate to be in callbacks_class when --dynamic_buffer is set.",
                     )
 
@@ -142,17 +126,7 @@ class TestExtensionsAdded(SetupDefaults):
         self.assertFalse(setup.args.dynamic_buffer)
         for config in (setup.config, setup.trainable_class().algorithm_config):
             with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
-                self.assertFalse(
-                    config.callbacks_class is DynamicGradientAccumulation
-                    or (
-                        isinstance(config.callbacks_class, type)
-                        and issubclass(config.callbacks_class, DynamicGradientAccumulation)
-                    )
-                    or (
-                        isinstance(config.callbacks_class, (list, tuple))
-                        and DynamicGradientAccumulation in config.callbacks_class
-                    )
-                )
+                self.assertFalse(self.is_algorithm_callback_added(config, DynamicGradientAccumulation))
 
         with patch_args("--dynamic_batch"):
             setup = AlgorithmSetup()
@@ -162,17 +136,7 @@ class TestExtensionsAdded(SetupDefaults):
             )
             for config in (setup.config, setup.trainable_class().algorithm_config):
                 with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
-                    self.assertTrue(
-                        config.callbacks_class is DynamicGradientAccumulation
-                        or (
-                            isinstance(config.callbacks_class, type)
-                            and issubclass(config.callbacks_class, DynamicGradientAccumulation)
-                        )
-                        or (
-                            isinstance(config.callbacks_class, (list, tuple))
-                            and DynamicGradientAccumulation in config.callbacks_class
-                        )
-                    )
+                    self.assertTrue(self.is_algorithm_callback_added(config, DynamicGradientAccumulation))
 
     @patch_args()
     def test_dynamic_eval_interval_added(self):
@@ -180,16 +144,7 @@ class TestExtensionsAdded(SetupDefaults):
         setup = AlgorithmSetup()
         for config in (setup.config, setup.trainable_class().algorithm_config):
             with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
-                self.assertFalse(
-                    (
-                        isinstance(config.callbacks_class, type)
-                        and issubclass(config.callbacks_class, DynamicEvalInterval)
-                    )
-                    or (
-                        isinstance(config.callbacks_class, (list, tuple))
-                        and DynamicEvalInterval in config.callbacks_class
-                    ),
-                )
+                self.assertFalse(self.is_algorithm_callback_added(config, DynamicEvalInterval))
         # Check that the DynamicEvalInterval is also added
         for args in ("--dynamic_buffer", "--dynamic_batch"):
             with patch_args(args), self.subTest(args=args):
@@ -197,14 +152,7 @@ class TestExtensionsAdded(SetupDefaults):
                 for config in (setup.config, setup.trainable_class().algorithm_config):
                     with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
                         self.assertTrue(
-                            (
-                                isinstance(config.callbacks_class, type)
-                                and issubclass(config.callbacks_class, DynamicEvalInterval)
-                            )
-                            or (
-                                isinstance(config.callbacks_class, (list, tuple))
-                                and DynamicEvalInterval in config.callbacks_class
-                            ),
+                            self.is_algorithm_callback_added(config, DynamicEvalInterval),
                             msg=f"Expected DynamicEvalInterval to be in callbacks_class when {args} is set.",
                         )
         # Check that only one is added
@@ -229,7 +177,7 @@ class TestProcessing(unittest.TestCase):
     @patch_args("--batch_size", "64", "--minibatch_size", "128")
     def test_to_large_minibatch_size(self):
         """minibatch_size cannot be larger than train_batch_size_per_learner"""
-        from ray_utilities.config.typed_argument_parser import logger
+        from ray_utilities.config.typed_argument_parser import logger  # noqa: PLC0415
 
         with self.assertLogs(
             logger,
@@ -255,10 +203,21 @@ class TestProcessing(unittest.TestCase):
                     setup = AlgorithmSetup()
                     self.assertEqual(setup.args.log_stats, choice)
                     if isclass(setup.trainable):
-                        _result = setup.trainable_class().train()
-                    else:
+                        _result = setup.trainable_class(setup.param_space).train()
+                    else:  # Otherwise call trainable function
                         _result = setup.trainable(setup.param_space)
-            with patch_args("--log_stats", "invalid_choice"):
-                with self.assertRaises(SystemExit) as context:
-                    AlgorithmSetup()
-                self.assertIsInstance(context.exception.__context__, argparse.ArgumentError)
+            with (
+                patch_args("--log_stats", "invalid_choice"),
+                self.assertRaises(SystemExit) as context,
+                redirect_stderr(io.StringIO()),
+            ):
+                AlgorithmSetup()
+            self.assertIsInstance(context.exception.__context__, argparse.ArgumentError)
+
+    def test_not_a_model_parameter_clean(self):
+        with patch_args("--not_parallel", "--optimize_config", "--tune", "batch_size", "--num-jobs", 3):
+            setup = AlgorithmSetup()
+            removable_params = setup.parser.get_non_cli_args()  # pyright: ignore[reportAttributeAccessIssue]
+            self.assertGreater(len(removable_params), 0)
+            for param in removable_params:
+                self.assertNotIn(param, setup.param_space, msg=f"Expected {param} to not be in param_space")

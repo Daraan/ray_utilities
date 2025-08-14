@@ -5,7 +5,7 @@ import logging
 import math
 from functools import partial
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Literal, Optional, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, Optional, TypeVar, cast, overload
 
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
@@ -42,6 +42,8 @@ DefaultExperimentSetup = TypeAliasType(
     "DefaultExperimentSetup", "ExperimentSetupBase[DefaultArgumentParser, AlgorithmConfig, Algorithm]"
 )
 
+_AlgorithmConfigT = TypeVar("_AlgorithmConfigT", bound="AlgorithmConfig")
+
 
 @overload
 def episode_iterator(args: dict[str, Any], hparams: Any, *, use_pbar: Literal[False]) -> range: ...
@@ -74,6 +76,49 @@ def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict) -> int:
     return result[ENV_RUNNER_RESULTS].get(
         NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]
     )
+
+
+def _patch_with_param_space(
+    args: dict[str, Any],
+    config: _AlgorithmConfigT,
+    *,
+    hparams: dict[str, Any],
+    config_inplace: bool = False,
+) -> tuple[dict[str, Any], _AlgorithmConfigT]:
+    same_keys = set(args.keys()) & set(hparams.keys())
+    args["__overwritten_keys__"] = {}
+    if not same_keys:
+        logger.debug("No keys to patch in args with hparams: %s", hparams)
+        return args, config
+    msg_dict = {k: f"{args[k]} -> {hparams[k]}" for k in same_keys}
+    if (
+        "train_batch_size_per_learner" in same_keys
+        and config.minibatch_size is not None
+        and config.minibatch_size < hparams["train_batch_size_per_learner"]
+    ):
+        logger.info(
+            "Overriding minibatch_size %d with train_batch_size_per_learner %d as it may not be higher",
+            config.minibatch_size,
+            hparams["train_batch_size_per_learner"],
+        )
+        msg_dict["minibatch_size"] = f"{config.minibatch_size} -> {hparams['train_batch_size_per_learner']}"
+        if config_inplace:
+            object.__setattr__(config, "minibatch_size", hparams["train_batch_size_per_learner"])
+        args["__overwritten_keys__"]["minibatch_size"] = hparams["train_batch_size_per_learner"]
+
+    logger.info("Patching args with hparams: %s", msg_dict)
+    for key in same_keys:
+        args[key] = hparams[key]
+        if config_inplace:
+            object.__setattr__(config, key, hparams[key])
+        args["__overwritten_keys__"][key] = hparams[key]
+    if config_inplace:
+        is_frozen = config._is_frozen
+        config = cast("_AlgorithmConfigT", config.copy(copy_frozen=False))
+        config.update_from_dict(args["__overwritten_keys__"])
+        if is_frozen:
+            config.freeze()
+    return args, config
 
 
 def get_args_and_config(
@@ -110,6 +155,7 @@ def get_args_and_config(
         config = setup_class.config_from_args(SimpleNamespace(**args))
     else:
         raise ValueError("Either setup or setup_class must be provided.")
+    args, config = _patch_with_param_space(args, config, hparams=hparams)
     # endregion
 
     # region seeding
@@ -200,7 +246,9 @@ def setup_trainable(
         except AttributeError:
             algo = config.build()
     # Load from checkpoint
-    elif checkpoint_loader := (setup or setup_class):
+    elif checkpoint_loader := (
+        setup or setup_class
+    ):  # TODO: possibly do not load algorithm and let Trainable handle it (should be an option)
         algo = checkpoint_loader.algorithm_from_checkpoint(args["from_checkpoint"], config=config)
         sync_env_runner_states_after_reload(algo)
         if config.algo_class is not None and not isinstance(algo, config.algo_class):

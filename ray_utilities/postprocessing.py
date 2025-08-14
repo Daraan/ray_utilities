@@ -435,7 +435,7 @@ def create_log_metrics(
     if log_stats != "most":
         for k in (
             # "time_since_restore",  # moved to timers
-            "num_training_step_calls_per_iteration",  #  if using algo.train more often before logging
+            "num_training_step_calls_per_iteration",  # if using algo.train more often before logging
             "iterations_since_restore",
             # "node_ip",  # autofilled
             # "hostname",  # autofilled

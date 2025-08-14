@@ -37,7 +37,7 @@ from typing_extensions import Self, TypedDict, TypeVar, deprecated
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.comet import CometArchiveTracker
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.config.typed_argument_parser import SupportsRestoreParser
+from ray_utilities.config.typed_argument_parser import SupportsMetaAnnotations
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.environment import create_env
 from ray_utilities.misc import get_trainable_name
@@ -384,7 +384,10 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     def clean_args_to_hparams(self, args: Optional[NamespaceType[ParserType_co]] = None) -> dict[str, Any]:
         args = args or self.get_args()
-        upload_args = remove_ignored_args(args, remove=(*LOG_IGNORE_ARGS, "process_number"))
+        to_remove: list[str] = [*LOG_IGNORE_ARGS, "process_number"]
+        if isinstance(args, SupportsMetaAnnotations):
+            to_remove.extend(args.get_non_cli_args())
+        upload_args = remove_ignored_args(args, remove=to_remove)
         return upload_args
 
     def get_trainable_name(self) -> str:
@@ -553,7 +556,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             # always restore values will be added to the overrides
 
             # to make overrides have a higher priority than args:
-            if isinstance(self.parser, SupportsRestoreParser):
+            if isinstance(self.parser, SupportsMetaAnnotations):
                 overrides = {
                     k: v for k, v in old_overwrites.items() if k in self.parser.get_to_restore_values()
                 } | overrides
@@ -715,6 +718,15 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 cls.algo_class,
             )
         if config is not None:
+            if config.minibatch_size is not None and config.minibatch_size > config.train_batch_size_per_learner:
+                logger.warning(
+                    "minibatch_size %d is larger than train_batch_size_per_learner %d, this can result in an error. "
+                    "Reducing the minibatch_size to the train_batch_size_per_learner.",
+                    config.minibatch_size,
+                    config.train_batch_size_per_learner,
+                    stacklevel=2,
+                )
+                config.minibatch_size = config.train_batch_size_per_learner
             kwargs = {"config": config, **kwargs}
         try:
             # Algorithm checkpoint is likely in subdir.
@@ -990,6 +1002,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         *,
         load_class: bool = False,
         init_trainable: bool = True,
+        init_config: Optional[bool] = None,
     ) -> Self:
         # TODO: Why not a classmethod again?
         saved_class = data.get("setup_class", cls)
@@ -1011,9 +1024,21 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         new.config_overrides(**data.get("config_overrides", {}))
         config: ConfigType_co | Literal[False] = data.get("config", False)
         new.param_space = data["param_space"]
-        if data["__init_config__"] and config:
-            logger.error(
-                "Having __init_config__=True in the state while also passing config ignores the passed config object"
+        if init_config is None and data["__init_config__"] and config:
+            logger.warning(
+                "Having __init_config__=True in the state while also passing config ignores the saved config object."
+                " You can control the behavior and disable this warning by setting init_config=True/False "
+                "in the from_saved method."
+            )
+        init_config = data["__init_config__"] or not bool(config) if init_config is None else init_config
+        if init_config:
+            logger.info("Re-initializing config from args after state was loaded", stacklevel=2)
+        else:
+            logger.info(
+                "Not re-initializing config from args after state was loaded. "
+                "Using the config from the state. "
+                "This may lead to unexpected behavior if the args do not match the config.",
+                stacklevel=2,
             )
         if config:
             new.config = config
@@ -1023,7 +1048,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             parse_args=False,
             init_param_space=False,
             init_trainable=init_trainable,
-            init_config=data["__init_config__"] or not bool(config),
+            init_config=init_config,
         )
         return new
 

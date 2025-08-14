@@ -300,12 +300,12 @@ class MultiDistribution(RLlibToJaxDistribution):
     def rsample(
         self,
         *,
-        sample_shape: Tuple[int, ...] = None,
+        sample_shape: Optional[tuple[int, ...]] = None,
         **kwargs,
     ) -> Union[TensorType, Tuple[TensorType, TensorType]]:
         rsamples = []
         for dist in self._flat_child_distributions:
-            rsample = dist.rsample(sample_shape=sample_shape, **kwargs)
+            rsample = dist.rsample(sample_shape=sample_shape, **kwargs)  # pyright: ignore[reportArgumentType] super has implicit optional
             rsamples.append(rsample)
 
         rsamples = tree.unflatten_as(self._original_struct, rsamples)

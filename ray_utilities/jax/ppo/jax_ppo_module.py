@@ -32,7 +32,7 @@ class JaxPPOModule(DefaultPPORLModule, JaxModule):
         super().setup()
         self.pi: JaxRLModel | FlaxRLModel
         self.vf: FlaxRLModel
-        import jax
+        import jax  # import jax late, to avoid some os.fork warnings  # noqa: PLC0415
 
         actor = self.pi
         critic = self.vf

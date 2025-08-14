@@ -155,7 +155,7 @@ def create_algorithm_config(
     config.framework(framework)
     learner_mix: list[type[Learner]] = [learner_class or config.learner_class]
     if not args.get("keep_masked_samples", False):
-        from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
+        from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner  # noqa: PLC0415
 
         learner_mix.insert(0, RemoveMaskedSamplesLearner)
     if False:  # NOTE: Must always be the first in the mix

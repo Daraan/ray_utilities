@@ -2,7 +2,6 @@ from __future__ import annotations
 
 # some of ray's TypeAlias are not detected as such
 # pyright: reportInvalidTypeForm=warning
-
 import logging
 from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
@@ -21,6 +20,7 @@ from ray.rllib.connectors.learner import GeneralAdvantageEstimation
 from ray.rllib.core.learner.learner import ENTROPY_KEY, POLICY_LOSS_KEY, VF_LOSS_KEY
 from ray.rllib.core.learner.tf.tf_learner import TfLearner
 from ray.rllib.core.learner.torch.torch_learner import TorchLearner
+from ray.rllib.core.rl_module.apis import SelfSupervisedLossAPI
 
 from ray_utilities.connectors.debug_connector import add_debug_connectors
 from ray_utilities.connectors.dummy_connector import DummyNumpyToTensor
@@ -167,7 +167,6 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
     ):
         loss_per_module = {}
         aux_data = {}
-        from ray.rllib.core.rl_module.apis import SelfSupervisedLossAPI
 
         for module_id, module_state in parameters.items():
             module_batch = batch[module_id]

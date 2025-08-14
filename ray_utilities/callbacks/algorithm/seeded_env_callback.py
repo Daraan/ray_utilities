@@ -176,6 +176,9 @@ class SeedEnvsCallback(DefaultCallbacks):
         """Equality check for the callback."""
         return isinstance(other, SeedEnvsCallback) and self.env_seed == other.env_seed
 
+    def __hash__(self) -> int:  # PLW1641: Need an explicit __hash__ when using __eq__
+        return hash(type(self)) + hash(self.env_seed)
+
 
 def make_seeded_env_callback(env_seed_: int | None) -> type[SeedEnvsCallback]:
     """Create a callback that seeds the environment."""

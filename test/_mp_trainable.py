@@ -26,3 +26,5 @@ def remote_process(
     trainable, _ = helper.get_trainable(num_env_runners=num_env_runners, env_seed=env_seed)
     print("Saving trainable to", path)
     trainable.save(path)
+    # Cannot pickle
+    # return cloudpickle.dumps(trainable)

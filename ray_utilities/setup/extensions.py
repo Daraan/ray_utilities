@@ -1,23 +1,34 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from copy import deepcopy
+from typing import TYPE_CHECKING, Any, ClassVar
+
+from ray import tune
 
 from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradientAccumulation
 from ray_utilities.callbacks.algorithm.dynamic_buffer_callback import DynamicBufferUpdate
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
-from ray_utilities.setup.experiment_base import ExperimentSetupBase, ParserType_co, AlgorithmType_co, ConfigType_co
+from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
 
 if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
 
+    from ray_utilities.typing import ParameterSpace
+
 _logger = logging.getLogger(__name__)
 
 
-class SetupForDynamicTuning(ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]): ...
+class SetupForDynamicTuning(ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]):
+    ...
+    # base class that can be expanded in the future
 
 
 class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType_co, ConfigType_co, AlgorithmType_co]):
+    rollout_size_sample_space: ClassVar[ParameterSpace[int]] = tune.grid_search(
+        [16, 32, 64, 128, 256, 512, 1024, 2048, 3072, 4096, 6144, 8192, 10240, 16384]
+    )
+
     @classmethod
     def _get_callbacks_from_args(cls, args) -> list[type[RLlibCallback]]:
         # Can call the parent; might be None for ExperimentSetupBase
@@ -28,11 +39,9 @@ class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType_co, ConfigType_co,
                 callbacks.append(DynamicEvalInterval)
         return callbacks
 
-    @staticmethod
-    def _create_dynamic_buffer_params():
-        from ray import tune  # lazy import if tune is not used
-
-        return tune.grid_search([16, 32, 64, 128, 256, 512, 1024, 2048, 3072, 4096, 6144, 8192, 10240, 16384])
+    @classmethod
+    def _create_dynamic_buffer_params(cls):
+        return deepcopy(cls.rollout_size_sample_space)
 
     def create_param_space(self) -> dict[str, Any]:
         self._set_dynamic_parameters_to_tune()  # sets _dynamic_parameters_to_tune
@@ -45,11 +54,24 @@ class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType_co, ConfigType_co,
                 "rollout_size"
             )  # remove before calling super().create_param_space()
         param_space = super().create_param_space()
+        # TODO: # FIXME "rollout_size" is not used anywhere
+        # however train_batch_size_per_learner is used with the DynamicBatchSize Setup
+        # which uses in ints dynamic variant gradient accumulation.
         param_space["rollout_size"] = self._create_dynamic_buffer_params()
         return param_space
 
 
 class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType_co, ConfigType_co, AlgorithmType_co]):
+    """
+    Note:
+        When using the dynamic_batch callback the setup uses gradient accumulation to control the batch size.
+        It does not increase the train_batch_size_per_learner. For that select the dynamic rollout size setup.
+    """
+
+    batch_size_sample_space: ClassVar[ParameterSpace[int]] = tune.grid_search(
+        [16, 32, 64, 128, 256, 512, 1024, 2048, 3072, 4096, 6144, 8192, 10240, 16384]
+    )
+
     @classmethod
     def _get_callbacks_from_args(cls, args) -> list[type[RLlibCallback]]:
         # When used as a mixin, can call the parent; might be None for ExperimentSetupBase
@@ -60,15 +82,14 @@ class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType_co, ConfigType_
                 callbacks.append(DynamicEvalInterval)
         return callbacks
 
-    @staticmethod
-    def _create_dynamic_batch_size_params():
+    @classmethod
+    def _create_dynamic_batch_size_params(cls):
         """
         Attentions:
             Adds batch_size and not values for gradient accumulation!
         """
-        from ray import tune  # lazy import if tune is not used
-
-        return tune.grid_search([16, 32, 64, 128, 256, 512, 1024, 2048, 3072, 4096, 6144, 8192, 10240, 16384])
+        # TODO: control this somehow via args
+        return deepcopy(cls.batch_size_sample_space)
 
     def create_param_space(self) -> dict[str, Any]:
         self._set_dynamic_parameters_to_tune()  # sets _dynamic_parameters_to_tune

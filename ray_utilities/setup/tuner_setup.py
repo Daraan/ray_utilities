@@ -10,6 +10,7 @@ from ray.tune.search.optuna import OptunaSearch
 from ray.tune.stopper import CombinedStopper, FunctionStopper
 from typing_extensions import TypeVar
 
+from ray_utilities.callbacks.tuner.metric_checkpointer import TUNE_RESULT_IS_A_COPY, StepCheckpointer
 from ray_utilities.config._tuner_callbacks_setup import TunerCallbackSetup
 from ray_utilities.constants import (
     CLI_REPORTER_PARAMETER_COLUMNS,
@@ -139,6 +140,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             mode=self.eval_metric_order,
             trial_name_creator=trial_name_creator,
             max_concurrent_trials=None if self._setup.args.not_parallel else self._setup.args.num_jobs,
+            # scheduler=Fifo,
         )
 
     @overload
@@ -158,12 +160,12 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             RunConfig = tune.RunConfig
             FailureConfig = tune.FailureConfig
             CheckpointConfig = tune.CheckpointConfig
-        except AttributeError:
+        except AttributeError:  # Use Old API instead
             RunConfig = train.RunConfig
             FailureConfig = train.FailureConfig
             CheckpointConfig = train.CheckpointConfig
         if TYPE_CHECKING:
-            from ray.air.config import RunConfig  # noqa: TC004
+            from ray.air.config import RunConfig  # noqa: PLC0415, TC004
 
             FailureConfig = tune.FailureConfig
             CheckpointConfig = tune.CheckpointConfig
@@ -175,6 +177,20 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             stopper = None
         else:
             stopper: OptunaSearchWithPruner | Stopper | None = self._stopper
+        if self._setup.args.checkpoint_frequency_unit == "steps" and self._setup.args.checkpoint_frequency is not None:
+            checkpoint_frequency = 0  # handle it with custom callback
+            if TUNE_RESULT_IS_A_COPY:
+                logger.info(
+                    "Disabling iteration based checkpointing, using StepCheckpointer instead. "
+                    "NOTE: However this will not work with ray <= (all versions) as it passes a copy"
+                    " of the result dict."
+                )
+
+            else:
+                logger.info("Disabling iteration based checkpointing, using StepCheckpointer instead")
+            callbacks.append(StepCheckpointer(self._setup.args.checkpoint_frequency))
+        else:
+            checkpoint_frequency = self._setup.args.checkpoint_frequency
         return RunConfig(
             # Trial artifacts are uploaded periodically to this directory
             storage_path=Path("../outputs/experiments").resolve(),  # pyright: ignore[reportArgumentType]
@@ -186,10 +202,12 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             # Use fail_fast for during debugging/testing to stop all experiments
             failure_config=FailureConfig(fail_fast=True),
             checkpoint_config=CheckpointConfig(
-                num_to_keep=4,
+                num_to_keep=self._setup.args.num_to_keep,
                 checkpoint_score_order="max",
                 checkpoint_score_attribute=self.eval_metric,
-                checkpoint_frequency=0,  # No automatic checkpointing
+                checkpoint_frequency=(
+                    checkpoint_frequency if self._setup.args.checkpoint_frequency_unit != "steps" else 0
+                ),
                 # checkpoint_at_end=True,  # will raise error if used with function
             ),
             stop=stopper,

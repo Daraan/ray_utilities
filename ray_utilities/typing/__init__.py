@@ -1,10 +1,10 @@
 import importlib.metadata
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Iterable, Literal
 
 import typing_extensions
 from packaging.version import Version
-from typing_extensions import TypeAliasType
+from typing_extensions import TypeAliasType, TypeVar
 
 if TYPE_CHECKING:
     import gymnasium as gym
@@ -23,9 +23,11 @@ ExtraItems = Any  # float | int | str | bool | None | dict[str, "_ExtraItems"] |
 # ruff: noqa: E402
 from .algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
 from .metrics import FlatLogMetricsDict, LogMetricsDict
-from .trainable_return import TrainableReturnData, RewardsDict, RewardUpdaters
+from .trainable_return import RewardsDict, RewardUpdaters, TrainableReturnData
 
 if typing_extensions.TYPE_CHECKING:
+    from ray.tune.search.sample import Domain
+
     from ray_utilities.setup.experiment_base import ExperimentSetupBase
 
 __all__ = [
@@ -61,3 +63,12 @@ TestModeCallable = typing_extensions.TypeAliasType(
 
 EnvSpec = TypeAliasType("EnvSpec", "str | _EnvSpec")
 EnvType = TypeAliasType("EnvType", "gym.Env | environment_gymnax.Environment | gym.vector.VectorEnv")
+
+_Domain = TypeVar("_Domain", bound="Domain", default="Domain")
+_AnyT = TypeVar("_AnyT", default=Any)
+ParameterSpace = TypeAliasType(
+    "ParameterSpace",
+    dict[Literal["grid_search"] | str, Iterable[_AnyT]] | _Domain,  # noqa: PYI051
+    type_params=(_AnyT, _Domain),
+)
+"""Describes a tune.Domain or grid_search for a parameter sampling by tune"""

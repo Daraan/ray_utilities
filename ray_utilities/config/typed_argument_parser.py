@@ -28,15 +28,30 @@ AlwaysRestore = Annotated[_T, "AlwaysRestore"]
 Marks a field that should always be restored and not ignored
 e.g. it should not be superseeded by a get_args_from_config.
 """
-RestoreIfDefault = Annotated[_T, "RestoreIf", NO_VALUE]
+RestoreIfDefault = Annotated[_T, "RestoreIf", NO_VALUE]  # note do not use a generic here
+"""NOT IN USE. Restore if the current value is the given default value"""
+
+NotAModelParameter = Annotated[_T, "NotAModelParameter"]
+"""
+Marks a key do be not available to the model, i.e. ``num_jobs``.
+
+These values will not be included in the `"cli_args"` key of the trainable's config and
+therefore not uploaded to wandb / comet.
+
+See Also:
+    ``clean_args_to_hparams``
+    ``remove_ignored_args``
+    ``LOG_IGNORE_ARGS``
+"""
 
 
-class SupportsRestoreParser(Tap):
+class SupportsMetaAnnotations(Tap):
     def configure(self) -> None:
         super().configure()
         complete_annotations = self._get_from_self_and_super(
             extract_func=lambda super_class: dict(get_type_hints(super_class, include_extras=True))
         )
+        # get literals dynamically to be future proof
         always_restore: Literal["AlwaysRestore"] = get_args(AlwaysRestore)[-1]
         self._always_restore: set[str] = {
             k for k, v in complete_annotations.items() if get_origin(v) is Annotated and always_restore in get_args(v)
@@ -52,8 +67,17 @@ class SupportsRestoreParser(Tap):
                     "Please provide a default value or remove the NeverRestore annotation."
                 )
 
+        # non cli args
+        non_a_hp: Literal["NotAModelParameter"] = get_args(NotAModelParameter)[-1]
+        self._non_cli_args: set[str] = {
+            k for k, v in complete_annotations.items() if get_origin(v) is Annotated and non_a_hp in get_args(v)
+        }
+
     def get_to_restore_values(self):
         return self._always_restore
+
+    def get_non_cli_args(self):
+        return self._non_cli_args
 
     def restore_arg(self, name: str, *, restored_value: Any | NO_VALUE, default: Any = NO_VALUE) -> Any | NO_VALUE:
         """
@@ -128,6 +152,8 @@ class _DefaultSetupArgumentParser(Tap):
 
     extra: Optional[list[str]] = None
 
+    from_checkpoint: NeverRestore[Optional[str]] = None
+
     def configure(self) -> None:
         # Short hand args
         super().configure()
@@ -137,14 +163,17 @@ class _DefaultSetupArgumentParser(Tap):
         # self.add_argument("--test", nargs="*", const=True, default=False)
         self.add_argument("--iterations", "-it", default="auto", type=_auto_int_transform)
         self.add_argument("--total_steps", "-ts")
+        self.add_argument(
+            "--from_checkpoint", "-cp", "-load", default=None, type=str, help="Path to the checkpoint to load from."
+        )
 
 
 class RLlibArgumentParser(Tap):
+    """Attributes of this class have to be attributes of the AlgorithmConfig."""
+
     train_batch_size_per_learner: int = 2048  # batch size that ray samples
     minibatch_size: int = 128
     """Minibatch size used for backpropagation/optimization"""
-
-    from_checkpoint: Optional[str] = None
 
     def configure(self) -> None:
         super().configure()
@@ -153,10 +182,6 @@ class RLlibArgumentParser(Tap):
             dest="train_batch_size_per_learner",
             type=int,
             required=False,
-        )
-
-        self.add_argument(
-            "--from_checkpoint", "-cp", "-load", default=None, type=str, help="Path to the checkpoint to load from."
         )
 
     def process_args(self):
@@ -172,10 +197,10 @@ class RLlibArgumentParser(Tap):
 
 
 class DefaultResourceArgParser(Tap):
-    num_jobs: NeverRestore[int] = 5
+    num_jobs: NotAModelParameter[NeverRestore[int]] = 5
     """Trials to run in parallel"""
 
-    num_samples: NeverRestore[int] = 1
+    num_samples: NotAModelParameter[NeverRestore[int]] = 1
     """Number of samples to run in parallel, if None, same as num_jobs"""
 
     gpu: NeverRestore[bool] = False
@@ -183,7 +208,7 @@ class DefaultResourceArgParser(Tap):
     parallel: NeverRestore[bool] = False
     """Use multiple CPUs per worker"""
 
-    not_parallel: NeverRestore[bool] = False
+    not_parallel: NotAModelParameter[NeverRestore[bool]] = False
     """
     Do not run multiple models in parallel, i.e. the Tuner will execute one job only.
     This is similar to num_jobs=1, but one might skip the Tuner setup.
@@ -256,10 +281,10 @@ LOG_STATS = "log_stats"
 
 class DefaultLoggingArgParser(Tap):
     log_level: NeverRestore[Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]] = "INFO"
-    wandb: NeverRestore[OnlineLoggingOption] = False
-    comet: NeverRestore[OnlineLoggingOption] = False
+    wandb: NeverRestore[NotAModelParameter[OnlineLoggingOption]] = False
+    comet: NeverRestore[NotAModelParameter[OnlineLoggingOption]] = False
     comment: Optional[str] = None
-    tags: list[str] = []  # noqa: RUF012
+    tags: NotAModelParameter[list[str]] = []  # noqa: RUF012
     log_stats: LogStatsChoices = "minimal"
     """Log all metrics and do not reduce them to the most important ones"""
 
@@ -314,6 +339,25 @@ class DefaultExtraArgs(Tap):
     def configure(self) -> None:
         super().configure()
         self.add_argument("--extra", help="extra arguments", nargs="+")
+
+
+class CheckpointConfigArgumentParser(Tap):
+    checkpoint_frequency: NotAModelParameter[int | None] = 50_000
+    """
+    Frequency of checkpoints in steps (or iterations, see checkpoint_frequency_unit)
+    0 or None for no checkpointing
+    """
+
+    checkpoint_frequency_unit: NotAModelParameter[Literal["steps", "iterations"]] = "steps"
+    """Unit for checkpoint_frequency, either after # steps or iterations"""
+
+    num_to_keep: NotAModelParameter[int | None] = None
+    """The number of checkpoints to keep. None to keep all checkpoints."""
+
+    def process_args(self) -> None:
+        if self.num_to_keep is not None and self.num_to_keep <= 0:
+            raise ValueError(f"num_to_keep must be a positive integer or None. Not {self.num_to_keep}.")
+        return super().process_args()
 
 
 class OptionalExtensionsArgs(RLlibArgumentParser):
@@ -393,7 +437,9 @@ def _parse_tune_choices(
 
 
 class OptunaArgumentParser(Tap):
-    optimize_config: NeverRestore[bool] = False  # legacy argument name; possible replace with --tune later
+    optimize_config: NotAModelParameter[NeverRestore[bool]] = (
+        False  # legacy argument name; possible replace with --tune later
+    )
     tune: NeverRestore[list[Literal["batch_size", "rollout_size", "all"]] | Literal[False]] = False
     """List of dynamic parameters to be tuned"""
 
@@ -416,11 +462,12 @@ class OptunaArgumentParser(Tap):
 
 
 class DefaultArgumentParser(
-    SupportsRestoreParser,
+    SupportsMetaAnnotations,
     OptionalExtensionsArgs,  # Needs to be before _DefaultSetupArgumentParser
     RLlibArgumentParser,
     OptunaArgumentParser,
     _DefaultSetupArgumentParser,
+    CheckpointConfigArgumentParser,
     DefaultResourceArgParser,
     DefaultEnvironmentArgParser,
     DefaultLoggingArgParser,
