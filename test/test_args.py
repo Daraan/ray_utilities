@@ -1,7 +1,9 @@
 import argparse
+import io
 import logging
 import sys
 import unittest
+from contextlib import redirect_stderr
 from inspect import isclass
 
 from typing_extensions import get_args
@@ -204,10 +206,13 @@ class TestProcessing(unittest.TestCase):
                         _result = setup.trainable_class(setup.param_space).train()
                     else:  # Otherwise call trainable function
                         _result = setup.trainable(setup.param_space)
-            with patch_args("--log_stats", "invalid_choice"):
-                with self.assertRaises(SystemExit) as context:
-                    AlgorithmSetup()
-                self.assertIsInstance(context.exception.__context__, argparse.ArgumentError)
+            with (
+                patch_args("--log_stats", "invalid_choice"),
+                self.assertRaises(SystemExit) as context,
+                redirect_stderr(io.StringIO()),
+            ):
+                AlgorithmSetup()
+            self.assertIsInstance(context.exception.__context__, argparse.ArgumentError)
 
     def test_not_a_model_parameter_clean(self):
         with patch_args("--not_parallel", "--optimize_config", "--tune", "batch_size", "--num-jobs", 3):

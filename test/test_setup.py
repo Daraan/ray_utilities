@@ -670,6 +670,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
 
     @Cases(TWO_ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
+    @pytest.mark.length("medium")
     def test_with_tuner(self, cases):
         """Test if key stats are restored correctly - does not test further training and metrics"""
         frequency = 5
@@ -812,8 +813,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
                                 )
                     finally:
                         for step in range(len(tune_results[num_env_runners_a]["trainables"])):
-                            tune_results[num_env_runners_a]["trainables"][step].cleanup()
-                            tune_results[num_env_runners_b]["trainables"][step].cleanup()
+                            tune_results[num_env_runners_a]["trainables"][step].stop()
+                            tune_results[num_env_runners_b]["trainables"][step].stop()
 
     def _test_algo_checkpointing(
         self,
