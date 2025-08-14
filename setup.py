@@ -20,5 +20,11 @@ setup(
         "torch",
         "jax",
     ],
-    extras_require={"test": ["pytest", "pytest-timeout", "pytest-subtests", "debugpy"]},
+    extras_require={
+        "test": ["pytest", "pytest-timeout", "pytest-subtests", "debugpy"],
+        "wandb": ["wandb"],
+        "comet": ["comet_ml"],
+        "optuna": ["optuna"],
+        "jax": ["jax", "flax"],
+    },
 )

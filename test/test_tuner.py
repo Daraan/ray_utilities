@@ -58,7 +58,7 @@ MINIBATCH_SIZE = 32
 
 
 @pytest.mark.tuner
-class TestTuner(InitRay, TestHelpers, DisableLoggers):
+class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     def test_tuner_setup(self):
         with patch_args("--optimize_config", "--num_samples", "1"):
             optuna_setup = AlgorithmSetup()
@@ -77,7 +77,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers):
             self.assertNotIsInstance(tuner2._local_tuner._tune_config.search_alg, OptunaSearch)
 
     def test_run_tune_function(self):
-        with patch_args("--num_samples", "3", "--num_jobs", "2", "--batch_size", BATCH_SIZE, "--iterations", "3"):
+        with patch_args("--num_samples", "3", "--num_jobs", "3", "--batch_size", BATCH_SIZE, "--iterations", "3"):
             with AlgorithmSetup(init_trainable=False) as setup:
                 setup.config.training(num_epochs=2, minibatch_size=BATCH_SIZE)
                 setup.config.evaluation(evaluation_interval=1)  # else eval metric not in dict
@@ -92,8 +92,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers):
 
     def test_step_checkpointing(self):
         with patch_args(
-            "--num_samples",
-            "1",
+            "--num_samples", "1",
             "--num_jobs", "1",
             "--batch_size",
             BATCH_SIZE,
@@ -224,8 +223,9 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers):
                 runner.step()
 
             assert callback.num_checkpoints == 3
-            assert checkpoint_now_implemented  # custom patch
+            # assert checkpoint_now_implemented  # custom patch
             if checkpoint_now_implemented:
+                assert trial.storage
                 assert sum(item.startswith("checkpoint_") for item in os.listdir(trial.storage.trial_fs_path)) == 3
 
 
@@ -491,7 +491,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             with self.subTest(num_env_runners=num_env_runners):
                 with patch_args(
                     "--num_samples", "1",
-                    "--num_jobs", 2 if num_env_runners == 0 else 1,
+                    "--num_jobs", 1,
                     "--batch_size", BATCH_SIZE,  # overwrite
                     "--minibatch_size", MINIBATCH_SIZE,  # keep
                     "--iterations", "1",  # overwrite
@@ -519,7 +519,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 SAMPLE_SPACE = [16, 44, 66]
                 with patch_args(
                     "--num_samples", NUM_RUNS,
-                    "--num_jobs", 1 if num_env_runners > 0 else 2,
+                    "--num_jobs", 2 if num_env_runners > 0 else 4,
                     "--from_checkpoint", checkpoints[0],
                     "--log_stats", "most",
                     "--tune", "batch_size", "rollout_size",

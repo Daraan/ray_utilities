@@ -63,7 +63,7 @@ if TYPE_CHECKING:
     from ray_utilities.typing.metrics import LogMetricsDict
 
 
-class TestSetupClasses(SetupDefaults):
+class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
     def test_frozen_config(self):
         with patch_args():
             setup = AlgorithmSetup()
@@ -160,7 +160,7 @@ class TestSetupClasses(SetupDefaults):
             with (
                 patch_args(
                     "--tune", param,
-                    "--num_jobs", "1",
+                    "--num_jobs", "4",
                     "--total_steps", "10",
                     "-it", "2",
                     "--num_samples", "16",

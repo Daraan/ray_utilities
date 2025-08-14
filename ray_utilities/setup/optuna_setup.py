@@ -118,7 +118,7 @@ class OptunaSearchWithPruner(OptunaSearch, Stopper):
         if trial.should_prune():
             _logger.info("Optuna pruning trial %s", trial_id)
             trial = self._ot_trials[trial_id]
-            return True  # TODO: Can we report this to Optuna as raising PruneTrial is not possible
+            return True  # TODO: Can we report this to Optuna as well? as raising PruneTrial is not possible
         return False
 
 
