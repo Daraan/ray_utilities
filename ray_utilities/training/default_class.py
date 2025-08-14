@@ -944,6 +944,7 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
         )
         self._current_step = get_current_step(result)
         # HACK: as long as tune does not allow custom result checkpointing use this
+        # see for example: https://github.com/ray-project/ray/pull/55527
         if (
             TUNE_RESULT_IS_A_COPY
             and self._setup.args.checkpoint_frequency_unit == "steps"  # type: ignore

@@ -23,7 +23,6 @@ class TestMeta(TestCase):
             tested.append(r)
         self.assertEqual(tested, [1, 2, 3])
         # Test iterator
-        # test list
         tested = []
         for i, r in enumerate(iter_cases(v for v in [1, 2, 3]), start=1):
             self.assertEqual(r, i)

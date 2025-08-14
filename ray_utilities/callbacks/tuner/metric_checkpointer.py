@@ -25,8 +25,14 @@ _logger = logging.getLogger(__name__)
 
 
 TUNE_RESULT_IS_A_COPY = True
-"""Tuner does not allow to modify the result dict as it is a copy. As long as this is True
-use the callback on an Algorithm"""
+"""
+Tuner does not allow to modify the result dict as it is a copy. As long as this is True
+use the callback on an Algorithm. Or the HACK in the DefaultTrainable class to trigger
+checkpointing.
+
+See Also:
+    - https://github.com/ray-project/ray/pull/55527
+"""
 
 
 # todo: do not derive from RLlibCallback when tuner checkpoint is actually working.
