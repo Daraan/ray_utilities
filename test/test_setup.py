@@ -490,6 +490,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
     def test_wandb_upload(self, mock_run: unittest.mock.MagicMock):
         mock_run.return_value = unittest.mock.Mock()
         mock_run.return_value.stdout = "wandb: Syncing files..."
+        os.environ["WANDB_API_KEY"] = "test"
         with patch_args("--wandb", "offline+upload", "--num_jobs", 1, "--iterations", 1, "--batch_size", 32):
             setup = AlgorithmSetup()
             _results = run_tune(setup)

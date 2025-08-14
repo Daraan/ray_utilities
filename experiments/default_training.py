@@ -9,9 +9,9 @@ if __name__ == "__main__":
     with patch_args(
         "-a", DefaultArgumentParser.agent_type,
         "--test",
-        "--total_steps", 200_000,
         "--wandb", "offline+upload",
         "--comet", "offline+upload",
+        "--comment", "Default training run",
         extend=True,
     ):  # fmt: skip
         setup = PPOSetup()  # Replace with your own setup class
