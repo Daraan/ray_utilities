@@ -5,7 +5,6 @@ import logging
 import os
 import pickle
 import subprocess
-import time
 import warnings
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
@@ -29,11 +28,6 @@ from typing import (
 )
 
 import ray
-
-try:
-    from wandb.sync import SyncManager  # pyright: ignore[reportPrivateImportUsage]
-except ImportError:
-    pass
 from ray import tune
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core.rl_module import MultiRLModuleSpec
@@ -916,7 +910,6 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         """Upload wandb's offline folder of the session to wandb, similar to the `wandb sync` shell command"""
         # Get the wandb offline directory
         logger.info("Uploading wandb offline experiments...")
-        time.sleep(3)  # Give some time to sync files just to be sure
         num_uploaded = 0
         for result in results:
             # Find offline run directories
@@ -956,7 +949,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             self.comet_upload_offline_experiments()
         if self.args.wandb and "upload" in self.args.wandb:
             if results is None:
-                logger.warning(
+                logger.error(
                     "Wandb upload requested, but no results provided. This will not upload any offline experiments."
                 )
                 return
