@@ -34,6 +34,15 @@ import logging
 from functools import partial
 from typing import TYPE_CHECKING
 
+from ray.rllib.connectors.env_to_module import (
+    AddObservationsFromEpisodesToBatch,
+    AddStatesFromEpisodesToBatch,
+    AgentToModuleMapping,
+    BatchIndividualItems,
+    # EnvToModulePipeline,
+    # NumpyToTensor,
+)
+
 from ray_utilities.connectors.debug_connector import DebugConnector
 
 if TYPE_CHECKING:
@@ -65,14 +74,6 @@ def _default_env_to_module_without_numpy(
         NumpyToTensor, # XX removed
     ]
     """
-    from ray.rllib.connectors.env_to_module import (
-        AddObservationsFromEpisodesToBatch,
-        AddStatesFromEpisodesToBatch,
-        AgentToModuleMapping,
-        BatchIndividualItems,
-        # EnvToModulePipeline,
-        # NumpyToTensor,
-    )
 
     pipeline = []
     if debug:
@@ -81,7 +82,7 @@ def _default_env_to_module_without_numpy(
     pipeline.append(AddObservationsFromEpisodesToBatch())  # <-- extracts episodes obs to batch
     # Append time-rank handler.
     try:
-        from ray.rllib.connectors.env_to_module import AddTimeDimToBatchAndZeroPad
+        from ray.rllib.connectors.env_to_module import AddTimeDimToBatchAndZeroPad  # noqa: PLC0415
     except ImportError:
         logger.error(
             "AddTimeDimToBatchAndZeroPad not found on current ray version. This might lead to a broken pipeline"
@@ -92,7 +93,7 @@ def _default_env_to_module_without_numpy(
     pipeline.append(AddStatesFromEpisodesToBatch())
     # If multi-agent -> Map from AgentID-based data to ModuleID based data.
     if algo.is_multi_agent:
-        from ray.rllib.core.rl_module.multi_rl_module import MultiRLModuleSpec
+        from ray.rllib.core.rl_module.multi_rl_module import MultiRLModuleSpec  # noqa: PLC0415
 
         pipeline.append(
             AgentToModuleMapping(

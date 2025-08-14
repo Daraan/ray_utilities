@@ -343,7 +343,10 @@ class DefaultExtraArgs(Tap):
 
 class CheckpointConfigArgumentParser(Tap):
     checkpoint_frequency: NotAModelParameter[int | None] = 50_000
-    """Frequency of checkpoints in steps (or iterations, see checkpoint_frequency_unit), 0 or None for no checkpointing"""
+    """
+    Frequency of checkpoints in steps (or iterations, see checkpoint_frequency_unit)
+    0 or None for no checkpointing
+    """
 
     checkpoint_frequency_unit: NotAModelParameter[Literal["steps", "iterations"]] = "steps"
     """Unit for checkpoint_frequency, either after # steps or iterations"""

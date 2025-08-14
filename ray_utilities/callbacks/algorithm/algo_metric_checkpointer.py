@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
-from functools import partial
 import sys
+from functools import partial
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from ray.rllib.callbacks.callbacks import RLlibCallback
@@ -16,7 +16,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ray.rllib.algorithms.algorithm import Algorithm
-    from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
     from ray.tune.experiment import Trial
 
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
@@ -37,11 +36,11 @@ class AlgoMetricCheckpointer(RLlibCallback):
     def __init__(
         self, metric_name: Optional[str] = None, condition: Optional[Callable[[dict[str, Any]], bool]] = None
     ) -> None:
-        if type(self).condition is None and condition is None:
+        if self.condition is None and condition is None:
             raise ValueError(
                 "Condition must be provided for MetricCheckpointer. Either as class variable or in constructor."
             )
-        if type(self).condition is not None and condition is not None:
+        if self.condition is not None and condition is not None:
             _logger.warning("Both class variable and constructor condition provided. Using constructor condition.")
         super().__init__()
         self.metric_name = metric_name or "Unknown"
@@ -94,7 +93,7 @@ class AlgoStepCheckpointer(AlgoMetricCheckpointer):  # type: ignore
     """Checkpoints trials based on a specific metric condition."""
 
     def _condition(self, result: StrictAlgorithmReturnData | LogMetricsDict | dict) -> bool:
-        steps_since_last_checkpoint = get_current_step(result) - self._last_checkpoint_iteration  # pyright: ignore[reportArgumentType]
+        steps_since_last_checkpoint = get_current_step(result) - self._last_checkpoint_step  # pyright: ignore[reportArgumentType]
 
         return steps_since_last_checkpoint >= self._checkpoint_frequency
 

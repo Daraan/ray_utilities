@@ -95,7 +95,6 @@ class TrainableStateDict(TypedDict):
 
     trainable: StateDict
     """The state obtained by tune.Trainable.get_state()."""
-    # TODO: What with own state, e.g. hparams passed?, not contained in get_state
 
     algorithm: NotRequired[StateDict]  # component; can be ignored
     """Als Algorithm is a Checkpointable its state might not be saved here"""
@@ -168,7 +167,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     @classmethod
     def define(
         cls,
-        # TODO: Allow instance of setup here as well
         setup_cls: _ExperimentSetup[_ParserTypeInner, _ConfigTypeInner, _AlgorithmTypeInner],
         *,
         discrete_eval: bool = False,
@@ -225,7 +223,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             )
             # NOTE: Use get_ctor_args_and_kwargs to include the overwrites on a reload
         super().__init__(config or {}, **kwargs)  # calls setup
-        # TODO: do not create loggers
+        # TODO: do not create loggers, if any are created
         self.config: dict[str, Any]
         """Not the AlgorithmConfig, config passed by the tuner"""
 
@@ -449,7 +447,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             config_overrides = {}
         overrides_at_start = self._algorithm_overrides or {}
         if isinstance(checkpoint, dict):
-            # TODO
             keys_to_process = set(checkpoint.keys())  # Sanity check if processed all keys
 
             # from_checkpoint calls restore_from_path which calls set state
@@ -510,8 +507,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     and algo_kwargs["config"].train_batch_size_per_learner < algo_kwargs["config"].minibatch_size
                 ):
                     _logger.warning(
-                        "minibatch_size %d is larger than train_batch_size_per_learner %d, this can result in an error. "
-                        "Reducing the minibatch_size to the train_batch_size_per_learner.",
+                        "minibatch_size %d is larger than train_batch_size_per_learner %d, this can result in an error."
+                        " Reducing the minibatch_size to the train_batch_size_per_learner.",
                         algo_kwargs["config"].minibatch_size,
                         algo_kwargs["config"].train_batch_size_per_learner,
                     )
@@ -656,7 +653,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 to the corresponding subcomponent's own state.
         """
         # NOTE: When coming from restore_from_path, the components have already be restored
-        # TODO: are they possible more correct?
+        # are those states possibly more correct?
         keys_to_process = set(state.keys())
         assert state["trainable"]["iteration"] == state["iteration"]
         try:
@@ -730,13 +727,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     _logger.warning("Restoring algorithm without %s component in state.", component)
         # Get algorithm state; fallback to only config (which however might not do anything)
         # NOTE: This sync env_runner -> eval_env_runner which causes wrong env_steps_sampled metric
-        # TODO: What todo with config_overrides?
         # TODO: # XXX as algorithm is not in state and restored via components, state might not be correct
-        algo_state = state.get("algorithm", {"config": algorithm_config})
-        if COMPONENT_METRICS_LOGGER in algo_state:
-            assert self.algorithm.metrics
-            self.algorithm.metrics.reset()
-        self.algorithm.set_state(algo_state)
+        algo_state = state.get("algorithm")
+        if algo_state:
+            if COMPONENT_METRICS_LOGGER in algo_state:
+                assert self.algorithm.metrics
+                self.algorithm.metrics.reset()
+            self.algorithm.set_state(algo_state)
         # Update env_runners after restore
         # check if config has been restored correctly - TODO: Remove after more testing
         from ray_utilities.testing_utils import TestHelpers
@@ -748,8 +745,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 "Updating env_runner config after restore, did not match after set_state",
             )
             self.algorithm.env_runner.config = self.algorithm_config.copy(copy_frozen=True)
-        # TODO: This likely has no effect at all; possibly sync metrics with custom function
         if self.algorithm.env_runner_group:
+            # TODO: Passing config here likely has no effect at all; possibly sync metrics with custom function
             # Does not sync config!, recreate env_runner_group or force sync. Best via reference
             self.algorithm.env_runner_group.sync_env_runner_states(config=self.algorithm_config)
             if (self.algorithm_config.num_env_runners or 0) > 0:

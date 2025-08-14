@@ -54,7 +54,7 @@ def env_creator_with_seed(config: EnvContext):
     env_type: str = this_env_config.pop("env_type")
 
     # If using multiple workers, use different seeds for workers with a higher index
-    global _seed_counter
+    global _seed_counter  # noqa: PLW0603
     if config.num_workers and config.worker_index:
         mixed_seed = np.random.SeedSequence(
             seed,

@@ -73,7 +73,7 @@ class AdvTBXLoggerCallback(TBXLoggerCallback):
                         else:
                             video = video[0]
                     assert isinstance(video, np.ndarray) and video.ndim == 5
-                    parent_dir[keys[-1]] = video  # type: ignore[assignment]
+                    parent_dir[keys[-1]] = video  # pyright: ignore[reportGeneralTypeIssues]
         return result  # type: ignore[return-value]
 
     def log_trial_result(self, iteration: int, trial: "Trial", result: dict[str, Any] | AutoExtendedLogMetricsDict):

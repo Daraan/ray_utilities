@@ -139,6 +139,95 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers):
                     f"Expected current_step to be {BATCH_SIZE * 4}, got {t2._current_step}"
                 )
 
+    def test_checkpoint_force_by_trial_callback(self):
+        """Test that cloud syncing is forced if one of the trials has made more
+        than num_to_keep checkpoints since last sync.
+        Legacy test: test_trial_runner_3.py::TrialRunnerTest::
+            testCloudCheckpointForceWithNumToKeep
+        """
+        import tempfile  # noqa: PLC0415
+        from typing import Optional  # noqa: PLC0415
+        from ray.train import SyncConfig  # noqa: PLC0415, TC002
+        from ray.train._internal.storage import StorageContext  # noqa: PLC0415
+        from ray.tune import Callback, CheckpointConfig  # noqa: PLC0415
+        from ray.tune.experiment import Trial  # noqa: PLC0415
+        from ray.air.execution import PlacementGroupResourceManager  # noqa: PLC0415
+        from ray.tune.execution.tune_controller import TuneController  # noqa: PLC0415
+        from ray.tune.utils.mock_trainable import MOCK_TRAINABLE_NAME, register_mock_trainable  # noqa: PLC0415
+
+        register_mock_trainable()
+
+        def mock_storage_context(
+            exp_name: str = "exp_name",
+            storage_path: Optional[str] = None,
+            storage_context_cls: type = StorageContext,
+            sync_config: Optional[SyncConfig] = None,
+        ) -> StorageContext:
+            storage_path = storage_path or tempfile.mkdtemp()
+            trial_name = "trial_name"
+
+            storage = storage_context_cls(
+                storage_path=storage_path,
+                experiment_dir_name=exp_name,
+                trial_dir_name=trial_name,
+                sync_config=sync_config,
+            )
+            # Patch the default /tmp/ray/session_* so we don't require ray
+            # to be initialized in unit tests.
+            session_path = tempfile.mkdtemp()
+            storage._get_session_path = lambda: session_path
+
+            os.makedirs(storage.trial_fs_path, exist_ok=True)
+            os.makedirs(storage.trial_driver_staging_path, exist_ok=True)
+
+            return storage
+
+        checkpoint_now_implemented = None
+
+        class CheckpointCallback(Callback):
+            num_checkpoints = 0
+
+            def on_trial_result(self, iteration, trials, trial: Trial, result, **info):
+                nonlocal checkpoint_now_implemented
+                # Checkpoint every two iterations
+                if result[TRAINING_ITERATION] % 2 == 0:
+                    self.num_checkpoints += 1
+                    try:
+                        trial.checkpoint_now()
+                    except AttributeError:
+                        checkpoint_now_implemented = False
+                    else:
+                        checkpoint_now_implemented = True
+
+        with tempfile.TemporaryDirectory() as local_dir:
+            storage = mock_storage_context(storage_path=local_dir)
+
+            # disable automatic checkpointing
+            checkpoint_config = CheckpointConfig(checkpoint_frequency=0)
+            callback = CheckpointCallback()
+            runner = TuneController(
+                resource_manager_factory=PlacementGroupResourceManager,
+                storage=storage,
+                callbacks=[callback],
+                trial_checkpoint_config=checkpoint_config,
+            )
+
+            trial = Trial(
+                MOCK_TRAINABLE_NAME,
+                checkpoint_config=checkpoint_config,
+                stopping_criterion={"training_iteration": 6},
+                storage=storage,
+            )
+            runner.add_trial(trial)
+
+            while not runner.is_finished():
+                runner.step()
+
+            assert callback.num_checkpoints == 3
+            assert checkpoint_now_implemented  # custom patch
+            if checkpoint_now_implemented:
+                assert sum(item.startswith("checkpoint_") for item in os.listdir(trial.storage.trial_fs_path)) == 3
+
 
 @pytest.mark.tuner
 class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
@@ -254,7 +343,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     "--num_samples", "1",
                     "--num_jobs", "1",
                     "--batch_size", BATCH_SIZE,  # overwrite
-                    "--minibatch_size", MINIBATCH_SIZE, # keep
+                    "--minibatch_size", MINIBATCH_SIZE,  # keep
                     "--iterations", "1",  # overwrite
                 ):  # fmt: off
                     with AlgorithmSetup() as setup1:
@@ -402,9 +491,9 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             with self.subTest(num_env_runners=num_env_runners):
                 with patch_args(
                     "--num_samples", "1",
-                    "--num_jobs", 2 if num_env_runners==0 else 1,
+                    "--num_jobs", 2 if num_env_runners == 0 else 1,
                     "--batch_size", BATCH_SIZE,  # overwrite
-                    "--minibatch_size", MINIBATCH_SIZE, # keep
+                    "--minibatch_size", MINIBATCH_SIZE,  # keep
                     "--iterations", "1",  # overwrite
                 ):  # fmt: off
                     with AlgorithmSetup() as setup1:

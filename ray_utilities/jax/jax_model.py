@@ -125,7 +125,7 @@ class JaxRLModel(BaseModel):
     ) -> jax.Array:
         # kwargs might contain t: #timesteps when exploring
         # NOTE: current pyright error is likely a bug
-        return self.model.apply(params=parameters, inputs=input_dict["obs"], indices=indices)  #  pyright: ignore[reportReturnType]
+        return self.model.apply(params=parameters, inputs=input_dict["obs"], indices=indices)  # pyright: ignore[reportReturnType]
 
     def __call__(
         self,

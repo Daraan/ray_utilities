@@ -15,12 +15,13 @@ from .algorithm_return import EvaluationResultsDict, _EvaluationNoDiscreteDict
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
+    from wandb import Video  # pyright: ignore[reportMissingImports] # TODO: can we use this as log type as well?
 
 __all__ = [
     "LogMetricsDict",
 ]
 
-_LOG_METRICS_VIDEO_TYPES: TypeAlias = "list[NDArray] | str"
+_LOG_METRICS_VIDEO_TYPES: TypeAlias = "list[NDArray] | str | Video"
 
 
 class VideoMetricsDict(TypedDict, closed=True):

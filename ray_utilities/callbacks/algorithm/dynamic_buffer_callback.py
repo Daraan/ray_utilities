@@ -52,7 +52,7 @@ class DynamicBufferUpdate(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
             num_increase_factors=len(self._budget["step_sizes"]),
             n_envs=1,
         )
-        # TEST:
+        # TEST:  # TODO remove
         step_index = 0
         iterations = self._budget["iterations_per_step_size"][0]
         import numpy as np

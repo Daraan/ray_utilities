@@ -21,7 +21,13 @@ from functools import partial
 from typing import TYPE_CHECKING, Callable
 
 from ray.rllib.connectors.learner import (
+    AddColumnsFromEpisodesToTrainBatch,
+    AddObservationsFromEpisodesToBatch,
     AddOneTsToEpisodesAndTruncate,
+    AddStatesFromEpisodesToBatch,
+    AddTimeDimToBatchAndZeroPad,
+    AgentToModuleMapping,
+    BatchIndividualItems,
     GeneralAdvantageEstimation,
 )
 from typing_extensions import deprecated
@@ -44,15 +50,6 @@ def _learner_connector_without_numpy(
     algo: PPOConfig,
     debug: bool = False,
 ) -> ConnectorV2 | list[ConnectorV2]:
-    from ray.rllib.connectors.learner import (
-        AddColumnsFromEpisodesToTrainBatch,
-        AddObservationsFromEpisodesToBatch,
-        AddStatesFromEpisodesToBatch,
-        AddTimeDimToBatchAndZeroPad,
-        AgentToModuleMapping,
-        BatchIndividualItems,
-    )
-
     pipeline = []
     if debug:
         pipeline.append(DebugConnector(name="LearnerConnectorStart"))
@@ -65,7 +62,7 @@ def _learner_connector_without_numpy(
     pipeline.append(AddStatesFromEpisodesToBatch(as_learner_connector=True))
     # If multi-agent -> Map from AgentID-based data to ModuleID based data.
     if algo.is_multi_agent:
-        from ray.rllib.core.rl_module.multi_rl_module import MultiRLModuleSpec
+        from ray.rllib.core.rl_module.multi_rl_module import MultiRLModuleSpec  # noqa: PLC0415
 
         pipeline.append(
             AgentToModuleMapping(

@@ -182,7 +182,8 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             if TUNE_RESULT_IS_A_COPY:
                 logger.info(
                     "Disabling iteration based checkpointing, using StepCheckpointer instead. "
-                    "NOTE: However this will not work with ray <= (all versions) as it passes a copy of the result dict."
+                    "NOTE: However this will not work with ray <= (all versions) as it passes a copy"
+                    " of the result dict."
                 )
 
             else:

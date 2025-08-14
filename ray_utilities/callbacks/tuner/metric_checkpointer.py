@@ -40,11 +40,11 @@ class MetricCheckpointer(Callback):
     _last_checkpoint_step = -1
 
     def __init__(self, metric_name: Optional[str] = None, condition: Optional[Callable[[dict], bool]] = None) -> None:
-        if type(self.condition) is None and condition is None:
+        if self.condition is None and condition is None:
             raise ValueError(
                 "Condition must be provided for MetricCheckpointer. Either as class variable or in constructor."
             )
-        if type(self.condition) is not None and condition is not None:
+        if self.condition is not None and condition is not None:
             _logger.warning("Both class variable and constructor condition provided. Using constructor condition.")
         super().__init__()
         self.metric_name = metric_name or "Unknown"

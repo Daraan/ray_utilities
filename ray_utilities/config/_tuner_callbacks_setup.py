@@ -11,6 +11,11 @@ from typing_extensions import TypeVar
 from ray_utilities.callbacks.tuner import AdvCometLoggerCallback, create_tuner_callbacks
 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 
+try:
+    import wandb
+except ImportError:
+    pass
+
 if TYPE_CHECKING:
     from ray.air.integrations.wandb import WandbLoggerCallback
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
@@ -87,8 +92,6 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             mode = "disabled"
         else:
             mode = args.wandb.split("+")[0]  # pyright: ignore[reportAssignmentType]
-
-        import wandb
 
         # Note: Settings are overwritten by the keywords provided below (or by ray)
         try:

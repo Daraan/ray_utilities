@@ -87,7 +87,11 @@ def _patch_args_with_param_space(
         logger.debug("No keys to patch in args with hparams: %s", hparams)
         return args
     msg_dict = {k: f"{args[k]} -> {hparams[k]}" for k in same_keys}
-    if "train_batch_size_per_learner" in same_keys and config.minibatch_size < hparams["train_batch_size_per_learner"]:
+    if (
+        "train_batch_size_per_learner" in same_keys
+        and config.minibatch_size is not None
+        and config.minibatch_size < hparams["train_batch_size_per_learner"]
+    ):
         logger.info(
             "Overriding minibatch_size %d with train_batch_size_per_learner %d as it may not be higher",
             config.minibatch_size,
