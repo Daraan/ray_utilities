@@ -1002,6 +1002,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         *,
         load_class: bool = False,
         init_trainable: bool = True,
+        init_config: Optional[bool] = None,
     ) -> Self:
         # TODO: Why not a classmethod again?
         saved_class = data.get("setup_class", cls)
@@ -1023,9 +1024,21 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         new.config_overrides(**data.get("config_overrides", {}))
         config: ConfigType_co | Literal[False] = data.get("config", False)
         new.param_space = data["param_space"]
-        if data["__init_config__"] and config:
-            logger.error(
-                "Having __init_config__=True in the state while also passing config ignores the passed config object"
+        if init_config is None and data["__init_config__"] and config:
+            logger.warning(
+                "Having __init_config__=True in the state while also passing config ignores the saved config object."
+                " You can control the behavior and disable this warning by setting init_config=True/False "
+                "in the from_saved method."
+            )
+        init_config = data["__init_config__"] or not bool(config) if init_config is None else init_config
+        if init_config:
+            logger.info("Re-initializing config from args after state was loaded", stacklevel=2)
+        else:
+            logger.info(
+                "Not re-initializing config from args after state was loaded. "
+                "Using the config from the state. "
+                "This may lead to unexpected behavior if the args do not match the config.",
+                stacklevel=2,
             )
         if config:
             new.config = config
@@ -1035,7 +1048,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             parse_args=False,
             init_param_space=False,
             init_trainable=init_trainable,
-            init_config=data["__init_config__"] or not bool(config),
+            init_config=init_config,
         )
         return new
 
