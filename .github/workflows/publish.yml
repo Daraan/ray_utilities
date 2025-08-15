@@ -36,8 +36,8 @@ jobs:
             - build
         runs-on: ubuntu-latest
         environment:
-            name: testpypi
-            url: https://test.pypi.org/p/ray-utilities
+            name: pypi
+            url: https://pypi.org/p/ray-utilities
         permissions:
             id-token: write  # IMPORTANT: this permission is mandatory for trusted publishing
         steps:
@@ -49,3 +49,5 @@ jobs:
 
             - name: Publish package distributions to PyPI
               uses: pypa/gh-action-pypi-publish@release/v1
+              with:
+                repository-url: https://test.pypi.org/legacy/
