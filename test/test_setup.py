@@ -8,6 +8,7 @@ import subprocess
 import pyarrow as pa
 import pytest
 
+from ray_utilities.misc import raise_tune_errors
 from ray_utilities.runfiles import run_tune
 
 os.environ["RAY_DEBUG"] = "legacy"
@@ -262,6 +263,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     grid = []
                 tuner = setup.create_tuner()
                 results = tuner.fit()
+                raise_tune_errors(results)
                 self.check_tune_result(results)
                 assert results[0].metrics
                 self.assertIn(

@@ -61,6 +61,7 @@ from typing_extensions import Final, NotRequired, Required, Sentinel, get_origin
 
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import logger as dynamic_buffer_logger
+from ray_utilities.misc import raise_tune_errors
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.setup.experiment_base import logger as experiment_base_logger
 from ray_utilities.setup.tuner_setup import TunerSetup
@@ -307,6 +308,13 @@ class TestHelpers(unittest.TestCase):
 
     @staticmethod
     def _clean_output_dir():
+        # if on GitHub do not clean
+        if "GITHUB_REF" in os.environ:
+            logger.info("Skipping cleaning output dir in GitHub Actions")
+            return
+        if "RAY_UTILITIES_KEEP_TESTING_STORAGE" in os.environ:
+            logger.info("Skipping cleaning output dir, RAY_UTILITIES_KEEP_TESTING_STORAGE is set")
+            return
         # Remove TESTING storage path
         try:
             AlgorithmSetup.PROJECT = "TESTING"
@@ -380,6 +388,7 @@ class TestHelpers(unittest.TestCase):
     # endregion
 
     def check_tune_result(self, result: tune.ResultGrid):
+        raise_tune_errors(result)
         self.assertEqual(result.num_errors, 0, format_result_errors(result.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
         return True
 
