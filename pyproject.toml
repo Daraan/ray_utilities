@@ -1,3 +1,60 @@
+# Build system requirements.
+[build-system]
+requires = ["flit_core >=3.11,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "ray_utilities"
+version = "0.2.1"
+readme = "README.md"
+description = "Utilities for Ray RLlib and related workflows. Includes experiment setup, callbacks, and JAX model utilities."
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [
+  { name = "Daniel Sperber", email = "daniel.sperber@gmail.com" }
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "ray[tune,rllib]",
+  "typed-argument-parser",
+  "tqdm",
+  "colorlog",
+  "opencv-python",
+  "comet_ml",  # remove later -> optional
+  "wandb",  # remove later -> optional
+  "optuna",  # remove later -> optional
+  "python-dotenv",
+  "torch",
+  "jax",  # remove later -> optional
+]
+[project.optional-dependencies]
+test = [
+  "pytest",
+  "pytest-timeout",
+  "pytest-subtests",
+  "debugpy",
+]
+wandb = [
+  "wandb",
+]
+comet = [
+  "comet_ml",
+]
+optuna = [
+  "optuna",
+]
+jax = [
+  "jax",
+  "flax",
+]
+
 [tool.black]
 line-length = 120
 target-version = ['py39', 'py310', 'py311']

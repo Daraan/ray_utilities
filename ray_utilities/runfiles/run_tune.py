@@ -8,6 +8,7 @@ from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+from ray_utilities.misc import raise_tune_errors
 from ray_utilities.random import seed_everything
 from ray_utilities.training.default_class import TrainableBase
 
@@ -46,7 +47,7 @@ def _run_without_tuner(
     # Possibly set RAY_DEBUG=legacy
     if isclass(trainable):
         # If trainable is a class, instantiate it with the sampled parameters
-        trainable_instance = trainable(**setup.sample_params())
+        trainable_instance = trainable(setup.sample_params())
         logger.warning("[TESTING] Using a Trainable class, without a Tuner, performing only one step")
         tuner = setup.create_tuner()
         assert tuner._local_tuner
@@ -106,7 +107,10 @@ def run_tune(
 
     tuner = setup.create_tuner()
     results = tuner.fit()
-    setup.upload_offline_experiments()
+    if len(results) == 0:
+        logger.warning("No results returned from the tuner.")
+    setup.upload_offline_experiments(results)
+    raise_tune_errors(results)
     return results
 
 

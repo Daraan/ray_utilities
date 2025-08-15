@@ -8,6 +8,7 @@ from tap import Tap
 from typing_extensions import Annotated, Literal, get_type_hints, get_args, get_origin, Sentinel
 
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, split_timestep_budget
+from ray_utilities.misc import AutoInt
 
 logger = logging.getLogger(__name__)
 
@@ -332,6 +333,10 @@ class DefaultLoggingArgParser(Tap):
             "--" + LOG_STATS, nargs="?", const="more", default="minimal", choices=get_args(LogStatsChoices)
         )
 
+    def process_args(self) -> None:
+        super().process_args()
+        logging.getLogger("ray_utilities").setLevel(self.log_level)
+
 
 class DefaultExtraArgs(Tap):
     extra: Optional[list[str]] = None
@@ -367,7 +372,7 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
     dynamic_batch: AlwaysRestore[bool] = False
     """Use dynamic batch"""
 
-    iterations: NeverRestore[int | Literal["auto"]] = "auto"
+    iterations: NeverRestore[int | AutoInt | Literal["auto"]] = "auto"
     total_steps: int = 1_000_000
     min_step_size: int = 32
     """min_dynamic_buffer_size"""
@@ -423,6 +428,7 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
                 min_size=self.min_step_size,
                 max_size=self.max_step_size,
             )
+            iterations = AutoInt(iterations)
         else:
             iterations = self.iterations
         self.iterations = iterations

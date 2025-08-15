@@ -264,6 +264,7 @@ def create_algorithm_config(
             "Remember to call seed_environments_for_config(config, env_seed) with a seed acquired from the trial."
         )
     elif args["env_seeding_strategy"] == "same":
+        # TODO: could use env_seed here, allows to sample a constant random seed != args["seed"]
         make_seeded_env_callback(args["seed"])
     elif args["env_seeding_strategy"] == "constant":
         make_seeded_env_callback(SeedEnvsCallback.env_seed)

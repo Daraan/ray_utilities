@@ -76,15 +76,15 @@ class MetricCheckpointer(Callback):
                 self.metric_name,
                 self._last_checkpoint_value,
             )
-        else:
-            _logger.debug(
-                "Not checkpointing trial %s at iteration %s, step %d with: metric '%s' = %s",
-                trial.trial_id if trial else "",
-                iteration,
-                current_step,
-                self.metric_name,
-                result.get(self.metric_name, None),
-            )
+        # else:
+        #    _logger.debug(
+        #        "Not checkpointing trial %s at iteration %s, step %d with: metric '%s' = %s",
+        #        trial.trial_id if trial else "",
+        #        iteration,
+        #        current_step,
+        #        self.metric_name,
+        #        result.get(self.metric_name, None),
+        #    )
 
     @override(Callback)
     def on_trial_result(
@@ -119,11 +119,11 @@ class StepCheckpointer(MetricCheckpointer):  # type: ignore
 
     def _condition(self, result: StrictAlgorithmReturnData | LogMetricsDict | dict) -> bool:
         steps_since_last_checkpoint = get_current_step(result) - self._last_checkpoint_step  # pyright: ignore[reportArgumentType]
-        _logger.debug(
-            "StepCheckpointer: steps since last checkpoint: %d, frequency: %d",
-            steps_since_last_checkpoint,
-            self._checkpoint_frequency,
-        )
+        # _logger.debug(
+        #    "StepCheckpointer: steps since last checkpoint: %d, frequency: %d",
+        #    steps_since_last_checkpoint,
+        #    self._checkpoint_frequency,
+        # )
         return steps_since_last_checkpoint >= self._checkpoint_frequency
 
     def __init__(self, checkpoint_frequency: int = 50_000) -> None:

@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from ray_utilities.config import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import ExperimentSetupBase, SetupCheckpointDict
     from ray_utilities.typing import LogMetricsDict
+    from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict
 
 
 _logger = logging.getLogger(__name__)
@@ -199,6 +200,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             setup_class = setup_cls
             discrete_eval = discrete_eval_
             use_pbar = use_pbar_
+
+        DefinedTrainable.__name__ = "Defined" + cls.__name__
 
         assert not TYPE_CHECKING or issubclass(DefinedTrainable, TrainableBase)
         assert DefinedTrainable._base_cls is cls
@@ -835,6 +838,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     def step(self) -> LogMetricsDict:
         # Update self._current_step in child class
         raise NotImplementedError("Subclasses must implement the `step` method.")
+
+    if TYPE_CHECKING:
+
+        def train(self) -> AutoExtendedLogMetricsDict:  # pyright: ignore[reportIncompatibleMethodOverride]
+            return super().train()  # pyright: ignore[reportReturnType]
 
     def __del__(self):
         # Cleanup the pbar if it is still open

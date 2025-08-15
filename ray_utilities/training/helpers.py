@@ -19,9 +19,11 @@ from ray.rllib.utils.metrics import (
 )
 from typing_extensions import TypeAliasType
 
+from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
 from ray_utilities.config import seed_environments_for_config
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
-from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_steps
+from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, calculate_steps
+from ray_utilities.misc import AutoInt
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
@@ -94,7 +96,7 @@ def _patch_with_param_space(
     if (
         "train_batch_size_per_learner" in same_keys
         and config.minibatch_size is not None
-        and config.minibatch_size < hparams["train_batch_size_per_learner"]
+        and config.minibatch_size > hparams["train_batch_size_per_learner"]
     ):
         logger.info(
             "Overriding minibatch_size %d with train_batch_size_per_learner %d as it may not be higher",
@@ -118,6 +120,7 @@ def _patch_with_param_space(
         config.update_from_dict(args["__overwritten_keys__"])
         if is_frozen:
             config.freeze()
+    assert config.minibatch_size or 0 <= config.train_batch_size_per_learner
     return args, config
 
 
@@ -176,8 +179,8 @@ def get_args_and_config(
     elif args["env_seeding_strategy"] == "same":
         seed_environments_for_config(config, args["seed"])
     elif args["env_seeding_strategy"] == "constant":
-        seed_environments_for_config(config, 0)
-    else:
+        seed_environments_for_config(config, SeedEnvsCallback.env_seed)
+    else:  # random
         seed_environments_for_config(config, None)
 
     # endregion seeding
@@ -238,7 +241,39 @@ def setup_trainable(
     if config_overrides:
         if isinstance(config_overrides, AlgorithmConfig):
             config_overrides = config_overrides.to_dict()
+        if "train_batch_size_per_learner" in config_overrides or "minibatch_size" in config_overrides:
+            batch_size = config_overrides.get("train_batch_size_per_learner", config.train_batch_size_per_learner)
+            minibatch_size = config_overrides.get("minibatch_size", config.minibatch_size)
+            if minibatch_size > batch_size:
+                logger.info(
+                    "Overriding minibatch_size %d with train_batch_size_per_learner %d as it may not be higher",
+                    minibatch_size,
+                    batch_size,
+                )
+                config_overrides["minibatch_size"] = batch_size
         config = cast("ConfigType_co", config.update_from_dict(config_overrides))
+    if "train_batch_size_per_learner" in hparams or (
+        config_overrides and "train_batch_size_per_learner" in config_overrides
+    ):
+        # recalculate iterations and total_steps
+        if isinstance(args["iterations"], AutoInt):
+            new_iterations = calculate_iterations(
+                dynamic_buffer=args["dynamic_buffer"],
+                batch_size=config.train_batch_size_per_learner,
+                total_steps=args["total_steps"],
+                assure_even=args["use_exact_total_steps"],
+                min_size=args["min_step_size"],
+                max_size=args["max_step_size"],
+            )
+            logger.info(
+                "Adjusted iterations %d -> %d based on train_batch_size_per_learner %d",
+                args["iterations"],
+                new_iterations,
+                config.train_batch_size_per_learner,
+            )
+            args["iterations"] = new_iterations
+        else:
+            logger.debug("Not adjusting iterations, as it was not an 'auto' value.")
     if not args["from_checkpoint"]:
         try:
             # new API; Note: copies config!
@@ -281,17 +316,19 @@ def get_total_steps(args: dict[str, Any], config: "AlgorithmConfig") -> int | No
     return (
         args.get("total_steps", None)
         if args["iterations"] == "auto"
-        else calculate_steps(
-            args["iterations"],
-            total_steps_default=args["total_steps"],
-            min_step_size=args["min_step_size"],
-            max_step_size=args["max_step_size"],
-        )
-        if args["dynamic_buffer"]
         else (
-            config.train_batch_size_per_learner
-            * max(1, config.num_learners)  # pyright: ignore[reportArgumentType]
-            * args["iterations"]
+            calculate_steps(
+                args["iterations"],
+                total_steps_default=args["total_steps"],
+                min_step_size=args["min_step_size"],
+                max_step_size=args["max_step_size"],
+            )
+            if args["dynamic_buffer"]
+            else (
+                config.train_batch_size_per_learner
+                * max(1, config.num_learners)  # pyright: ignore[reportArgumentType]
+                * args["iterations"]
+            )
         )
     )
 

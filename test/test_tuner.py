@@ -26,6 +26,7 @@ from ray_utilities.constants import (
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
 )
+from ray_utilities.misc import raise_tune_errors
 from ray_utilities.runfiles import run_tune
 from ray_utilities.setup import optuna_setup
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
@@ -35,14 +36,12 @@ from ray_utilities.testing_utils import (
     Cases,
     DisableLoggers,
     InitRay,
-    SetupDefaults,
     SetupWithCheck,
     TestHelpers,
     TrainableWithChecks,
     format_result_errors,
     iter_cases,
     patch_args,
-    raise_result_errors,
 )
 from ray_utilities.training.default_class import DefaultTrainable
 
@@ -88,7 +87,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 assert result.metrics
                 self.assertEqual(result.metrics["current_step"], 3 * BATCH_SIZE)
                 self.assertEqual(result.metrics[TRAINING_ITERATION], 3)
-            raise_result_errors(results)
+            raise_tune_errors(results)
 
     def test_step_checkpointing(self):
         with patch_args(
@@ -102,7 +101,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             "--total_steps", BATCH_SIZE * 5,
             "--checkpoint_frequency_unit", "steps",
             "--checkpoint_frequency", BATCH_SIZE * 2,
-        ):  # fmt: off
+        ):  # fmt: skip
             # FIXME: new default steps does not align with other tests!
             setup = AlgorithmSetup()
             # Workaround for NOT working StepCheckpointer as it works on a copy of the result dict.
@@ -146,12 +145,13 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
         """
         import tempfile  # noqa: PLC0415
         from typing import Optional  # noqa: PLC0415
+
+        from ray.air.execution import PlacementGroupResourceManager  # noqa: PLC0415
         from ray.train import SyncConfig  # noqa: PLC0415, TC002
         from ray.train._internal.storage import StorageContext  # noqa: PLC0415
         from ray.tune import Callback, CheckpointConfig  # noqa: PLC0415
-        from ray.tune.experiment import Trial  # noqa: PLC0415
-        from ray.air.execution import PlacementGroupResourceManager  # noqa: PLC0415
         from ray.tune.execution.tune_controller import TuneController  # noqa: PLC0415
+        from ray.tune.experiment import Trial  # noqa: PLC0415
         from ray.tune.utils.mock_trainable import MOCK_TRAINABLE_NAME, register_mock_trainable  # noqa: PLC0415
 
         register_mock_trainable()
@@ -239,7 +239,7 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
             "--batch_size", BATCH_SIZE,
             "--minibatch_size", MINIBATCH_SIZE,
             "--iterations", "4",
-        ):  # fmt: off
+        ):  # fmt: skip
             setup = AlgorithmSetup()
         tuner = setup.create_tuner()
         tuner._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
@@ -249,7 +249,7 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
             # NOTE: num_keep does not appear to work here
         )
         results = tuner.fit()
-        raise_result_errors(results)
+        raise_tune_errors(results)
         checkpoint_dir, checkpoints = self.get_checkpoint_dirs(results[0])
         self.assertEqual(
             len(checkpoints),
@@ -265,7 +265,7 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
             "--batch_size", BATCH_SIZE,
             "--minibatch_size", MINIBATCH_SIZE,
             "--iterations", "2",
-        ):  # fmt: off
+        ):  # fmt: skip
 
             class CheckpointSetup(AlgorithmSetup):
                 def _create_trainable(self):
@@ -345,7 +345,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     "--batch_size", BATCH_SIZE,  # overwrite
                     "--minibatch_size", MINIBATCH_SIZE,  # keep
                     "--iterations", "1",  # overwrite
-                ):  # fmt: off
+                ):  # fmt: skip
                     with AlgorithmSetup() as setup1:
                         setup1.config.env_runners(num_env_runners=num_env_runners)
                 tuner1 = setup1.create_tuner()
@@ -383,7 +383,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE,  # 1 + NUM_ITERS_2 iterations
                     "--from_checkpoint", checkpoints[0],
                     "--log_stats", "most",
-                ):  # fmt: off
+                ):  # fmt: skip
                     with (
                         Setup() as setup2,
                         Setup() as setup2b,
@@ -396,7 +396,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 Trainable2 = setup2b.create_trainable()
                 if TYPE_CHECKING:
                     Trainable2 = setup2b.trainable_class
-                trainable2_local = Trainable2(setup2b.param_space)
+                trainable2_local = Trainable2(setup2b.sample_params())
                 if trainable2_local.algorithm_config.callbacks_on_sample_end and isinstance(
                     trainable2_local.algorithm_config.callbacks_on_sample_end, Iterable
                 ):
@@ -495,7 +495,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     "--batch_size", BATCH_SIZE,  # overwrite
                     "--minibatch_size", MINIBATCH_SIZE,  # keep
                     "--iterations", "1",  # overwrite
-                ):  # fmt: off
+                ):  # fmt: skip
                     with AlgorithmSetup() as setup1:
                         setup1.config.env_runners(num_env_runners=num_env_runners)
                 tuner1 = setup1.create_tuner()
@@ -524,7 +524,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     "--log_stats", "most",
                     "--tune", "batch_size", "rollout_size",
                     "--iterations", "3",
-                ):  # fmt: off
+                ):  # fmt: skip
                     Setup.batch_size_sample_space = {"grid_search": SAMPLE_SPACE}
                     Setup.rollout_size_sample_space = {"grid_search": SAMPLE_SPACE}
                     with Setup() as setup2:
@@ -537,7 +537,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 )
                 # Tuner will sample parameter and feed is as input arg to the trainable
                 results2 = tuner2.fit()
-                raise_result_errors(results2)
+                raise_tune_errors(results2)
                 self.assertEqual(
                     results2.num_terminated, NUM_RUNS, f"Expected num_samples={NUM_RUNS} runs to be terminated"
                 )
@@ -571,7 +571,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     )
 
 
-class TestOptunaTuner(SetupDefaults):
+class TestOptunaTuner(TestHelpers, DisableLoggers):
     def test_optuna_tuner_setup(self):
         with patch_args("--optimize_config", "--num_samples", "1"):
             optuna_setup = AlgorithmSetup()

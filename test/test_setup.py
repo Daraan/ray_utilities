@@ -3,15 +3,20 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 
 import pyarrow as pa
 import pytest
+
+from ray_utilities.misc import raise_tune_errors
+from ray_utilities.runfiles import run_tune
 
 os.environ["RAY_DEBUG"] = "legacy"
 # os.environ["RAY_DEBUG"]="0"
 
 import tempfile
 import unittest
+import unittest.mock
 from copy import deepcopy
 from inspect import isclass
 from pathlib import Path
@@ -258,6 +263,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     grid = []
                 tuner = setup.create_tuner()
                 results = tuner.fit()
+                raise_tune_errors(results)
                 self.check_tune_result(results)
                 assert results[0].metrics
                 self.assertIn(
@@ -348,7 +354,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 "--extra", "abc",  # nargs
                 "--env_seeding_strategy", "constant",
                 "--wandb", "offline",  # possibly do not restore
-            ):  # fmt: off
+            ):  # fmt: skip
                 with AlgorithmSetup(init_trainable=False) as setup:
                     # These depend on args and CANNOT be restored!
                     setup.config.training(minibatch_size=10, num_epochs=2)
@@ -395,7 +401,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 "--comment", "B",
                 "--from_checkpoint", tmpdir,
                 "--env_seeding_strategy", "sequential",  # default value
-            ):  # fmt: off
+            ):  # fmt: skip
                 # Test if setup1.args are merged with setup2.args
                 loaded_config, *_ = AlgorithmSetup._config_from_checkpoint(tmpdir)
                 self.assertEqual(loaded_config.train_batch_size_per_learner, batch_size1)
@@ -458,7 +464,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             with patch_args(
                 "--from_checkpoint", tmpdir,
                 "-a", "a new value",
-            ):  # fmt: off
+            ):  # fmt: skip
                 with self.assertLogs(
                     parser_logger,
                     "WARNING",
@@ -474,13 +480,30 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 "--from_checkpoint", tmpdir,
                 "--minibatch_size", trainable.algorithm_config.minibatch_size * 2,
                 "--seed", (trainable._setup.config.seed or 1234) * 2
-            ):  # fmt: off
+            ):  # fmt: skip
                 setup2 = AlgorithmSetup()
                 # Not annotated value, restored
                 self.assertEqual(setup2.config.train_batch_size_per_learner, 1234)
                 # Never restored
                 self.assertNotEqual(setup2.args.log_level, "DEBUG")
                 self.assertEqual(setup2.args.num_jobs, DefaultArgumentParser.num_jobs)
+
+    @unittest.mock.patch.object(subprocess, "run")
+    def test_wandb_upload(self, mock_run: unittest.mock.MagicMock):
+        # NOTE: This test is flaky, there are instances of no wandb folder copied
+        class ExitCode:
+            returncode = 0
+            stdout = "wandb: Syncing files..."
+            stderr = None
+
+        mock_run.return_value = ExitCode()
+        with patch_args("--wandb", "offline+upload", "--num_jobs", 1, "--iterations", 2, "--batch_size", 32):
+            setup = AlgorithmSetup()
+            _results = run_tune(setup)
+        mock_run.assert_called_once()
+        self.assertDictEqual(
+            mock_run.call_args.kwargs, {"check": False, "stdout": subprocess.PIPE, "stderr": subprocess.STDOUT}
+        )
 
 
 ENV_STEPS_PER_ITERATION = 10
@@ -687,7 +710,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
             "--iterations",
             str(frequency * num_checkpoints),
             "--seed", str(cli_seed),
-        ):  # fmt: off
+        ):  # fmt: skip
             for num_env_runners_a, num_env_runners_b in iter_cases(cases):
                 msg_prefix = f"num_env_runners=({num_env_runners_a} & {num_env_runners_b}) :"
                 with self.subTest(msg=msg_prefix):

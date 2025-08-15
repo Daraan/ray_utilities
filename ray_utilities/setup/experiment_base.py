@@ -1,13 +1,14 @@
+# pyright: enableExperimentalFeatures=true
 from __future__ import annotations
 
 import logging
 import os
 import pickle
+import random
+import subprocess
 import warnings
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-
-# pyright: enableExperimentalFeatures=true
 from inspect import isclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -35,6 +36,7 @@ from tap.tap import Tap
 from typing_extensions import Self, TypedDict, TypeVar, deprecated
 
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
+from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
 from ray_utilities.comet import CometArchiveTracker
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.typed_argument_parser import SupportsMetaAnnotations
@@ -53,6 +55,7 @@ if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
     from ray.rllib.utils.typing import EnvType
+    from ray.tune.result_grid import ResultGrid
 
     from ray_utilities.training.default_class import TrainableBase
     from ray_utilities.typing import TrainableReturnData
@@ -441,7 +444,10 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         self._check_tune_arguments_resolved()
         module_spec = self._get_module_spec(copy=False)
         if module_spec:
-            module = module_spec.module_class.__name__ if module_spec.module_class is not None else "UNDEFINED"
+            if module_spec.module_class is not None:
+                module = module_spec.module_class.__name__
+            else:
+                module = f"DEFAULT_MODULE({self.args.agent_type})"
         else:
             module = None
         # Arguments reported on the CLI
@@ -451,11 +457,21 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             ),  # pyright: ignore[reportOptionalMemberAccess]
             "algo": self.config.algo_class.__name__ if self.config.algo_class is not None else "UNDEFINED",
             "module": module,
+            "setup_cls": self.__class__.__name__,
             "trainable_name": self.get_trainable_name(),  # "UNDEFINED" is called before create_trainable
         }
         # If not logged in choice will not be reported in the CLI interface
         param_space = {k: tune.choice([v]) for k, v in param_space.items()}
-        if self.args.seed is not None:
+        if self.args.env_seeding_strategy == "same":
+            # Fixed or same random selected seed
+            # NOTE: This might not be used by create_algorithm_config.
+            # Rather is, make_seeded_env_callback(args["seed"])
+            param_space["env_seed"] = self.args.seed  # if self.args.seed is not None else random.randint(0, 2**16)
+        elif self.args.env_seeding_strategy == "constant":
+            param_space["env_seed"] = SeedEnvsCallback.env_seed  # use as constant value
+        elif self.args.env_seeding_strategy == "random":
+            param_space["env_seed"] = None
+        else:  # "sequential", sample from distribution
             param_space["env_seed"] = tune.randint(0, 2**16)
             # param_space["run_seed"] = tune.randint(0, 2**16)  # potential seed for config
 
@@ -624,7 +640,11 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         init_config = setup_state["__init_config__"]
         overrides = setup_state["config_overrides"]
         cls._unfreeze_config(config)
-        return config, init_config, overrides
+        return (
+            config,  # pyright: ignore[reportReturnType], cannot guarantee AlgorithmType
+            init_config,
+            overrides,
+        )
 
     @final
     @classmethod
@@ -897,15 +917,60 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             return
         self.comet_tracker.upload_and_move()
 
-    def wandb_upload_offline_experiments(self):
-        logger.warning("Wandb offline upload is not yet implemented.")
+    def wandb_upload_offline_experiments(self, results: ResultGrid):
+        """Upload wandb's offline folder of the session to wandb, similar to the `wandb sync` shell command"""
+        # Get the wandb offline directory
+        logger.info("Uploading wandb offline experiments...")
+        num_uploaded = 0
+        for result in results:
+            # Find offline run directories
+            wandb_dir = os.environ.get("WANDB_DIR", None)
+            if wandb_dir is None:
+                wandb_dir = Path(result.path) / "wandb"
+            else:
+                wandb_dir = Path(wandb_dir)
+            offline_runs = list(wandb_dir.glob("offline-run-*"))
+            if len(offline_runs) > 1:
+                logger.warning("Multiple wandb offline directories found in %s: %s", wandb_dir, offline_runs)
 
-    def upload_offline_experiments(self):
+            if not offline_runs:
+                logger.info("No wandb offline experiments found to upload.")
+                return
+            num_uploaded += len(offline_runs)
+
+            for run_dir in offline_runs:
+                logger.info("Uploading offline wandb run from: %s", run_dir)
+                exit = subprocess.run(
+                    ["wandb", "sync", run_dir.as_posix()], check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+                )
+                if exit.stdout:
+                    print(exit.stdout if isinstance(exit.stdout, str) else exit.stdout.decode("utf-8"))
+                if exit.returncode != 0:
+                    logger.error(
+                        "Failed to upload wandb offline run %s with exit code %d. Output: %s",
+                        run_dir,
+                        exit.returncode,
+                        (
+                            exit.stdout.decode("utf-8")
+                            if isinstance(exit.stdout, bytes)
+                            else exit.stdout
+                            if exit.stdout
+                            else ""
+                        ),
+                    )
+        logger.info("Uploaded %d wandb offline runs from %s.", num_uploaded, results.experiment_path)
+
+    def upload_offline_experiments(self, results: Optional[ResultGrid] = None):
         if self.args.comet and "upload" in self.args.comet:
             logger.info("Uploading offline experiments to Comet")
             self.comet_upload_offline_experiments()
         if self.args.wandb and "upload" in self.args.wandb:
-            self.wandb_upload_offline_experiments()
+            if results is None:
+                logger.error(
+                    "Wandb upload requested, but no results provided. This will not upload any offline experiments."
+                )
+                return
+            self.wandb_upload_offline_experiments(results)
 
     # endregion
 

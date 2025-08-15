@@ -151,5 +151,8 @@ def seed_environments_for_config(config: AlgorithmConfig, env_seed: int | None):
 
         seed_environments_for_config(config, None)  # <-- always random
     """
+    if not (env_seed is None or isinstance(env_seed, (int, float, tuple, list))):
+        # tuple, or list of int might be ok too
+        raise TypeError(f"{type(env_seed)} is not a valid type for env_seed. If it is a Distribution sample first.")
     seed_envs_cb = make_seeded_env_callback(env_seed)
     add_callbacks_to_config(config, on_environment_created=seed_envs_cb, remove_existing=_remove_existing_seeded_envs)

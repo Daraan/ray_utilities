@@ -119,7 +119,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
                 "--minibatch_size", "20",
                 "--comment", "A",
                 "--tags", "test",
-            ):  # fmt: off
+            ):  # fmt: skip
                 with AlgorithmSetup() as setup:
                     setup.config.evaluation(evaluation_interval=1)
                     setup.config.training(
@@ -150,7 +150,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
                 "--batch_size", "60",
                 "--comment", "B",
                 "--from_checkpoint", tmpdir,
-            ):  # fmt: off
+            ):  # fmt: skip
                 with AlgorithmSetup(init_trainable=False) as setup2:
                     setup2.config.training(
                         num_epochs=5,
@@ -164,7 +164,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
                 )
                 # self.assertEqual(setup2.args.total_steps % setup2.args.train_batch_size_per_learner, 0)
                 trainable2 = setup2.trainable_class(
-                    setup2.param_space, algorithm_overrides=AlgorithmConfig.overrides(gamma=0.22, grad_clip=4.321)
+                    setup2.sample_params(), algorithm_overrides=AlgorithmConfig.overrides(gamma=0.22, grad_clip=4.321)
                 )
                 assert trainable2._algorithm_overrides is not None
                 self.assertDictEqual(
@@ -440,7 +440,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             "--batch_size", "32",
             "--minibatch_size", "16",
             "--iterations", "3",
-        ):  # fmt: off
+        ):  # fmt: skip
             for num_env_runners in iter_cases(cases):
                 with self.subTest(num_env_runners=num_env_runners):
                     setup = AlgorithmSetup(init_trainable=False)
