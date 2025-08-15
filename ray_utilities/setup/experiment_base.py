@@ -36,6 +36,7 @@ from tap.tap import Tap
 from typing_extensions import Self, TypedDict, TypeVar, deprecated
 
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
+from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
 from ray_utilities.comet import CometArchiveTracker
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.typed_argument_parser import SupportsMetaAnnotations
@@ -461,10 +462,16 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         }
         # If not logged in choice will not be reported in the CLI interface
         param_space = {k: tune.choice([v]) for k, v in param_space.items()}
-        if self.args.env_seeding_strategy != "same":
+        if self.args.env_seeding_strategy == "same":
             # Fixed or same random selected seed
-            param_space["env_seed"] = self.args.seed if self.args.seed is not None else random.randint(0, 2**16)
-        elif self.args.seed is not None:  # takes args.seed
+            # NOTE: This might not be used by create_algorithm_config.
+            # Rather is, make_seeded_env_callback(args["seed"])
+            param_space["env_seed"] = self.args.seed  # if self.args.seed is not None else random.randint(0, 2**16)
+        elif self.args.env_seeding_strategy == "constant":
+            param_space["env_seed"] = SeedEnvsCallback.env_seed  # use as constant value
+        elif self.args.env_seeding_strategy == "random":
+            param_space["env_seed"] = None
+        else:  # "sequential", sample from distribution
             param_space["env_seed"] = tune.randint(0, 2**16)
             # param_space["run_seed"] = tune.randint(0, 2**16)  # potential seed for config
 

@@ -41,6 +41,7 @@ from ray import tune
 from ray.tune.search.optuna import OptunaSearch
 from ray.tune.stopper import Stopper
 from ray.tune.utils import flatten_dict
+from ray.tune.search import sample
 
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 
@@ -212,12 +213,32 @@ def create_search_algo(
     grid_values = {}
     if hparams:
         grid_values = {k: v["grid_search"] for k, v in hparams.items() if isinstance(v, dict) and "grid_search" in v}
-    # when using grid search need to use a grid sampler here
+    # when using grid search need to use a grid sampler here and adjust other parameters accordingly
     if grid_values:
-        sampler = optuna.samplers.GridSampler(grid_values)
+        if hparams and any(
+            isinstance(v, sample.Domain) and (not isinstance(v, sample.Categorical) or len(v.categories) > 1)
+            for v in hparams.values()
+        ):
+            _logger.warning(
+                "Grid search is not compatible with sampled parameters: "
+                "found continuous distributions or > 1 non-grid Categoricals. "
+                "Turning categoricals to grid and sampling ONE value for continuous parameters. "
+                "This warning is common if '--tune' and '--env_seeding_strategy sequential' is used. "
+                "In this case change the env_seeding_strategy to 'same', 'constant' or 'random'."
+            )
+            for k, v in hparams.items():
+                if isinstance(v, sample.Domain) and not isinstance(v, sample.Categorical):
+                    # sample ONE value for continuous parameters
+                    hparams[k] = tune.choice([v.sample()])
+                    _logger.debug("Converted continuous parameter %s to a single choice: %s", k, hparams[k])
+                elif isinstance(v, sample.Categorical) and len(v.categories) > 1:
+                    # add single category to grid search
+                    grid_values[k] = v.categories
+                    _logger.debug("Converted categorical parameter %s to grid search: %s", k, grid_values[k])
+        sampler = optuna.samplers.GridSampler(grid_values, seed=seed)
         # TODO: This covers grid but what if I want TPESampler as well?
     else:
-        sampler = None
+        sampler = None  # TPE sampler
     if not pruner:
         searcher = OptunaSearch(
             study_name=study_name,

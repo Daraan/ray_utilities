@@ -19,6 +19,7 @@ from ray.rllib.utils.metrics import (
 )
 from typing_extensions import TypeAliasType
 
+from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
 from ray_utilities.config import seed_environments_for_config
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_steps
@@ -94,7 +95,7 @@ def _patch_with_param_space(
     if (
         "train_batch_size_per_learner" in same_keys
         and config.minibatch_size is not None
-        and config.minibatch_size < hparams["train_batch_size_per_learner"]
+        and config.minibatch_size > hparams["train_batch_size_per_learner"]
     ):
         logger.info(
             "Overriding minibatch_size %d with train_batch_size_per_learner %d as it may not be higher",
@@ -118,6 +119,7 @@ def _patch_with_param_space(
         config.update_from_dict(args["__overwritten_keys__"])
         if is_frozen:
             config.freeze()
+    assert config.minibatch_size or 0 <= config.train_batch_size_per_learner
     return args, config
 
 
@@ -176,8 +178,8 @@ def get_args_and_config(
     elif args["env_seeding_strategy"] == "same":
         seed_environments_for_config(config, args["seed"])
     elif args["env_seeding_strategy"] == "constant":
-        seed_environments_for_config(config, 0)
-    else:
+        seed_environments_for_config(config, SeedEnvsCallback.env_seed)
+    else:  # random
         seed_environments_for_config(config, None)
 
     # endregion seeding
@@ -238,6 +240,12 @@ def setup_trainable(
     if config_overrides:
         if isinstance(config_overrides, AlgorithmConfig):
             config_overrides = config_overrides.to_dict()
+        if "train_batch_size_per_learner" in config_overrides or "minibatch_size" in config_overrides:
+            batch_size = config_overrides.get("train_batch_size_per_learner", config.train_batch_size_per_learner)
+            minibatch_size = config_overrides.get("minibatch_size", config.minibatch_size)
+            if minibatch_size > batch_size:
+                logger.info("Overriding minibatch_size %d with train_batch_size_per_learner %d as it may not be higher")
+                config_overrides["minibatch_size"] = batch_size
         config = cast("ConfigType_co", config.update_from_dict(config_overrides))
     if not args["from_checkpoint"]:
         try:
