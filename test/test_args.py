@@ -203,9 +203,9 @@ class TestProcessing(unittest.TestCase):
                     setup = AlgorithmSetup()
                     self.assertEqual(setup.args.log_stats, choice)
                     if isclass(setup.trainable):
-                        _result = setup.trainable_class(setup.param_space).train()
+                        _result = setup.trainable_class(setup.sample_params()).train()
                     else:  # Otherwise call trainable function
-                        _result = setup.trainable(setup.param_space)
+                        _result = setup.trainable(setup.sample_params())
             with (
                 patch_args("--log_stats", "invalid_choice"),
                 self.assertRaises(SystemExit) as context,

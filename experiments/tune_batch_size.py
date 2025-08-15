@@ -12,8 +12,8 @@ if __name__ == "__main__":
         "--wandb", "offline+upload",
         "--comet", "offline+upload",
         "--seed", "42",
-        "--num_samples", len(PPOSetup.batch_size_sample_space["grid_search"]),
-        "--tags", "tune", "batch_size",
+        "--num_samples", len(PPOSetup.batch_size_sample_space["grid_search"]), # pyright: ignore
+        "--tags", "tune-batch_size", "mlp",
         "--comment", "Default training run. Tune batch size",
         "--env_seeding_strategy", "same",
         extend=True,

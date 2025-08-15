@@ -164,7 +164,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
                 )
                 # self.assertEqual(setup2.args.total_steps % setup2.args.train_batch_size_per_learner, 0)
                 trainable2 = setup2.trainable_class(
-                    setup2.param_space, algorithm_overrides=AlgorithmConfig.overrides(gamma=0.22, grad_clip=4.321)
+                    setup2.sample_params(), algorithm_overrides=AlgorithmConfig.overrides(gamma=0.22, grad_clip=4.321)
                 )
                 assert trainable2._algorithm_overrides is not None
                 self.assertDictEqual(

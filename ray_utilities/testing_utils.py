@@ -310,13 +310,14 @@ class TestHelpers(unittest.TestCase):
         # Remove TESTING storage path
         try:
             AlgorithmSetup.PROJECT = "TESTING"
-            setup = AlgorithmSetup(init_config=False, init_trainable=False, init_param_space=False)
             # Create run config to have access to output dir
             with (
                 change_log_level(experiment_base_logger, logging.ERROR),
                 change_log_level(tuner_setup_logger, logging.ERROR),
             ):
-                run_config = TunerSetup(setup=setup).create_run_config([])
+                run_config = TunerSetup(
+                    setup=AlgorithmSetup(init_config=False, init_trainable=False, init_param_space=False)
+                ).create_run_config([])
             if run_config.storage_path is None:
                 return
             storage_path = pathlib.Path(run_config.storage_path) / run_config.name  # pyright: ignore[reportOperatorIssue]

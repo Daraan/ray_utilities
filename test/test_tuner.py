@@ -396,7 +396,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 Trainable2 = setup2b.create_trainable()
                 if TYPE_CHECKING:
                     Trainable2 = setup2b.trainable_class
-                trainable2_local = Trainable2(setup2b.param_space)
+                trainable2_local = Trainable2(setup2b.sample_params())
                 if trainable2_local.algorithm_config.callbacks_on_sample_end and isinstance(
                     trainable2_local.algorithm_config.callbacks_on_sample_end, Iterable
                 ):
