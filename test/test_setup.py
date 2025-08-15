@@ -491,8 +491,12 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
     @unittest.mock.patch.object(subprocess, "run")
     def test_wandb_upload(self, mock_run: unittest.mock.MagicMock):
         # NOTE: This test is flaky, there are instances of no wandb folder copied
-        mock_run.return_value = unittest.mock.Mock()
-        mock_run.return_value.stdout = "wandb: Syncing files..."
+        class ExitCode:
+            returncode = 0
+            stdout = "wandb: Syncing files..."
+            stderr = None
+
+        mock_run.return_value = ExitCode()
         with patch_args("--wandb", "offline+upload", "--num_jobs", 1, "--iterations", 2, "--batch_size", 32):
             setup = AlgorithmSetup()
             _results = run_tune(setup)

@@ -204,6 +204,12 @@ def calculate_iterations(
     See Also:
         split_timestep_budget: For more information on how the budget is split.
     """
+    if batch_size is not None and batch_size > max_size:
+        logger.warning(
+            "Batch size %d is larger than the maximum size %d. Calculation of iterations might not be correct.",
+            batch_size,
+            max_size,
+        )
     if not dynamic_buffer:
         if batch_size is None:
             raise ValueError("batch_size must be provided when dynamic_buffer is False")

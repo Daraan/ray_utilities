@@ -1,3 +1,12 @@
+# Build system requirements.
+[build-system]
+requires = ["flit_core >=3.11,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "ray_utilities"
+readme = "README.md"
+
 [tool.black]
 line-length = 120
 target-version = ['py39', 'py310', 'py311']

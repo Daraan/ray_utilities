@@ -245,7 +245,11 @@ def setup_trainable(
             batch_size = config_overrides.get("train_batch_size_per_learner", config.train_batch_size_per_learner)
             minibatch_size = config_overrides.get("minibatch_size", config.minibatch_size)
             if minibatch_size > batch_size:
-                logger.info("Overriding minibatch_size %d with train_batch_size_per_learner %d as it may not be higher")
+                logger.info(
+                    "Overriding minibatch_size %d with train_batch_size_per_learner %d as it may not be higher",
+                    minibatch_size,
+                    batch_size,
+                )
                 config_overrides["minibatch_size"] = batch_size
         config = cast("ConfigType_co", config.update_from_dict(config_overrides))
     if "train_batch_size_per_learner" in hparams or (
