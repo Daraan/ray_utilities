@@ -22,7 +22,8 @@ from typing_extensions import TypeAliasType
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
 from ray_utilities.config import seed_environments_for_config
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
-from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_steps
+from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, calculate_steps
+from ray_utilities.misc import AutoInt
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
@@ -247,6 +248,28 @@ def setup_trainable(
                 logger.info("Overriding minibatch_size %d with train_batch_size_per_learner %d as it may not be higher")
                 config_overrides["minibatch_size"] = batch_size
         config = cast("ConfigType_co", config.update_from_dict(config_overrides))
+    if "train_batch_size_per_learner" in hparams or (
+        config_overrides and "train_batch_size_per_learner" in config_overrides
+    ):
+        # recalculate iterations and total_steps
+        if isinstance(args["iterations"], AutoInt):
+            new_iterations = calculate_iterations(
+                dynamic_buffer=args["dynamic_buffer"],
+                batch_size=config.train_batch_size_per_learner,
+                total_steps=args["total_steps"],
+                assure_even=args["use_exact_total_steps"],
+                min_size=args["min_step_size"],
+                max_size=args["max_step_size"],
+            )
+            logger.info(
+                "Adjusted iterations %d -> %d based on train_batch_size_per_learner %d",
+                args["iterations"],
+                new_iterations,
+                config.train_batch_size_per_learner,
+            )
+            args["iterations"] = new_iterations
+        else:
+            logger.debug("Not adjusting iterations, as it was not an 'auto' value.")
     if not args["from_checkpoint"]:
         try:
             # new API; Note: copies config!
@@ -289,17 +312,19 @@ def get_total_steps(args: dict[str, Any], config: "AlgorithmConfig") -> int | No
     return (
         args.get("total_steps", None)
         if args["iterations"] == "auto"
-        else calculate_steps(
-            args["iterations"],
-            total_steps_default=args["total_steps"],
-            min_step_size=args["min_step_size"],
-            max_step_size=args["max_step_size"],
-        )
-        if args["dynamic_buffer"]
         else (
-            config.train_batch_size_per_learner
-            * max(1, config.num_learners)  # pyright: ignore[reportArgumentType]
-            * args["iterations"]
+            calculate_steps(
+                args["iterations"],
+                total_steps_default=args["total_steps"],
+                min_step_size=args["min_step_size"],
+                max_step_size=args["max_step_size"],
+            )
+            if args["dynamic_buffer"]
+            else (
+                config.train_batch_size_per_learner
+                * max(1, config.num_learners)  # pyright: ignore[reportArgumentType]
+                * args["iterations"]
+            )
         )
     )
 

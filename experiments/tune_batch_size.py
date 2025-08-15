@@ -13,9 +13,11 @@ if __name__ == "__main__":
         "--comet", "offline+upload",
         "--seed", "42",
         "--num_samples", len(PPOSetup.batch_size_sample_space["grid_search"]), # pyright: ignore
+        "--max_step_size", max(PPOSetup.batch_size_sample_space["grid_search"]), # pyright: ignore
         "--tags", "tune-batch_size", "mlp",
         "--comment", "Default training run. Tune batch size",
         "--env_seeding_strategy", "same",
+        "--log_level", "INFO",
         extend=True,
     ):  # fmt: skip
         setup = PPOSetup()  # Replace with your own setup class

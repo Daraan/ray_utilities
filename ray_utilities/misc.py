@@ -83,3 +83,7 @@ def raise_tune_errors(result: ResultGrid | Sequence[Exception], msg: str = "Erro
     else:
         errors = result
     raise ExceptionGroup(msg, errors)
+
+
+class AutoInt(int):
+    """An integer created from an "auto" string in the args."""
