@@ -8,6 +8,7 @@ from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+from ray_utilities.misc import raise_tune_errors
 from ray_utilities.random import seed_everything
 from ray_utilities.training.default_class import TrainableBase
 
@@ -106,7 +107,10 @@ def run_tune(
 
     tuner = setup.create_tuner()
     results = tuner.fit()
+    if len(results) == 0:
+        logger.warning("No results returned from the tuner.")
     setup.upload_offline_experiments(results)
+    raise_tune_errors(results)
     return results
 
 

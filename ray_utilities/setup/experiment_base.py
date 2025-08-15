@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import pickle
+import random
 import subprocess
 import warnings
 from abc import ABC, abstractmethod
@@ -460,7 +461,10 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         }
         # If not logged in choice will not be reported in the CLI interface
         param_space = {k: tune.choice([v]) for k, v in param_space.items()}
-        if self.args.seed is not None:
+        if self.args.env_seeding_strategy != "same":
+            # Fixed or same random selected seed
+            param_space["env_seed"] = self.args.seed if self.args.seed is not None else random.randint(0, 2**16)
+        elif self.args.seed is not None:  # takes args.seed
             param_space["env_seed"] = tune.randint(0, 2**16)
             # param_space["run_seed"] = tune.randint(0, 2**16)  # potential seed for config
 

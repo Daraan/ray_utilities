@@ -4,14 +4,16 @@ import datetime
 import functools
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from exceptiongroup import ExceptionGroup
 from ray.experimental import tqdm_ray
+from ray.tune.result_grid import ResultGrid
 from tqdm import tqdm
 from typing_extensions import Iterable, TypeIs
 
 from ray_utilities.constants import RAY_UTILITIES_INITIALIZATION_TIMESTAMP
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from ray.tune.experiment import Trial
 
@@ -69,3 +71,15 @@ def deep_update(mapping: dict[str, Any], *updating_mappings: dict[str, Any]) -> 
             else:
                 updated_mapping[k] = v
     return updated_mapping
+
+
+def raise_tune_errors(result: ResultGrid | Sequence[Exception], msg: str = "Errors encountered during tuning") -> None:
+    if isinstance(result, ResultGrid):
+        if not result.errors:
+            return
+        if len(result.errors) == 1:
+            raise result.errors[0]
+        errors = result.errors
+    else:
+        errors = result
+    raise ExceptionGroup(msg, errors)

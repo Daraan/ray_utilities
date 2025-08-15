@@ -16,8 +16,8 @@ import sys
 import unittest
 import unittest.util
 from collections import deque
-from collections.abc import Iterator, Sequence
-from contextlib import nullcontext
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
@@ -46,7 +46,6 @@ import ray.tune
 import ray.tune.logger
 import ray.tune.logger.unified
 import tree
-from exceptiongroup import ExceptionGroup
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core import ALL_MODULES
@@ -57,13 +56,15 @@ from ray.rllib.utils.metrics import (
 )
 from ray.rllib.utils.metrics.stats import Stats
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
-from ray.tune.result_grid import ResultGrid
 from ray.tune.search.sample import Categorical, Domain, Float, Integer
 from typing_extensions import Final, NotRequired, Required, Sentinel, get_origin, get_type_hints
 
 from ray_utilities.config import DefaultArgumentParser
+from ray_utilities.dynamic_config.dynamic_buffer_update import logger as dynamic_buffer_logger
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
+from ray_utilities.setup.experiment_base import logger as experiment_base_logger
 from ray_utilities.setup.tuner_setup import TunerSetup
+from ray_utilities.setup.tuner_setup import logger as tuner_setup_logger
 from ray_utilities.training.default_class import DefaultTrainable, TrainableBase, TrainableStateDict
 from ray_utilities.training.functional import training_step
 from ray_utilities.training.helpers import nan_to_zero_hist_leaves
@@ -160,7 +161,7 @@ def iter_cases(cases: type[Cases] | mock.MagicMock | Iterator[Any] | Iterable[An
 def patch_args(*args: str | int, extend=False):
     old_args = sys.argv[1:]
     actor_args = (
-        ("-a", "no_actor_provided by patch_args")
+        ("-a", "no_actor_provided_by_patch_args")
         if (
             "-a" not in args
             and "--actor_type" not in args
@@ -299,6 +300,7 @@ class TestHelpers(unittest.TestCase):
 
     def setUp(self):
         AlgorithmSetup.PROJECT = "TESTING"
+        os.environ["WANDB_API_KEY"] = "test"
         super().setUp()
         self._env_seed_rng = random.Random(111)
         atexit.register(self._clean_output_dir)
@@ -309,7 +311,12 @@ class TestHelpers(unittest.TestCase):
         try:
             AlgorithmSetup.PROJECT = "TESTING"
             setup = AlgorithmSetup(init_config=False, init_trainable=False, init_param_space=False)
-            run_config = TunerSetup(setup=setup).create_run_config([])
+            # Create run config to have access to output dir
+            with (
+                change_log_level(experiment_base_logger, logging.ERROR),
+                change_log_level(tuner_setup_logger, logging.ERROR),
+            ):
+                run_config = TunerSetup(setup=setup).create_run_config([])
             if run_config.storage_path is None:
                 return
             storage_path = pathlib.Path(run_config.storage_path) / run_config.name  # pyright: ignore[reportOperatorIssue]
@@ -1135,16 +1142,19 @@ class SetupDefaults(TestHelpers, DisableLoggers):
             DefaultArgumentParser().parse_args().as_dict()
         )
         self._DEFAULT_NAMESPACE = DefaultArgumentParser()
-        self._DEFAULT_SETUP = AlgorithmSetup(init_trainable=False)
-
-        self._DEFAULT_SETUP_LOW_RES = AlgorithmSetup(init_trainable=False)
-        self._DEFAULT_SETUP_LOW_RES.config.training(
-            train_batch_size_per_learner=128, minibatch_size=64, num_epochs=2
-        ).env_runners(num_env_runners=0, num_envs_per_env_runner=1, num_cpus_per_env_runner=0).learners(
-            num_learners=0, num_cpus_per_learner=0
-        )
-        self._DEFAULT_SETUP_LOW_RES.create_trainable()
-        self._DEFAULT_SETUP.create_trainable()
+        with (
+            change_log_level(experiment_base_logger, logging.ERROR),
+            change_log_level(dynamic_buffer_logger, logging.ERROR),
+        ):
+            self._DEFAULT_SETUP = AlgorithmSetup(init_trainable=False)
+            self._DEFAULT_SETUP_LOW_RES = AlgorithmSetup(init_trainable=False)
+            self._DEFAULT_SETUP_LOW_RES.config.training(
+                train_batch_size_per_learner=128, minibatch_size=64, num_epochs=2
+            ).env_runners(num_env_runners=0, num_envs_per_env_runner=1, num_cpus_per_env_runner=0).learners(
+                num_learners=0, num_cpus_per_learner=0
+            )
+            self._DEFAULT_SETUP_LOW_RES.create_trainable()
+            self._DEFAULT_SETUP.create_trainable()
         self._INPUT_LENGTH = env.observation_space.shape[0]  # pyright: ignore[reportOptionalSubscript]
         self._DEFAULT_INPUT = jnp.arange(self._INPUT_LENGTH * 2).reshape((2, self._INPUT_LENGTH))
         self._DEFAULT_BATCH: dict[str, chex.Array] = MappingProxyType({"obs": self._DEFAULT_INPUT})  # pyright: ignore[reportAttributeAccessIssue]
@@ -1184,20 +1194,6 @@ def dict_diff_message(d1: Any, d2: Any) -> str:
     standardMsg = "%s != %s" % unittest.util._common_shorten_repr(d1, d2)
     diff = "\n" + "\n".join(difflib.ndiff(pprint.pformat(d1).splitlines(), pprint.pformat(d2).splitlines()))
     return standardMsg + diff
-
-
-def raise_result_errors(
-    result: ResultGrid | Sequence[Exception], msg: str = "Errors encountered during tuning"
-) -> None:
-    if isinstance(result, ResultGrid):
-        if not result.errors:
-            return
-        if len(result.errors) == 1:
-            raise result.errors[0]
-        errors = result.errors
-    else:
-        errors = result
-    raise ExceptionGroup(msg, errors)
 
 
 def format_result_errors(errors):
@@ -1293,3 +1289,13 @@ class TrainableWithChecks(DefaultTrainable[Any, "AlgorithmConfig", Any]):
 
 if TYPE_CHECKING:
     __: type[_TrainableWithCheckProto] = TrainableWithChecks
+
+
+@contextmanager
+def change_log_level(logger: logging.Logger, new_level: logging._Level):
+    old_level = logger.getEffectiveLevel()
+    logger.setLevel(new_level)
+    try:
+        yield
+    finally:
+        logger.setLevel(old_level)

@@ -8,11 +8,14 @@ if __name__ == "__main__":
     PPOSetup.PROJECT = "DefaultTraining"
     with patch_args(
         "-a", DefaultArgumentParser.agent_type,
-        "--test",
-        "--seed", "42",
+        "--tune", "batch_size",
         "--wandb", "offline+upload",
         "--comet", "offline+upload",
-        "--comment", "Default training run",
+        "--seed", "42",
+        "--num_samples", len(PPOSetup.batch_size_sample_space["grid_search"]),
+        "--tags", "tune", "batch_size",
+        "--comment", "Default training run. Tune batch size",
+        "--env_seeding_strategy", "same",
         extend=True,
     ):  # fmt: skip
         setup = PPOSetup()  # Replace with your own setup class

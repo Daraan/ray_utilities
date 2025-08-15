@@ -26,6 +26,7 @@ from ray_utilities.constants import (
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
 )
+from ray_utilities.misc import raise_tune_errors
 from ray_utilities.runfiles import run_tune
 from ray_utilities.setup import optuna_setup
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
@@ -35,14 +36,12 @@ from ray_utilities.testing_utils import (
     Cases,
     DisableLoggers,
     InitRay,
-    SetupDefaults,
     SetupWithCheck,
     TestHelpers,
     TrainableWithChecks,
     format_result_errors,
     iter_cases,
     patch_args,
-    raise_result_errors,
 )
 from ray_utilities.training.default_class import DefaultTrainable
 
@@ -88,7 +87,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 assert result.metrics
                 self.assertEqual(result.metrics["current_step"], 3 * BATCH_SIZE)
                 self.assertEqual(result.metrics[TRAINING_ITERATION], 3)
-            raise_result_errors(results)
+            raise_tune_errors(results)
 
     def test_step_checkpointing(self):
         with patch_args(
@@ -146,12 +145,13 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
         """
         import tempfile  # noqa: PLC0415
         from typing import Optional  # noqa: PLC0415
+
+        from ray.air.execution import PlacementGroupResourceManager  # noqa: PLC0415
         from ray.train import SyncConfig  # noqa: PLC0415, TC002
         from ray.train._internal.storage import StorageContext  # noqa: PLC0415
         from ray.tune import Callback, CheckpointConfig  # noqa: PLC0415
-        from ray.tune.experiment import Trial  # noqa: PLC0415
-        from ray.air.execution import PlacementGroupResourceManager  # noqa: PLC0415
         from ray.tune.execution.tune_controller import TuneController  # noqa: PLC0415
+        from ray.tune.experiment import Trial  # noqa: PLC0415
         from ray.tune.utils.mock_trainable import MOCK_TRAINABLE_NAME, register_mock_trainable  # noqa: PLC0415
 
         register_mock_trainable()
@@ -249,7 +249,7 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
             # NOTE: num_keep does not appear to work here
         )
         results = tuner.fit()
-        raise_result_errors(results)
+        raise_tune_errors(results)
         checkpoint_dir, checkpoints = self.get_checkpoint_dirs(results[0])
         self.assertEqual(
             len(checkpoints),
@@ -537,7 +537,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 )
                 # Tuner will sample parameter and feed is as input arg to the trainable
                 results2 = tuner2.fit()
-                raise_result_errors(results2)
+                raise_tune_errors(results2)
                 self.assertEqual(
                     results2.num_terminated, NUM_RUNS, f"Expected num_samples={NUM_RUNS} runs to be terminated"
                 )
@@ -571,7 +571,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     )
 
 
-class TestOptunaTuner(SetupDefaults):
+class TestOptunaTuner(TestHelpers, DisableLoggers):
     def test_optuna_tuner_setup(self):
         with patch_args("--optimize_config", "--num_samples", "1"):
             optuna_setup = AlgorithmSetup()
