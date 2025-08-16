@@ -159,18 +159,18 @@ def iter_cases(cases: type[Cases] | mock.MagicMock | Iterator[Any] | Iterable[An
         raise
 
 
-def patch_args(*args: str | int, extend=False):
+def patch_args(*args: str | int, extend_argv: bool = False):
     old_args = sys.argv[1:]
     actor_args = (
         ("-a", "no_actor_provided_by_patch_args")
         if (
             "-a" not in args
             and "--actor_type" not in args
-            and (not extend or ("-a" not in old_args and "--actor_type" not in old_args))
+            and (not extend_argv or ("-a" not in old_args and "--actor_type" not in old_args))
         )
         else ()
     )
-    patched_args = map(str, args if not extend else (*old_args, *args))
+    patched_args = map(str, (*old_args, *args) if extend_argv else args)
     patch = [
         sys.argv[0] if sys.argv else "_imaginary_file_for_patch.py",
         *actor_args,
