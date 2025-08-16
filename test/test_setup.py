@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import os
 import subprocess
 
@@ -20,7 +21,7 @@ import unittest.mock
 from copy import deepcopy
 from inspect import isclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Optional, cast
+from typing import IO, TYPE_CHECKING, Any, Final, Optional, cast
 
 import cloudpickle
 import tree
@@ -492,22 +493,25 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 self.assertNotEqual(setup2.args.log_level, "DEBUG")
                 self.assertEqual(setup2.args.num_jobs, DefaultArgumentParser.num_jobs)
 
-    @unittest.mock.patch.object(subprocess, "run")
+    @unittest.mock.patch.object(subprocess, "Popen", autospec=True)
     def test_wandb_upload(self, mock_run: unittest.mock.MagicMock):
         # NOTE: This test is flaky, there are instances of no wandb folder copied
-        class ExitCode:
-            returncode = 0
-            stdout = "wandb: Syncing files..."
-            stderr = None
+        class MockPopen(unittest.mock.MagicMock):
+            returncode = 1
+            stdout: IO[bytes] = io.BytesIO(b"MOCK: wandb: Syncing files...")
+            stderr: IO[bytes] | None = io.BytesIO(b"MOCK: error")
 
-        mock_run.return_value = ExitCode()
+            def poll(self) -> None:
+                return None
+
+        mocked_popen = MockPopen()
+        mock_run.return_value = mocked_popen
         with patch_args("--wandb", "offline+upload", "--num_jobs", 1, "--iterations", 2, "--batch_size", 32):
             setup = AlgorithmSetup()
             _results = run_tune(setup)
-        mock_run.assert_called_once()
-        self.assertDictEqual(
-            mock_run.call_args.kwargs, {"check": False, "stdout": subprocess.PIPE, "stderr": subprocess.STDOUT}
-        )
+
+        mocked_popen.wait.assert_called_once()
+        self.assertDictEqual(mock_run.call_args.kwargs, {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT})
 
 
 ENV_STEPS_PER_ITERATION = 10
