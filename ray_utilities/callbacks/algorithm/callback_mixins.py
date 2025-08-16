@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Generic, Mapping, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Mapping, Optional, TypeVar
 
 from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.utils.metrics import (
@@ -131,6 +131,18 @@ class StepCounterMixin(GetGlobalStepMixin):
         _get_global_step
     """
 
+    _batch_size_changes: Final[dict[int, tuple[int, int]]] = {}
+
+    @classmethod
+    def batch_size_changed(cls, *, iteration: int, old_batch_size: int, new_batch_size: int):
+        StepCounterMixin._batch_size_changes[iteration] = (old_batch_size, new_batch_size)
+
+    @classmethod
+    def _did_batch_size_change(cls, iteration: int) -> Literal[False] | tuple[int, int]:
+        if iteration in cls._batch_size_changes:
+            return cls._batch_size_changes[iteration]
+        return False
+
     def _set_step_counter_on_algorithm_init(
         self,
         *,
@@ -152,19 +164,43 @@ class StepCounterMixin(GetGlobalStepMixin):
         algorithm: Algorithm,
         metrics_logger: MetricsLogger,
     ) -> None:
+        """
+        Increment the step counter _training_iteration by one and update the planned current step.
+        Note:
+            If the updater changes the total_train_batch_size, the planned_current_step needs to
+            be adjusted *after* (or in) the updater call.
+            Such an updater should be the first callback in the list of callbacks.
+        """
         self._training_iterations += 1
-        self._planned_current_step += (
-            algorithm.config.total_train_batch_size  # pyright: ignore[reportOptionalMemberAccess]
-        )  # pyright: ignore[reportOptionalMemberAccess]
-        if self._planned_current_step != self._get_global_step(metrics_logger):
+        # NOTE: When updating the total_train_batch_size this step; then planned_current_step needs to be adjusted
+        if size_change := self._did_batch_size_change(self._training_iterations):
+            # update with old batch size to match the logger result, new is used for the next step
+            self._planned_current_step += size_change[0]
+        else:
+            self._planned_current_step += algorithm.config.total_train_batch_size  # pyright: ignore[reportOptionalMemberAccess]
+        if self._planned_current_step != (global_step := self._get_global_step(metrics_logger)):
             _logger.error(
-                "Expected step %d (%d + %d) but got %d instead. "
-                "Expected step should at least be smaller but not larger.",
+                "%s: Expected step %d (%d + %d) but got %d (difference: %d) instead. Iteration: %d"
+                "Expected step should at least be smaller but not larger: %s",
+                self.__class__.__name__,
                 self._planned_current_step,
                 self._planned_current_step - algorithm.config.total_train_batch_size,  # pyright: ignore[reportOptionalMemberAccess]
                 algorithm.config.total_train_batch_size,  # pyright: ignore[reportOptionalMemberAccess]
-                self._get_global_step(metrics_logger),
+                global_step,
+                global_step - self._planned_current_step,
+                self._training_iterations,
+                "OK" if self._planned_current_step < global_step else "NOT OK",
+                stacklevel=2,
             )
+        # else:
+        #    _logger.info(
+        #        "%s: Step counter as expected: %d==%d (training_iterations: %d, total_train_batch_size: %d)",
+        #        self.__class__.__name__,
+        #        self._planned_current_step,
+        #        global_step,
+        #        self._training_iterations,
+        #        algorithm.config.total_train_batch_size,  # pyright: ignore[reportOptionalMemberAccess]
+        #    )
 
     def _set_step_counter_on_checkpoint_loaded(
         self,

@@ -25,7 +25,7 @@ TrainableT = TypeVar("TrainableT", bound=Callable[..., "TrainableReturnData"] | 
 
 
 class AlgorithmSetup(
-    SetupWithDynamicBuffer[ParserType_co, ConfigType_co, AlgorithmType_co],
+    SetupWithDynamicBuffer[ParserType_co, ConfigType_co, AlgorithmType_co],  # use before the other setup
     SetupWithDynamicBatchSize[ParserType_co, ConfigType_co, AlgorithmType_co],
     ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co],
 ):
