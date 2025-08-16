@@ -67,7 +67,7 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
             "id": trial_id,
             "name": trial_name,
             "resume": False,
-            "reinit": True,
+            "reinit": "default",  # bool is deprecated
             "allow_val_change": True,
             "group": wandb_group,
             "project": wandb_project,

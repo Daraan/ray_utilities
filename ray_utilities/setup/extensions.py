@@ -25,6 +25,11 @@ class SetupForDynamicTuning(ExperimentSetupBase[ParserType_co, ConfigType_co, Al
 
 
 class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType_co, ConfigType_co, AlgorithmType_co]):
+    """
+    Note:
+        Use before other setups that add DynamicEvalInterval to avoid error log on missing key.
+    """
+
     rollout_size_sample_space: ClassVar[ParameterSpace[int]] = tune.grid_search(
         [16, 32, 64, 128, 256, 512, 1024, 2048, 3072, 4096, 6144, 8192, 10240, 16384]
     )

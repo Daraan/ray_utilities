@@ -101,7 +101,11 @@ class DynamicBufferUpdate(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
             self._update_algorithm(algorithm, key="_train_batch_size_per_learner", value=env_steps)
             # decrease minibatch size if necessary to minibatch == batch_size
             if env_steps < self._initial_minibatch_size:
-                logger.debug("Minibatch size changed from %s to %s", self._initial_minibatch_size, env_steps)
+                logger.debug(
+                    "Minibatch size changed from %s to %s. The first value might be wrong if adjusted after the callback init",
+                    self._initial_minibatch_size,
+                    env_steps,
+                )
                 self._update_algorithm(algorithm, key="minibatch_size", value=env_steps)
             elif algorithm.config.minibatch_size != self._initial_minibatch_size:
                 logger.debug("Resetting minibatch_size to %s", self._initial_minibatch_size)
@@ -142,8 +146,10 @@ class DynamicBufferUpdate(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         self._set_step_counter_on_algorithm_init(algorithm=algorithm, metrics_logger=metrics_logger)
         self._set_budget_on_algorithm_init(algorithm=algorithm, metrics_logger=metrics_logger, **kwargs)
         logger.debug("Initial rollout size for DynamicBuffer %s", self._budget["step_sizes"][0])
-        # legacy only
-        self._initial_minibatch_size = algorithm.config.minibatch_size
+        # legacy only; might be wrong if adjusted later because minibatch_size > batch_size
+        self._initial_minibatch_size = min(
+            algorithm.config.minibatch_size, algorithm.config.train_batch_size_per_learner
+        )
         super().on_algorithm_init(algorithm=algorithm, metrics_logger=metrics_logger)
 
     def on_train_result(
@@ -155,9 +161,20 @@ class DynamicBufferUpdate(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         **kwargs,
     ) -> None:
         assert metrics_logger
-        # Safer way to get correct steps:
+        # Safer way to get correct steps, # TODO: re-evaluate: possible use the one from metrics_logger instead
+        # Updater needs to change current_step_planned for NEXT step in case there is an increase in batch size.
+        batch_size_old = algorithm.config.train_batch_size_per_learner  # pyright: ignore[reportOptionalMemberAccess]
         self._set_step_counter_on_train_result(algorithm=algorithm, metrics_logger=metrics_logger)
         self._updater(algorithm, metrics_logger, global_step=self._planned_current_step)  # pyright: ignore[reportArgumentType]
+        if algorithm.config.train_batch_size_per_learner != batch_size_old:  # pyright: ignore[reportOptionalMemberAccess]
+            # report that batch_size has changed
+            self.batch_size_changed(
+                iteration=self._training_iterations,
+                old_batch_size=batch_size_old,
+                new_batch_size=algorithm.config.train_batch_size_per_learner,  # pyright: ignore[reportOptionalMemberAccess]
+            )
+
+        # if train_batch_size_per_learner changed adjust other callbacks
         # Exact way to update steps:
         # self._updater(algorithm, metrics_logger, global_step=self._get_global_step(metrics_logger))
 

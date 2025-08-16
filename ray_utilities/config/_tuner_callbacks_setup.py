@@ -107,6 +107,8 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         except Exception:
             logger.exception("Error creating wandb.Settings")
             adv_settings = None
+        # TODO: make use of resume/resume_from/fork_from when using from_checkpoint
+        # see: https://docs.wandb.ai/ref/python/sdk/functions/init/ format: {id}?_step={step}
         return AdvWandbLoggerCallback(
             project=self._setup.project_name,
             group=self._setup.group_name,  # if not set trainable name is used
@@ -132,8 +134,6 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             mode=mode,
             job_type="train",
             log_config=False,  # Log "config" key of results; useful if params change. Defaults to False.
-            # TODO: `config_exclude_keys` is deprecated. Use `config=wandb.helper.parse_config(config_object, exclude=('key',))` instead.  # noqa: E501
-            config_exclude_keys=["node_ip", "cli_args/test", "cli_args/num_jobs"],
             # settings advanced wandb.Settings
             settings=adv_settings,
         )
