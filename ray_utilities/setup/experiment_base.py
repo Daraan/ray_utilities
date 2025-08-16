@@ -947,7 +947,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         logger.info("Uploading wandb offline experiments...")
         num_uploaded = 0
         uploads: list[subprocess.Popen[bytes]] = []
-        finished_uploads: list[subprocess.Popen[bytes]] = []
+        finished_uploads: set[subprocess.Popen[bytes]] = set()
         for result in results:
             # Find offline run directories
             wandb_dir = os.environ.get(
@@ -974,8 +974,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                         uploads_in_progress,
                     )
                     for process in uploads:
-                        self._report_wandb_upload(process, run_dir)
-                        finished_uploads.append(process)
+                        self._report_wandb_upload(process)
+                        finished_uploads.add(process)
                     uploads = [p for p in uploads if p not in finished_uploads]
                 logger.info("Uploading offline wandb run from: %s", run_dir)
                 process = subprocess.Popen(
@@ -988,15 +988,15 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             logger.info("Waiting for all wandb uploads to finish...")
             for process in uploads:
                 self._report_wandb_upload(process)
-                finished_uploads.append(process)
+                finished_uploads.add(process)
             uploads = []
             logger.info("Uploaded all %d wandb offline runs from %s.", num_uploaded, results.experiment_path)
             return None
         unfinished_uploads = uploads.copy()
         for process in uploads:
-            if process.poll() is not None:
-                self._report_wandb_upload(process, wait=False)
-                finished_uploads.append(process)
+            if process.poll() is not None:  # report on already finished uploads
+                self._report_wandb_upload(process)
+                finished_uploads.add(process)
                 unfinished_uploads.remove(process)
         if not unfinished_uploads:
             logger.info("All wandb offline runs have been uploaded.")

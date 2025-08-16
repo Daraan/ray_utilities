@@ -261,15 +261,13 @@ class TestProcessing(unittest.TestCase):
         )
         # because total steps 2048< 4096 (even auto value), args.iterations is 2 (2* 1024) and not 3 (2048 + 1024 * 2)
         with patch_args(
-            "--total_steps",
-            "2048",
-            "--batch_size",
-            2048,
+            "--total_steps", "2048",
+            "--batch_size", 2048,
             "--min_step_size",
             min_step_size,
             "--max_step_size",
             max_step_size,
-        ):
+        ):  # fmt: skip
             args = DefaultArgumentParser().parse_args()
             self.assertEqual(args.total_steps, 4096)  # 4096
             self.assertEqual(args.iterations, 2)  # One step of 2048

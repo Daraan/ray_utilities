@@ -357,12 +357,12 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             with patch_args(
                 "--total_steps", "80",
                 "--batch_size", batch_size1,
+                "--use_exact_total_steps",  # Do not adjust total_steps
                 "--minibatch_size", "20",
                 "--comment", "A",
                 "--extra", "abc",  # nargs
                 "--env_seeding_strategy", "constant",
                 "--wandb", "offline",  # possibly do not restore
-                "--use_exact_total_steps",  # Do not adjust total_steps
             ):  # fmt: skip
                 with AlgorithmSetup(init_trainable=False) as setup:
                     # These depend on args and CANNOT be restored!
@@ -407,10 +407,10 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             with patch_args(
                 "--total_steps", 80 + 120,
                 "--batch_size", "60",
+                "--use_exact_total_steps",  # Do not adjust total_steps
                 "--comment", "B",
                 "--from_checkpoint", tmpdir,
                 "--env_seeding_strategy", "sequential",  # default value
-                "--use_exact_total_steps",  # Do not adjust total_steps
             ):  # fmt: skip
                 # Test if setup1.args are merged with setup2.args
                 loaded_config, *_ = AlgorithmSetup._config_from_checkpoint(tmpdir)
