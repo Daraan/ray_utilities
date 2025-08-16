@@ -68,7 +68,10 @@ def _run_without_tuner(
 
 
 def run_tune(
-    setup: _SetupT | type[_SetupT], test_mode_func: Optional[TestModeCallable[_SetupT]] = None
+    setup: _SetupT | type[_SetupT],
+    test_mode_func: Optional[TestModeCallable[_SetupT]] = None,
+    *,
+    raise_errors: bool = True,
 ) -> TrainableReturnData | ResultGrid:
     """
     Runs the tuning process for a given experiment setup.
@@ -77,6 +80,7 @@ def run_tune(
         setup: The experiment setup containing the configuration and trainable.
         test_mode_func: A callable function to execute in test mode.
             This function should take the trainable and args as parameters.
+        raise_errors: If True, raises errors encountered during tuning.
 
     Returns:
         ResultGrid: The results of the tuning process.
@@ -110,7 +114,8 @@ def run_tune(
     if len(results) == 0:
         logger.warning("No results returned from the tuner.")
     setup.upload_offline_experiments(results)
-    raise_tune_errors(results)
+    if raise_errors:
+        raise_tune_errors(results)
     return results
 
 

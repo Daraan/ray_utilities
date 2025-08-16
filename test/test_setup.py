@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import os
 import subprocess
 
@@ -20,7 +21,7 @@ import unittest.mock
 from copy import deepcopy
 from inspect import isclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Optional, cast
+from typing import IO, TYPE_CHECKING, Any, Final, Optional, cast
 
 import cloudpickle
 import tree
@@ -202,6 +203,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 )
 
     def test_dynamic_param_space_with_trainable(self):
+        """Check the --tune parameters"""
         type_hints = te.get_type_hints(DefaultArgumentParser)["tune"]
         self.assertIs(te.get_origin(type_hints), te.Union)
         th_args = te.get_args(type_hints)
@@ -215,12 +217,14 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         self.assertNotIn("all", th_lists)
 
         for param in th_lists:
+            # run 3 jobs in parallel
             with (
                 patch_args(
                     "--tune", param,
                     "--num_jobs", "3",
                     "-it", "2",
                     "--num_samples", "3",
+                    "--use_exact_total_steps"
                 )  # ,
                 # self.assertNoLogs(logger, level="WARNING"),
             ):  # fmt: skip
@@ -251,9 +255,12 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                         metrics["param_value"] = self._param_to_check  # pyright: ignore[reportGeneralTypeIssues]
 
                 Setup = SetupWithCheck(TrainableWithChecksB)
+                # Limit for performance
+                Setup.batch_size_sample_space = {"grid_search": [16, 64, 128]}
+                Setup.rollout_size_sample_space = {"grid_search": [16, 64, 128]}
 
                 with Setup() as setup:
-                    setup.config.minibatch_size = 8  # prevent ValueErrors
+                    setup.config.minibatch_size = 8  # set to small value to prevent ValueErrors
                 param_space = setup.param_space
                 self.assertIn(param, param_space)
                 self.assertIsNotNone(param_space[param])  # dict with list
@@ -262,6 +269,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 else:
                     grid = []
                 tuner = setup.create_tuner()
+                tuner._local_tuner.get_run_config().checkpoint_config.checkpoint_at_end = False  # pyright: ignore[reportOptionalMemberAccess]
                 results = tuner.fit()
                 raise_tune_errors(results)
                 self.check_tune_result(results)
@@ -349,6 +357,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             with patch_args(
                 "--total_steps", "80",
                 "--batch_size", batch_size1,
+                "--use_exact_total_steps",  # Do not adjust total_steps
                 "--minibatch_size", "20",
                 "--comment", "A",
                 "--extra", "abc",  # nargs
@@ -398,6 +407,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             with patch_args(
                 "--total_steps", 80 + 120,
                 "--batch_size", "60",
+                "--use_exact_total_steps",  # Do not adjust total_steps
                 "--comment", "B",
                 "--from_checkpoint", tmpdir,
                 "--env_seeding_strategy", "sequential",  # default value
@@ -442,17 +452,12 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
 
     def test_parser_restore_annotations(self):
         with patch_args(
-            "--batch_size",
-            "1234",
-            "--num_jobs",
-            DefaultArgumentParser.num_jobs + 2,  # NeverRestore
-            "--log_level",
-            "DEBUG",  # NeverRestore
-            "--env_type",
-            "cart",  # AlwaysRestore
-            "--actor_type",
-            "mlp",
-        ):
+            "--batch_size", "1234",
+            "--num_jobs", DefaultArgumentParser.num_jobs + 2,  # NeverRestore
+            "--log_level", "DEBUG",  # NeverRestore
+            "--env_type", "cart",  # AlwaysRestore
+            "--actor_type", "mlp",
+        ):  # fmt: skip
             setup = AlgorithmSetup()
             self.assertEqual(setup.args.log_level, "DEBUG")
             Trainable = setup.create_trainable()
@@ -488,22 +493,25 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 self.assertNotEqual(setup2.args.log_level, "DEBUG")
                 self.assertEqual(setup2.args.num_jobs, DefaultArgumentParser.num_jobs)
 
-    @unittest.mock.patch.object(subprocess, "run")
+    @unittest.mock.patch.object(subprocess, "Popen", autospec=True)
     def test_wandb_upload(self, mock_run: unittest.mock.MagicMock):
         # NOTE: This test is flaky, there are instances of no wandb folder copied
-        class ExitCode:
-            returncode = 0
-            stdout = "wandb: Syncing files..."
-            stderr = None
+        class MockPopen(unittest.mock.MagicMock):
+            returncode = 1
+            stdout: IO[bytes] = io.BytesIO(b"MOCK: wandb: Syncing files...")
+            stderr: IO[bytes] | None = io.BytesIO(b"MOCK: error")
 
-        mock_run.return_value = ExitCode()
+            def poll(self) -> None:
+                return None
+
+        mocked_popen = MockPopen()
+        mock_run.return_value = mocked_popen
         with patch_args("--wandb", "offline+upload", "--num_jobs", 1, "--iterations", 2, "--batch_size", 32):
             setup = AlgorithmSetup()
             _results = run_tune(setup)
-        mock_run.assert_called_once()
-        self.assertDictEqual(
-            mock_run.call_args.kwargs, {"check": False, "stdout": subprocess.PIPE, "stderr": subprocess.STDOUT}
-        )
+
+        mocked_popen.wait.assert_called_once()
+        self.assertDictEqual(mock_run.call_args.kwargs, {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT})
 
 
 ENV_STEPS_PER_ITERATION = 10

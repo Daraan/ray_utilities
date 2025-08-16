@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 import os
 import pickle
-import random
 import subprocess
 import warnings
 from abc import ABC, abstractmethod
@@ -917,14 +916,43 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             return
         self.comet_tracker.upload_and_move()
 
-    def wandb_upload_offline_experiments(self, results: ResultGrid):
-        """Upload wandb's offline folder of the session to wandb, similar to the `wandb sync` shell command"""
+    @staticmethod
+    def _report_wandb_upload(process: subprocess.Popen[bytes], run_dir: Optional[Path] = None, *, wait: bool = True):
+        run_dir = run_dir or Path(process.args[-1])  # pyright: ignore[reportArgumentType, reportIndexIssue]
+        if wait:
+            process.wait()
+        if process.stdout:
+            stdout = process.stdout.read()
+            print(stdout if isinstance(stdout, str) else stdout.decode("utf-8"))
+        if process.returncode != 0:
+            stderr = process.stderr.read() if process.stderr else b""
+            logger.error(
+                "Failed to upload wandb offline run %s with exit code %d. Output: %s",
+                run_dir,
+                process.returncode,
+                stderr.decode("utf-8"),
+            )
+
+    def wandb_upload_offline_experiments(
+        self, results: ResultGrid, *, wait: bool = True, parallel_uploads: int = 5
+    ) -> list[subprocess.Popen] | None:
+        """
+        Upload wandb's offline folder of the session to wandb, similar to the `wandb sync` shell command
+
+        Args:
+            results: The ResultGrid containing the results of the experiment.
+            wait: If True, waits for the upload to finish before returning.
+        """
         # Get the wandb offline directory
         logger.info("Uploading wandb offline experiments...")
         num_uploaded = 0
+        uploads: list[subprocess.Popen[bytes]] = []
+        finished_uploads: set[subprocess.Popen[bytes]] = set()
         for result in results:
             # Find offline run directories
-            wandb_dir = os.environ.get("WANDB_DIR", None)
+            wandb_dir = os.environ.get(
+                "WANDB_DIR", None
+            )  # FIXME: If this is set it might upload the same directory multiple times
             if wandb_dir is None:
                 wandb_dir = Path(result.path) / "wandb"
             else:
@@ -935,42 +963,74 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
             if not offline_runs:
                 logger.info("No wandb offline experiments found to upload.")
-                return
+                return None
             num_uploaded += len(offline_runs)
 
-            for run_dir in offline_runs:
-                logger.info("Uploading offline wandb run from: %s", run_dir)
-                exit = subprocess.run(
-                    ["wandb", "sync", run_dir.as_posix()], check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-                )
-                if exit.stdout:
-                    print(exit.stdout if isinstance(exit.stdout, str) else exit.stdout.decode("utf-8"))
-                if exit.returncode != 0:
-                    logger.error(
-                        "Failed to upload wandb offline run %s with exit code %d. Output: %s",
-                        run_dir,
-                        exit.returncode,
-                        (
-                            exit.stdout.decode("utf-8")
-                            if isinstance(exit.stdout, bytes)
-                            else exit.stdout
-                            if exit.stdout
-                            else ""
-                        ),
+            for run_dir in offline_runs:  # likely just a single iteration
+                uploads_in_progress = len(uploads) - len(finished_uploads)
+                if uploads_in_progress >= parallel_uploads:
+                    logger.info(
+                        "Waiting for %d wandb uploads to finish before starting new ones.",
+                        uploads_in_progress,
                     )
-        logger.info("Uploaded %d wandb offline runs from %s.", num_uploaded, results.experiment_path)
+                    for process in uploads:
+                        self._report_wandb_upload(process)
+                        finished_uploads.add(process)
+                    uploads = [p for p in uploads if p not in finished_uploads]
+                logger.info("Uploading offline wandb run from: %s", run_dir)
+                process = subprocess.Popen(
+                    ["wandb", "sync", run_dir.as_posix()],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                )
+                uploads.append(process)
+        if wait:
+            logger.info("Waiting for all wandb uploads to finish...")
+            for process in uploads:
+                self._report_wandb_upload(process)
+                finished_uploads.add(process)
+            uploads = []
+            logger.info("Uploaded all %d wandb offline runs from %s.", num_uploaded, results.experiment_path)
+            return None
+        unfinished_uploads = uploads.copy()
+        for process in uploads:
+            if process.poll() is not None:  # report on already finished uploads
+                self._report_wandb_upload(process)
+                finished_uploads.add(process)
+                unfinished_uploads.remove(process)
+        if not unfinished_uploads:
+            logger.info("All wandb offline runs have been uploaded.")
+            return None
+        logger.info(
+            "Uploaded %d wandb offline runs from %s, %d still in progress.",
+            num_uploaded,
+            results.experiment_path,
+            len(unfinished_uploads),
+        )
+        # There are still processes running
+        return unfinished_uploads
 
     def upload_offline_experiments(self, results: Optional[ResultGrid] = None):
-        if self.args.comet and "upload" in self.args.comet:
-            logger.info("Uploading offline experiments to Comet")
-            self.comet_upload_offline_experiments()
+        unfinished_wandb_uploads = None
         if self.args.wandb and "upload" in self.args.wandb:
             if results is None:
                 logger.error(
                     "Wandb upload requested, but no results provided. This will not upload any offline experiments."
                 )
                 return
-            self.wandb_upload_offline_experiments(results)
+            try:
+                unfinished_wandb_uploads = self.wandb_upload_offline_experiments(results)
+            except Exception:
+                logger.exception("Error while uploading offline experiments to WandB: %s")
+        if self.args.comet and "upload" in self.args.comet:
+            logger.info("Uploading offline experiments to Comet")
+            try:
+                self.comet_upload_offline_experiments()
+            except Exception:
+                logger.exception("Error while uploading offline experiments to Comet")
+        if unfinished_wandb_uploads:
+            for process in unfinished_wandb_uploads:
+                self._report_wandb_upload(process, wait=True)
 
     # endregion
 

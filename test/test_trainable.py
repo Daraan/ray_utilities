@@ -115,6 +115,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
             batch_size1 = 40
             with patch_args(
                 "--total_steps", "80",
+                "--use_exact_total_steps",  # Do not adjust total_steps
                 "--batch_size", batch_size1,
                 "--minibatch_size", "20",
                 "--comment", "A",
@@ -147,6 +148,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
             del setup
             with patch_args(
                 "--total_steps", 80 + 120,  # Should be divisible by new batch_size
+                "--use_exact_total_steps",  # Do not adjust total_steps
                 "--batch_size", "60",
                 "--comment", "B",
                 "--from_checkpoint", tmpdir,
@@ -286,7 +288,13 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
         """Basically test if TRAINING_ITERATION is set correctly."""
         # ray.init(include_dashboard=False, ignore_reinit_error=True)
 
-        with patch_args("--iterations", "5", "--total_steps", "320", "--batch_size", "64", "--minibatch_size", "32"):
+        with patch_args(
+            "--iterations", "5",
+            "--total_steps", "320",
+            "--use_exact_total_steps",
+            "--batch_size", "64",
+            "--minibatch_size", "32",
+        ):  # fmt: skip
             # Need to fix argv for remote
             PPOTrainable = DefaultTrainable.define(PPOSetup.typed(), fix_argv=True)
             trainable = PPOTrainable()
@@ -438,6 +446,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             "--num_samples", "1",
             "--num_jobs", "1",
             "--batch_size", "32",
+            "--use_exact_total_steps",  # Do not adjust total_steps
             "--minibatch_size", "16",
             "--iterations", "3",
         ):  # fmt: skip

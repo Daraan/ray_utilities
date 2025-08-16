@@ -93,12 +93,11 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
         with patch_args(
             "--num_samples", "1",
             "--num_jobs", "1",
-            "--batch_size",
-            BATCH_SIZE,
-            "--minibatch_size",
-            MINIBATCH_SIZE,
+            "--batch_size", BATCH_SIZE,
+            "--minibatch_size", MINIBATCH_SIZE,
             "--iterations", "5",
             "--total_steps", BATCH_SIZE * 5,
+            "--use_exact_total_steps"  # do not adjust total_steps
             "--checkpoint_frequency_unit", "steps",
             "--checkpoint_frequency", BATCH_SIZE * 2,
         ):  # fmt: skip
@@ -343,6 +342,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     "--num_samples", "1",
                     "--num_jobs", "1",
                     "--batch_size", BATCH_SIZE,  # overwrite
+                    "--use_exact_total_steps"  # do not adjust total_steps
                     "--minibatch_size", MINIBATCH_SIZE,  # keep
                     "--iterations", "1",  # overwrite
                 ):  # fmt: skip
@@ -375,12 +375,10 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 with patch_args(
                     "--num_samples", "1",
                     "--num_jobs", "1",
-                    "--batch_size",
-                    BATCH_SIZE * 2,
-                    "--minibatch_size",
-                    MINIBATCH_SIZE,
-                    "--total_steps",
-                    BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE,  # 1 + NUM_ITERS_2 iterations
+                    "--batch_size", BATCH_SIZE * 2,
+                    "--minibatch_size", MINIBATCH_SIZE,
+                    "--total_steps", BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE,  # 1 + NUM_ITERS_2 iterations
+                    "--use_exact_total_steps",  # do not adjust total_steps
                     "--from_checkpoint", checkpoints[0],
                     "--log_stats", "most",
                 ):  # fmt: skip
