@@ -1027,7 +1027,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             try:
                 self.comet_upload_offline_experiments()
             except Exception:
-                logger.exception("Error while uploading offline experiments to Comet: %s")
+                logger.exception("Error while uploading offline experiments to Comet")
         if unfinished_wandb_uploads:
             for process in unfinished_wandb_uploads:
                 self._report_wandb_upload(process, wait=True)

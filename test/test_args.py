@@ -236,7 +236,7 @@ class TestProcessing(unittest.TestCase):
             max_size=max_step_size,
             assure_even=True,
         )
-        self.assertEqual(budget["total_iterations"], second=3)
+        self.assertEqual(budget["total_iterations"], 3)
         self.assertEqual(
             calculate_iterations(
                 dynamic_buffer=False,
