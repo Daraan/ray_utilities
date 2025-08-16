@@ -245,6 +245,7 @@ def calculate_steps(iterations, *, total_steps_default: int = 1_000_000, min_ste
         max_size=max_step_size,
         assure_even=True,
     )
+    # budget has correct iterations = sum(budget["iterations_per_step_size"]); but possible manual value.
     iterations_left = iterations
     steps_taken = 0
     for i, step_size in enumerate(budget["step_sizes"]):

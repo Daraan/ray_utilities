@@ -12,8 +12,9 @@ from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradient
 from ray_utilities.callbacks.algorithm.dynamic_buffer_callback import DynamicBufferUpdate
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
 from ray_utilities.callbacks.algorithm.exact_sampling_callback import exact_sampling_callback
-from ray_utilities.config.typed_argument_parser import LogStatsChoices
+from ray_utilities.config.typed_argument_parser import DefaultArgumentParser, LogStatsChoices
 from ray_utilities.connectors.remove_masked_samples_connector import RemoveMaskedSamplesConnector
+from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, split_timestep_budget
 from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import SetupDefaults, patch_args
@@ -221,3 +222,64 @@ class TestProcessing(unittest.TestCase):
             self.assertGreater(len(removable_params), 0)
             for param in removable_params:
                 self.assertNotIn(param, setup.param_space, msg=f"Expected {param} to not be in param_space")
+
+    def test_iterations_and_total_steps(self):
+        with patch_args("--total_steps", "2000", "--batch_size", 1999, "--use_exact_total_steps"):
+            args = DefaultArgumentParser().parse_args()
+            self.assertEqual(args.total_steps, 2000)
+            self.assertEqual(args.iterations, 2)
+        min_step_size = 1024
+        max_step_size = 2048
+        budget = split_timestep_budget(
+            total_steps=2048,
+            min_size=min_step_size,
+            max_size=max_step_size,
+            assure_even=True,
+        )
+        self.assertEqual(budget["total_iterations"], second=3)
+        self.assertEqual(
+            calculate_iterations(
+                dynamic_buffer=False,
+                batch_size=2048,  # not needed when dynamic
+                total_steps=budget["total_steps"],  # 4096
+                assure_even=True,
+                min_size=min_step_size,
+                max_size=max_step_size,
+            ),
+            2,
+        )
+        self.assertEqual(
+            calculate_iterations(
+                dynamic_buffer=True,
+                batch_size=2048,  # not needed when dynamic
+                total_steps=budget["total_steps"],  # 4096
+                assure_even=True,
+                min_size=min_step_size,
+                max_size=max_step_size,
+            ),
+            3,
+        )
+        # because total steps 2048< 4096 (even auto value), args.iterations is 2 (2* 1024) and not 3 (2048 + 1024 * 2)
+        with patch_args(
+            "--total_steps",
+            "2048",
+            "--batch_size",
+            2048,
+            "--min_step_size",
+            min_step_size,
+            "--max_step_size",
+            max_step_size,
+        ):
+            args = DefaultArgumentParser().parse_args()
+            self.assertEqual(args.total_steps, 4096)  # 4096
+            self.assertEqual(args.iterations, 2)  # One step of 2048
+        with patch_args(
+            "--total_steps", "2048",
+            "--batch_size", 2048,
+            "--min_step_size", min_step_size,
+            "--max_step_size", max_step_size,
+            "--dynamic_buffer",
+        ):  # fmt: skip
+            args = DefaultArgumentParser().parse_args()
+            self.assertEqual(args.total_steps, 4096)  # 4096
+            self.assertEqual(args.iterations, 3)  # One step of 2048, two steps of 1024

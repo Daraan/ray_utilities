@@ -415,7 +415,7 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
             total_steps=self.total_steps,
             min_size=self.min_step_size,
             max_size=self.max_step_size,
-            assure_even=self.use_exact_total_steps,
+            assure_even=not self.use_exact_total_steps,
         )
         # eval_intervals = get_dynamic_evaluation_intervals(budget["step_sizes"], batch_size=self.train_batch_size_per_learner, eval_freq=4)
         self.total_steps = budget["total_steps"]
@@ -424,7 +424,7 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
                 dynamic_buffer=self.dynamic_buffer,
                 batch_size=self.train_batch_size_per_learner,  # <-- if adjusted manually afterwards iterations will be wrong  # noqa: E501
                 total_steps=self.total_steps,
-                assure_even=self.use_exact_total_steps,
+                assure_even=not self.use_exact_total_steps,
                 min_size=self.min_step_size,
                 max_size=self.max_step_size,
             )

@@ -202,6 +202,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 )
 
     def test_dynamic_param_space_with_trainable(self):
+        """Check the --tune parameters"""
         type_hints = te.get_type_hints(DefaultArgumentParser)["tune"]
         self.assertIs(te.get_origin(type_hints), te.Union)
         th_args = te.get_args(type_hints)
@@ -215,12 +216,14 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         self.assertNotIn("all", th_lists)
 
         for param in th_lists:
+            # run 3 jobs in parallel
             with (
                 patch_args(
                     "--tune", param,
                     "--num_jobs", "3",
                     "-it", "2",
                     "--num_samples", "3",
+                    "--use_exact_total_steps"
                 )  # ,
                 # self.assertNoLogs(logger, level="WARNING"),
             ):  # fmt: skip
@@ -251,9 +254,12 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                         metrics["param_value"] = self._param_to_check  # pyright: ignore[reportGeneralTypeIssues]
 
                 Setup = SetupWithCheck(TrainableWithChecksB)
+                # Limit for performance
+                Setup.batch_size_sample_space = {"grid_search": [16, 64, 128]}
+                Setup.rollout_size_sample_space = {"grid_search": [16, 64, 128]}
 
                 with Setup() as setup:
-                    setup.config.minibatch_size = 8  # prevent ValueErrors
+                    setup.config.minibatch_size = 8  # set to small value to prevent ValueErrors
                 param_space = setup.param_space
                 self.assertIn(param, param_space)
                 self.assertIsNotNone(param_space[param])  # dict with list
@@ -262,6 +268,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 else:
                     grid = []
                 tuner = setup.create_tuner()
+                tuner._local_tuner.get_run_config().checkpoint_config.checkpoint_at_end = False  # pyright: ignore[reportOptionalMemberAccess]
                 results = tuner.fit()
                 raise_tune_errors(results)
                 self.check_tune_result(results)
@@ -354,6 +361,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 "--extra", "abc",  # nargs
                 "--env_seeding_strategy", "constant",
                 "--wandb", "offline",  # possibly do not restore
+                "--use_exact_total_steps",  # Do not adjust total_steps
             ):  # fmt: skip
                 with AlgorithmSetup(init_trainable=False) as setup:
                     # These depend on args and CANNOT be restored!
@@ -401,6 +409,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 "--comment", "B",
                 "--from_checkpoint", tmpdir,
                 "--env_seeding_strategy", "sequential",  # default value
+                "--use_exact_total_steps",  # Do not adjust total_steps
             ):  # fmt: skip
                 # Test if setup1.args are merged with setup2.args
                 loaded_config, *_ = AlgorithmSetup._config_from_checkpoint(tmpdir)
@@ -442,17 +451,12 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
 
     def test_parser_restore_annotations(self):
         with patch_args(
-            "--batch_size",
-            "1234",
-            "--num_jobs",
-            DefaultArgumentParser.num_jobs + 2,  # NeverRestore
-            "--log_level",
-            "DEBUG",  # NeverRestore
-            "--env_type",
-            "cart",  # AlwaysRestore
-            "--actor_type",
-            "mlp",
-        ):
+            "--batch_size", "1234",
+            "--num_jobs", DefaultArgumentParser.num_jobs + 2,  # NeverRestore
+            "--log_level", "DEBUG",  # NeverRestore
+            "--env_type", "cart",  # AlwaysRestore
+            "--actor_type", "mlp",
+        ):  # fmt: skip
             setup = AlgorithmSetup()
             self.assertEqual(setup.args.log_level, "DEBUG")
             Trainable = setup.create_trainable()

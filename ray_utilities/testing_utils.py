@@ -354,6 +354,8 @@ class TestHelpers(unittest.TestCase):
         "--batch_size", "64",
         "--comment", "created by TestHelpers.get_trainable",
         "--seed", "42",
+        "--min_step_size", "16",  # try not to adjust total_steps
+        "--max_step_size", "16",  # try not to adjust total_steps
     )  # fmt: skip
     def get_trainable(self, *, num_env_runners: int = 0, env_seed: int | None | _NOT_PROVIDED = _NOT_PROVIDED):
         # NOTE: In this test attributes are shared BY identity, this is just a weak test.
