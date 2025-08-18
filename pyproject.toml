@@ -2,11 +2,10 @@
 [build-system]
 requires = ["flit_core >=3.11,<4"]
 build-backend = "flit_core.buildapi"
-name = "ray_utilities"
 
 [project]
 name = "ray_utilities"
-dynamic = ["version"]
+version = "0.2.1"
 readme = "README.md"
 description = "Utilities for Ray RLlib and related workflows. Includes experiment setup, callbacks, and JAX model utilities."
 license = { file = "LICENSE" }

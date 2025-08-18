@@ -23,7 +23,7 @@ jobs:
         run: python -m pip install --upgrade pip build
 
       - name: Build distributions
-        run: RC_VERSION=yes python -m build
+        run: python -m build
 
       - name: Store the distribution packages
         uses: actions/upload-artifact@v4
