@@ -1,5 +1,4 @@
 # File: run_experiment.py
-import os
 from ray_utilities import run_tune
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
@@ -7,20 +6,24 @@ from ray_utilities.setup import PPOSetup
 
 if __name__ == "__main__":
     PPOSetup.PROJECT = "Default-MLP"  # Upper category on Comet / WandB
-    PPOSetup.group_name = "default-training"  # pyright: ignore
+    PPOSetup.group_name = "dynamic-batch_size"  # pyright: ignore
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
-        "-a", DefaultArgumentParser.agent_type,
+        "--dynamic_batch",
+        "--dynamic_rollout",
         # Meta / less influential arguments for the experiment.
-        # Assure constant total_steps across experiments.
-        "--max_step_size", max(MAX_DYNAMIC_BATCH_SIZE, *PPOSetup.batch_size_sample_space["grid_search"]), # pyright: ignore
-        "--tags", "static", "default",
+        "--num_samples", 8,
+        "--max_step_size", MAX_DYNAMIC_BATCH_SIZE,
+        "--tags", "dynamic", "dynamic:batch_size", "dynamic:rollout", "dynamic:batch_size+rollout", "mlp",
+        "--comment", "Default training run. Dynamic batch size via gradient accumulation",
+        "--env_seeding_strategy", "sequential",
         # constant
+        "-a", DefaultArgumentParser.agent_type,
         "--seed", "42",
         "--wandb", "offline+upload",
-        "--comet", "online",
-        "--comment", "Default training run",
+        "--comet", "offline+upload",
+        "--log_level", "INFO",
         "--log_stats", "most",
     ):  # fmt: skip
-        setup = PPOSetup()  # Replace with your own setup class
+        setup: PPOSetup[DefaultArgumentParser] = PPOSetup()  # Replace with your own setup class
         results = run_tune(setup)

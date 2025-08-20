@@ -22,6 +22,7 @@ if __name__ == "__main__":
         "--wandb", "offline+upload",
         "--comet", "offline+upload",
         "--log_level", "INFO",
+        "--log_stats", "most",
     ):  # fmt: skip
         setup = PPOSetup()  # Replace with your own setup class
         results = run_tune(setup)

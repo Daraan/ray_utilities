@@ -20,9 +20,10 @@ if __name__ == "__main__":
         # constant
         "-a", DefaultArgumentParser.agent_type,
         "--seed", "42",
-        #"--wandb", "offline+upload",
-        #"--comet", "offline+upload",
+        "--wandb", "offline+upload",
+        "--comet", "offline+upload",
         "--log_level", "INFO",
+        "--log_stats", "most",
     ):  # fmt: skip
         setup: PPOSetup[DefaultArgumentParser] = PPOSetup()  # Replace with your own setup class
         results = run_tune(setup)
