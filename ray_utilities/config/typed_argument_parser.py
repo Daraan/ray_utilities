@@ -482,10 +482,10 @@ class CheckpointConfigArgumentParser(Tap):
 
 class OptionalExtensionsArgs(RLlibArgumentParser):
     dynamic_buffer: AlwaysRestore[bool] = False
-    """Use DynamicBufferCallback"""
+    """Use DynamicBufferCallback. Increases env steps sampled and batch size"""
 
     dynamic_batch: AlwaysRestore[bool] = False
-    """Use dynamic batch"""
+    """Use dynamic batch, scales batch size via gradient accumulation"""
 
     iterations: NeverRestore[int | AutoInt | Literal["auto"]] = "auto"
     total_steps: int = 1_000_000

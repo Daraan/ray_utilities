@@ -17,6 +17,7 @@ from ray_utilities.callbacks.algorithm.exact_sampling_callback import exact_samp
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser, LogStatsChoices
 from ray_utilities.connectors.remove_masked_samples_connector import RemoveMaskedSamplesConnector
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, split_timestep_budget
+from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import PPOTorchLearnerWithGradientAccumulation
 from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import SetupDefaults, patch_args
@@ -130,6 +131,8 @@ class TestExtensionsAdded(SetupDefaults):
         for config in (setup.config, setup.trainable_class().algorithm_config):
             with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
                 self.assertFalse(self.is_algorithm_callback_added(config, DynamicGradientAccumulation))
+                # Test that also the Supporting learner is added
+                self.assertFalse(issubclass(config.learner_class, PPOTorchLearnerWithGradientAccumulation))
 
         with patch_args("--dynamic_batch"):
             setup = AlgorithmSetup()
@@ -140,6 +143,7 @@ class TestExtensionsAdded(SetupDefaults):
             for config in (setup.config, setup.trainable_class().algorithm_config):
                 with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
                     self.assertTrue(self.is_algorithm_callback_added(config, DynamicGradientAccumulation))
+                    self.assertTrue(issubclass(config.learner_class, PPOTorchLearnerWithGradientAccumulation))
 
     @patch_args()
     def test_dynamic_eval_interval_added(self):

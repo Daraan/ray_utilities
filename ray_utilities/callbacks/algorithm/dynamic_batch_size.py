@@ -41,7 +41,7 @@ class DynamicGradientAccumulation(StepCounterMixin, BudgetMixin, DynamicHyperpar
             dynamic_buffer=learner_config_dict["dynamic_buffer"],
             dynamic_batch=learner_config_dict["dynamic_batch"],
             global_step=global_step,
-            accumulate_gradients_every_initial=learner_config_dict.get("accumulate_gradients_every", 1),
+            accumulate_gradients_every_initial=self._accumulate_gradients_every_initial,
             initial_steps=self._budget["step_sizes"][0],
             num_increase_factors=len(self._budget["step_sizes"]),
             n_envs=1,
@@ -49,13 +49,17 @@ class DynamicGradientAccumulation(StepCounterMixin, BudgetMixin, DynamicHyperpar
         # Batch Size
         if accumulate_gradients_every != self._accumulate_gradients_every_current:
             logger.debug(
-                "Batch size changed from %s to %s at iteration %s - step %s",
-                self._batch_size_current,
-                batch_size,
+                "Accumulating gradients update after n iterations changed from %s to %s at iteration %s - step %s. "
+                "effective batch size is %s",
+                self._accumulate_gradients_every_current,
+                accumulate_gradients_every,
                 metrics_logger.peek("training_iteration", default=self._training_iterations),
                 global_step,
+                # Might be wrong if batch size is updated at same step by a later callback
+                algorithm.config.train_batch_size_per_learner * accumulate_gradients_every,
             )
             self._batch_size_current = batch_size
+            self._accumulate_gradients_every_current = accumulate_gradients_every
             self._update_learner_config(algorithm, accumulate_gradients_every=accumulate_gradients_every)
 
     def __init__(
@@ -73,6 +77,7 @@ class DynamicGradientAccumulation(StepCounterMixin, BudgetMixin, DynamicHyperpar
         # Set on algorithm init
         self._batch_size_current: int = None
         self._accumulate_gradients_every_current: int = None
+        self._accumulate_gradients_every_initial: int = None
 
     def on_algorithm_init(
         self,
@@ -81,7 +86,7 @@ class DynamicGradientAccumulation(StepCounterMixin, BudgetMixin, DynamicHyperpar
         metrics_logger: Optional[MetricsLogger] = None,
         **kwargs,
     ) -> None:
-        # TODO: What when using checkpoint?
+        # TODO: What to do when using checkpoints?
         assert algorithm.config
         assert algorithm.config.minibatch_size is not None
         self._set_step_counter_on_algorithm_init(algorithm=algorithm, metrics_logger=metrics_logger)
@@ -94,6 +99,7 @@ class DynamicGradientAccumulation(StepCounterMixin, BudgetMixin, DynamicHyperpar
             logger.warning("No accumulate_gradients_every found in learner_config_dict. Using default value of 1. ")
             interval = 1
         self._accumulate_gradients_every_current = interval
+        self._accumulate_gradients_every_initial = interval
         super().on_algorithm_init(algorithm=algorithm, metrics_logger=metrics_logger)
 
     def on_train_result(

@@ -91,8 +91,13 @@ class DynamicHyperparameterCallback(GetGlobalStepMixin, DefaultCallbacks, abc.AB
         update = partial(cls._update_worker_learner_config, update=kwargs)
         if update_env_runners and algorithm.env_runner_group:
             algorithm.env_runner_group.foreach_env_runner(update)  # pyright: ignore[reportPossiblyUnboundVariable]
-        if algorithm.learner_group:
+        if algorithm.learner_group:  # NOTE: object implements __len__ 0 if local!
             algorithm.learner_group.foreach_learner(update)  # pyright: ignore[reportPossiblyUnboundVariable]
+        elif algorithm.learner_group is not None:
+            if algorithm.learner_group._learner is None:
+                logger.error("Algorithm learner_group is local but learner is None, cannot update")
+            else:
+                update(algorithm.learner_group._learner)
 
     def __init__(self, update_function: UpdateFunction, hyperparameter_name: str):
         self._updater = update_function

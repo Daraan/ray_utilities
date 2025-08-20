@@ -58,11 +58,20 @@ class AlgorithmSetup(
 
     @classmethod
     def _config_from_args(cls, args, base: Optional[ConfigType_co] = None) -> ConfigType_co:
+        learner_class = None
+        if args.accumulate_gradients_every > 1 or args.dynamic_batch:
+            # import lazy as currently not used elsewhere
+            from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
+                PPOTorchLearnerWithGradientAccumulation,
+            )
+
+            learner_class = PPOTorchLearnerWithGradientAccumulation
         config, _module_spec = create_algorithm_config(
             args=args,
             module_class=None,
             catalog_class=None,
             model_config=None,
+            learner_class=learner_class,
             framework="torch",
             config_class=cls.config_class,
             base=base,

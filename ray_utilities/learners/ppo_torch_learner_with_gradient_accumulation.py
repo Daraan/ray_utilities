@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Collection
 
 from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import PPOTorchLearner
 from ray.rllib.utils.annotations import override
@@ -25,6 +25,8 @@ class PPOTorchLearnerWithGradientAccumulation(PPOTorchLearner):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._step_count = 0
+        self._gradient_updates = 0
+        self._last_gradient_update_step: int | None = None
         self._params: dict[ParamRef, torch.Tensor]  # pyright: ignore[reportIncompatibleVariableOverride]
         # TODO: Test checkpoint loading
 
@@ -39,6 +41,8 @@ class PPOTorchLearnerWithGradientAccumulation(PPOTorchLearner):
             % (accumulate_gradients_every := self.config.learner_config_dict["accumulate_gradients_every"])
             == 0
         ):
+            self._gradient_updates += 1
+            self._last_gradient_update_step = self._step_count
             _logger.debug("Updating gradients for step %s", self._step_count)
             for optim in self._optimizer_parameters:
                 # `set_to_none=True` is a faster way to zero out the gradients.
@@ -88,3 +92,26 @@ class PPOTorchLearnerWithGradientAccumulation(PPOTorchLearner):
         # Updates KL coefficients, and LR Schedulers; if doing this every step batch_size
         # accumulation is not exact to multipling batch size - but should be minor influence if any.
         super().after_gradient_based_update(timesteps=timesteps)
+
+    def get_state(
+        self,
+        components: str | Collection[str] | None = None,
+        *,
+        not_components: str | Collection[str] | None = None,
+        **kwargs,
+    ):
+        state_dict = super().get_state(components, not_components=not_components, **kwargs)
+        state_dict.update(
+            {
+                "step_count": self._step_count,
+                "gradient_updates": self._gradient_updates,
+                "last_gradient_update_step": self._last_gradient_update_step,
+            }
+        )
+        return state_dict
+
+    def set_state(self, state) -> None:
+        super().set_state(state)
+        self._step_count = state.get("step_count", 0)
+        self._gradient_updates = state.get("gradient_updates", 0)
+        self._last_gradient_update_step = state.get("last_gradient_update_step", None)
