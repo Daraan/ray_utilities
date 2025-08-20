@@ -1,3 +1,5 @@
+# ruff: noqa: FBT003  # positional bool
+
 import argparse
 import io
 import logging
@@ -281,3 +283,100 @@ class TestProcessing(unittest.TestCase):
             args = DefaultArgumentParser().parse_args()
             self.assertEqual(args.total_steps, 4096)  # 4096
             self.assertEqual(args.iterations, 3)  # One step of 2048, two steps of 1024
+
+    def test_class_patch_args(self):
+        with patch_args():  # Highest priority
+            self.assertListEqual(sys.argv[1:], ["-a", "no_actor_provided_by_patch_args"])
+            with DefaultArgumentParser.patch_args():
+                self.assertListEqual(sys.argv[1:], ["-a", "no_actor_provided_by_patch_args"])
+                args = DefaultArgumentParser().parse_args()
+                self.assertEqual(args.comet, False)
+                self.assertEqual(args.agent_type, "no_actor_provided_by_patch_args")
+
+        with patch_args("--comet"):  # Highest priority
+            with DefaultArgumentParser.patch_args():
+                args = DefaultArgumentParser().parse_args()
+                self.assertEqual(args.comet, "online")
+            args = DefaultArgumentParser().parse_args()
+            self.assertEqual(args.comet, "online")
+
+        with patch_args():  # Highest priority
+            with DefaultArgumentParser.patch_args("--comet"):
+                args = DefaultArgumentParser().parse_args()
+                self.assertEqual(args.comet, "online")
+            args = DefaultArgumentParser().parse_args()
+            self.assertEqual(args.comet, False)
+
+        with patch_args("--comet", "offline"):  # Highest priority
+            with DefaultArgumentParser.patch_args():
+                args = DefaultArgumentParser().parse_args()
+                self.assertEqual(args.comet, "offline")
+            args = DefaultArgumentParser().parse_args()
+            self.assertEqual(args.comet, "offline")
+
+        with patch_args():  # Highest priority
+            with DefaultArgumentParser.patch_args("--comet", "offline"):
+                args = DefaultArgumentParser().parse_args()
+                self.assertEqual(args.comet, "offline")
+            args = DefaultArgumentParser().parse_args()
+            self.assertEqual(args.comet, False)
+        with patch_args("--comet", "online"):  # Highest priority
+            with DefaultArgumentParser.patch_args("--comet", "offline"):
+                args = DefaultArgumentParser().parse_args()
+                self.assertEqual(args.comet, "online")
+            args = DefaultArgumentParser().parse_args()
+            self.assertEqual(args.comet, "online")
+
+        with patch_args("--no_exact_sampling"):  # Highest priority
+            with DefaultArgumentParser.patch_args("--dynamic_buffer"):
+                args = DefaultArgumentParser().parse_args()
+                self.assertTrue(args.no_exact_sampling)
+                self.assertTrue(args.dynamic_buffer)
+            args = DefaultArgumentParser().parse_args()
+            self.assertTrue(args.no_exact_sampling)
+            self.assertFalse(args.dynamic_buffer)
+
+        with patch_args("--total_steps", "100"):  # Highest priority
+            with DefaultArgumentParser.patch_args("--iterations", "10"):
+                args = DefaultArgumentParser().parse_args()
+                self.assertTrue(args.total_steps, 100)
+                self.assertTrue(args.iterations, 10)
+            args = DefaultArgumentParser().parse_args()
+            self.assertTrue(args.total_steps, 100)
+
+        with patch_args("--comet", "--no_exact_sampling", "-n", 4):
+            with DefaultArgumentParser.patch_args(
+                # main args for this experiment
+                "--tune", "batch_size",
+                # Meta / less influential arguments for the experiment.
+                "--num_samples", 16,
+                "--max_step_size", 16_000,
+                "--tags", "tune-batch_size", "mlp",
+                "--comment", "Default training run. Tune batch size",
+                "--env_seeding_strategy", "same",
+                # constant
+                "-a", DefaultArgumentParser.agent_type,
+                "--seed", "42",
+                "--wandb", "offline+upload",
+                "--comet", "offline+upload",
+                "--log_level", "INFO",
+                "--use_exact_total_steps",
+            ):  # fmt: skip
+                args = AlgorithmSetup().args
+                self.assertListEqual(args.tune, ["batch_size"])  # pyright: ignore[reportArgumentType]
+                self.assertEqual(args.max_step_size, 16_000)
+                self.assertEqual(args.tags, ["tune-batch_size", "mlp"])
+                self.assertEqual(args.comment, "Default training run. Tune batch size")
+                self.assertEqual(args.env_seeding_strategy, "same")
+                self.assertEqual(args.seed, 42)
+                self.assertEqual(args.wandb, "offline+upload")
+                self.assertEqual(args.log_level, "INFO")
+                self.assertIs(args.use_exact_total_steps, True)
+                # superseeded by sys.argv
+                self.assertEqual(args.num_samples, 4)
+                self.assertEqual(args.comet, "online")
+                self.assertIs(args.no_exact_sampling, True)
+            args = AlgorithmSetup().args
+            self.assertIs(args.use_exact_total_steps, False)
+            self.assertIs(args.wandb, False)
+            self.assertIs(args.tune, False)

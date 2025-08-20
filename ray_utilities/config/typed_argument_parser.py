@@ -9,6 +9,8 @@ from typing_extensions import Annotated, Literal, get_type_hints, get_args, get_
 
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, split_timestep_budget
 from ray_utilities.misc import AutoInt
+from contextlib import contextmanager
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +49,14 @@ See Also:
 
 
 class SupportsMetaAnnotations(Tap):
+    """
+    Mixin class for argument parsers that support meta annotations:
+
+    - `AlwaysRestore`: Always restore the value from a checkpoint.
+    - `NeverRestore`: Never restore the value from a checkpoint, always use the default value
+    - `NotAModelParameter`: Mark the argument as not a model parameter, i.e. not included in the model's config.
+    """
+
     def configure(self) -> None:
         super().configure()
         complete_annotations = self._get_from_self_and_super(
@@ -102,7 +112,7 @@ class SupportsMetaAnnotations(Tap):
         current_value = getattr(self, name, NO_VALUE)
         current_value_is_default = current_value == getattr(type(self), name, None)
         if name in self._always_restore:
-            if current_value is not NO_VALUE and current_value != restored_value:
+            if current_value is not NO_VALUE and current_value != restored_value:  # pyright: ignore[reportOperatorIssue]
                 logger.log(
                     logging.DEBUG if current_value_is_default else logging.WARNING,
                     "Restoring AlwaysRestore argument '%s' from checkpoint: replacing %s (%s) with %s",
@@ -130,6 +140,111 @@ class SupportsMetaAnnotations(Tap):
                 return default
             return getattr(type(self), name, NO_VALUE)
         return restored_value
+
+
+class PatchArgsMixin(Tap):
+    """
+    Mixin class that allows to provide parameters that can be overwritten by the command line arguments.
+
+    Example:
+        # python file.py --another_arg cli_value
+        with DefaultArgumentParser.patch_args(
+            "--my_arg", "value",
+            "--another_arg", "another_value",
+        ):
+            # Inside this context, the arguments are patched. Custom provided CLI args have the highest priority.
+            # For example, if `--another_arg cli_value` is provided in the command line,
+            # it will overwrite the value "another_value".
+    """
+
+    @classmethod
+    @contextmanager
+    def patch_args(cls, *args: str | Any):
+        """
+        Context manager to temporarily *merge* sys.argv with additional arguments.
+        Arguments present in sys.argv will take a *higher* priority.
+
+        See Also:
+            - testing_utils.patch_args as an alternative
+        """
+        original_argv = sys.argv[:]
+        # Parse the original and patch args separately
+        parser_argv = cls()
+        patch_parser = cls()
+        NO_VALUE = object()
+        for action in patch_parser._actions:
+            action.default = NO_VALUE
+        for action in parser_argv._actions:
+            action.default = NO_VALUE
+
+        # Parse original CLI args (excluding script name)
+        argv_ns, orig_unknown = parser_argv.parse_known_args(original_argv[1:])
+
+        # Parse patch args
+        patch_ns, patch_unknown = patch_parser.parse_known_args(list(map(str, args)))
+
+        # Remove NO_VALUE entries to keep those that were actually passed:
+        passed_argv = {dest: v for dest, v in vars(argv_ns).items() if v is not NO_VALUE}
+        passed_patch = {dest: v for dest, v in vars(patch_ns).items() if v is not NO_VALUE}
+        # argv has highest priority
+        merged_args = {**passed_patch, **passed_argv}
+
+        # actions that were used
+        used_actions = {
+            action: merged_args[action.dest] for action in patch_parser._actions if action.dest in merged_args
+        }
+
+        new_args = []
+        for action, value in used_actions.items():
+            option = None
+            args_option: str | None = None
+            dd_option: str | None = None
+            for option in action.option_strings:
+                # find the one that was used:
+                if option in original_argv:
+                    break
+                if option in args:
+                    # could still be overwritten in argv
+                    args_option = option
+                if option.startswith("--"):
+                    dd_option = option
+            else:
+                # did not find in patch
+                if args_option is not None:
+                    option = args_option
+                elif dd_option is not None:
+                    option = dd_option
+            if option is None:
+                continue  # should not happen            # consider n_args and store_true/false
+            if isinstance(value, bool):
+                # action was used so add it, do not need to check store_true/false
+                if action.nargs in (None, 0):
+                    new_args.append(option)
+                else:
+                    # cannot pass bool as str
+                    # possible has some type conversion we cannot guess
+                    logger.warning("Cannot safely convert boolean value to string for option '%s'", option)
+                    new_args.extend((option, str(value)))
+                continue
+
+            if action.nargs in (None, 1):
+                new_args.extend([option, value])
+            elif action.nargs == 0:
+                new_args.append(option)
+            elif action.nargs == "?":
+                new_args.extend([option, value] if value is not None else [option])
+            elif action.nargs in ("*", "+") or isinstance(action.nargs, int):
+                new_args.extend([option] + (value if value is not None else []))
+            else:
+                logger.warning("Unexpected nargs value for option '%s': %s", option, action.nargs)
+                new_args.extend([option] + (value if value is not None else []))
+        patched_argv = [original_argv[0], *map(str, new_args)]
+        sys.argv = patched_argv
+
+        try:
+            yield
+        finally:
+            sys.argv = original_argv
 
 
 class _DefaultSetupArgumentParser(Tap):
@@ -478,6 +593,7 @@ class DefaultArgumentParser(
     DefaultEnvironmentArgParser,
     DefaultLoggingArgParser,
     DefaultExtraArgs,
+    PatchArgsMixin,
 ):
     def configure(self) -> None:
         super().configure()
