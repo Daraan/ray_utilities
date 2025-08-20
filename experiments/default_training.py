@@ -13,6 +13,7 @@ if __name__ == "__main__":
         # Meta / less influential arguments for the experiment.
         # Assure constant total_steps accross experiments.
         "--max_step_size", max(MAX_DYNAMIC_BATCH_SIZE, *PPOSetup.batch_size_sample_space["grid_search"]), # pyright: ignore
+        "--tags", "static", "default",
         # constant
         "--seed", "42",
         "--wandb", "offline+upload",

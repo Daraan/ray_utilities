@@ -81,8 +81,10 @@ class DynamicHyperparameterCallback(GetGlobalStepMixin, DefaultCallbacks, abc.AB
         """
         # Warn if config does not have this attr:
         assert algorithm.config
-        if (key is None and (not kwargs or value is None)) or (key is not None and (kwargs or value is None)):
-            raise ValueError("Either kwargs or key and value must be provided, but not both.")
+        if (key is None and (not kwargs or value is not None)) or (key is not None and (kwargs or value is None)):
+            raise ValueError(
+                f"Either kwargs or key and value must be provided, but not both. key: {key}, value: {value}, kwargs: {kwargs}"
+            )
         if key:
             kwargs = {key: value}
         algorithm.config.learner_config_dict.update(kwargs)
