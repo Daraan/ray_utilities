@@ -12,6 +12,7 @@ from inspect import isclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Collection, Generic, Optional, TypedDict, TypeVar, cast, overload
 
+import git
 import pyarrow.fs
 import ray
 from ray import tune
@@ -165,6 +166,9 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     discrete_eval: bool = False
     use_pbar: bool = True
 
+    _git_repo_sha: str = "unknown"
+    """Current sha of the repo, set on define"""
+
     @classmethod
     def define(
         cls,
@@ -191,6 +195,16 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         if fix_argv:
             if isclass(setup_cls):
                 setup_cls = type(setup_cls.__name__ + "FixedArgv", (setup_cls,), {"_fixed_argv": sys.argv})
+        # Get git metadata now, as when on remote we are in a temp dir
+        try:
+            repo = git.Repo(search_parent_directories=True)
+            cls._git_repo_sha: str = repo.head.object.hexsha
+            if repo.is_dirty(untracked_files=False):
+                _logger.warning("Saving commit sha as metadata, but repository has uncommitted changes.")
+            _logger.info("Current commit sha is %s", cls._git_repo_sha)
+        except Exception as e:  # noqa: BLE001
+            _logger.warning("Could not get git commit SHA: %s", e)
+            cls._git_repo_sha = "unknown"
 
         class DefinedTrainable(
             cls,
@@ -824,13 +838,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         """
         metadata = super().get_metadata()
         metadata["ray_utilities_version"] = importlib.metadata.version("ray_utilities")
-        try:
-            import git  # noqa: PLC0415
-
-            metadata["repo_sha"] = git.Repo(search_parent_directories=True).head.object.hexsha
-        except Exception as e:  # noqa: BLE001
-            _logger.warning("Could not get git commit SHA: %s", e)
-            metadata["repo_sha"] = "unknown"
+        if self._git_repo_sha == "unknown":
+            try:
+                repo = git.Repo(search_parent_directories=True)
+                self._git_repo_sha = repo.head.object.hexsha
+            except Exception:
+                _logger.exception("Failed to get git repo sha:")
+        metadata["repo_sha"] = self._git_repo_sha
         return metadata
 
     # endregion checkpoints
