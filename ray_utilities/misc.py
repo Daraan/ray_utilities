@@ -35,7 +35,7 @@ def trial_name_creator(trial: Trial) -> str:
     )
     start_time_str = start_time.strftime("%Y-%m-%d_%H:%M")
     module = trial.config.get("module", None)
-    if module is None:
+    if module is None and "cli_args" in trial.config:
         module = trial.config["cli_args"]["agent_type"]
     fields = [
         trial.trainable_name,
@@ -44,6 +44,10 @@ def trial_name_creator(trial: Trial) -> str:
         start_time_str,
         "id=" + trial.trial_id,
     ]
+    if "cli_args" in trial.config and trial.config["cli_args"]["from_checkpoint"]:
+        match = RE_GET_TRIAL_ID.match(trial.config["cli_args"]["from_checkpoint"])
+        if match:
+            fields.append("from_checkpoint=" + match.group("trial_id"))
     setup_cls = trial.config.get("setup_cls", None)
     if setup_cls is not None:
         fields.insert(0, setup_cls)
