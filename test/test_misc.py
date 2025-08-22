@@ -1,11 +1,11 @@
 from unittest import TestCase
 
+import ray.tune.logger
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
+from ray_utilities.misc import RE_GET_TRIAL_ID
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import Cases, DisableLoggers, iter_cases
-
-import ray.tune.logger
 
 
 class TestMeta(TestCase):
@@ -54,3 +54,13 @@ class TestNoLoggers(DisableLoggers):
         if isinstance(trainable.algorithm._result_logger, ray.tune.logger.UnifiedLogger):
             self.assertEqual(trainable.algorithm._result_logger._logger_cls_list, ())
             self.assertEqual(len(trainable.algorithm._result_logger._loggers), 0)
+
+
+class TestMisc(TestCase):
+    def test_re_find_id(self):
+        match = RE_GET_TRIAL_ID.search("sdf_sdgsg_12:12:id=sd353_00002_sdfgf")
+        assert match is not None
+        self.assertEqual(match.group(), "id=sd353_00002")
+        self.assertEqual(match.group(1), "sd353_00002")
+        self.assertEqual(match.groups(), ("sd353_00002",))
+        self.assertEqual(match.groupdict(), {"trial_id": "sd353_00002"})

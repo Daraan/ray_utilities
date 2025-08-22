@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import functools
+import re
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from exceptiongroup import ExceptionGroup
@@ -19,6 +20,14 @@ if TYPE_CHECKING:
 
 _T = TypeVar("_T")
 
+RE_GET_TRIAL_ID = re.compile("id=(?P<trial_id>[a-zA-Z0-9]+_[0-9]+)")
+"""
+Regex Pattern to extract the id of a trial.
+
+Assumes the id is in the format 'id=<part1>_<sample_number>'.
+That each block should have five characters is not checked for.
+"""
+
 
 def trial_name_creator(trial: Trial) -> str:
     start_time = datetime.datetime.fromtimestamp(
@@ -33,7 +42,7 @@ def trial_name_creator(trial: Trial) -> str:
         trial.config["env"],
         module,
         start_time_str,
-        trial.trial_id,
+        "id=" + trial.trial_id,
     ]
     setup_cls = trial.config.get("setup_cls", None)
     if setup_cls is not None:

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import logging
 import os
+import pickle
+import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from ray.air.integrations.wandb import WandbLoggerCallback, _clean_log, _QueueItem
 
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS
+from ray_utilities.misc import RE_GET_TRIAL_ID
 
 from ._save_video_callback import SaveVideoFirstCallback
 
@@ -22,6 +27,8 @@ try:
     from wandb import Video
 except ImportError:
     pass  # wandb not installed
+
+_logger = logging.getLogger(__name__)
 
 
 class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
@@ -61,17 +68,52 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
                 config[key].pop(sub_key, None)
         assert "num_jobs" not in config["cli_args"]
         assert "test" not in config["cli_args"]
+        fork_from = None  # new run
+        if trial.config["cli_args"].get("from_checkpoint"):
+            match = RE_GET_TRIAL_ID.search(trial.config["cli_args"]["from_checkpoint"])
+            # get id of run
+            if match is None:
+                # Deprecated:
+                # possible old format without id=
+                match = re.search(rf"(?:id=)?([a-zA-Z0-9]+_[0-9]{5})", trial.config["cli_args"]["from_checkpoint"])
+                if match is None:
+                    _logger.error(
+                        "Cannot extract trial id from checkpoint name: %s. "
+                        "Make sure that it has to format id=<part1>_<sample_number>",
+                        trial.config["cli_args"]["from_checkpoint"],
+                    )
+            else:
+                ckpt_trial_id = match.groupdict()["trial_id"]
+                # Need to change to format '<run>?<metric>=<numeric_value>'
+                # Where metric="_step"
+                # open state pickle to get iteration
+                ckpt_dir = Path(trial.config["cli_args"]["from_checkpoint"])
+                state = None
+                if (state_file := ckpt_dir / "state.pkl").exists():
+                    with open(state_file, "rb") as f:
+                        state = pickle.load(f)
+                elif (ckpt_dir / "_dict_checkpoint.pkl").exists():
+                    with open(ckpt_dir / "_dict_checkpoint.pkl", "rb") as f:
+                        state = pickle.load(f)["state"]
+                if state is None:
+                    _logger.error(
+                        "Could not find state.pkl or _dict_checkpoint.pkl in the checkpoint path. "
+                        "Cannot use fork_from with wandb"
+                    )
+                else:
+                    iteration = state["trainable"]["iteration"]
+                    fork_from = f"{ckpt_trial_id}?_step={iteration}"
         # --- End New Code
-
         wandb_init_kwargs = {
             "id": trial_id,
             "name": trial_name,
-            "resume": False,
             "reinit": "default",  # bool is deprecated
             "allow_val_change": True,
             "group": wandb_group,
             "project": wandb_project,
             "config": config,
+            # possibly fork / resume
+            "fork_from": fork_from,
         }
         wandb_init_kwargs.update(self.kwargs)
 
@@ -100,7 +142,7 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
                     parent_dir = cast("_LogMetricsEvalEnvRunnersResultsDict", parent_dir)
                     parent_dir[keys[-1]] = video_dict = cast("VideoMetricsDict", parent_dir[keys[-1]]).copy()  # pyright: ignore[reportTypedDictNotRequiredAccess]  # fmt: skip
                     # IMPORTANT use absolute path as local path is a ray session!
-                    video_dict["video"] = Video(os.path.abspath(video_dict.pop("video_path")), format="mp4")  # pyright: ignore[reportPossiblyUnboundVariable]
+                    video_dict["video"] = Video(os.path.abspath(video_dict.pop("video_path")), format="mp4")  # pyright: ignore[reportPossiblyUnboundVariable] # fmt: skip
 
         return metrics  # type: ignore[return-value]
 
