@@ -6,7 +6,7 @@ from ray_utilities.setup import PPOSetup
 
 if __name__ == "__main__":
     PPOSetup.PROJECT = "Default-MLP"  # Upper category on Comet / WandB
-    PPOSetup.group_name = "dynamic-batch_size"  # pyright: ignore
+    PPOSetup.group_name = "dynamic:batch_size+rollout_size"  # pyright: ignore
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
         "--dynamic_batch",

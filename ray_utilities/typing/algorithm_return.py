@@ -3,7 +3,7 @@
 # pyright: enableExperimentalFeatures=true
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from typing_extensions import Never, NotRequired, ReadOnly, Required, TypedDict
 
@@ -134,6 +134,8 @@ if _PEP_728_AVAILABLE or TYPE_CHECKING:
         training_iteration: Required[int]
         """The number of times train.report() has been called"""
 
+        config: Required[dict[str, Any]]
+
         should_checkpoint: bool
 
         comment: str
@@ -182,6 +184,7 @@ if _PEP_728_AVAILABLE or TYPE_CHECKING:
         See Also:
             - https://docs.ray.io/en/latest/tune/tutorials/tune-metrics.html#tune-autofilled-metrics
         """
+
 
 else:
     # PEP 728 not yet released in typing_extensions

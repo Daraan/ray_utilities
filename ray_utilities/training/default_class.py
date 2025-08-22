@@ -47,6 +47,7 @@ from ray_utilities.training.helpers import (
 from ray_utilities.typing.trainable_return import RewardUpdaters
 
 if TYPE_CHECKING:
+    import git.types  # noqa: TC004  # false positive
     from ray.experimental import tqdm_ray
     from ray.rllib.algorithms import Algorithm
     from ray.rllib.env.env_runner import EnvRunner
@@ -76,6 +77,8 @@ _ExperimentSetup = TypeAliasType(
     "type[ExperimentSetupBase[_ParserType, _ConfigType, _AlgorithmType]] | ExperimentSetupBase[_ParserType, _ConfigType, _AlgorithmType]",  # noqa: E501
     type_params=(_ParserType, _ConfigType, _AlgorithmType),
 )
+
+_UNKNOWN_GIT_SHA = "unknown"
 
 
 def _validate_algorithm_config_afterward(func):
@@ -110,6 +113,9 @@ class TrainableStateDict(TypedDict):
     setup: SetupCheckpointDict[Any, Any, Any]
 
     current_step: int
+
+    git_sha: NotRequired[str]
+    """sha of the current commit"""
 
 
 class PartialTrainableStateDict(TypedDict, total=False):
@@ -166,7 +172,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     discrete_eval: bool = False
     use_pbar: bool = True
 
-    _git_repo_sha: str = "unknown"
+    _git_repo_sha: str = _UNKNOWN_GIT_SHA
     """Current sha of the repo, set on define"""
 
     @classmethod
@@ -198,13 +204,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # Get git metadata now, as when on remote we are in a temp dir
         try:
             repo = git.Repo(search_parent_directories=True)
-            cls._git_repo_sha: str = repo.head.object.hexsha
+        except Exception as e:  # noqa: BLE001
+            _logger.warning("Could not get git commit SHA: %s", e)
+            cls._git_repo_sha = _UNKNOWN_GIT_SHA
+        else:
+            cls._git_repo_sha: str = cast("git.types.AnyGitObject", repo.head.object).hexsha
             if repo.is_dirty(untracked_files=False):
                 _logger.warning("Saving commit sha as metadata, but repository has uncommitted changes.")
             _logger.info("Current commit sha is %s", cls._git_repo_sha)
-        except Exception as e:  # noqa: BLE001
-            _logger.warning("Could not get git commit SHA: %s", e)
-            cls._git_repo_sha = "unknown"
 
         class DefinedTrainable(
             cls,
@@ -646,6 +653,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             "reward_updaters": reward_updaters_state,
             "setup": setup_state,
             "current_step": self._current_step,
+            "git_sha": self._git_repo_sha,
         }
         # Current step is
         # state["trainable"]["last_result"]["current_step"]
@@ -790,6 +798,16 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             "RewardUpdaters", {k: create_running_reward_updater(v) for k, v in state["reward_updaters"].items()}
         )
         keys_to_process.remove("reward_updaters")
+        if self._git_repo_sha == _UNKNOWN_GIT_SHA:
+            self._git_repo_sha = state.get("git_sha", _UNKNOWN_GIT_SHA)
+            if self._git_repo_sha != _UNKNOWN_GIT_SHA:
+                self._git_repo_sha += "_restored"  # unsure what the actual git commit is
+        elif self._git_repo_sha != state.get("git_sha", _UNKNOWN_GIT_SHA):
+            _logger.info(
+                "Git repo sha has changed %s vs %s",
+                self._git_repo_sha,
+                state.get("git_sha", _UNKNOWN_GIT_SHA),
+            )
 
         if len(keys_to_process) > 0:
             _logger.warning(
@@ -838,12 +856,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         """
         metadata = super().get_metadata()
         metadata["ray_utilities_version"] = importlib.metadata.version("ray_utilities")
-        if self._git_repo_sha == "unknown":
+        if self._git_repo_sha == _UNKNOWN_GIT_SHA:
             try:
                 repo = git.Repo(search_parent_directories=True)
-                self._git_repo_sha = repo.head.object.hexsha
-            except Exception:
-                _logger.exception("Failed to get git repo sha:")
+            except Exception:  # noqa: BLE001
+                _logger.error("Failed to get git Repo for metadata")
+            else:
+                self._git_repo_sha = cast("git.types.AnyGitObject", repo.head.object).hexsha
         metadata["repo_sha"] = self._git_repo_sha
         return metadata
 

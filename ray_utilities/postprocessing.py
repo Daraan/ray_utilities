@@ -356,6 +356,7 @@ def create_log_metrics(
         "training_iteration": result["training_iteration"],
         "done": result["done"],
         "current_step": current_step,
+        "batch_size": result["config"]["_train_batch_size_per_learner"],
     }
     if discrete_eval:
         metrics[EVALUATION_RESULTS]["discrete"] = {

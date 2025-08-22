@@ -335,7 +335,7 @@ class TestHelpers(unittest.TestCase):
 
                 shutil.rmtree(storage_path.as_posix(), ignore_errors=True)
             else:
-                logger.info("Testing storage path does not exist: %s", storage_path)
+                logger.debug("Testing storage path does not exist: %s", storage_path)
         except OSError:
             logger.exception("Failed to remove testing storage path")
         except Exception:

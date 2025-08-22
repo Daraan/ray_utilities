@@ -100,6 +100,9 @@ class LogMetricsDict(TypedDict):
     should_checkpoint: NotRequired[bool]
     """If True, the tuner should checkpoint this step."""
 
+    batch_size: NotRequired[int]
+    """Current train_batch_size_per_learner. Should be logged in experiments were it can change."""
+
 
 class AutoExtendedLogMetricsDict(LogMetricsDict):
     """
