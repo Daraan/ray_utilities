@@ -765,11 +765,24 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             algorithm_config_dict: dict[str, Any] = algorithm_config_dict | (
                 (self._algorithm_overrides or {}) | (self._perturbed_config or {})
             )
-        # Fix private key with public property when using from_state
+        # Fix private key with public property when using from_state, do not overwrite property
         if "train_batch_size_per_learner" in algorithm_config_dict:
-            algorithm_config_dict["_train_batch_size_per_learner"] = algorithm_config_dict[
+            algorithm_config_dict["_train_batch_size_per_learner"] = algorithm_config_dict.pop(
                 "train_batch_size_per_learner"
-            ]
+            )
+        for k in algorithm_config_dict.keys():
+            ATTR_NOT_FOUND = object()
+            cls_attr = getattr(algorithm_config_dict["class"], k, ATTR_NOT_FOUND)
+            if cls_attr is ATTR_NOT_FOUND:
+                print("Attr", k, "not found on class", algorithm_config_dict["class"])
+                continue
+            if isinstance(cls_attr, property):
+                _logger.error(
+                    "%s is a property of class %s. State contains key overwritting this property. "
+                    "This can lead to unexpected behavior.",
+                    k,
+                    algorithm_config_dict["class"],
+                )
         # state["algorithm_config"] contains "class" to restore the correct config class
         new_algo_config = AlgorithmConfig.from_state(algorithm_config_dict)
         if type(new_algo_config) is not type(self.algorithm_config):
