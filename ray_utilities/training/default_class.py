@@ -33,7 +33,7 @@ from typing_extensions import Self, TypeAliasType
 from ray_utilities.callbacks.progress_bar import restore_pbar, save_pbar_state, update_pbar
 from ray_utilities.callbacks.tuner.metric_checkpointer import TUNE_RESULT_IS_A_COPY
 from ray_utilities.config.typed_argument_parser import LOG_STATS, LogStatsChoices
-from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
+from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, PERTURBED_HPARAMS
 from ray_utilities.misc import is_pbar
 from ray_utilities.training.functional import training_step
 from ray_utilities.training.helpers import (
@@ -246,6 +246,12 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 "might result in unexpected values after a restore. Test carefully."
             )
             # NOTE: Use get_ctor_args_and_kwargs to include the overwrites on a reload
+        if config and PERTURBED_HPARAMS in config:
+            _logger.info("Received perturbed config: %s", config[PERTURBED_HPARAMS])
+            self._perturbed_config: Optional[dict[str, Any]] = config[PERTURBED_HPARAMS]
+        else:
+            self._perturbed_config = None
+        """When initialized with a perturbed config, this holds the original config."""
         super().__init__(config or {}, **kwargs)  # calls setup
         # TODO: do not create loggers, if any are created
         self.config: dict[str, Any]
@@ -370,6 +376,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
     @algorithm_config.setter
     def algorithm_config(self, value: _ConfigType):
+        # Does not update env_runners and learner !
         self.algorithm.config = value
 
     @property
@@ -440,14 +447,27 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # set iterations
         # set reward_updaters
         # config comes from new setup
+        if PERTURBED_HPARAMS in self.config:
+            perturbed: dict[str, Any] = {k: self.config[k] for k in self.config[PERTURBED_HPARAMS]}
+            # assert perturbed == self.config[PERTURBED_HPARAMS]
+            setup_config = self._setup.config.copy(copy_frozen=False).update_from_dict(perturbed)
+            setup_config.freeze()
+            # Remove __perturbed__ from config so that a future checkpoint hparams does not see them as highest priority
+            self._perturbed_config: Optional[dict[str, Any]] = self.config.pop(PERTURBED_HPARAMS)
+        else:
+            perturbed = {}
+            setup_config = self._setup.config
+            self._perturbed_config = None
         algo_kwargs: dict[str, Any] = (
             {**kwargs}
             if ignore_setup  # NOTE: also ignores overrides on self
-            else {"config": self._setup.config, **kwargs}
+            else {"config": setup_config, **kwargs}
         )
+        if perturbed and ignore_setup:
+            _logger.warning("Using a perturbed keys and ignore_setup likely ignores the perturbed arguments.")
 
-        if "config" in algo_kwargs and (self._algorithm_overrides or self._param_overrides):
-            config_overrides = (self._algorithm_overrides or {}) | self._param_overrides
+        if "config" in algo_kwargs and (self._algorithm_overrides or self._param_overrides or perturbed):
+            config_overrides = (self._algorithm_overrides or {}) | self._param_overrides | perturbed
             algo_kwargs["config"] = (
                 cast("AlgorithmConfig", algo_kwargs["config"])
                 .copy(copy_frozen=False)
@@ -468,7 +488,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 algo_kwargs["config"].minibatch_size = algo_kwargs["config"].train_batch_size_per_learner
             algo_kwargs["config"].freeze()
         else:
-            config_overrides = {}
+            config_overrides = perturbed or {}
         overrides_at_start = self._algorithm_overrides or {}
         if isinstance(checkpoint, dict):
             keys_to_process = set(checkpoint.keys())  # Sanity check if processed all keys
@@ -491,6 +511,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                         self._algorithm_overrides
                     )
                 self.algorithm.set_state(checkpoint["algorithm_state"])
+                keys_to_process.remove("algorithm_state")
             else:
                 _logger.critical(
                     "Algorithm checkpoint directory %s does not exist, (possibly temporary path was saved) "
@@ -513,17 +534,15 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # use from_checkpoint to do that
             self.restore_from_path(checkpoint, **algo_kwargs)
             # Restored overrides:
-            if (
-                "config" in algo_kwargs
-                and self._algorithm_overrides
-                and overrides_at_start != self._algorithm_overrides
+            if "config" in algo_kwargs and (
+                (self._algorithm_overrides and overrides_at_start != self._algorithm_overrides) or perturbed
             ):
                 # Overrides at start should have higher priority
                 algo_kwargs["config"] = (
                     algo_kwargs["config"]
                     .copy(copy_frozen=False)
-                    # Restored < algorithm_overrides < hparams
-                    .update_from_dict(self._algorithm_overrides | config_overrides)
+                    # Restored < algorithm_overrides < hparams < perturbed
+                    .update_from_dict((self._algorithm_overrides or {}) | config_overrides)
                 )
                 # Fix minibatch size < batch_size if reloaded bad value
                 if (
@@ -703,22 +722,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
         self._iteration = state["iteration"]
         keys_to_process.remove("iteration")
-
-        # state["algorithm_config"] contains "class" to restore the correct config class
-        new_algo_config = AlgorithmConfig.from_state(state["algorithm_config"])
-        if type(new_algo_config) is not type(self.algorithm_config):
-            _logger.warning(
-                "Restored config class %s differs from expected class %s", type(new_algo_config), type(self.config)
-            )
-        new_algo_config = cast("_ConfigType", new_algo_config)
-        did_reset = self.algorithm.reset_config(state["algorithm_config"])  # likely does nothing
-        if not did_reset:
-            self.algorithm_config = (
-                new_algo_config  # NOTE: does not SYNC config if env_runners / learners not in components
-            )
-            # NOTE: evaluation_config might also not be set!
-        keys_to_process.remove("algorithm_config")
-
         # Setup
         # NOTE: setup.config can differ from new_algo_config when algorithm_overrides is used!
         # self._setup.config = new_algo_config  # TODO: Possible unset setup._config to not confuse configs
@@ -726,24 +729,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         self._setup = self._setup.from_saved(state["setup"], init_trainable=False)
         keys_to_process.remove("setup")
 
-        algorithm_overrides = state.get("algorithm_overrides", None)
-        algorithm_config = state["algorithm_config"]
-        if algorithm_overrides:
-            # What to do with old overwrites?
-            if self._algorithm_overrides is None:
-                self._algorithm_overrides = algorithm_overrides
-            else:
-                _logger.info(
-                    "Not setting _algorithm_overrides to %s as it would overwrite present values %s. "
-                    "Use _algorithm_overrides=None first to load them on set_state; use an empty dict "
-                    "if you do not want to restore them.",
-                    algorithm_overrides,
-                    self._algorithm_overrides,
-                )
-            algorithm_config = algorithm_config.copy() | self._algorithm_overrides
-        keys_to_process.remove("algorithm_overrides")
-
-        # algorithm might not be in state as it is a checkpointable component and was not pickled
+        # Algorithm - steps are very likely skipped as it is a checkpointable component and was not pickled
         if "algorithm" in state:
             if self.algorithm.metrics and COMPONENT_METRICS_LOGGER in state["algorithm"]:
                 self.algorithm.metrics.reset()
@@ -758,7 +744,45 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             if COMPONENT_METRICS_LOGGER in algo_state:
                 assert self.algorithm.metrics
                 self.algorithm.metrics.reset()
-            self.algorithm.set_state(algo_state)
+            self.algorithm.set_state(algo_state)  # if this is in config might not be respected
+        keys_to_process.discard("algorithm")
+
+        # region Algorithm config
+        algorithm_overrides = state.get("algorithm_overrides", None)
+        algorithm_config_dict = state["algorithm_config"]
+        if algorithm_overrides or self._perturbed_config:
+            # What to do with old overwrites?
+            if self._algorithm_overrides is None:
+                self._algorithm_overrides = algorithm_overrides
+            else:
+                _logger.info(
+                    "Not setting _algorithm_overrides to %s as it would overwrite present values %s. "
+                    "Use _algorithm_overrides=None first to load them on set_state; use an empty dict "
+                    "if you do not want to restore them.",
+                    algorithm_overrides,
+                    self._algorithm_overrides,
+                )
+            algorithm_config_dict: dict[str, Any] = algorithm_config_dict | (
+                (self._algorithm_overrides or {}) | (self._perturbed_config or {})
+            )
+        # Fix private key with public property when using from_state
+        if "train_batch_size_per_learner" in algorithm_config_dict:
+            algorithm_config_dict["_train_batch_size_per_learner"] = algorithm_config_dict[
+                "train_batch_size_per_learner"
+            ]
+        # state["algorithm_config"] contains "class" to restore the correct config class
+        new_algo_config = AlgorithmConfig.from_state(algorithm_config_dict)
+        if type(new_algo_config) is not type(self.algorithm_config):
+            _logger.warning(
+                "Restored config class %s differs from expected class %s", type(new_algo_config), type(self.config)
+            )
+        new_algo_config = cast("_ConfigType", new_algo_config)
+        did_reset = self.algorithm.reset_config(algorithm_config_dict)  # likely does nothing
+        if not did_reset:
+            # NOTE: does not SYNC config if env_runners / learners not in components we do that below
+            # NOTE: evaluation_config might also not be set!
+            self.algorithm_config = new_algo_config
+
         # Update env_runners after restore
         # check if config has been restored correctly - TODO: Remove after more testing
         from ray_utilities.testing_utils import TestHelpers
@@ -783,7 +807,9 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     r.config = ray.get(remote_config_ref)
 
                 self.algorithm.env_runner_group.foreach_env_runner(set_env_runner_config, local_env_runner=False)
-        keys_to_process.discard("algorithm")
+        keys_to_process.remove("algorithm_config")
+        keys_to_process.remove("algorithm_overrides")
+        # endregion
 
         self._pbar = restore_pbar(state["pbar_state"])
         if is_pbar(self._pbar):

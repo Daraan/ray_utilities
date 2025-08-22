@@ -111,3 +111,10 @@ The current step in the training process, at the top level of the metrics dict.
 With exact sampling aligns with `NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME` otherwise
 with `NUM_ENV_STEPS_SAMPLED_LIFETIME`.
 """
+
+PERTURBED_HPARAMS = "__perturbed__"
+"""
+Key in the config of a trainable that indicates which hyperparameters have been perturbed.
+
+This is mainly used for BaseTrainable.load_checkpoint and not during __init__
+"""

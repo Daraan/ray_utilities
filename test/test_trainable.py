@@ -15,7 +15,7 @@ from ray.rllib.utils.metrics import EVALUATION_RESULTS
 from ray.tune.utils import validate_save_restore
 from ray.util.multiprocessing import Pool
 
-from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
+from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN, PERTURBED_HPARAMS
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.testing_utils import (
     ENV_RUNNER_CASES,
@@ -194,6 +194,42 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
                 self.assertEqual(trainable2._total_steps["total_steps"], 80 + 120)
                 # NOT restored as set by config_from_args
                 self.assertEqual(trainable2.algorithm_config.minibatch_size, 20)
+
+    def test_perturbed_keys(self):
+        with (
+            patch_args("--batch_size", 512),
+            tempfile.TemporaryDirectory() as tmpdir,
+            tempfile.TemporaryDirectory() as tmpdir2,
+        ):
+            setup = AlgorithmSetup()
+            trainable = setup.trainable_class()
+            self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 512)
+            trainable_perturbed = setup.trainable_class(
+                {"train_batch_size_per_learner": 222, PERTURBED_HPARAMS: {"train_batch_size_per_learner": 222}}
+            )
+            ckpt = trainable.save_checkpoint(tmpdir)
+            ckpt_perturbed = trainable_perturbed.save_checkpoint(tmpdir2)
+            trainable2 = setup.trainable_class(
+                # NOTE: Normally should be the same but check that perturbed is used after load_checkpoint
+                {"train_batch_size_per_learner": 123, PERTURBED_HPARAMS: {"train_batch_size_per_learner": 444}}
+            )
+            trainable2b = setup.trainable_class(
+                # NOTE: Normally should be the same but check that perturbed is used after load_checkpoint
+                {"train_batch_size_per_learner": 123}
+            )
+            trainable2c = setup.trainable_class(
+                # NOTE: Normally should be the same but check that perturbed is used after load_checkpoint
+                {"train_batch_size_per_learner": 123, PERTURBED_HPARAMS: {"train_batch_size_per_learner": 444}}
+            )
+            self.assertEqual(trainable2.algorithm_config.train_batch_size_per_learner, 123)
+            # Usage of algorithm_state will log an error
+            trainable2.load_checkpoint(ckpt)
+            # perturbation of trainable2 is respected
+            self.assertEqual(trainable2.algorithm_config.train_batch_size_per_learner, 444)
+            trainable2b.load_checkpoint(ckpt_perturbed)
+            self.assertEqual(trainable2b.algorithm_config.train_batch_size_per_learner, 222)
+            trainable2c.load_checkpoint(ckpt_perturbed)
+            self.assertEqual(trainable2c.algorithm_config.train_batch_size_per_learner, 444)
 
 
 class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints, num_cpus=4):
