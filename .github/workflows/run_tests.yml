@@ -31,12 +31,16 @@ jobs:
     - name: Install dependencies
       run: |
         pip install .[test]
-    - name: Test with pytest
+    - name: Test basic
       run: |
         export KEEP_MAX_DIFF=1
         export DISABLE_BREAKPOINTS=1
         # Run basic tests. If these fail others likely fail as well
         pytest -xv -m basic
+    - name: Test with pytest
+      run: |
+        export KEEP_MAX_DIFF=1
+        export DISABLE_BREAKPOINTS=1
         # Split tests because of deadlock
         pytest -k "not test_trainable" -m "not basic" -v -x --fast
     - name: Test trainable 1/2 (might deadlock)

@@ -52,6 +52,13 @@ from ray.rllib.core import ALL_MODULES
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
     LEARNER_RESULTS,
+    NUM_AGENT_STEPS_SAMPLED,
+    NUM_AGENT_STEPS_SAMPLED_LIFETIME,
+    NUM_ENV_STEPS_SAMPLED,
+    NUM_ENV_STEPS_SAMPLED_LIFETIME,
+    NUM_EPISODES,
+    NUM_MODULE_STEPS_SAMPLED,
+    NUM_MODULE_STEPS_SAMPLED_LIFETIME,
     TIMERS,
 )
 from ray.rllib.utils.metrics.stats import Stats
@@ -461,6 +468,7 @@ class TestHelpers(unittest.TestCase):
         *,
         strict: bool = False,
         compare_results: bool | None = None,
+        compare_steps_sampled: bool | None = None,
         ignore: Collection[str] = (),
         seed_subset_ok=False,
     ):
@@ -485,6 +493,16 @@ class TestHelpers(unittest.TestCase):
         all_keys = {k for k in all_keys if not k.endswith("_throughput")}
         if compare_results is None:
             compare_results = strict
+        if compare_steps_sampled is None:
+            compare_steps_sampled = strict
+        if not compare_steps_sampled:
+            all_keys.discard(NUM_EPISODES)
+            all_keys.discard(NUM_ENV_STEPS_SAMPLED)
+            all_keys.discard(NUM_ENV_STEPS_SAMPLED_LIFETIME)
+            all_keys.discard(NUM_MODULE_STEPS_SAMPLED)
+            all_keys.discard(NUM_MODULE_STEPS_SAMPLED_LIFETIME)
+            all_keys.discard(NUM_AGENT_STEPS_SAMPLED)
+            all_keys.discard(NUM_AGENT_STEPS_SAMPLED_LIFETIME)
         if not compare_results:
             all_keys.discard("agent_episode_returns_mean")  # <2.48
             all_keys.discard("agent_episode_return_mean")  # 2.48
@@ -606,6 +624,7 @@ class TestHelpers(unittest.TestCase):
                 self.assertEqual(
                     result1[metric],
                     expected_value,
+                    f"Expected {expected_value} for metric '{metric}', but got {result1[metric]}",
                 )
 
     @staticmethod
