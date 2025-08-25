@@ -116,6 +116,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     self.assertEqual(trainable.algorithm_config.num_epochs, 4)
                     self.assertEqual(trainable.algorithm_config.minibatch_size, 222)
 
+    @pytest.mark.basic
     def test_basic(self):
         with patch_args():
             setup = AlgorithmSetup()
@@ -128,12 +129,18 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         self.assertIsNotNone(setup.create_tags())
         self.assertIsNotNone(setup.create_trainable())
 
+    @pytest.mark.basic
     def test_argument_usage(self):
         # Test warning and failure
         with patch_args("--batch_size", "1234"):
             self.assertEqual(AlgorithmSetup().config.train_batch_size_per_learner, 1234)
         with patch_args("--train_batch_size_per_learner", "456"):
             self.assertEqual(AlgorithmSetup().config.train_batch_size_per_learner, 456)
+
+    def test_project_name_substitution(self):
+        setup = AlgorithmSetup(init_trainable=False, init_param_space=False, init_config=False)
+        setup.PROJECT = "Test-<agent_type>-<env_type>"
+        self.assertEqual(setup.project_name.rstrip("-v0123456789"), "Test-mlp-CartPole")
 
     @pytest.mark.tuner
     def test_dynamic_param_spaces(self):

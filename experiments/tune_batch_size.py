@@ -1,11 +1,11 @@
-# File: run_experiment.py
+#!/usr/bin/env python3
 from ray_utilities import run_tune
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
 from ray_utilities.setup import PPOSetup
 
 if __name__ == "__main__":
-    PPOSetup.PROJECT = "Default-MLP"  # Upper category on Comet / WandB
+    PPOSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
     PPOSetup.group_name = "tune-batch_size"  # pyright: ignore
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
@@ -13,7 +13,7 @@ if __name__ == "__main__":
         # Meta / less influential arguments for the experiment.
         "--num_samples", len(PPOSetup.batch_size_sample_space["grid_search"]), # pyright: ignore
         "--max_step_size", max(MAX_DYNAMIC_BATCH_SIZE, *PPOSetup.batch_size_sample_space["grid_search"]), # pyright: ignore
-        "--tags", "tune-batch_size", "mlp",
+        "--tags", "tune-batch_size", # per default includes "<env_type>", "<agent_type>",
         "--comment", "Default training run. Tune batch size",
         "--env_seeding_strategy", "same",
         # constant

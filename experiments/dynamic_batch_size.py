@@ -1,11 +1,11 @@
-# File: run_experiment.py
+#!/usr/bin/env python3
 from ray_utilities import run_tune
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
 from ray_utilities.setup import PPOSetup
 
 if __name__ == "__main__":
-    PPOSetup.PROJECT = "Default-MLP"  # Upper category on Comet / WandB
+    PPOSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
     PPOSetup.group_name = "dynamic-batch_size"  # pyright: ignore
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
@@ -14,7 +14,7 @@ if __name__ == "__main__":
         # Meta / less influential arguments for the experiment.
         "--num_samples", 5,
         "--max_step_size", MAX_DYNAMIC_BATCH_SIZE,
-        "--tags", "dynamic", "dynamic:batch_size", "mlp",
+        "--tags", "dynamic", "dynamic:batch_size",  # per default includes "<env_type>", "<agent_type>",
         "--comment", "Default training run. Dynamic batch size via gradient accumulation",
         "--env_seeding_strategy", "sequential",
         # constant

@@ -136,6 +136,10 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
     """extra tags to add if """
 
     PROJECT: str = "Unnamed Project"
+    """Base for project_name. Can consist of tags written as <args_attribute> that are substituted"""
+
+    use_dev_project: bool = True
+    """When True the `project_name` will be "dev-workspace" in test mode"""
 
     config_class: type[ConfigType_co]
     algo_class: type[AlgorithmType_co]
@@ -156,12 +160,22 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 "Setup class %s has no custom PROJECT attribute set to determine `project_name`.",
                 self.__class__.__name__,
             )
-        return "dev-workspace" if self.args.test else self.PROJECT
+        return "dev-workspace" if self.use_dev_project and self.args.test else self._parse_project_name(self.PROJECT)
 
     @project_name.setter
     def project_name(self, value: str):
         logger.warning("Setting project name to %s. Prefer creation of a new class", value)
         self.PROJECT: str = value
+
+    def _parse_project_name(self, project_name: str):
+        while "<" in project_name and ">" in project_name:
+            start = project_name.index("<")
+            end = project_name.index(">", start)
+            tag = project_name[start : end + 1]
+            substituted = self._substitute_tag(tag)
+            if substituted is not None:
+                project_name = project_name.replace(tag, str(substituted), 1)
+        return project_name
 
     @property
     @abstractmethod
@@ -341,20 +355,25 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
     # region Tags
 
     def _substitute_tag(self, tag: str):
+        """Substitutes tags written with <args_attribute> with the respective attribute value."""
         if not tag.startswith("<"):
             return tag
-        assert tag[-1] == ">", f"Invalid tag parsing format: {tag}. Must be '<argattribute>'"
+        assert tag[-1] == ">", f"Invalid tag parsing format: {tag}. Must be '<args_attribute>'"
         tag = tag[1:-1]
         if hasattr(self.args, tag):
             value = getattr(self.args, tag)
             if isinstance(value, bool) or value is None:
-                if value:
+                if value:  # is True
                     return tag
                 return None
             return value
         return None  # error
 
     def _parse_extra_tags(self, extra_tags: Sequence[str] | None = None) -> list[str]:
+        """
+        Parses tags that are stored in default_extra_tags.
+        Tags that are written like <args_attribute> are subsituted with the respective attribute.
+        """
         if extra_tags is None:
             extra_tags = self.default_extra_tags.copy()
         else:
