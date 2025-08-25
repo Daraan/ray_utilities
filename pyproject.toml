@@ -192,5 +192,6 @@ timeout = 240
 session_timeout = 900
 markers = [
    "tuner",
-   "env_runner_cases: ",
+   "basic: Mark tests that should be tested first - if they fail others likely fail",
+   "env_runner_cases",
 ]

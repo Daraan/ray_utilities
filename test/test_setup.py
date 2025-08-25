@@ -496,20 +496,23 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
     @unittest.mock.patch.object(subprocess, "Popen", autospec=True)
     def test_wandb_upload(self, mock_run: unittest.mock.MagicMock):
         # NOTE: This test is flaky, there are instances of no wandb folder copied
+        # Does the actor die silently?
+        self.no_pbar_updates()
+
         class MockPopen(unittest.mock.MagicMock):
             returncode = 1
             stdout: IO[bytes] = io.BytesIO(b"MOCK: wandb: Syncing files...")
-            stderr: IO[bytes] | None = io.BytesIO(b"MOCK: error")
+            stderr: IO[bytes] | None = io.BytesIO(b"MOCK: stderr - its expected you see this message")
 
             def poll(self) -> None:
                 return None
 
         mocked_popen = MockPopen()
         mock_run.return_value = mocked_popen
-        with patch_args("--wandb", "offline+upload", "--num_jobs", 1, "--iterations", 2, "--batch_size", 32):
+        # use more iterations here for it to be more likely that the files are synced.
+        with patch_args("--wandb", "offline+upload", "--num_jobs", 1, "--iterations", 5, "--batch_size", 32):
             setup = AlgorithmSetup()
-            _results = run_tune(setup)
-
+            _results = run_tune(setup, raise_errors=True)
         mocked_popen.wait.assert_called_once()
         self.assertDictEqual(mock_run.call_args.kwargs, {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT})
 

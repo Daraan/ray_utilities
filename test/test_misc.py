@@ -1,5 +1,6 @@
 from unittest import TestCase
 
+import pytest
 import ray.tune.logger
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
@@ -8,6 +9,7 @@ from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import Cases, DisableLoggers, iter_cases
 
 
+@pytest.mark.basic
 class TestMeta(TestCase):
     @Cases([1, 2, 3])
     def test_test_cases(self, cases):
@@ -56,6 +58,7 @@ class TestNoLoggers(DisableLoggers):
             self.assertEqual(len(trainable.algorithm._result_logger._loggers), 0)
 
 
+@pytest.mark.basic
 class TestMisc(TestCase):
     def test_re_find_id(self):
         match = RE_GET_TRIAL_ID.search("sdf_sdgsg_12:12:id=sd353_00002_sdfgf")

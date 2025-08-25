@@ -400,6 +400,22 @@ class TestHelpers(unittest.TestCase):
             return
         self.maxDiff = max_diff
 
+    def no_pbar_updates(self):
+        # points were they are
+        import ray_utilities.callbacks.progress_bar
+        import ray_utilities.training.default_class
+        import ray_utilities.training.functional
+
+        pbar_updates = [
+            mock.patch.object(ray_utilities.callbacks.progress_bar, "update_pbar"),
+            mock.patch.object(ray_utilities.training.default_class, "update_pbar"),
+            mock.patch.object(ray_utilities.training.functional, "update_pbar"),
+        ]
+        for pbar_update in pbar_updates:
+            pbar_update.start()
+
+    # region tests
+
     def util_test_tree_equivalence(
         self,
         tree1: TrainState | Any,
@@ -650,8 +666,6 @@ class TestHelpers(unittest.TestCase):
                     weights2[key],
                     err_msg=f"Key '{key}' not equal in both states {msg}",
                 )
-
-    # region tests
 
     def compare_env_runner_configs(self, algo: Algorithm, algo_restored: Algorithm):
         self.set_max_diff(self.maxDiff and max(self.maxDiff or 0, 20000))

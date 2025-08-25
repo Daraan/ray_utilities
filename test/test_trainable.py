@@ -289,6 +289,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
 
     @Cases(ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
+    @pytest.mark.basic
     def test_1_get_set_state(self, cases):
         # If this test fails all others will most likely fail too, run it first.
         self.maxDiff = None

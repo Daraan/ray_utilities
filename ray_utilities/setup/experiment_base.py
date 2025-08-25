@@ -962,8 +962,10 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 logger.warning("Multiple wandb offline directories found in %s: %s", wandb_dir, offline_runs)
 
             if not offline_runs:
-                logger.info("No wandb offline experiments found to upload.")
-                return None
+                logger.error(
+                    "No wandb offline experiments found to upload in %s: %s. ", wandb_dir, list(wandb_dir.glob("*"))
+                )
+                continue
             num_uploaded += len(offline_runs)
 
             for run_dir in offline_runs:  # likely just a single iteration

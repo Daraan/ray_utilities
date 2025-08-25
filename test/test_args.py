@@ -8,6 +8,7 @@ import unittest
 from contextlib import redirect_stderr
 from inspect import isclass
 
+import pytest
 from typing_extensions import get_args
 
 from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradientAccumulation
@@ -21,6 +22,8 @@ from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import 
 from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import SetupDefaults, patch_args
+
+pytestmark = pytest.mark.basic
 
 
 class TestExtensionsAdded(SetupDefaults):
