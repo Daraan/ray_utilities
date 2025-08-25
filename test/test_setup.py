@@ -231,7 +231,8 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     "--num_jobs", "3",
                     "-it", "2",
                     "--num_samples", "3",
-                    "--use_exact_total_steps"
+                    "--use_exact_total_steps",
+                    "--env_seeding_strategy", "same"
                 )  # ,
                 # self.assertNoLogs(logger, level="WARNING"),
             ):  # fmt: skip
@@ -257,7 +258,10 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                                 result[ENV_RUNNER_RESULTS].get(NUM_ENV_STEPS_PASSED_TO_LEARNER, None)
                                 == self._param_to_check
                             )
-                            assert result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED] == self._param_to_check
+                            assert (
+                                result["learners"]["__all_modules__"].get(NUM_ENV_STEPS_PASSED_TO_LEARNER, None)
+                                == self._param_to_check
+                            )
                         metrics["param_name"] = self._param_name  # pyright: ignore[reportGeneralTypeIssues]
                         metrics["param_value"] = self._param_to_check  # pyright: ignore[reportGeneralTypeIssues]
 
