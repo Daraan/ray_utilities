@@ -567,6 +567,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             sync_env_runner_states_after_reload(self.algorithm)
         else:
             raise ValueError(f"Checkpoint must be a dict or a path. Not {type(checkpoint)}")
+        if perturbed:  # check that perturbed has highest priority and updated the config
+            for k, v in perturbed.items():
+                assert getattr(self.algorithm_config, k) == v, "Expected perturbed key '%s' to be %s, but got %s" % (
+                    k,
+                    v,
+                    getattr(self.algorithm_config, k),
+                )
 
     # endregion
 

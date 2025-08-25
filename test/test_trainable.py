@@ -212,16 +212,25 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
             ckpt = trainable.save_checkpoint(tmpdir)
             ckpt_perturbed = trainable_perturbed.save_checkpoint(tmpdir2)
             trainable_perturbed.stop()
+
+            class PerturbedInt(int):
+                """Class to check if the final chosen value is the int from the perturbed subdict"""
+
             trainable2 = setup.trainable_class(
                 # NOTE: Normally should be the same but check that perturbed is used after load_checkpoint
-                {"train_batch_size_per_learner": 123, PERTURBED_HPARAMS: {"train_batch_size_per_learner": 444}}
+                {
+                    "train_batch_size_per_learner": 123,
+                    PERTURBED_HPARAMS: {"train_batch_size_per_learner": PerturbedInt(123)},
+                }
             )
             self.assertEqual(trainable2.algorithm_config.train_batch_size_per_learner, 123)
+            # trainable2.config["train_batch_size_per_learner"] = 444
             # Usage of algorithm_state will log an error
             trainable2.load_checkpoint(ckpt)
             # perturbation of trainable2 is respected
             trainable2.stop()
-            self.assertEqual(trainable2.algorithm_config.train_batch_size_per_learner, 444)
+            self.assertEqual(trainable2.algorithm_config.train_batch_size_per_learner, 123)
+            self.assertIsInstance(trainable2.algorithm_config.train_batch_size_per_learner, PerturbedInt)
             trainable2b = setup.trainable_class(
                 # NOTE: Normally should be the same but check that perturbed is used after load_checkpoint
                 {"train_batch_size_per_learner": 123}
@@ -231,10 +240,13 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
             self.assertEqual(trainable2b.algorithm_config.train_batch_size_per_learner, 222)
             trainable2c = setup.trainable_class(
                 # NOTE: Normally should be the same but check that perturbed is used after load_checkpoint
-                {"train_batch_size_per_learner": 123, PERTURBED_HPARAMS: {"train_batch_size_per_learner": 444}}
+                {
+                    "train_batch_size_per_learner": 333,
+                    PERTURBED_HPARAMS: {"train_batch_size_per_learner": PerturbedInt(333)},
+                }
             )
             trainable2c.load_checkpoint(ckpt_perturbed)
-            self.assertEqual(trainable2c.algorithm_config.train_batch_size_per_learner, 444)
+            self.assertEqual(trainable2c.algorithm_config.train_batch_size_per_learner, 333)
 
             # check that a perturbed checkpoint is restored:
             checkpoint2 = trainable2c.save_checkpoint(tmpdir3)
@@ -243,7 +255,8 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
             self.assertEqual(trainable3.algorithm_config.train_batch_size_per_learner, 512)  # not yet loaded
             trainable3.load_checkpoint(checkpoint2)
             # Check that perturbed value was loaded
-            self.assertEqual(trainable3.algorithm_config.train_batch_size_per_learner, 444)
+            self.assertEqual(trainable3.algorithm_config.train_batch_size_per_learner, 333)
+            self.assertIsInstance(trainable3.algorithm_config.train_batch_size_per_learner, PerturbedInt)
 
 
 class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints, num_cpus=4):
