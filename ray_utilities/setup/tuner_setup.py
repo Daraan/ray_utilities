@@ -19,11 +19,13 @@ from ray_utilities.constants import (
 from ray_utilities.misc import trial_name_creator
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner, create_search_algo
 from ray_utilities.training.helpers import get_current_step
+from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
 from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultIterationStopper
 
 if TYPE_CHECKING:
     from ray.air.config import RunConfig as RunConfigV1
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
+    from ray.tune import schedulers
     from ray.tune.execution.placement_groups import PlacementGroupFactory
     from ray.tune.experiment import Trial
     from ray.tune.stopper import Stopper
@@ -250,3 +252,20 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             tune_config=tune_config,
             run_config=self.create_run_config(self.create_callbacks()),
         )
+
+
+class ScheduledTunerSetup(TunerSetup):
+    def create_scheduler(self) -> schedulers.TrialScheduler:
+        return ReTuneScheduler(
+            perturbation_interval=2048 * 3,  # FIXME: Hardcoded defaults
+            resample_probability=1.0,
+            hyperparam_mutations={"train_batch_size_per_learner": {"grid_search": [256, 512, 1024, 2048]}},
+            mode=None,  # filled in by Tuner
+            metric=None,  # filled in by Tuner
+            synch=True,
+        )
+
+    def create_tune_config(self) -> tune.TuneConfig:
+        tune_config = super().create_tune_config()
+        tune_config.scheduler = self.create_scheduler()
+        return tune_config

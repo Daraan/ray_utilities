@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import logging
 import os
+import pickle
+import random
+import tempfile
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import pytest
 from ray import tune
 from ray.rllib.utils.metrics import (
@@ -14,13 +18,17 @@ from ray.rllib.utils.metrics import (
     NUM_ENV_STEPS_SAMPLED,
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
+from ray.train._internal.storage import StorageContext
+from ray.tune import CheckpointConfig
+from ray.tune.experiment import Trial
 from ray.tune.result import SHOULD_CHECKPOINT, TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.search.optuna import OptunaSearch
 from ray.tune.stopper import CombinedStopper
 from ray.tune.stopper.maximum_iteration import MaximumIterationStopper
+from ray.tune.utils.mock_trainable import MOCK_TRAINABLE_NAME, register_mock_trainable  # noqa: PLC0415
 
 from ray_utilities.callbacks.algorithm import exact_sampling_callback
-from ray_utilities.callbacks.tuner.metric_checkpointer import StepCheckpointer
+from ray_utilities.callbacks.tuner.metric_checkpointer import StepCheckpointer  # pyright: ignore[reportDeprecated]
 from ray_utilities.constants import (
     EVAL_METRIC_RETURN_MEAN,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
@@ -39,11 +47,15 @@ from ray_utilities.testing_utils import (
     SetupWithCheck,
     TestHelpers,
     TrainableWithChecks,
+    _MockTrial,
+    _MockTrialRunner,
     format_result_errors,
     iter_cases,
+    mock_result,
     patch_args,
 )
 from ray_utilities.training.default_class import DefaultTrainable
+from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
 
 if TYPE_CHECKING:
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
@@ -147,11 +159,8 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
 
         from ray.air.execution import PlacementGroupResourceManager  # noqa: PLC0415
         from ray.train import SyncConfig  # noqa: PLC0415, TC002
-        from ray.train._internal.storage import StorageContext  # noqa: PLC0415
         from ray.tune import Callback, CheckpointConfig  # noqa: PLC0415
         from ray.tune.execution.tune_controller import TuneController  # noqa: PLC0415
-        from ray.tune.experiment import Trial  # noqa: PLC0415
-        from ray.tune.utils.mock_trainable import MOCK_TRAINABLE_NAME, register_mock_trainable  # noqa: PLC0415
 
         register_mock_trainable()
 
@@ -161,7 +170,6 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             storage_context_cls: type = StorageContext,
             sync_config: Optional[SyncConfig] = None,
         ) -> StorageContext:
-            storage_path = storage_path or tempfile.mkdtemp()
             trial_name = "trial_name"
 
             storage = storage_context_cls(
@@ -653,3 +661,303 @@ class TestOptunaTuner(TestHelpers, DisableLoggers):
                 3,
             )
             # NOTE: This can be OK even if runs fail!
+
+
+class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
+    # Some tests taken from ray's testing suite
+
+    def setUp(self):
+        super().setUp()
+        self.NUM_TRIALS = 5
+        self.batch_size_mutations: dict[str, Any] = {"train_batch_size_per_learner": {"grid_search": [32, 64, 128]}}
+        self.setup = AlgorithmSetup(init_trainable=False)
+
+    def setup_scheduler(self, *, num_trials=None, step_once=True, tmpdir, trial_config=None, hyperparam_mutations=None):
+        num_trials = self.NUM_TRIALS if num_trials is None else num_trials
+        hyperparam_mutations = hyperparam_mutations or self.batch_size_mutations
+        trial_config = trial_config or self.setup.sample_params()
+        if "train_batch_size_per_learner" not in trial_config:
+            trial_config["train_batch_size_per_learner"] = 32
+        self.storage = StorageContext(storage_path=tmpdir, experiment_dir_name="test_re_scheduler")
+        SYNCH = False
+        scheduler = ReTuneScheduler(
+            perturbation_interval=10,
+            mode="max",
+            hyperparam_mutations=hyperparam_mutations,
+            synch=SYNCH,
+            metric="episode_reward_mean",
+            quantile_fraction=0.99,
+        )
+        runner = _MockTrialRunner(scheduler)
+        for i in range(num_trials):
+            trial = _MockTrial(i, trial_config, self.storage)
+            trial.init_local_path()
+            # runner calls add_trial on step
+            runner.add_trial(trial)  # calls ReTuner.add_trial
+            trial.status = Trial.RUNNING
+        for i in range(num_trials):
+            trial = runner.trials[i]
+            if step_once:
+                if SYNCH:
+                    self.check_on_trial_result(
+                        scheduler,
+                        runner,
+                        trial,
+                        mock_result(10, 50 * i),
+                        expected_decision=ReTuneScheduler.PAUSE,
+                    )
+                else:
+                    self.check_on_trial_result(
+                        scheduler,
+                        runner,
+                        trial,
+                        mock_result(10, 50 * i),
+                        expected_decision=ReTuneScheduler.CONTINUE,
+                    )
+        # num_checkpoint increases if trial is in upper_quantile
+        try:
+            scheduler.reset_stats()  # set checkpoints to 0
+        except AttributeError:
+            logger.exception("Failed to reset scheduler stats. Likely due to new interface")
+            scheduler._num_checkpoints = 0
+        return scheduler, runner
+
+    # Test based on ray's testing suite
+    def check_on_trial_result(self, pbt: ReTuneScheduler, runner, trial: Trial, result, expected_decision=None):
+        trial.status = Trial.RUNNING
+        decision = pbt.on_trial_result(runner, trial, result)
+        if expected_decision is None:
+            pass
+        elif expected_decision == ReTuneScheduler.PAUSE:
+            self.assertTrue(
+                trial.status == Trial.PAUSED or decision == expected_decision  # pyright: ignore[reportUnnecessaryComparison]
+            )
+        elif expected_decision == ReTuneScheduler.CONTINUE:
+            self.assertEqual(decision, expected_decision)
+        return decision
+
+    def test_retuner_basics(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scheduler, runner = self.setup_scheduler(tmpdir=tmpdir)
+
+    def testPerturbsLowPerformingTrials(self):  # noqa: N802
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pbt, runner = self.setup_scheduler(tmpdir=tmpdir)
+            trials: list[Trial] = runner.get_trials()
+            lower_quantile, upper_quantile = pbt._quantiles()
+            # Assume only one top trial
+            self.assertEqual(lower_quantile, trials[:-1], "lower_quantile mismatch")
+            self.assertEqual(upper_quantile, trials[-1:], "upper_quantile mismatch")
+            # self.assertNotIn(trials[2], lower_quantile, "trial 2 should not be in lower quantile")  # if 0.25
+            # self.assertNotIn(trials[2], upper_quantile, "trial 2 should not be in upper quantile")  # if 0.25
+            self.assertTrue(trials, "trials should not be empty")
+
+            # no perturbation: haven't hit next perturbation interval
+            self.check_on_trial_result(pbt, runner, trials[0], mock_result(15, -100), ReTuneScheduler.CONTINUE)
+            # Assumes self.NUM_TRIALS = 5
+            # Trial 0, score 0, trial 4 score 200
+            self.assertEqual(pbt.last_scores(trials), [0, 50, 100, 150, 200])
+            self.assertEqual(pbt._num_perturbations, 0)
+            self.assertNotIn("@perturbed", trials[0].experiment_tag)
+
+            # Perturbation only happens in lower quantile (0.5) by default (max with ray implementation)
+
+            # perturb since it's lower quantile
+            self.check_on_trial_result(pbt, runner, trials[0], mock_result(20, -100), ReTuneScheduler.PAUSE)
+            self.assertEqual(pbt.last_scores(trials), [-100, 50, 100, 150, 200])
+            self.assertIn("@perturbed", trials[0].experiment_tag)
+            self.assertIn(trials[0].restored_checkpoint, ["trial_3", "trial_4"])  # pyright: ignore[reportAttributeAccessIssue] # from mock
+            self.assertEqual(pbt._num_perturbations, 1)
+
+            # also perturbed as trial[2] now in lower quantile
+            self.check_on_trial_result(pbt, runner, trials[2], mock_result(20, 40), ReTuneScheduler.PAUSE)
+            self.assertEqual(pbt.last_scores(trials), [-100, 50, 40, 150, 200])
+            self.assertEqual(pbt._num_perturbations, 2)
+            self.assertIn(trials[2].restored_checkpoint, ["trial_3", "trial_4"])  # pyright: ignore[reportAttributeAccessIssue] # from mock
+            self.assertIn("@perturbed", trials[2].experiment_tag)
+
+            # trial 1 is in neither quantile if quantile 0.25 is used (ray default)
+            pbt._quantile_fraction = 0.25
+            self.check_on_trial_result(pbt, runner, trials[1], mock_result(20, 100), ReTuneScheduler.PAUSE)
+            self.assertEqual(pbt.last_scores(trials), [-100, 100, 40, 150, 200])
+            self.assertEqual(pbt._num_perturbations, 2)
+            self.assertIsNone(trials[1].restored_checkpoint)  # pyright: ignore[reportAttributeAccessIssue] # from mock
+            self.assertNotIn("@perturbed", trials[1].experiment_tag)
+
+    def testCheckpointsMostPromisingTrials(self):  # noqa: N802
+        # taken from ray's testing suite
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pbt, runner = self.setup_scheduler(tmpdir=tmpdir)
+            trials = runner.get_trials()
+            self.assertEqual(pbt.last_scores(trials), [0, 50, 100, 150, 200])
+
+            pbt._quantile_fraction = 3 / 5
+            # As 200=200 but trial will not be in 99% quantile, decision is NOOP
+            # NOOP means the trial is paused, and new checkpoint can be loaded
+            # TODO: Should continue trial if nearly good
+            # no checkpoint: haven't hit next perturbation interval yet
+            self.check_on_trial_result(pbt, runner, trials[0], mock_result(15, 200), ReTuneScheduler.CONTINUE)
+            self.assertEqual(pbt.last_scores(trials), [0, 50, 100, 150, 200])
+            self.assertEqual(pbt._num_checkpoints, 0)
+
+            # checkpoint: both past interval and upper quantile
+            self.check_on_trial_result(pbt, runner, trials[0], mock_result(20, 200), ReTuneScheduler.CONTINUE)
+            self.assertEqual(pbt.last_scores(trials), [200, 50, 100, 150, 200])
+            self.assertEqual(pbt._num_checkpoints, 1)
+            self.check_on_trial_result(pbt, runner, trials[1], mock_result(30, 201), ReTuneScheduler.CONTINUE)
+            self.assertEqual(pbt.last_scores(trials), [200, 201, 100, 150, 200])
+            self.assertEqual(pbt._num_checkpoints, 2)
+
+            # not upper quantile any more, only top 2 are kept -> Pause
+            self.check_on_trial_result(pbt, runner, trials[4], mock_result(30, 199), ReTuneScheduler.PAUSE)
+            self.assertEqual(pbt.last_scores(trials), [200, 201, 100, 150, 199])
+            self.assertEqual(pbt._num_checkpoints, 2)
+            self.assertEqual(pbt._num_perturbations, 1)
+            self.assertIn(trials[4].restored_checkpoint, ["trial_0", "trial_1"])
+
+    def testCheckpointing(self):  # noqa: N802
+        # taken from ray's testing suite
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pbt, runner = self.setup_scheduler(tmpdir=tmpdir)
+
+            class Experiment(tune.Trainable):
+                def step(self):
+                    return {"episode_reward_mean": self.training_iteration, "current_step": self.training_iteration * 5}
+
+                def save_checkpoint(self, checkpoint_dir):
+                    checkpoint = os.path.join(checkpoint_dir, "checkpoint")
+                    self._ckpt = checkpoint
+                    with open(checkpoint, "w") as f:
+                        f.write("OK")
+                    print("Checkpoint saved to", checkpoint)
+
+                def reset_config(self, config) -> bool:  # pyright: ignore[reportIncompatibleMethodOverride]
+                    return True
+
+                def load_checkpoint(self, checkpoint):
+                    pass
+
+                def restore(self, checkpoint_path):
+                    # does not receive correct path
+                    return
+
+            trial_hyperparams = {"train_batch_size_per_learner": 32}
+
+            analysis = tune.run(
+                Experiment,
+                num_samples=3,
+                scheduler=pbt,
+                checkpoint_config=CheckpointConfig(checkpoint_frequency=3, num_to_keep=None),
+                config=trial_hyperparams,
+                stop={"training_iteration": 30},
+                time_budget_s=100_000,
+                checkpoint_score_attr="episode_reward_mean",
+            )
+
+            for trial in analysis.trials:
+                self.assertEqual(trial.status, Trial.TERMINATED)
+                self.assertTrue(trial.has_checkpoint())
+
+    def testPermutationContinuation(self):  # noqa: N802
+        # taken from ray's testing suite
+        # self.enable_loggers()
+
+        os.environ["TUNE_GLOBAL_CHECKPOINT_S"] = "500"  # timeout for save checkpoint
+
+        class MockTrainable(tune.Trainable):
+            def setup(self, config):
+                self.iter = 0
+                self.a = config["a"]
+                self.b = config["b"]
+                self.c = config["c"]
+
+            def step(self):
+                self.iter += 1
+                return {"mean_accuracy": (self.a - self.iter) * self.b, "a": self.a, "b": self.b, "c": self.c}
+
+            def save_checkpoint(self, checkpoint_dir):
+                # breakpoint()
+                # remote_breakpoint()
+                checkpoint_path = os.path.join(checkpoint_dir, "model.mock")
+                with open(checkpoint_path, "wb") as fp:
+                    pickle.dump((self.a, self.b, self.iter), fp)
+
+            def load_checkpoint(self, checkpoint: str):  # pyright: ignore[reportIncompatibleMethodOverride]
+                # NOTE: loading a checkpoint changes training_iteration when synch=False
+                # breakpoint()
+                # remote_breakpoint()
+                checkpoint_path = os.path.join(checkpoint, "model.mock")
+                with open(checkpoint_path, "rb") as fp:
+                    self.a, self.b, self.iter = pickle.load(fp)
+                # This resets the training iteration stop criterion to a bad value
+                print("Training iteration after reload", self.training_iteration, "@ iter", self.iter)
+
+        scheduler = ReTuneScheduler(
+            time_attr="training_iteration",
+            metric="mean_accuracy",
+            mode="max",
+            perturbation_interval=1,
+            perturbation_factors=(1, 1),
+            log_config=True,
+            hyperparam_mutations={"c": lambda: 1},  # c always mutates to 1
+            synch=True,
+        )
+
+        class MockParam(object):
+            def __init__(self, params):
+                self._params = params
+                self._index = 0
+
+            def __call__(self, *args, **kwargs):
+                val = self._params[self._index % len(self._params)]
+                self._index += 1
+                return val
+
+        param_a = MockParam([10, 20, 30, 40])
+        param_b = MockParam([1.2, 0.9, 1.1, 0.8])
+
+        random.seed(100)
+        np.random.seed(1000)
+        checkpoint_config = CheckpointConfig(
+            num_to_keep=2,
+            checkpoint_score_attribute="training_iteration",
+            checkpoint_score_order="min",
+            checkpoint_frequency=1,
+            checkpoint_at_end=True,
+        )
+        results = tune.run(
+            MockTrainable,
+            config={
+                "a": tune.sample_from(lambda _: param_a()),
+                "b": tune.sample_from(lambda _: param_b()),
+                "c": 1,
+            },
+            fail_fast=True,
+            num_samples=4,
+            checkpoint_config=checkpoint_config,
+            scheduler=scheduler,
+            name="testPermutationContinuation",
+            stop={"training_iteration": 3},
+        )
+        # in the end all should have the same hyperparameters of trial_3:
+        # Trial 4 (40-3) * 0.8 = 29.6
+        # Trial 3 (30-3) * 1.1 = 29.7
+        trial2 = results.trials[2]
+        assert trial2.checkpoint
+        with open(os.path.join(trial2.checkpoint.path, "model.mock"), "rb") as fp:
+            trial2_ckpt = pickle.load(fp)
+        for trial in results.trials[1:]:
+            self.assertDictEqual(trial.config, trial2.config)
+        for i, trial in enumerate(results.trials):
+            if i != 3:
+                self.assertEqual(trial.metric_analysis["a"]["min"], param_a._params[i])
+            else:
+                self.assertEqual(trial.metric_analysis["a"]["max"], param_a._params[i])
+            self.assertEqual(trial.metric_analysis["a"]["last"], 30)
+            self.assertEqual(trial.metric_analysis["b"]["last"], second=1.1)
+            assert trial.checkpoint
+            with open(os.path.join(trial.checkpoint.path, "model.mock"), "rb") as fp:
+                self.assertEqual(trial2_ckpt, pickle.load(fp))
+            if i != 2:
+                with open(os.path.join(trial.checkpoint.path[:-1] + "0", "model.mock"), "rb") as fp:
+                    self.assertNotEqual(trial2_ckpt, pickle.load(fp))
