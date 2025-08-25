@@ -523,6 +523,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
     @pytest.mark.length("medium")
     def test_tuner_checkpointing(self, cases):
         # self.enable_loggers()
+        self.no_pbar_updates()
         with patch_args(
             "--num_samples", "1",
             "--num_jobs", "1",

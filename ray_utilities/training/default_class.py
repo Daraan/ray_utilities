@@ -783,19 +783,22 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             algorithm_config_dict["_train_batch_size_per_learner"] = algorithm_config_dict.pop(
                 "train_batch_size_per_learner"
             )
+        attrs_not_found = []
         for k in algorithm_config_dict.keys():
             ATTR_NOT_FOUND = object()
             cls_attr = getattr(algorithm_config_dict["class"], k, ATTR_NOT_FOUND)
             if cls_attr is ATTR_NOT_FOUND:
-                print("Attr", k, "not found on class", algorithm_config_dict["class"])
+                # This can for example be offline learning settings, deprecated values. Important is property check.
+                attrs_not_found.append(k)
                 continue
             if isinstance(cls_attr, property):
                 _logger.error(
-                    "%s is a property of class %s. State contains key overwritting this property. "
+                    "%s is a property of class %s. State contains key overwriting this property. "
                     "This can lead to unexpected behavior.",
                     k,
                     algorithm_config_dict["class"],
                 )
+        print("Attributes not found on class", algorithm_config_dict["class"], ":", attrs_not_found)
         # state["algorithm_config"] contains "class" to restore the correct config class
         new_algo_config = AlgorithmConfig.from_state(algorithm_config_dict)
         if type(new_algo_config) is not type(self.algorithm_config):
@@ -860,6 +863,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 self._git_repo_sha,
                 state.get("git_sha", _UNKNOWN_GIT_SHA),
             )
+        keys_to_process.discard("git_sha")
 
         if len(keys_to_process) > 0:
             _logger.warning(
