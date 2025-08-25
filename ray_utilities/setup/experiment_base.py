@@ -96,7 +96,11 @@ class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, Algor
 
     args: ParserType_co
     """Duck-typed SimpleNamespace"""
-    param_space: dict[str, Any]
+    param_space: dict[str, Any] | TypedDict[{"__params_not_created__": Literal[True]}]
+    """
+    Result of create_param_space.
+    However, as the function might never have been called, this might be dict with a single key __params_not_created__
+    """
     setup_class: type[ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]]
     config: ConfigType_co
     __init_config__: bool
@@ -1136,7 +1140,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             "config_overrides": self.config_overrides(),
             "__init_config__": True,
             # Allows to recreate the config based on args
-            "param_space": self.param_space,
+            "param_space": getattr(self, "param_space", {"__params_not_created__": True}),
             "setup_class": type(self),
         }
         return data

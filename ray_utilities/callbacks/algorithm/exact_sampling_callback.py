@@ -41,8 +41,8 @@ def _remove_or_trim_samples(samples: list[EpisodeType], total_samples: int, exac
     exact_matches = [(index := i) if length == diff else False for i, length in enumerate(lengths)]
     # If there is a sample with exact length, remove it. Appears to be the most likely case.
     if index is not None:
-        logger.info(
-            "Removing a sample with exact length %d: %s. Was done: %s",
+        logger.debug(
+            "Removing a sample with exact length %d: %s. Sample was done: %s",
             diff,
             samples[index],
             samples[index].is_done,

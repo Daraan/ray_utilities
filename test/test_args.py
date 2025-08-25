@@ -143,32 +143,39 @@ class TestExtensionsAdded(SetupDefaults):
                 setup.args.dynamic_batch,
                 "Expected dynamic_batch to be True when --dynamic_batch is set.",
             )
-            for config in (setup.config, setup.trainable_class().algorithm_config):
+            trainable = setup.trainable_class()
+            for config in (setup.config, trainable.algorithm_config):
                 with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
                     self.assertTrue(self.is_algorithm_callback_added(config, DynamicGradientAccumulation))
                     self.assertTrue(issubclass(config.learner_class, PPOTorchLearnerWithGradientAccumulation))
+            trainable.stop()
 
     @patch_args()
     def test_dynamic_eval_interval_added(self):
         # Check DynamicEvalInterval is not added by default
         setup = AlgorithmSetup()
-        for config in (setup.config, setup.trainable_class().algorithm_config):
+        trainable = setup.trainable_class()
+        for config in (setup.config, trainable.algorithm_config):
             with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
                 self.assertFalse(self.is_algorithm_callback_added(config, DynamicEvalInterval))
+        trainable.stop()
         # Check that the DynamicEvalInterval is also added
         for args in ("--dynamic_buffer", "--dynamic_batch"):
             with patch_args(args), self.subTest(args=args):
                 setup = AlgorithmSetup()
-                for config in (setup.config, setup.trainable_class().algorithm_config):
+                trainable = setup.trainable_class()
+                for config in (setup.config, trainable.algorithm_config):
                     with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
                         self.assertTrue(
                             self.is_algorithm_callback_added(config, DynamicEvalInterval),
                             msg=f"Expected DynamicEvalInterval to be in callbacks_class when {args} is set.",
                         )
+                trainable.stop()
         # Check that only one is added
         with patch_args("--dynamic_batch", "--dynamic_buffer"):
             setup = AlgorithmSetup()
-            for config in (setup.config, setup.trainable_class().algorithm_config):
+            trainable = setup.trainable_class()
+            for config in (setup.config, trainable.algorithm_config):
                 with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
                     self.assertTrue(
                         (
@@ -181,6 +188,7 @@ class TestExtensionsAdded(SetupDefaults):
                             and config.callbacks_class.count(DynamicEvalInterval) == 1
                         )
                     )
+            trainable.stop()
 
 
 class TestProcessing(unittest.TestCase):

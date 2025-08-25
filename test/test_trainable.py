@@ -258,6 +258,23 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
             self.assertEqual(trainable3.algorithm_config.train_batch_size_per_learner, 333)
             self.assertIsInstance(trainable3.algorithm_config.train_batch_size_per_learner, PerturbedInt)
 
+    def test_further_subclassing(self):
+        # for example by resource placement request
+        setup = AlgorithmSetup()
+        setup.trainable_class.use_pbar = not setup.trainable_class.use_pbar  # change from default value
+        setup.trainable_class.discrete_eval = not setup.trainable_class.discrete_eval
+
+        class SubclassedTrainable(setup.trainable_class):
+            pass
+
+        self.assertIs(SubclassedTrainable.setup_class, setup.trainable_class.setup_class)  # pyright: ignore[reportGeneralTypeIssues]
+        self.assertIs(SubclassedTrainable.setup_class, setup)
+        self.assertEqual(SubclassedTrainable._git_repo_sha, setup.trainable_class._git_repo_sha)
+        if "GITHUB_REF" not in os.environ:
+            self.assertNotEqual(SubclassedTrainable._git_repo_sha, "unknown")
+        self.assertEqual(SubclassedTrainable.use_pbar, setup.trainable_class.use_pbar)
+        self.assertEqual(SubclassedTrainable.discrete_eval, setup.trainable_class.discrete_eval)
+
 
 class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints, num_cpus=4):
     def setUp(self):

@@ -371,7 +371,7 @@ class DefaultResourceArgParser(Tap):
         super().configure()
         self.add_argument("-J", "--num_jobs")
         self.add_argument("-gpu", "--gpu")
-        self.add_argument("-mp", "--parallel")
+        self.add_argument("-p", "--parallel")
         self.add_argument("-np", "--not_parallel")
         self.add_argument("--num_samples", "-n", type=int, default=None)
 

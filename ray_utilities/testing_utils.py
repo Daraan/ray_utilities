@@ -966,6 +966,9 @@ class TestHelpers(unittest.TestCase):
         self.assertDictEqual(setup_state1, setup_state2)
 
     def compare_param_space(self, param_space1: dict[str, Any], param_space2: dict[str, Any]):
+        if param_space1 == {"__params_not_created__": True} or param_space2 == {"__params_not_created__": True}:
+            self.assertTrue(param_space1 == param_space2)
+            return
         self.assertCountEqual(param_space1, param_space2)
         self.assertEqual(param_space1.keys(), param_space2.keys())
         self.assertDictEqual(param_space1["cli_args"], param_space2["cli_args"])

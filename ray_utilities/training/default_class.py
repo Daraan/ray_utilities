@@ -201,6 +201,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         if fix_argv:
             if isclass(setup_cls):
                 setup_cls = type(setup_cls.__name__ + "FixedArgv", (setup_cls,), {"_fixed_argv": sys.argv})
+            else:
+                _logger.error("fix_argv is currently only supported when passing a setup class.")
         # Get git metadata now, as when on remote we are in a temp dir
         try:
             repo = git.Repo(search_parent_directories=True)
@@ -218,6 +220,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             metaclass=_TrainableSubclassMeta,
             base=cls,
         ):
+            # FIXME: Somehow these attributes are possibly not carried over into tune properly
+            _git_repo_sha = cls._git_repo_sha
             setup_class = setup_cls
             discrete_eval = discrete_eval_
             use_pbar = use_pbar_
@@ -302,7 +306,9 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         _logger.debug("Setting up %s with config: %s", self.__class__.__name__, config)
 
         if isclass(self.setup_class):
-            self._setup = self.setup_class()  # XXX # FIXME # correct args; might not work when used with Tuner
+            self._setup = self.setup_class(
+                init_trainable=False, init_param_space=False
+            )  # XXX # FIXME # correct args; might not work when used with Tuner
         else:
             self._setup = self.setup_class
         # TODO: Possible unset setup._config to not confuse configs (or remove setup totally?)
@@ -905,8 +911,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         if self._git_repo_sha == _UNKNOWN_GIT_SHA:
             try:
                 repo = git.Repo(search_parent_directories=True)
-            except Exception:  # noqa: BLE001
-                _logger.error("Failed to get git Repo for metadata")
+            except Exception as e:  # noqa: BLE001
+                _logger.error("Failed to get git Repo for metadata: %s", e)
             else:
                 self._git_repo_sha = cast("git.types.AnyGitObject", repo.head.object).hexsha
         metadata["repo_sha"] = self._git_repo_sha
@@ -999,6 +1005,12 @@ class _TrainableSubclassMeta(ABCMeta):
 
     def __new__(cls, name, bases, namespace, base: type[TrainableBase[Any, Any, Any]] = TrainableBase):
         namespace["_base_cls"] = base
+        try:
+            namespace["_git_repo_sha"] = next(
+                sha for b in bases if (sha := getattr(b, "_git_repo_sha", _UNKNOWN_GIT_SHA)) and sha != _UNKNOWN_GIT_SHA
+            )
+        except StopIteration:
+            pass
         return super().__new__(cls, name, bases, namespace)
 
     def __subclasscheck__(cls, subclass: type[TrainableBase[Any, Any, Any] | Any]):
