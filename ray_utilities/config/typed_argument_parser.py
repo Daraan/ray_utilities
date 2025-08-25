@@ -284,7 +284,39 @@ class _DefaultSetupArgumentParser(Tap):
         )
 
 
-class RLlibArgumentParser(Tap):
+class _EnvRunnerParser(Tap):
+    num_env_runners: int = 0
+    """Number of CPU workers to use for training"""
+
+    evaluation_num_env_runners: int = 0
+    """Number of CPU workers to use for evaluation"""
+
+    num_envs_per_env_runner: int = 4
+    """Number of parallel environments per env runner"""
+
+    def configure(self) -> None:
+        super().configure()
+        self.add_argument(
+            "-n_envs",
+            "--num_envs_per_env_runner",
+            type=int,
+            required=False,
+        )
+        self.add_argument(
+            "-n_runners",
+            "--num_env_runners",
+            type=int,
+            required=False,
+        )
+        self.add_argument(
+            "-n_eval_runners",
+            "--evaluation_num_env_runners",
+            type=int,
+            required=False,
+        )
+
+
+class RLlibArgumentParser(_EnvRunnerParser):
     """Attributes of this class have to be attributes of the AlgorithmConfig."""
 
     train_batch_size_per_learner: int = 2048  # batch size that ray samples

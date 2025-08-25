@@ -128,12 +128,12 @@ def create_algorithm_config(
         # num_cpus_per_worker=1,
     )
     config.env_runners(
-        num_env_runners=2 if args["parallel"] else 0,
+        num_env_runners=2 if args["parallel"] and args["num_env_runners"] < 2 else args["num_env_runners"],
         num_cpus_per_env_runner=1,  # num_cpus_per_worker
         # How long an rollout episode lasts, for "auto" calculated from batch_size
         # total_train_batch_size / (num_envs_per_env_runner * num_env_runners)
         # rollout_fragment_length=1,  # Default: "auto"
-        num_envs_per_env_runner=1,
+        num_envs_per_env_runner=args["num_envs_per_env_runner"],
         # validate_env_runners_after_construction=args["test"],
         # 1) "truncate_episodes": Each call to `EnvRunner.sample()` returns a
         #    batch of at most `rollout_fragment_length * num_envs_per_env_runner` in
@@ -239,10 +239,12 @@ def create_algorithm_config(
     )
     # https://docs.ray.io/en/latest/rllib/package_ref/doc/ray.rllib.algorithms.algorithm_config.AlgorithmConfig.evaluation.html
     config.evaluation(
-        evaluation_interval=10,
-        evaluation_duration=5,
+        evaluation_interval=10,  # Note can be adjusted dynamically by DynamicEvalCallback
+        evaluation_duration=10,
         evaluation_duration_unit="episodes",
-        evaluation_num_env_runners=2 if args["parallel"] else 0,
+        evaluation_num_env_runners=(
+            2 if args["parallel"] and args["evaluation_num_env_runners"] < 2 else args["evaluation_num_env_runners"]
+        ),
         # NOTE: Policy gradient algorithms are able to find the optimal
         # policy, even if this is a stochastic one. Setting "explore=False" here
         # results in the evaluation workers not using this optimal policy!
