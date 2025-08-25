@@ -55,8 +55,16 @@ from ray.rllib.utils.metrics import (
     TIMERS,
 )
 from ray.rllib.utils.metrics.stats import Stats
+from ray.train import Checkpoint
+from ray.train._internal.checkpoint_manager import _CheckpointManager
+from ray.train._internal.session import _FutureTrainingResult, _TrainingResult
+from ray.tune import CheckpointConfig
+from ray.tune.execution.placement_groups import PlacementGroupFactory
+from ray.tune.experiment.trial import Trial, _TemporaryTrialState
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
+from ray.tune.schedulers import TrialScheduler
 from ray.tune.search.sample import Categorical, Domain, Float, Integer
+from ray.tune.trainable.metadata import _TrainingRunMetadata
 from typing_extensions import Final, NotRequired, Required, Sentinel, get_origin, get_type_hints
 
 from ray_utilities.config import DefaultArgumentParser
@@ -1325,3 +1333,127 @@ def change_log_level(logger: logging.Logger, new_level: logging._Level):
         yield
     finally:
         logger.setLevel(old_level)
+
+
+# region Mock classes
+
+
+def mock_result(t, rew, *, t_key="current_step"):
+    return dict(**{t_key: t}, episode_reward_mean=rew, training_iteration=int(t))
+
+
+class _FakeFutureResult(_FutureTrainingResult):
+    # taken from ray's tests
+    def __init__(self, result):
+        self.result = result
+
+    def resolve(self, block: bool = True):
+        return self.result
+
+
+class _MockTrialRunner:
+    """From ray testing suite"""
+
+    def __init__(self, scheduler):
+        self._scheduler_alg = scheduler
+        self.search_alg = None
+        self.trials = []
+
+    def process_action(self, trial, action):
+        if action == TrialScheduler.CONTINUE:
+            pass
+        elif action == TrialScheduler.PAUSE:
+            self.pause_trial(trial)
+        elif action == TrialScheduler.STOP:
+            self.stop_trial(trial)
+
+    def pause_trial(self, trial, should_checkpoint: bool = True):  # noqa: FBT001, FBT002
+        if should_checkpoint:
+            self._schedule_trial_save(trial, None)
+        trial.status = Trial.PAUSED
+
+    def stop_trial(self, trial, error=False, error_msg=None):  # noqa: ARG002, FBT002
+        if trial.status in [Trial.ERROR, Trial.TERMINATED]:
+            return
+        if trial.status in [Trial.PENDING, Trial.PAUSED]:
+            self._scheduler_alg.on_trial_remove(self, trial)
+        else:
+            self._scheduler_alg.on_trial_complete(self, trial, mock_result(100, 10))
+
+        trial.status = Trial.ERROR if error else Trial.TERMINATED
+
+    def add_trial(self, trial):
+        self.trials.append(trial)
+        self._scheduler_alg.on_trial_add(self, trial)
+
+    def get_trials(self):
+        return self.trials
+
+    def get_live_trials(self):
+        return {t for t in self.trials if t.status != Trial.TERMINATED}
+
+    def _launch_trial(self, trial):
+        trial.status = Trial.RUNNING
+
+    def _set_trial_status(self, trial, status):
+        trial.status = status
+
+    def start_trial(self, trial, checkpoint_obj=None, train=True):  # noqa: ARG002, FBT002
+        trial.logger_running = True
+        if checkpoint_obj:
+            trial.restored_checkpoint = checkpoint_obj.dir_or_data
+        trial.status = Trial.RUNNING
+        return True
+
+    def _schedule_trial_restore(self, trial):
+        pass
+
+    def _schedule_trial_save(self, trial, result: dict | None = None):
+        result = result or {}
+        return _FakeFutureResult(
+            _TrainingResult(
+                checkpoint=Checkpoint.from_directory(trial.trainable_name),
+                metrics=result,
+            )
+        )
+
+
+class _MockTrial(Trial):
+    def __init__(self, i, config, storage):
+        self.trainable_name = "trial_{}".format(i)
+        self.trial_id = str(i)
+        self.config = config
+        self.experiment_tag = "{}tag".format(i)
+        self.trial_name_creator = None
+        self.logger_running = False
+        self._restored_checkpoint = None
+        self._restore_checkpoint_result = None
+        self.placement_group_factory = PlacementGroupFactory([{"CPU": 1}])
+        self.custom_trial_name = None
+        self.custom_dirname = None
+        # ray missing coverage here,  if attr not in trial.config: i.e. config not provided by searcher
+        # self.evaluated_params = {}  # XXX: Added by us; why does ray not raise error here
+        self._legacy_local_experiment_path = None
+        self.relative_logdir = None
+        self._default_result_or_future = None
+        self.run_metadata = _TrainingRunMetadata()
+        self.run_metadata.checkpoint_manager = _CheckpointManager(
+            checkpoint_config=CheckpointConfig(
+                num_to_keep=2,
+                checkpoint_score_attribute="episode_reward_mean",
+            ),
+        )
+        self.temporary_state = _TemporaryTrialState()
+        self.storage = storage
+
+    @property
+    def restored_checkpoint(self):
+        if hasattr(self.run_metadata.checkpoint_manager, "_latest_checkpoint_result"):
+            assert self.run_metadata.checkpoint_manager
+            result = self.run_metadata.checkpoint_manager._latest_checkpoint_result
+            if result is None:
+                return self._restored_checkpoint
+            assert result
+            assert result.checkpoint
+            return result.checkpoint.path
+        return self._restored_checkpoint
