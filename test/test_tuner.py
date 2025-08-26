@@ -513,7 +513,10 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 )
 
                 NUM_RUNS = 5
-                SAMPLE_SPACE = [16, 44, 68]  # should be divisible num_envs_per_env_runner
+                # Define multipliers for sample space; all values will be divisible by num_envs_per_env_runner
+                SAMPLE_SPACE_MULTIPLIERS = [4, 15, 19]
+                assert setup1.config.num_envs_per_env_runner
+                SAMPLE_SPACE = [max(setup1.config.num_envs_per_env_runner * m, 16) for m in SAMPLE_SPACE_MULTIPLIERS]
                 with patch_args(
                     "--num_samples", NUM_RUNS,
                     "--num_jobs", 2 if num_env_runners > 0 else 4,
@@ -947,7 +950,7 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
             else:
                 self.assertEqual(trial.metric_analysis["a"]["max"], param_a._params[i])
             self.assertEqual(trial.metric_analysis["a"]["last"], 30)
-            self.assertEqual(trial.metric_analysis["b"]["last"], second=1.1)
+            self.assertEqual(trial.metric_analysis["b"]["last"], 1.1)
             assert trial.checkpoint
             with open(os.path.join(trial.checkpoint.path, "model.mock"), "rb") as fp:
                 self.assertEqual(trial2_ckpt, pickle.load(fp))

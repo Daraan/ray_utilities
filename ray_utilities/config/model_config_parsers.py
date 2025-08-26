@@ -7,13 +7,37 @@ import tree
 from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
 from tap import Tap
 
+try:
+    from frozenlist import FrozenList  # pyright: ignore[reportAssignmentType]
+
+    _fcnet_hiddens_default = FrozenList([256, 256])
+    _fcnet_hiddens_default.freeze()
+    _head_fcnet_hiddens_default = FrozenList([])
+    _head_fcnet_hiddens_default.freeze()
+except ImportError:
+
+    class FrozenList(list):
+        def freeze(self):
+            pass
+
+        def append(self, *args, **kwargs) -> None:  # noqa: ARG002
+            raise RuntimeError("Cannot modify frozen list.")
+
+        insert = pop = append
+        frozen: bool = True
+
+    _fcnet_hiddens_default = FrozenList([256, 256])
+    _head_fcnet_hiddens_default = FrozenList([])
+
+__all__ = ["MLPConfigParser"]
+
 
 class MLPConfigParser(Tap):
     """Keys must align with RLlib's DefaultModelConfig"""
 
     # Documentation taken from ray's DefaultModelConfig
 
-    fcnet_hiddens: list[int] = (256, 256)  # pyright: ignore[reportAssignmentType]
+    fcnet_hiddens: list[int] = _fcnet_hiddens_default
     """
     List containing the sizes (number of nodes) of a fully connected (MLP) stack.
     Note that in an encoder-based default architecture with a policy head (and
@@ -52,7 +76,7 @@ class MLPConfigParser(Tap):
     # ====================================================
     # Head configs (e.g. policy- or value function heads)
     # ====================================================
-    head_fcnet_hiddens: list[int] = ()  # pyright: ignore[reportAssignmentType]
+    head_fcnet_hiddens: list[int] = _head_fcnet_hiddens_default
     """
     List containing the sizes (number of nodes) of a fully connected (MLP) head
     (e.g., policy-, value-, or Q-head). To configure the encoder architecture,
