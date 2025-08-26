@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 
 
-ENV_STEPS_PER_ITERATION = 10
+ENV_STEPS_PER_ITERATION = 10  # as long as this is small can test for NUM_ENV_STEPS_SAMPLED
 NUM_ENV_STEPS_IN_CALLBACK_LIFETIME = "num_env_steps_in_callback_lifetime"
 A_MEAN_VALUE = "a_mean_value"
 NUM_ENV_RUNNERS = 3

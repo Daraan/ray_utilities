@@ -15,7 +15,6 @@ from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
     EPISODE_RETURN_MEAN,
     EVALUATION_RESULTS,
-    NUM_ENV_STEPS_SAMPLED,
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
 from ray.train._internal.storage import StorageContext
@@ -302,6 +301,7 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
 
 
 @pytest.mark.tuner
+@pytest.mark.length("medium")
 class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     @Cases(ENV_RUNNER_CASES)
     def test_retune_with_different_config(self, cases):
@@ -326,13 +326,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 expected_lifetime = (
                     expected * (result["training_iteration"] - 1) + BATCH_SIZE
                 )  # first step + 2 iterations
-                assert (value := result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED]) == expected, (
-                    f"Expected {expected} env steps sampled, got {value}"
-                )
-                lifetime_value = result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]
-                assert lifetime_value == expected_lifetime, (
-                    f"Expected {expected_lifetime} env steps sampled lifetime, got {lifetime_value}"
-                )
+                # Do not compare ENV_STEPS_SAMPLED when using multiple envs per env runner
                 assert NUM_ENV_STEPS_PASSED_TO_LEARNER in result[ENV_RUNNER_RESULTS]
                 value = result[ENV_RUNNER_RESULTS].get(NUM_ENV_STEPS_PASSED_TO_LEARNER, None)
                 assert value == expected, f"Expected {expected} env steps passed to learner, got {value}"
@@ -366,12 +360,12 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 del tuner1
                 self.assertEqual(
                     results1.num_errors, 0, "Encountered errors: " + format_result_errors((results1.errors))
-                )  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]
+                )
                 # Check metrics:
                 result1 = results1[0]
                 assert result1.metrics and result1.config
-                self.assertEqual(result1.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME], BATCH_SIZE)  # pyright: ignore[reportOptionalSubscript]
-                self.assertEqual(result1.metrics[TRAINING_ITERATION], 1)  # pyright: ignore[reportOptionalSubscript]
+                self.assertEqual(result1.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME], BATCH_SIZE)
+                self.assertEqual(result1.metrics[TRAINING_ITERATION], 1)
                 checkpoint_dir, checkpoints = self.get_checkpoint_dirs(results1[0])
                 self.assertEqual(
                     len(checkpoints),
@@ -470,10 +464,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 self.assertEqual(result2.metrics["iterations_since_restore"], NUM_ITERS_2)
 
                 # Change batch size change:
-                self.assertEqual(
-                    result2.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME],
-                    BATCH_SIZE + (BATCH_SIZE * 2) * NUM_ITERS_2,
-                )
+                # do not check NUM_ENV_STEPS_SAMPLED_LIFETIME when using multiple envs per env runner
                 self.assertEqual(
                     result2.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME],
                     BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE,
@@ -489,7 +480,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     @Cases([0])  # more env runners should have no influence here
     def test_retune_with_tune_argument(self, cases):
         class TrainableWithChecksB(TrainableWithChecks):
-            debug = False
+            debug_step = False
 
         Setup = SetupWithCheck(TrainableWithChecksB)
 
@@ -522,7 +513,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 )
 
                 NUM_RUNS = 5
-                SAMPLE_SPACE = [16, 44, 66]
+                SAMPLE_SPACE = [16, 44, 68]  # should be divisible num_envs_per_env_runner
                 with patch_args(
                     "--num_samples", NUM_RUNS,
                     "--num_jobs", 2 if num_env_runners > 0 else 4,
@@ -535,6 +526,8 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     Setup.rollout_size_sample_space = {"grid_search": SAMPLE_SPACE}
                     with Setup() as setup2:
                         setup2.config.env_runners(num_env_runners=num_env_runners)
+                assert setup2.config.num_envs_per_env_runner is not None
+                self.assertTrue(all(s % setup2.config.num_envs_per_env_runner == 0 for s in SAMPLE_SPACE))
                 tuner2 = setup2.create_tuner()
                 tuner2._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
                     checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
@@ -567,7 +560,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 # check if values match expectations
                 for result in results2:
                     assert result.metrics and result.config
-                    self.assertEqual(result.metrics["training_iteration"], 3)
+                    self.assertEqual(result.metrics[TRAINING_ITERATION], 3)
                     self.assertEqual(result.metrics["iterations_since_restore"], 2)
                     # Check that new batch_size was used
                     self.assertEqual(

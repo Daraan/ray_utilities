@@ -528,12 +528,16 @@ class TestHelpers(unittest.TestCase):
         if "environments" in metrics_0 and seed_subset_ok:
             metrics_0 = deepcopy(metrics_0)
             metrics_1 = deepcopy(metrics_1)
-            seeds0 = metrics_0["environments"]["seeds"]
-            seeds1 = metrics_1["environments"]["seeds"]
+            seeds0: dict[str, Iterable[int]] = metrics_0["environments"]["seeds"]
+            seeds1: dict[str, Iterable[int]] = metrics_1["environments"]["seeds"]
             # when having multiple env runners the seed sequence might be
             seq0 = set(seeds0.pop("seed_sequence"))  # A
             seq1 = set(seeds1.pop("seed_sequence"))  # A B
-            self.assertTrue(seq0 <= seq1 or seq0 >= seq1)
+            self.assertEqual(len(seq0), len(set(seq0)), f"Seeds are not unique: {seq0}")
+            self.assertEqual(len(seq1), len(set(seq1)), f"Seeds are not unique: {seq1}")
+            self.assertTrue(
+                seq0 <= seq1 or seq0 >= seq1, f"One seed sequences should be a subset of the other: {seq0} vs {seq1}"
+            )
 
         self.assertDictEqual(
             {k: v for k in all_keys if not (isinstance(v := metrics_0[k], float) and math.isnan(v))},
@@ -1271,12 +1275,18 @@ def remote_breakpoint(port=5678):
         },
     }
     """
+    error = None
     if not debugpy.is_client_connected():
         print("starting debugpy. Listening on port:", port)
-        debugpy.listen(("localhost", port))  # noqa: T100
+        try:
+            debugpy.listen(("localhost", port))  # noqa: T100
+        except RuntimeError as e:
+            error = e
+            print(e)
     else:
         print("debugpy already connected, waiting for client")
-    debugpy.wait_for_client()  # noqa: T100
+    if error is None:
+        debugpy.wait_for_client()  # noqa: T100
     breakpoint()  # noqa: T100
 
 

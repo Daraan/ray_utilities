@@ -762,7 +762,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
         # region Algorithm config
         algorithm_overrides = state.get("algorithm_overrides", None)
-        algorithm_config_dict = state["algorithm_config"]
+        algorithm_state_dict = state["algorithm_config"]
         if algorithm_overrides or self._perturbed_config:
             # What to do with old overwrites?
             if self._algorithm_overrides is None:
@@ -775,38 +775,35 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     algorithm_overrides,
                     self._algorithm_overrides,
                 )
-            algorithm_config_dict: dict[str, Any] = algorithm_config_dict | (
+            # NOTE: This is a state dict keys differ from a "from_dict"
+            algorithm_state_dict: dict[str, Any] = algorithm_state_dict | (
                 (self._algorithm_overrides or {}) | (self._perturbed_config or {})
             )
         # Fix private key with public property when using from_state, do not overwrite property
-        if "train_batch_size_per_learner" in algorithm_config_dict:
-            algorithm_config_dict["_train_batch_size_per_learner"] = algorithm_config_dict.pop(
+        if "train_batch_size_per_learner" in algorithm_state_dict:
+            algorithm_state_dict["_train_batch_size_per_learner"] = algorithm_state_dict.pop(
                 "train_batch_size_per_learner"
             )
-        attrs_not_found = []
-        for k in algorithm_config_dict.keys():
+        for k in algorithm_state_dict.keys():
             ATTR_NOT_FOUND = object()
-            cls_attr = getattr(algorithm_config_dict["class"], k, ATTR_NOT_FOUND)
-            if cls_attr is ATTR_NOT_FOUND:
-                # This can for example be offline learning settings, deprecated values. Important is property check.
-                attrs_not_found.append(k)
+            cls_attr = getattr(algorithm_state_dict["class"], k, ATTR_NOT_FOUND)
+            if cls_attr is ATTR_NOT_FOUND:  # instance attribute
                 continue
             if isinstance(cls_attr, property):
                 _logger.error(
                     "%s is a property of class %s. State contains key overwriting this property. "
                     "This can lead to unexpected behavior.",
                     k,
-                    algorithm_config_dict["class"],
+                    algorithm_state_dict["class"],
                 )
-        print("Attributes not found on class", algorithm_config_dict["class"], ":", attrs_not_found)
         # state["algorithm_config"] contains "class" to restore the correct config class
-        new_algo_config = AlgorithmConfig.from_state(algorithm_config_dict)
+        new_algo_config = AlgorithmConfig.from_state(algorithm_state_dict)
         if type(new_algo_config) is not type(self.algorithm_config):
             _logger.warning(
                 "Restored config class %s differs from expected class %s", type(new_algo_config), type(self.config)
             )
         new_algo_config = cast("_ConfigType", new_algo_config)
-        did_reset = self.algorithm.reset_config(algorithm_config_dict)  # likely does nothing
+        did_reset = self.algorithm.reset_config(algorithm_state_dict)  # likely does nothing
         if not did_reset:
             # NOTE: does not SYNC config if env_runners / learners not in components we do that below
             # NOTE: evaluation_config might also not be set!

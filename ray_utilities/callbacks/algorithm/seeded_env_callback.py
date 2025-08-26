@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from inspect import isclass
-from typing import TYPE_CHECKING, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 import numpy as np
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
@@ -25,13 +25,9 @@ FIX_EVAL_SEED = True
 """If True, this is closer to original EnvRunner behavior, but each evaluation will use the same seeds."""
 
 
-def _is_vector_env(env) -> TypeIs[gym.vector.VectorEnv]:
-    """Check if the environment is a vectorized environment."""
-    return hasattr(env, "num_envs")
-
-
-def _is_async(env) -> TypeIs[gym.vector.AsyncVectorEnv]:
-    """Check if the environment is a vectorized environment."""
+def _is_async(env: gym.Env | Any) -> TypeIs[gym.vector.AsyncVectorEnv | gym.vector.SyncVectorEnv]:
+    """Check if the environment is an async vectorized environment."""
+    # NOTE expects unwrapped env, currently RLlib passed unpacked envs into the callbacks
     return hasattr(env, "set_attr")
 
 
@@ -76,7 +72,7 @@ class SeedEnvsCallback(DefaultCallbacks):
         *,
         env_runner: EnvRunner,  # noqa: ARG002
         metrics_logger: Optional[MetricsLogger] = None,
-        env: gym.vector.AsyncVectorEnv | gym.vector.VectorEnv | gym.Env,
+        env: gym.vector.AsyncVectorEnv | gym.vector.VectorEnv | gym.Env | gym.vector.SyncVectorEnv,
         env_context: EnvContext,
         **kwargs,  # noqa: ARG002
     ) -> None:
@@ -125,7 +121,7 @@ class SeedEnvsCallback(DefaultCallbacks):
             env_seed,
             spawn_key=(worker_index, env_context.vector_index, env_runner.config.in_evaluation),
         )
-        seeds = seed_sequence.generate_state(env.num_envs if _is_async(env) else 1)
+        log_seeds = seed_sequence.generate_state(env.num_envs if _is_async(env) else 1)
         rng = np.random.default_rng(seed_sequence)
         rngs = rng.spawn(env.num_envs if _is_async(env) else 1)
         logger.debug(
@@ -151,11 +147,11 @@ class SeedEnvsCallback(DefaultCallbacks):
             # HACK: Set clear_on_reduce=True and remove window again when https://github.com/ray-project/ray/issues/54324 is solved  # noqa: E501
             metrics_logger.log_value(
                 ("environments", "seeds", "seed_sequence"),
-                seeds.tolist(),
+                log_seeds.tolist(),
                 clear_on_reduce=False,
                 reduce=None,
                 # HACK 2: clear_on_reduce=True is forced when no window is provided
-                window=len(seeds) + 1,  # remove when bug is fixed
+                window=len(log_seeds) * (env_context.num_workers or 1),  # remove when bug is fixed
             )
         # NOTE: Need to set env_runner._seed to None for the custom seeds to be used.
         if env_runner.config.in_evaluation and FIX_EVAL_SEED:
