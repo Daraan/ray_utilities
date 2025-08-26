@@ -166,6 +166,8 @@ force-single-line = false  # default: false
 extend-generics = [
     "ray_utilities.setup.experiment_base.ExperimentSetupBase",
     "ray_utilities.jax.jax_model.FlaxRLModel",
+    "ray_utilities.setup.ppo_mlp_setup.MLPSetup",
+    "ray_utilities.setup.ppo_mlp_setup.PPOMLPSetup",
 ]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]

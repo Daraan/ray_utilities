@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from ray.rllib.algorithms.ppo import PPO, PPOConfig
 from typing_extensions import TypeVar
 
 from ray_utilities.config import add_callbacks_to_config
 from ray_utilities.config.create_algorithm import create_algorithm_config
-from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
+from ray_utilities.setup.experiment_base import (
+    AlgorithmType_co,
+    ConfigType_co,
+    ExperimentSetupBase,
+    NamespaceType,
+    ParserType_co,
+)
 from ray_utilities.setup.extensions import SetupWithDynamicBatchSize, SetupWithDynamicBuffer
 from ray_utilities.training.default_class import DefaultTrainable
 
@@ -57,6 +63,11 @@ class AlgorithmSetup(
         return DefaultTrainable.define(self)
 
     @classmethod
+    def _model_config_from_args(cls, args: NamespaceType[ParserType_co]) -> dict[str, Any] | None:  # noqa: ARG003
+        """Returns a model_config to be used with an RLModule. Return None for default option."""
+        return None
+
+    @classmethod
     def _config_from_args(cls, args, base: Optional[ConfigType_co] = None) -> ConfigType_co:
         learner_class = None
         if args.accumulate_gradients_every > 1 or args.dynamic_batch:
@@ -70,7 +81,7 @@ class AlgorithmSetup(
             args=args,
             module_class=None,
             catalog_class=None,
-            model_config=None,
+            model_config=cls._model_config_from_args(args),
             learner_class=learner_class,
             framework="torch",
             config_class=cls.config_class,

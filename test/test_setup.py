@@ -5,13 +5,16 @@ import argparse
 import io
 import os
 import subprocess
+from ast import literal_eval
 
 import pyarrow as pa
 import pytest
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import NUM_ENV_RUNNERS_0_1_EQUAL
+from ray_utilities.config.model_config_parsers import MLPConfigParser
 from ray_utilities.misc import raise_tune_errors
 from ray_utilities.runfiles import run_tune
+from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 
 os.environ["RAY_DEBUG"] = "legacy"
 # os.environ["RAY_DEBUG"]="0"
@@ -64,6 +67,7 @@ from ray_utilities.training.default_class import DefaultTrainable, TrainableBase
 
 if TYPE_CHECKING:
     import numpy as np
+    from ray.rllib.algorithms.ppo.torch.default_ppo_torch_rl_module import DefaultPPOTorchRLModule
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 
@@ -582,6 +586,47 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     self.assertNotEqual(
                         logged_seeds[i], logged_seeds[j], f"Deque at index {i} is equal to deque at index {j}"
                     )
+
+
+class TestPPOMLPSetup(InitRay, num_cpus=4):
+    def test_basic(self):
+        with patch_args():
+            setup = PPOMLPSetup()
+        self.assertIsNotNone(setup.config)
+        self.assertIsNotNone(setup.args)
+        self.assertIsNotNone(setup.create_tuner())
+        self.assertIsNotNone(setup.create_config())
+        self.assertIsNotNone(setup.create_param_space())
+        self.assertIsNotNone(setup.create_parser())
+        self.assertIsNotNone(setup.create_tags())
+        self.assertIsNotNone(setup.create_trainable())
+
+    def test_model_config_dict(self):
+        with patch_args():
+            setup = PPOMLPSetup()
+        model_config = setup._model_config_from_args(setup.args)
+        assert model_config, f"Not truthy {model_config}"
+        for k, v in MLPConfigParser().parse_args([]).as_dict().items():
+            self.assertIn(k, model_config)
+            self.assertEqual(v, model_config[k])
+
+    @Cases([[], ["--fcnet_hiddens", "[16, 32, 64]"]])
+    def test_layers(self, cases):
+        import torch  # noqa: PLC0415  # import lazy
+
+        for args in iter_cases(cases):
+            with patch_args(*args):
+                setup = PPOMLPSetup()
+            algo = setup.build_algo()
+            module: DefaultPPOTorchRLModule = algo.get_module()  # pyright: ignore[reportAssignmentType]
+            mlp_encoder: torch.nn.Sequential = module.encoder.encoder.net.mlp
+            # Use default for empty args
+            expected_layers = MLPConfigParser.fcnet_hiddens if not args else literal_eval(args[-1])
+            self.assertEqual(len(mlp_encoder), 2 * len(expected_layers))
+            size_iter = iter(expected_layers)
+            for layer in mlp_encoder:
+                if isinstance(layer, torch.nn.Linear):
+                    self.assertEqual(layer.out_features, next(size_iter))
 
 
 ENV_STEPS_PER_ITERATION = 20 * max(1, DefaultArgumentParser.num_envs_per_env_runner)
