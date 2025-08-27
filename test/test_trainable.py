@@ -120,6 +120,12 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
             batch_size2 = make_divisible(60, DefaultArgumentParser.num_envs_per_env_runner)
             mini_batch_size1 = make_divisible(20, DefaultArgumentParser.num_envs_per_env_runner)
             mini_batch_size2 = make_divisible(30, DefaultArgumentParser.num_envs_per_env_runner)
+            override_mini_batch_size = make_divisible(10, DefaultArgumentParser.num_envs_per_env_runner)
+            # Meta checks, sizes should differ for effective tests
+            self.assertNotEqual(batch_size1, batch_size2)
+            self.assertNotEqual(mini_batch_size1, mini_batch_size2)
+            self.assertNotEqual(override_mini_batch_size, mini_batch_size2)
+            self.assertNotEqual(override_mini_batch_size, mini_batch_size1)
             with patch_args(
                 "--total_steps", batch_size1 * 2,
                 "--use_exact_total_steps",  # Do not adjust total_steps
@@ -132,12 +138,12 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
                     setup.config.evaluation(evaluation_interval=1)
                     setup.config.training(
                         num_epochs=2,
-                        minibatch_size=10,  # overwrite CLI
+                        minibatch_size=override_mini_batch_size,  # overwrite CLI
                     )
                 trainable = setup.trainable_class(algorithm_overrides=AlgorithmConfig.overrides(gamma=0.11, lr=2.0))
                 self.assertEqual(trainable._total_steps["total_steps"], batch_size1 * 2)
                 self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, batch_size1)
-                self.assertEqual(trainable.algorithm_config.minibatch_size, 10)
+                self.assertEqual(trainable.algorithm_config.minibatch_size, override_mini_batch_size)
                 self.assertEqual(trainable.algorithm_config.num_epochs, 2)
                 self.assertEqual(trainable.algorithm_config.gamma, 0.11)
                 self.assertEqual(trainable.algorithm_config.lr, 2.0)
@@ -200,7 +206,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
                 self.assertEqual(trainable2.algorithm_config.train_batch_size_per_learner, batch_size2)
                 self.assertEqual(trainable2._total_steps["total_steps"], 2 * batch_size1 + 2 * batch_size2)
                 # NOT restored as set by config_from_args
-                self.assertEqual(trainable2.algorithm_config.minibatch_size, mini_batch_size2)
+                self.assertEqual(trainable2.algorithm_config.minibatch_size, mini_batch_size1)
 
     def test_perturbed_keys(self):
         with (
