@@ -34,6 +34,7 @@ runs:
       id: cache-venv
       uses: actions/cache@v4
       with:
+        lookup-only: true
         path: .venv
         key: venv-${{ runner.os }}-${{ hashFiles('setup.py') }}
         restore-keys: |
