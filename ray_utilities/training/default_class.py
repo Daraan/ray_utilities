@@ -206,7 +206,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # Get git metadata now, as when on remote we are in a temp dir
         try:
             repo = git.Repo(search_parent_directories=True)
-        except Exception as e:  # noqa: BLE001
+        except (git.InvalidGitRepositoryError, Exception) as e:
             _logger.warning("Could not get git commit SHA: %s", e)
             cls._git_repo_sha = _UNKNOWN_GIT_SHA
         else:
@@ -912,7 +912,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         if self._git_repo_sha == _UNKNOWN_GIT_SHA:
             try:
                 repo = git.Repo(search_parent_directories=True)
-            except Exception as e:  # noqa: BLE001
+            except (git.InvalidGitRepositoryError, Exception) as e:
                 _logger.error("Failed to get git Repo for metadata: %s", e)
             else:
                 self._git_repo_sha = cast("git.types.AnyGitObject", repo.head.object).hexsha

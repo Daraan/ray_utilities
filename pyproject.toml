@@ -27,11 +27,12 @@ dependencies = [
   "tqdm",
   "colorlog",
   "opencv-python",
+  "python-dotenv",
+  "frozenlist",
+  "torch",  # maybe optional
   "comet_ml",  # remove later -> optional
   "wandb",  # remove later -> optional
   "optuna",  # remove later -> optional
-  "python-dotenv",
-  "torch",
   "jax",  # remove later -> optional
 ]
 [project.optional-dependencies]
