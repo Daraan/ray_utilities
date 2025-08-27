@@ -17,6 +17,23 @@ inputs:
 runs:
   using: 'composite'
   steps:
+    - name: Cache virtualenv
+      id: cache-venv
+      uses: actions/cache@v4
+      with:
+        lookup-only: true
+        path: .venv
+        key: venv-${{ runner.os }}-${{ hashFiles('setup.py') }}
+        restore-keys: |
+          venv-${{ runner.os }}-
+    - name: Skip rest of job if cache hit
+      shell: bash
+      run: |
+        echo "venv-cache-hit=${{ steps.cache-venv.outputs.cache-hit }}" >> $GITHUB_OUTPUT
+        if [ "${{ steps.cache-venv.outputs.cache-hit }}" = "true" ]; then
+          echo "Cache hit, skipping dependency installation."
+          exit 0
+        fi
     - name: Set up Python (with pip cache)
       if: ${{ inputs.use-pip-cache == 'true' }}
       id: setup-pip-cached
@@ -30,23 +47,10 @@ runs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ inputs.python-version }}
-    - name: Cache virtualenv
-      id: cache-venv
-      uses: actions/cache@v4
-      with:
-        lookup-only: true
-        path: .venv
-        key: venv-${{ runner.os }}-${{ hashFiles('setup.py') }}
-        restore-keys: |
-          venv-${{ runner.os }}-
     - name: Report Cache hit
       shell: bash
       run: |
-        if [ -z "${{ steps.cache-venv.outputs.cache-hit }}" ]; then
-          echo "Cache hit for venv false"
-        else
-          echo "Cache hit for venv ${{ steps.cache-venv.outputs.cache-hit }}"
-        fi
+        echo "Cache hit for venv false"
         if [ "${{ inputs.use-pip-cache }}" == "true" ]; then
           if [ -z "${{ steps.setup-pip-cached.outputs.cache-hit }}" ]; then
             echo "Cache hit for pip false"
@@ -54,21 +58,15 @@ runs:
             echo "Cache hit for pip ${{ steps.setup-pip-cached.outputs.cache-hit }}"
           fi
         fi
-        if [ "${{ steps.cache-venv.outputs.cache-hit }}" == "true" ]; then
-          source .venv/bin/activate
-          pip list
-        fi
     - name: Set composite outputs
       id: composite-outputs
       shell: bash
       run: |
-        echo "venv-cache-hit=${{ steps.cache-venv.outputs.cache-hit }}" >> $GITHUB_OUTPUT
         echo "pip-cache-hit=${{ steps.setup-pip-cached.outputs.cache-hit }}" >> $GITHUB_OUTPUT
     - name: Set up virtualenv
       shell: bash
       run: python -m venv .venv
     - name: Install dependencies
-      if: ${{ steps.cache-venv.outputs.cache-hit != 'true' }}
       shell: bash
       run: |
         source .venv/bin/activate
