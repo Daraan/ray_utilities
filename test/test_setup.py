@@ -1279,6 +1279,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
 
     @Cases(TWO_ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
+    @pytest.mark.length("medium")
+    @pytest.mark.timeout(method="thread")
     def test_trainable_checkpointing(self, cases):
         """Test if trainable can be checkpointed and restored."""
         for num_env_runners_a, num_env_runners_b in iter_cases(cases):
@@ -1299,8 +1301,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
                 config.evaluation(
                     evaluation_interval=1,
                     evaluation_duration=100,
-                    evaluation_num_env_runners=0,
                     evaluation_duration_unit="timesteps",
+                    evaluation_num_env_runners=0,
                 )
                 Trainable0 = setup.create_trainable()
                 setup = AlgorithmSetup(init_trainable=False)
@@ -1316,8 +1318,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
                 config.evaluation(
                     evaluation_interval=1,
                     evaluation_duration=100,
-                    evaluation_num_env_runners=0,
                     evaluation_duration_unit="timesteps",
+                    evaluation_num_env_runners=0,
                 )
 
                 Trainable1 = setup.create_trainable()
@@ -1376,7 +1378,6 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
         # because _throughput values results are not equal in structure (only after 2 steps)
         # self.set_max_diff(40000)
 
-        # breakpoint()
         # self.assertDictEqual(results["env_runners"][0]["step_3"], results["env_runners"][1]["step_3"])
 
 

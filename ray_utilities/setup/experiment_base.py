@@ -301,6 +301,35 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             self.args = self.parse_args(known_only=self.parse_known_only)
         return self.args
 
+    def _merge_args_from_checkpoint(
+        self, parsed: NamespaceType[ParserType_co], checkpoint: str
+    ) -> NamespaceType[ParserType_co]:
+        # Merge args from a checkpoint:
+        path = Path(checkpoint)
+        with open(path / "state.pkl", "rb") as f:
+            state: dict[str, Any] = pickle.load(f)
+        # Create a patched parser with the old values as default values
+        new_parser = self.create_parser()
+        self.parser = new_parser
+        restored_args: dict[str, Any] = vars(state["setup"]["args"])
+        for action in new_parser._actions:
+            if isinstance(parsed, DefaultArgumentParser):
+                action.default = parsed.restore_arg(
+                    action.dest, restored_value=restored_args.get(action.dest, action.default)
+                )
+            else:
+                action.default = restored_args.get(action.dest, action.default)  # set new default values
+            # These are changed in process_args. Problem we do not know if we should
+            # restore them their value or "auto". e.g. --iterations 10 -> need to change iterations
+            if action.dest == "iterations":
+                logger.debug(
+                    "Resetting the parsers iterations default value to 'auto' after checkpoint restore. "
+                    "It will be recreated from the total_steps argument."
+                )
+                action.default = "auto"
+        self.parser = new_parser
+        return self.parser.parse_args()
+
     def parse_args(
         self, args: Sequence[str] | None = None, *, known_only: bool | None = None, checkpoint: Optional[str] = None
     ) -> NamespaceType[ParserType_co]:
@@ -331,33 +360,9 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 "The following arguments were not recognized by the parser: %s.",
                 extra_args,
             )
-        # Merge args from a checkpoint:
         checkpoint = checkpoint or parsed.from_checkpoint
         if checkpoint:
-            path = Path(checkpoint)
-            with open(path / "state.pkl", "rb") as f:
-                state: dict[str, Any] = pickle.load(f)
-            # Create a patched parser with the old values as default values
-            new_parser = self.create_parser()
-            self.parser = new_parser
-            restored_args: dict[str, Any] = vars(state["setup"]["args"])
-            for action in new_parser._actions:
-                if isinstance(parsed, DefaultArgumentParser):
-                    action.default = parsed.restore_arg(
-                        action.dest, restored_value=restored_args.get(action.dest, action.default)
-                    )
-                else:
-                    action.default = restored_args.get(action.dest, action.default)  # set new default values
-                # These are changed in process_args. Problem we do not know if we should
-                # restore them their value or "auto". e.g. --iterations 10 -> need to change iterations
-                if action.dest == "iterations":
-                    logger.debug(
-                        "Resetting the parsers iterations default value to 'auto' after checkpoint restore. "
-                        "It will be recreated from the total_steps argument."
-                    )
-                    action.default = "auto"
-            self.parser = new_parser
-            parsed = self.parser.parse_args()
+            parsed = self._merge_args_from_checkpoint(parsed, checkpoint)
 
         self.args = self.postprocess_args(parsed)
         return self.args

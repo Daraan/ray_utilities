@@ -296,7 +296,7 @@ class _EnvRunnerParser(Tap):
     evaluation_num_env_runners: int = 0
     """Number of CPU workers to use for evaluation"""
 
-    num_envs_per_env_runner: int = 17
+    num_envs_per_env_runner: int = 4
     """Number of parallel environments per env runner"""
 
     def configure(self) -> None:
