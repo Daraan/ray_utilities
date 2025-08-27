@@ -80,5 +80,10 @@ class DiscreteEvalCallback(DefaultCallbacks):
         assert module.is_discrete is False
         assert discrete_eval_results is None  # new API stack
         if discrete_eval_results is None:  # and algorithm.config.enable_env_runner_and_connector_v2:
-            discrete_eval_results = metrics_logger.reduce((EVALUATION_RESULTS, "discrete"), return_stats_obj=False)
+            # FIXME: reduce changed in ray version, does not take arguments anympre
+            try:
+                discrete_eval_results = metrics_logger.reduce((EVALUATION_RESULTS, "discrete"), return_stats_obj=False)  # pyright: ignore[reportCallIssue]
+            except TypeError:
+                # new ray versions; untested, might reduce too much
+                discrete_eval_results = metrics_logger.reduce()[EVALUATION_RESULTS]["discrete"]
         evaluation_metrics["discrete"] = discrete_eval_results

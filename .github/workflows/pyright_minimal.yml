@@ -30,6 +30,6 @@ jobs:
     - run: echo 'Dependency Cache hit ${{ steps.setup_python.outputs.cache-hit }}'
     - name: Install dependencies
       run: |
-        pip install .[test] pyright
+        pip install . pyright
     - name: Run pyright minimally
       run: pyright -p .basic_pyright_check.json
