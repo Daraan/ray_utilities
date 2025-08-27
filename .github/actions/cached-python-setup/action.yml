@@ -9,11 +9,14 @@ inputs:
   install-args:
     description: 'Arguments to pass to pip install'
     required: false
-    default: .[test]
+    default: .[test] pyright
   use-pip-cache:
     description: 'Whether to use pip cache'
     required: false
     default: false
+outputs:
+  venv-cache-hit: ${{ steps.cache-venv.outputs.cache-hit }}
+  pip-cache-hit: ${{ steps.setup-pip-cached.outputs.cache-hit }}
 runs:
   using: 'composite'
   steps:
@@ -41,15 +44,18 @@ runs:
     - name: Report Cache hit
       shell: bash
       run: |
+        source .venv/bin/activate
         echo "Cache hit for venv ${{ steps.cache-venv.outputs.cache-hit }}"
         if [ "${{ inputs.use-pip-cache }}" == "true" ]; then
           echo "Cache hit for pip ${{ steps.setup-pip-cached.outputs.cache-hit }}"
         fi
         pip list
     - name: Set up virtualenv
+      if: ${{ steps.cache-venv.outputs.cache-hit != 'true' }}
       shell: bash
       run: python -m venv .venv
     - name: Install dependencies
+      if: ${{ steps.cache-venv.outputs.cache-hit != 'true' }}
       shell: bash
       run: |
         source .venv/bin/activate

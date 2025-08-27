@@ -22,7 +22,7 @@ jobs:
         uses: ./.github/actions/cached-python-setup
         with:
           python-version: '3.10'
-          install-args: .[test]
+          install-args: .[test] pyright
           use-pip-cache: true
 
   test-basic-and-non-tuner:
@@ -34,7 +34,6 @@ jobs:
       uses: ./.github/actions/cached-python-setup
       with:
         python-version: '3.10'
-        install-args: .[test]
         use-pip-cache: false
     - name: Test basic
       run: |
@@ -60,7 +59,6 @@ jobs:
       uses: ./.github/actions/cached-python-setup
       with:
         python-version: '3.10'
-        install-args: .[test]
         use-pip-cache: false
     - name: Test trainable 1/2 (might deadlock)
       run: |
@@ -90,7 +88,6 @@ jobs:
         uses: ./.github/actions/cached-python-setup
         with:
           python-version: '3.10'
-          install-args: '-U . pyright'
           use-pip-cache: false
       - name: Run pyright minimally
         run: |
