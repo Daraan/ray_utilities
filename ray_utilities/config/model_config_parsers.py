@@ -9,12 +9,8 @@ from tap import Tap
 
 try:
     from frozenlist import FrozenList  # pyright: ignore[reportAssignmentType]
-
-    _fcnet_hiddens_default = FrozenList([256, 256])
-    _fcnet_hiddens_default.freeze()
-    _head_fcnet_hiddens_default = FrozenList([])
-    _head_fcnet_hiddens_default.freeze()
 except ImportError:
+    from copy import deepcopy
 
     class FrozenList(list):
         def freeze(self):
@@ -26,8 +22,20 @@ except ImportError:
         insert = pop = append
         frozen: bool = True
 
+        def __deepcopy__(self, memo):
+            # Return a new FrozenList with the same elements
+            copied_list = FrozenList((deepcopy(item, memo) for item in self))
+            if self.frozen:
+                copied_list.freeze()
+            return copied_list
+
     _fcnet_hiddens_default = FrozenList([256, 256])
     _head_fcnet_hiddens_default = FrozenList([])
+else:
+    _fcnet_hiddens_default = FrozenList([256, 256])
+    _fcnet_hiddens_default.freeze()
+    _head_fcnet_hiddens_default = FrozenList([])
+    _head_fcnet_hiddens_default.freeze()
 
 __all__ = ["MLPConfigParser"]
 
