@@ -1,0 +1,52 @@
+# Composite action to set up Python, create a virtualenv, and install dependencies
+name: 'Cached Python Setup'
+description: 'Set up Python, create virtualenv, and install dependencies for testing.'
+inputs:
+  python-version:
+    description: 'Python version to use'
+    required: true
+    default: '3.10'
+  install-args:
+    description: 'Arguments to pass to pip install'
+    required: false
+    default: .[test]
+  use-pip-cache:
+    description: 'Whether to use pip cache'
+    required: false
+    default: false
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python (with pip cache)
+      if: ${{ inputs.use-pip-cache == 'true' }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: 'pip'
+        cache-dependency-path: setup.py
+    - name: Set up Python (no pip cache)
+      if: ${{ inputs.use-pip-cache != 'true' }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Cache virtualenv
+      id: cache-venv
+      uses: actions/cache@v4
+      with:
+        path: .venv
+        key: venv-${{ runner.os }}-${{ hashFiles('setup.py') }}
+        restore-keys: |
+          venv-${{ runner.os }}-
+    - name: Report Cache hit
+      shell: bash
+      run: |
+        echo "Cache hit ${{ steps.cache-venv.outputs.cache-hit }}"
+        pip list
+    - name: Set up virtualenv
+      shell: bash
+      run: python -m venv .venv
+    - name: Install dependencies
+      shell: bash
+      run: |
+        source .venv/bin/activate
+        pip install ${{ inputs.install-args }}
