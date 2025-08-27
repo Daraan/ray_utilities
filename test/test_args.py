@@ -2,9 +2,9 @@
 
 import argparse
 import io
-import logging
 import sys
 import unittest
+import warnings
 from contextlib import redirect_stderr
 from inspect import isclass
 
@@ -195,21 +195,19 @@ class TestProcessing(unittest.TestCase):
     @patch_args("--batch_size", "64", "--minibatch_size", "128")
     def test_to_large_minibatch_size(self):
         """minibatch_size cannot be larger than train_batch_size_per_learner"""
-        from ray_utilities.config.typed_argument_parser import logger  # noqa: PLC0415
-
-        with self.assertLogs(
-            logger,
-            logging.WARNING,
-        ) as ctx:
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
             setup = AlgorithmSetup(init_trainable=False)
         self.assertEqual(setup.args.minibatch_size, 64)
         self.assertEqual(setup.args.train_batch_size_per_learner, 64)
         self.assertEqual(setup.config.minibatch_size, 64)
         self.assertEqual(setup.config.train_batch_size_per_learner, 64)
-        self.assertIn(
-            "minibatch_size 128 is larger than train_batch_size_per_learner 64",
-            ctx.output[0],
-            "Expected an error log when minibatch_size is larger than train_batch_size_per_learner",
+        self.assertTrue(
+            any(
+                "minibatch_size 128 is greater than train_batch_size_per_learner 64" in str(warning.message)
+                for warning in w
+            ),
+            "Expected a warning when minibatch_size is greater than train_batch_size_per_learner",
         )
 
     def test_log_stats(self):
