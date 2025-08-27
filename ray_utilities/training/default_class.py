@@ -45,6 +45,11 @@ from ray_utilities.training.helpers import (
     sync_env_runner_states_after_reload,
 )
 from ray_utilities.typing.trainable_return import RewardUpdaters
+from ray_utilities.warn import (
+    warn_about_larger_minibatch_size,
+    warn_if_batch_size_not_divisible,
+    warn_if_minibatch_size_not_divisible,
+)
 
 if TYPE_CHECKING:
     import git.types  # noqa: TC004  # false positive
@@ -484,11 +489,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 algo_kwargs["config"].minibatch_size is not None
                 and algo_kwargs["config"].train_batch_size_per_learner < algo_kwargs["config"].minibatch_size
             ):
-                _logger.warning(
-                    "minibatch_size %d is larger than train_batch_size_per_learner %d, this can result in an error. "
-                    "Reducing the minibatch_size to the train_batch_size_per_learner.",
-                    algo_kwargs["config"].minibatch_size,
-                    algo_kwargs["config"].train_batch_size_per_learner,
+                warn_about_larger_minibatch_size(
+                    minibatch_size=algo_kwargs["config"].minibatch_size,
+                    train_batch_size_per_learner=algo_kwargs["config"].train_batch_size_per_learner,
+                    note_adjustment=True,
                 )
                 config_overrides["minibatch_size"] = algo_kwargs["config"].train_batch_size_per_learner
                 algo_kwargs["config"].minibatch_size = algo_kwargs["config"].train_batch_size_per_learner
@@ -555,11 +559,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     algo_kwargs["config"].minibatch_size is not None
                     and algo_kwargs["config"].train_batch_size_per_learner < algo_kwargs["config"].minibatch_size
                 ):
-                    _logger.warning(
-                        "minibatch_size %d is larger than train_batch_size_per_learner %d, this can result in an error."
-                        " Reducing the minibatch_size to the train_batch_size_per_learner.",
-                        algo_kwargs["config"].minibatch_size,
-                        algo_kwargs["config"].train_batch_size_per_learner,
+                    warn_about_larger_minibatch_size(
+                        minibatch_size=algo_kwargs["config"].minibatch_size,
+                        train_batch_size_per_learner=algo_kwargs["config"].train_batch_size_per_learner,
+                        note_adjustment=True,
                     )
                     config_overrides["minibatch_size"] = algo_kwargs["config"].train_batch_size_per_learner
                     algo_kwargs["config"].minibatch_size = algo_kwargs["config"].train_batch_size_per_learner
@@ -580,6 +583,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     v,
                     getattr(self.algorithm_config, k),
                 )
+        warn_if_batch_size_not_divisible(
+            batch_size=self.algorithm_config.train_batch_size_per_learner,
+            num_envs_per_env_runner=self.algorithm_config.num_envs_per_env_runner,
+        )
+        warn_if_minibatch_size_not_divisible(
+            minibatch_size=self.algorithm_config.minibatch_size,
+            num_envs_per_env_runner=self.algorithm_config.num_envs_per_env_runner,
+        )
 
     # endregion
 

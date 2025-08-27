@@ -44,6 +44,11 @@ from ray_utilities.environment import create_env
 from ray_utilities.misc import get_trainable_name
 from ray_utilities.setup.tuner_setup import TunerSetup
 from ray_utilities.training.default_class import TrainableBase
+from ray_utilities.warn import (
+    warn_about_larger_minibatch_size,
+    warn_if_batch_size_not_divisible,
+    warn_if_minibatch_size_not_divisible,
+)
 
 if TYPE_CHECKING:
     import argparse
@@ -276,6 +281,9 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         init_env = create_env(args.env_type)
         env_name = init_env.unwrapped.spec.id  # pyright: ignore[reportOptionalMemberAccess]
         args.env_type = env_name
+        warn_if_batch_size_not_divisible(
+            batch_size=args.train_batch_size_per_learner, num_envs_per_env_runner=args.num_envs_per_env_runner
+        )
         return args
 
     def args_to_dict(self, args: Optional[NamespaceType[ParserType_co] | dict[str, Any]] = None) -> dict[str, Any]:
@@ -760,15 +768,20 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 cls.algo_class,
             )
         if config is not None:
+            warn_if_batch_size_not_divisible(
+                batch_size=config.train_batch_size_per_learner, num_envs_per_env_runner=config.num_envs_per_env_runner
+            )
             if config.minibatch_size is not None and config.minibatch_size > config.train_batch_size_per_learner:
-                logger.warning(
-                    "minibatch_size %d is larger than train_batch_size_per_learner %d, this can result in an error. "
-                    "Reducing the minibatch_size to the train_batch_size_per_learner.",
-                    config.minibatch_size,
-                    config.train_batch_size_per_learner,
-                    stacklevel=2,
+                warn_about_larger_minibatch_size(
+                    minibatch_size=config.minibatch_size,
+                    train_batch_size_per_learner=config.train_batch_size_per_learner,
+                    note_adjustment=True,
                 )
                 config.minibatch_size = config.train_batch_size_per_learner
+            warn_if_minibatch_size_not_divisible(
+                minibatch_size=config.minibatch_size,
+                num_envs_per_env_runner=config.num_envs_per_env_runner,
+            )
             kwargs = {"config": config, **kwargs}
         try:
             # Algorithm checkpoint is likely in subdir.
@@ -1175,6 +1188,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         config: ConfigType_co | Literal[False] = data.get("config", False)
         new.param_space = data["param_space"]
         if init_config is None and data["__init_config__"] and config:
+            # TODO: error needs overhaul
             logger.warning(
                 "Having __init_config__=True in the state while also passing config ignores the saved config object."
                 " You can control the behavior and disable this warning by setting init_config=True/False "

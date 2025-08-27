@@ -4,6 +4,12 @@ import logging
 import sys
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, cast
 
+from ray_utilities.warn import (
+    warn_about_larger_minibatch_size,
+    warn_if_batch_size_not_divisible,
+    warn_if_minibatch_size_not_divisible,
+)
+
 if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
 import gymnasium as gym
@@ -303,15 +309,17 @@ def create_algorithm_config(
     )
     if new_api is not None:
         config.api_stack(enable_rl_module_and_learner=new_api, enable_env_runner_and_connector_v2=new_api)
-        # Checks
-    try:
-        if config.train_batch_size_per_learner % config.minibatch_size != 0:  # pyright: ignore[reportOperatorIssue]
-            logger.warning(
-                "Train batch size (%s) is not divisible by minibatch size (%s).",
-                config.train_batch_size_per_learner,
-                config.minibatch_size,
-            )
-    except TypeError:
-        logger.debug("Error encountered while checking train_batch_size_per_learner", exc_info=True)
+    # Checks
+    warn_about_larger_minibatch_size(
+        minibatch_size=config.minibatch_size, train_batch_size_per_learner=config.train_batch_size_per_learner
+    )
+    warn_if_batch_size_not_divisible(
+        batch_size=config.train_batch_size_per_learner,
+        num_envs_per_env_runner=config.num_envs_per_env_runner,
+    )
+    warn_if_minibatch_size_not_divisible(
+        minibatch_size=config.minibatch_size,
+        num_envs_per_env_runner=config.num_envs_per_env_runner,
+    )
     config.validate_train_batch_size_vs_rollout_fragment_length()
     return config, module_spec

@@ -24,6 +24,11 @@ from ray_utilities.config import seed_environments_for_config
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, calculate_steps
 from ray_utilities.misc import AutoInt
+from ray_utilities.warn import (
+    warn_about_larger_minibatch_size,
+    warn_if_batch_size_not_divisible,
+    warn_if_minibatch_size_not_divisible,
+)
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
@@ -98,10 +103,10 @@ def _patch_with_param_space(
         and config.minibatch_size is not None
         and config.minibatch_size > hparams["train_batch_size_per_learner"]
     ):
-        logger.info(
-            "Overriding minibatch_size %d with train_batch_size_per_learner %d as it may not be higher",
-            config.minibatch_size,
-            hparams["train_batch_size_per_learner"],
+        warn_about_larger_minibatch_size(
+            minibatch_size=config.minibatch_size,
+            train_batch_size_per_learner=hparams["train_batch_size_per_learner"],
+            note_adjustment=True,
         )
         msg_dict["minibatch_size"] = f"{config.minibatch_size} -> {hparams['train_batch_size_per_learner']}"
         if config_inplace:
@@ -245,12 +250,18 @@ def setup_trainable(
             batch_size = config_overrides.get("train_batch_size_per_learner", config.train_batch_size_per_learner)
             minibatch_size = config_overrides.get("minibatch_size", config.minibatch_size)
             if minibatch_size > batch_size:
-                logger.info(
-                    "Overriding minibatch_size %d with train_batch_size_per_learner %d as it may not be higher",
-                    minibatch_size,
-                    batch_size,
+                warn_about_larger_minibatch_size(
+                    minibatch_size=minibatch_size, train_batch_size_per_learner=batch_size, note_adjustment=True
                 )
                 config_overrides["minibatch_size"] = batch_size
+        warn_if_batch_size_not_divisible(
+            batch_size=config_overrides.get("train_batch_size_per_learner", config.train_batch_size_per_learner),
+            num_envs_per_env_runner=config_overrides.get("num_envs_per_env_runner", config.num_envs_per_env_runner),
+        )
+        warn_if_minibatch_size_not_divisible(
+            minibatch_size=config_overrides.get("minibatch_size", config.minibatch_size),
+            num_envs_per_env_runner=config_overrides.get("num_envs_per_env_runner", config.num_envs_per_env_runner),
+        )
         config = cast("ConfigType_co", config.update_from_dict(config_overrides))
     if "train_batch_size_per_learner" in hparams or (
         config_overrides and "train_batch_size_per_learner" in config_overrides
@@ -491,3 +502,9 @@ def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
                 # kwargs is not save to use here, not used on all code paths
                 timeout_seconds=0.0,  # This is a state update -> Fire-and-forget.
             )
+
+
+def divisible_batch_size(batch_size: int, num_envs: int | None) -> int:
+    if num_envs is not None and batch_size % num_envs != 0:
+        batch_size = (batch_size // num_envs + 1) * num_envs
+    return batch_size
