@@ -19,6 +19,7 @@ runs:
   steps:
     - name: Set up Python (with pip cache)
       if: ${{ inputs.use-pip-cache == 'true' }}
+      id: setup-pip-cached
       uses: actions/setup-python@v5
       with:
         python-version: ${{ inputs.python-version }}
@@ -40,7 +41,10 @@ runs:
     - name: Report Cache hit
       shell: bash
       run: |
-        echo "Cache hit ${{ steps.cache-venv.outputs.cache-hit }}"
+        echo "Cache hit for venv ${{ steps.cache-venv.outputs.cache-hit }}"
+        if [ "${{ inputs.use-pip-cache }}" == "true" ]; then
+          echo "Cache hit for pip ${{ steps.setup-pip-cached.outputs.cache-hit }}"
+        fi
         pip list
     - name: Set up virtualenv
       shell: bash
