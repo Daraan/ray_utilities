@@ -504,7 +504,8 @@ def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
             )
 
 
-def divisible_batch_size(batch_size: int, num_envs: int | None) -> int:
-    if num_envs is not None and batch_size % num_envs != 0:
-        batch_size = (batch_size // num_envs + 1) * num_envs
-    return batch_size
+def make_divisible(a: int, b: int | None) -> int:
+    """Make a divisible by b"""
+    if b is not None and a % b != 0:
+        a = (a // b + 1) * b
+    return a

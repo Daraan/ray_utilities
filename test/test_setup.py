@@ -1286,7 +1286,9 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
         for num_env_runners_a, num_env_runners_b in iter_cases(cases):
             with patch_args(
                 "--batch_size", str(ENV_STEPS_PER_ITERATION),
+                "--minibatch_size", str(ENV_STEPS_PER_ITERATION // 2),
                 "--log_stats",  "most",  # increase log stats to assure necessary keys are present
+                "--env_seeding_strategy", "same",
             ):  # fmt: skip
                 setup = AlgorithmSetup(init_trainable=False)
                 config = setup.config
