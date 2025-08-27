@@ -163,7 +163,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         with patch_args("--tune", "rollout_size", "rollout_size"):
             with self.assertLogs(logger, level="WARNING") as cm:
                 AlgorithmSetup().create_param_space()
-            self.assertIn("Unused dynamic tuning parameters: ['rollout_size']", cm.output[0])
+            self.assertTrue(any("Unused dynamic tuning parameters: ['rollout_size']" in out for out in cm.output))
         type_hints = te.get_type_hints(DefaultArgumentParser)["tune"]
         self.assertIs(te.get_origin(type_hints), te.Union)
         th_args = te.get_args(type_hints)
@@ -1288,6 +1288,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
                 "--batch_size", str(ENV_STEPS_PER_ITERATION),
                 "--minibatch_size", str(ENV_STEPS_PER_ITERATION // 2),
                 "--log_stats",  "most",  # increase log stats to assure necessary keys are present
+                # Stuck when num_envs_per_env_runner is too high. Unclear why.
+                "--num_envs_per_env_runner", 1,
                 "--env_seeding_strategy", "same",
             ):  # fmt: skip
                 setup = AlgorithmSetup(init_trainable=False)

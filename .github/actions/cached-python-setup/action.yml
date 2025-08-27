@@ -41,9 +41,17 @@ runs:
     - name: Report Cache hit
       shell: bash
       run: |
-        echo "Cache hit for venv ${{ steps.cache-venv.outputs.cache-hit }}"
+        if [ -z "${{ steps.cache-venv.outputs.cache-hit }}" ]; then
+          echo "Cache hit for venv false"
+        else
+          echo "Cache hit for venv ${{ steps.cache-venv.outputs.cache-hit }}"
+        fi
         if [ "${{ inputs.use-pip-cache }}" == "true" ]; then
-          echo "Cache hit for pip ${{ steps.setup-pip-cached.outputs.cache-hit }}"
+          if [ -z "${{ steps.setup-pip-cached.outputs.cache-hit }}" ]; then
+            echo "Cache hit for pip false"
+          else
+            echo "Cache hit for pip ${{ steps.setup-pip-cached.outputs.cache-hit }}"
+          fi
         fi
         if [ "${{ steps.cache-venv.outputs.cache-hit }}" == "true" ]; then
           source .venv/bin/activate
@@ -63,5 +71,5 @@ runs:
       shell: bash
       run: |
         source .venv/bin/activate
-        pip list
+        pip install -U pip
         pip install ${{ inputs.install-args }}
