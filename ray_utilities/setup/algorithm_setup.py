@@ -1,3 +1,21 @@
+"""Algorithm setup classes for Ray RLlib experiments with dynamic configuration.
+
+This module provides concrete implementations of experiment setups for Ray RLlib
+algorithms, with built-in support for dynamic batch sizing, experience buffer
+management, and trainable class instantiation.
+
+The main classes extend :class:`~ray_utilities.setup.experiment_base.ExperimentSetupBase`
+with algorithm-specific functionality and configuration management, making it easy
+to set up and run reinforcement learning experiments with minimal boilerplate code.
+
+Key Components:
+    - :class:`AlgorithmSetup`: Base setup class with dynamic buffer and batch size support
+    - :class:`PPOSetup`: Ready-to-use setup for PPO algorithm experiments
+    - Type definitions for trainable classes and configuration flexibility
+
+These classes integrate with Ray Tune for hyperparameter optimization and provide
+a standardized interface for algorithm configuration across different RL algorithms.
+"""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -29,13 +47,43 @@ class AlgorithmSetup(
     SetupWithDynamicBatchSize[ParserType_co, ConfigType_co, AlgorithmType_co],
     ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co],
 ):
-    """
-    Base class for algorithm setup in Ray RLlib experiments.
+    """Concrete base class for Ray RLlib algorithm experiment setups.
 
-    This class is used to define the setup for RLlib algorithms, including configuration and callbacks.
-    It inherits from ExperimentSetupBase to provide a common interface for experiment setups.
+    This class provides a complete, ready-to-use implementation of
+    :class:`~ray_utilities.setup.experiment_base.ExperimentSetupBase` with
+    built-in support for dynamic configuration adjustments. It combines
+    multiple mixins to provide dynamic batch sizing and experience buffer
+    management capabilities.
 
-    Most basic complete ExperimentSetupBase
+    The class serves as the foundation for algorithm-specific setups and
+    can be used directly for basic PPO experiments or extended for other
+    algorithms by overriding the ``config_class`` and ``algo_class`` attributes.
+
+    Features:
+        - Dynamic batch size adjustment based on available resources
+        - Dynamic experience buffer sizing for sample efficiency
+        - Automatic trainable class creation with proper type hints
+        - Integration with Ray Tune for hyperparameter optimization
+        - Built-in callback and configuration management
+
+    Attributes:
+        config_class: RLlib configuration class (defaults to :class:`ray.rllib.algorithms.ppo.PPOConfig`)
+        algo_class: RLlib algorithm class (defaults to :class:`ray.rllib.algorithms.ppo.PPO`)
+
+    Example:
+        >>> setup = AlgorithmSetup()
+        >>> config = setup.create_config(args)
+        >>> trainable = setup._create_trainable()
+
+    Note:
+        This is the most basic complete implementation of :class:`ExperimentSetupBase`.
+        For production use, consider using :class:`PPOSetup` or creating algorithm-specific
+        subclasses with proper ``PROJECT`` names and configuration customizations.
+
+    See Also:
+        :class:`PPOSetup`: Specialized setup for PPO algorithms
+        :class:`~ray_utilities.setup.extensions.SetupWithDynamicBatchSize`: Dynamic batch sizing mixin
+        :class:`~ray_utilities.setup.extensions.SetupWithDynamicBuffer`: Dynamic buffer sizing mixin
     """
 
     PROJECT = "Unnamed Project"
@@ -86,9 +134,44 @@ class AlgorithmSetup(
 
 
 class PPOSetup(AlgorithmSetup[ParserType_co, "PPOConfig", "PPO"]):
-    """
-    A specific setup for PPO algorithms.
-    This class can be extended to customize PPO configurations and callbacks.
+    """Specialized setup class for Proximal Policy Optimization (PPO) experiments.
+
+    This class provides a ready-to-use setup specifically configured for PPO
+    algorithms in Ray RLlib. It inherits all the dynamic configuration capabilities
+    from :class:`AlgorithmSetup` while ensuring type safety with PPO-specific
+    algorithm and configuration types.
+
+    The setup automatically configures PPO-specific features like gradient
+    accumulation when requested through command-line arguments, and provides
+    sensible defaults for PPO experiments.
+
+    Features:
+        - Type-safe PPO configuration and algorithm classes
+        - Automatic gradient accumulation learner selection
+        - Built-in evaluation interval configuration
+        - Inherits dynamic batch sizing and buffer management
+        - Compatible with Ray Tune hyperparameter optimization
+
+    Attributes:
+        config_class: Set to :class:`ray.rllib.algorithms.ppo.PPOConfig`
+        algo_class: Set to :class:`ray.rllib.algorithms.ppo.PPO`
+
+    Example:
+        >>> setup = PPOSetup()
+        >>> parser = setup.create_parser()
+        >>> args = parser.parse_args(["--env", "CartPole-v1"])
+        >>> config = setup.create_config(args)
+        >>> trainable = setup._create_trainable()
+
+    Note:
+        This class can be extended to customize PPO configurations and callbacks
+        for specific experiment requirements. Override methods like ``create_config``
+        or ``_get_callbacks_from_args`` to add custom behavior.
+
+    See Also:
+        :class:`AlgorithmSetup`: Base algorithm setup class
+        :class:`ray.rllib.algorithms.ppo.PPO`: The PPO algorithm implementation
+        :class:`ray.rllib.algorithms.ppo.PPOConfig`: PPO configuration class
     """
 
     config_class = PPOConfig

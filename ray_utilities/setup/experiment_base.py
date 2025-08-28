@@ -1,4 +1,27 @@
 # pyright: enableExperimentalFeatures=true
+"""Base classes and utilities for Ray RLlib experiment setup and configuration.
+
+This module provides the foundational :class:`ExperimentSetupBase` class that serves
+as the abstract base for all experiment setups in the Ray Utilities framework. It
+handles the complete lifecycle of reinforcement learning experiments, from argument
+parsing and environment configuration to algorithm setup and training management.
+
+The module integrates with Ray RLlib, Ray Tune, and various configuration utilities
+to provide a unified interface for running scalable RL experiments with proper
+logging, checkpointing, and hyperparameter optimization support.
+
+Key Components:
+    - :class:`ExperimentSetupBase`: Abstract base class for experiment configuration
+    - :class:`SetupCheckpointDict`: Type definition for experiment checkpoints
+    - Type variables for generic algorithm and configuration types
+    - Utility functions for environment creation and project management
+
+Integration:
+    - Ray RLlib algorithms and configurations
+    - Ray Tune for hyperparameter optimization  
+    - Comet ML for experiment tracking
+    - Custom callback and configuration systems
+"""
 from __future__ import annotations
 
 import logging
@@ -89,45 +112,98 @@ _MaybeNone = Any
 
 
 class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, AlgorithmType_co]):
-    """
-    TypedDict for the setup checkpoint.
-    Contains the args, config, param_space, and setup_class.
+    """Type definition for experiment setup checkpoint data.
+
+    This :class:`typing.TypedDict` defines the structure of checkpoint data saved
+    and restored by :class:`ExperimentSetupBase` instances. It ensures type safety
+    and consistency when serializing experiment configurations for restoration.
+
+    The checkpoint contains all necessary information to recreate an experiment
+    setup, including parsed arguments, algorithm configuration, parameter space
+    for hyperparameter tuning, and metadata about the setup class.
+
+    Type Parameters:
+        ParserType_co: Type of the argument parser used in the setup
+        ConfigType_co: Type of the RLlib algorithm configuration
+        AlgorithmType_co: Type of the RLlib algorithm
+
+    See Also:
+        :meth:`ExperimentSetupBase.save_checkpoint`: Method that creates these checkpoints
+        :meth:`ExperimentSetupBase.restore_checkpoint`: Method that restores from these checkpoints
     """
 
     args: ParserType_co
-    """Duck-typed SimpleNamespace"""
+    """Parsed command-line arguments. Typically a :class:`~ray_utilities.config.DefaultArgumentParser` instance."""
+    
     param_space: dict[str, Any] | TypedDict[{"__params_not_created__": Literal[True]}]
+    """Parameter space for hyperparameter tuning.
+    
+    Result of :meth:`~ExperimentSetupBase.create_param_space`. If the method was never
+    called, this contains a single key ``__params_not_created__`` set to ``True``.
     """
-    Result of create_param_space.
-    However, as the function might never have been called, this might be dict with a single key __params_not_created__
-    """
+    
     setup_class: type[ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]]
+    """Class type of the experiment setup for proper restoration."""
+    
     config: ConfigType_co
+    """RLlib algorithm configuration instance."""
+    
     __init_config__: bool
-    """If True, the config is initialized from the args, `config` is ignored and should be unset"""
+    """Initialization flag for configuration.
+    
+    When ``True``, the config should be initialized from the args and the stored
+    ``config`` field should be ignored and remain unset.
+    """
     config_overrides: dict[str, Any]
     """Hold the current dict created by updating config_overrides"""
 
 
 class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmType_co]):
-    """
-    Base class for experiment setup, providing a framework for argument parsing, configuration,
-    and trainable algorithm instantiation to be compatible with ray.tune.Tuner.
+    """Abstract base class for Ray RLlib experiment setup and configuration.
 
-    This class is intended to be subclassed for specific experiment setups.
+    This class provides a comprehensive framework for setting up reinforcement learning
+    experiments with Ray RLlib and Ray Tune. It handles argument parsing, algorithm
+    configuration, environment setup, callback management, and trainable instantiation.
 
-    Methods:
-    - create_parser
-    - create_config
+    The class is designed to be subclassed for specific experiment types, providing
+    a consistent interface for experiment configuration while allowing customization
+    of algorithm types, configurations, and training behaviors.
+
+    Key Features:
+        - Type-safe configuration with generic algorithm and config types
+        - Integrated argument parsing with :class:`~ray_utilities.config.DefaultArgumentParser`
+        - Environment creation and configuration management
+        - Callback system integration for training customization
+        - Project name management with tag substitution
+        - Checkpoint and restoration capabilities
+        - Ray Tune compatibility for hyperparameter optimization
+
+    Type Parameters:
+        ParserType_co: Type of the argument parser, typically :class:`~ray_utilities.config.DefaultArgumentParser`
+        ConfigType_co: Type of the RLlib algorithm configuration (e.g., :class:`ray.rllib.algorithms.ppo.PPOConfig`)
+        AlgorithmType_co: Type of the RLlib algorithm (e.g., :class:`ray.rllib.algorithms.ppo.PPO`)
 
     Attributes:
-        PROJECT: A string used by `project_name` to determine the project name,
-            this is `Unnamed Project` by default, if not changed a warning is logged.
+        PROJECT: Base name for the project used in :attr:`project_name`. Can include
+            template tags like ``<env_type>`` that are substituted with argument values.
+        config_class: Class type for the RLlib algorithm configuration.
+        algo_class: Class type for the RLlib algorithm.
+        use_dev_project: When ``True``, uses "dev-workspace" as project name in test mode.
+        parse_known_only: When ``True``, ignores unrecognized arguments instead of failing.
 
-    Generics:
-        ParserType: Type of the ArgumentParser, e.g. DefaultArgumentParser
-        ConfigType_co: Type of the AlgorithmConfig, e.g. PPOConfig
-        AlgorithmType_co: Type of the Algorithm, e.g. PPO
+    Example:
+        >>> class PPOExperiment(ExperimentSetupBase[DefaultArgumentParser, PPOConfig, PPO]):
+        ...     PROJECT = "CartPole-<agent_type>"
+        ...     config_class = PPOConfig
+        ...     algo_class = PPO
+        ...     
+        ...     def create_config(self, args):
+        ...         return self.config_class().environment("CartPole-v1")
+
+    See Also:
+        :class:`~ray_utilities.setup.algorithm_setup.AlgorithmSetup`: Concrete implementation
+        :class:`~ray_utilities.setup.tuner_setup.TunerSetup`: For hyperparameter tuning
+        :class:`~ray_utilities.training.default_class.DefaultTrainable`: Associated trainable class
     """
 
     default_extra_tags: ClassVar[list[str]] = [
