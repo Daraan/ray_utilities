@@ -32,10 +32,15 @@ runs:
         key: venv-${{ runner.os }}-${{ hashFiles('setup.py', 'pyproject.toml') }}
         restore-keys: |
           venv-${{ runner.os }}-
-    - name: Skip rest of job if cache hit
-      if: ${{ steps.cache-venv.outputs.cache-hit == 'true' }}
+    - name: Check and handle cache hit
       shell: bash
-      run: echo "Cache hit on venv, skipping rest of the job." && exit 0
+      run: |
+        if [ "${{ steps.cache-venv.outputs.cache-hit }}" == "true" ]; then
+          echo "Cache hit on venv, skipping the rest of the jobs."
+          exit 0
+        else
+          echo "No cache hit on venv, proceeding with the setup."
+        fi
     - name: Set up Python (with pip cache)
       if: ${{ inputs.use-pip-cache == 'true' && steps.cache-venv.outputs.cache-hit != 'true'}}
       id: setup-pip-cached
