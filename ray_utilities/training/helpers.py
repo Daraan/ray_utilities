@@ -1,8 +1,10 @@
 # pyright: enableExperimentalFeatures=true
 from __future__ import annotations
 
+import dataclasses
 import logging
 import math
+from copy import deepcopy
 from functools import partial
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, Optional, TypeVar, cast, overload
@@ -32,6 +34,7 @@ from ray_utilities.warn import (
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
+    from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
     from ray.rllib.env.env_runner import EnvRunner
 
     from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
@@ -85,6 +88,26 @@ def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict) -> int:
     )
 
 
+def patch_model_config(config: AlgorithmConfig, model_config: dict[str, Any] | DefaultModelConfig):
+    """Updates the config.model_config and rl_module_spec.model_config with the given model_config."""
+    if dataclasses.is_dataclass(model_config):
+        model_config = dataclasses.asdict(model_config)
+    model_config = deepcopy(model_config)
+    if isinstance(config._model_config, dict):
+        config._model_config.update(model_config)
+    elif config._model_config is not None:
+        config._model_config = dataclasses.asdict(config._model_config) | model_config
+    else:
+        config._model_config = model_config
+    if config._rl_module_spec:
+        if config._rl_module_spec.model_config is None:
+            config._rl_module_spec.model_config = config._model_config
+        elif isinstance(config._rl_module_spec.model_config, dict):
+            config._rl_module_spec.model_config.update(model_config)
+        else:
+            config._rl_module_spec.model_config = dataclasses.asdict(config._rl_module_spec.model_config) | model_config
+
+
 def _patch_with_param_space(
     args: dict[str, Any],
     config: _AlgorithmConfigT,
@@ -94,6 +117,8 @@ def _patch_with_param_space(
 ) -> tuple[dict[str, Any], _AlgorithmConfigT]:
     same_keys = set(args.keys()) & set(hparams.keys())
     args["__overwritten_keys__"] = {}
+    if "model_config" in hparams:
+        patch_model_config(config, hparams["model_config"])
     if not same_keys:
         logger.debug("No keys to patch in args with hparams: %s", hparams)
         return args, config
@@ -133,6 +158,7 @@ def get_args_and_config(
     hparams: dict,
     setup: Optional["ExperimentSetupBase[Any, ConfigType_co, Any]"] = None,
     setup_class: Optional[type["ExperimentSetupBase[Any, ConfigType_co, Any]"]] = None,
+    model_config: Optional[dict[str, Any] | DefaultModelConfig] = None,
 ) -> tuple[dict[str, Any], ConfigType_co]:
     """
     Constructs the args and config from the given hparams, setup or setup_class.
@@ -163,6 +189,8 @@ def get_args_and_config(
         config = setup_class.config_from_args(SimpleNamespace(**args))
     else:
         raise ValueError("Either setup or setup_class must be provided.")
+    if model_config is not None:
+        patch_model_config(config, model_config)
     args, config = _patch_with_param_space(args, config, hparams=hparams)
     # endregion
 
@@ -217,6 +245,7 @@ def setup_trainable(
     setup: Optional["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"] = None,
     setup_class: Optional[type["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"]] = None,
     config_overrides: Optional[ConfigType_co | dict[str, Any]] = None,
+    model_config: Optional[dict[str, Any] | DefaultModelConfig] = None,
 ) -> tuple[dict[str, Any], "ConfigType_co", "AlgorithmType_co", "RewardUpdaters"]:
     """
     Sets up the trainable by getting the args and config from the given hparams, setup or setup_class.
@@ -236,12 +265,13 @@ def setup_trainable(
             - The returned config of algorithm.config, to prevent unexpected behavior this config
               object is frozen.
             - The type of the Algorithm is determined by the `algo_class` attribute of the config.
-            This is not entirely type-safe.
+              This is not entirely type-safe.
     """
     args, config = get_args_and_config(
         hparams,
         setup=setup,
         setup_class=setup_class,
+        model_config=model_config,
     )
     if config_overrides:
         if isinstance(config_overrides, AlgorithmConfig):

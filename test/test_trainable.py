@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 from copy import deepcopy
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest import mock, skip
 
 import cloudpickle
@@ -38,6 +38,8 @@ except ImportError:
     _TrainingResult = None
 
 if TYPE_CHECKING:
+    from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
+
     from ray_utilities.typing.trainable_return import TrainableReturnData
 
 
@@ -88,6 +90,32 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
         trainable1_1, _ = self.get_trainable(num_env_runners=1, env_seed=5)
         trainable2_1, _ = self.get_trainable(num_env_runners=1, env_seed=5)
         self.compare_trainables(trainable1_1, trainable2_1, num_env_runners=1, ignore_timers=True)
+
+    def test_get_trainable_fast_model(self):
+        # Test model sizes:
+        DefaultArgumentParser.num_envs_per_env_runner = 1
+        trainable1, _ = self.get_trainable(num_env_runners=0, env_seed=5, train=False, fast_model=True)
+        assert self._model_config is not None
+        new_trainable = self.TrainableClass()  # with model_config in hparams
+        for trainable in (trainable1, new_trainable):
+            with self.subTest("Model config check", model_config_in_hparams=trainable is new_trainable):
+                runner_module = cast("SingleAgentEnvRunner", trainable.algorithm.env_runner).module
+                assert (
+                    runner_module
+                    and trainable.algorithm.learner_group is not None
+                    and trainable.algorithm.learner_group._learner
+                )
+                learner_module = trainable.algorithm.learner_group._learner.module["default_policy"]
+                for ctx, model_config_dict in [
+                    ("runner", runner_module.model_config),
+                    ("algorithm_config", trainable.algorithm_config.model_config),
+                    ("learner_module", learner_module.model_config),
+                ]:
+                    if trainable is new_trainable:
+                        pass
+                    self.assertEqual(model_config_dict["fcnet_hiddens"], [self._fast_model_fcnet_hiddens], ctx)
+                    self.assertEqual(model_config_dict["head_fcnet_hiddens"], [], ctx)
+                    self.assertDictContainsSubset(self._model_config, model_config_dict, ctx)
 
     @patch_args()
     def test_trainable_class_and_overrides(self):
@@ -298,7 +326,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
     def test_save_checkpoint(self, cases):
         # NOTE: In this test attributes are shared BY identity, this is just a weak test.
         for num_env_runners in iter_cases(cases):
-            trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
+            trainable, _ = self.get_trainable(num_env_runners=num_env_runners, fast_model=True)
             with tempfile.TemporaryDirectory() as tmpdir:
                 # NOTE This loads some parts by identity!
                 saved_ckpt = trainable.save_checkpoint(tmpdir)
@@ -351,32 +379,39 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
         # If this test fails all others will most likely fail too, run it first.
         self.maxDiff = None
         for num_env_runners in iter_cases(cases):
-            trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
-            state = trainable.get_state()
-            # TODO: add no warning test
-            self.assertIn(COMPONENT_ENV_RUNNER, state.get("algorithm", {}))
+            try:
+                trainable, _ = self.get_trainable(num_env_runners=num_env_runners, fast_model=True)
+                state = trainable.get_state()
+                # TODO: add no warning test
+                self.assertIn(COMPONENT_ENV_RUNNER, state.get("algorithm", {}))
 
-            trainable2 = self.TrainableClass()
-            trainable2.set_state(deepcopy(state))
-            # class is missing in config dict
-            self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
-            trainable.stop()
-            trainable2.stop()
+                trainable2 = self.TrainableClass()
+                trainable2.set_state(deepcopy(state))
+                # class is missing in config dict
+                self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
+            finally:
+                try:
+                    trainable.stop()  # pyright: ignore[reportPossiblyUnboundVariable]
+                    trainable2.stop()  # pyright: ignore[reportPossiblyUnboundVariable]
+                except UnboundLocalError:
+                    pass
 
     @Cases(ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases  # might deadlock with num_env_runners >= 2
     def test_safe_to_path(self, cases):
         """Test that the trainable can be saved to a path and restored."""
         for num_env_runners in iter_cases(cases):
-            trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
-            with tempfile.TemporaryDirectory() as tmpdir:
-                trainable.save_to_path(tmpdir)
-                with patch_args():
-                    trainable2 = self.TrainableClass()
-                    trainable2.restore_from_path(tmpdir)
-            self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
-            trainable.stop()
-            trainable2.stop()
+            try:
+                trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    trainable.save_to_path(tmpdir)
+                    with patch_args():
+                        trainable2 = self.TrainableClass()
+                        trainable2.restore_from_path(tmpdir)
+                self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
+            finally:
+                trainable.stop()  # pyright: ignore[reportPossiblyUnboundVariable]
+                trainable2.stop()  # pyright: ignore[reportPossiblyUnboundVariable]
 
     def test_validate_save_restore(self):
         """Basically test if TRAINING_ITERATION is set correctly."""
@@ -441,8 +476,8 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                     # the restore_from_path variant does not do that
                     ignore_env_runner_state=num_env_runners > 0,
                 )
+                trainable_from_checkpoint.stop()
             trainable.stop()
-            trainable_from_checkpoint.stop()
 
     @Cases(ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases

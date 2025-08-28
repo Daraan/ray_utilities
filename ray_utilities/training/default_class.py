@@ -10,7 +10,7 @@ from abc import ABCMeta
 from copy import copy
 from inspect import isclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Collection, Generic, Optional, TypedDict, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Collection, Generic, Optional, TypedDict, TypeVar, cast, overload
 
 import git
 import pyarrow.fs
@@ -41,6 +41,7 @@ from ray_utilities.training.helpers import (
     episode_iterator,
     get_current_step,
     get_total_steps,
+    patch_model_config,
     setup_trainable,
     sync_env_runner_states_after_reload,
 )
@@ -55,6 +56,7 @@ if TYPE_CHECKING:
     import git.types  # noqa: TC004  # false positive
     from ray.experimental import tqdm_ray
     from ray.rllib.algorithms import Algorithm
+    from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
     from ray.rllib.env.env_runner import EnvRunner
     from ray.rllib.utils.typing import StateDict
     from tqdm import tqdm
@@ -180,6 +182,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     _git_repo_sha: str = _UNKNOWN_GIT_SHA
     """Current sha of the repo, set on define"""
 
+    cls_model_config: ClassVar[Optional[dict[str, Any] | DefaultModelConfig]] = None
+
     @classmethod
     def define(
         cls,
@@ -188,6 +192,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         discrete_eval: bool = False,
         use_pbar: bool = True,
         fix_argv: bool = False,
+        model_config: Optional[dict[str, Any] | DefaultModelConfig] = None,
     ) -> type[DefaultTrainable[_ParserTypeInner, _ConfigTypeInner, _AlgorithmTypeInner]]:
         """
         This creates a subclass with ``setup_class`` set to the given class.
@@ -230,6 +235,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             setup_class = setup_cls
             discrete_eval = discrete_eval_
             use_pbar = use_pbar_
+            cls_model_config = model_config
 
         DefinedTrainable.__name__ = "Defined" + cls.__name__
 
@@ -246,9 +252,21 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         config: Optional[dict[str, Any]] = None,
         *,
         algorithm_overrides: Optional[dict[str, Any]] = None,
+        model_config: Optional[dict[str, Any] | DefaultModelConfig] = None,
         **kwargs,
     ):
+        """
+        Args:
+            config: The configuration dictionary for the trainable.
+                Special Behavior:
+                    - keys that have the same name as the attribute of the Trainable's setup parsed
+                    arguments namespace (default: `DefaultArgumentParser`) override these attributes.
+                    - A special key is `model_config` that "extends" the model_config of the created
+                      Algorithm.
+            kwargs: passed to __init__ of superclasses, e.g. storage for tune.Trainable
+        """
         self._algorithm_overrides = algorithm_overrides
+        self._model_config = model_config if model_config is not None else self.cls_model_config
         if self._algorithm_overrides and self.setup_class._fixed_argv:
             _logger.warning(
                 "Using a Trainable with fixed argv on the setup_class and algorithm_overrides, "
@@ -335,6 +353,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             setup=self._setup,
             setup_class=self.setup_class if isclass(self.setup_class) else None,
             config_overrides=self._algorithm_overrides,
+            model_config=self._model_config,
         )
         self._param_overrides: dict[str, Any] = args.get("__overwritten_keys__", {})
         """Changed parameters via the hparams argument, e.g. passed by the tuner. See also: --tune"""
@@ -458,16 +477,17 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # set iterations
         # set reward_updaters
         # config comes from new setup
+        setup_config = self._setup.config.copy(copy_frozen=False)
+        if self._model_config is not None:
+            patch_model_config(setup_config, self._model_config)
         if PERTURBED_HPARAMS in self.config:
             perturbed: dict[str, Any] = {k: self.config[k] for k in self.config[PERTURBED_HPARAMS]}
             # assert perturbed == self.config[PERTURBED_HPARAMS]
-            setup_config = self._setup.config.copy(copy_frozen=False).update_from_dict(perturbed)
-            setup_config.freeze()
+            setup_config = setup_config.update_from_dict(perturbed)
             # Remove __perturbed__ from config so that a future checkpoint hparams does not see them as highest priority
             self._perturbed_config: Optional[dict[str, Any]] = self.config.pop(PERTURBED_HPARAMS)
         else:
             perturbed = {}
-            setup_config = self._setup.config
             self._perturbed_config = None
         algo_kwargs: dict[str, Any] = (
             {**kwargs}
@@ -499,6 +519,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             algo_kwargs["config"].freeze()
         else:
             config_overrides = perturbed or {}
+        setup_config.freeze()
         overrides_at_start = self._algorithm_overrides or {}
         if isinstance(checkpoint, dict):
             keys_to_process = set(checkpoint.keys())  # Sanity check if processed all keys
@@ -831,6 +852,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 "Updating env_runner config after restore, did not match after set_state",
             )
             self.algorithm.env_runner.config = self.algorithm_config.copy(copy_frozen=True)
+            if self.algorithm.learner_group is not None and self.algorithm.learner_group.is_local:
+                self.algorithm.learner_group._learner.config = self.algorithm_config.copy(copy_frozen=True)  # pyright: ignore[reportOptionalMemberAccess]
         if self.algorithm.env_runner_group:
             # TODO: Passing config here likely has no effect at all; possibly sync metrics with custom function
             # Does not sync config!, recreate env_runner_group or force sync. Best via reference

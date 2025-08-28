@@ -240,9 +240,11 @@ def create_algorithm_config(
         catalog_class=catalog_class,
     )
     # module = module_spec.build()
-    config.rl_module(
+    config.rl_module(  # only in RLModuleSpec is not sufficient
         rl_module_spec=module_spec,
     )
+    if model_config is not None:
+        config.rl_module(model_config=model_config)
     # https://docs.ray.io/en/latest/rllib/package_ref/doc/ray.rllib.algorithms.algorithm_config.AlgorithmConfig.evaluation.html
     config.evaluation(
         evaluation_interval=10,  # Note can be adjusted dynamically by DynamicEvalCallback
