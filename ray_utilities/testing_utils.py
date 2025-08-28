@@ -392,7 +392,7 @@ class TestHelpers(unittest.TestCase):
             PPOMLPSetup.typed(), model_config=self._model_config
         )
         if self._model_config is not None:
-            self.TrainableClass = partial(self.TrainableClass, model_config=self._model_config)  # pyright: ignore[reportAttributeAccessIssue]
+            self.TrainableClass.cls_model_config = self._model_config
         # this initializes the algorithm; overwrite batch_size of 64 again.
         # This does not modify the state["setup"]["config"]
         overrides = AlgorithmConfig.overrides(
