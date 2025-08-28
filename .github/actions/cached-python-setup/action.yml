@@ -37,7 +37,7 @@ runs:
       shell: bash
       run: echo "Cache hit on venv, skipping rest of the job." && exit 0
     - name: Set up Python (with pip cache)
-      if: ${{ inputs.use-pip-cache == 'true' }}
+      if: ${{ inputs.use-pip-cache == 'true' && steps.cache-venv.outputs.cache-hit != 'true'}}
       id: setup-pip-cached
       uses: actions/setup-python@v5
       with:
@@ -45,7 +45,7 @@ runs:
         cache: 'pip'
         cache-dependency-path: setup.py
     - name: Set up Python (no pip cache)
-      if: ${{ inputs.use-pip-cache != 'true' }}
+      if: ${{ inputs.use-pip-cache != 'true' && steps.cache-venv.outputs.cache-hit != 'true'}}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ inputs.python-version }}
