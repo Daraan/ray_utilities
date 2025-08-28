@@ -7,7 +7,7 @@ and hyperparameter tuning integration.
 Key Components:
     - :class:`ExperimentSetupBase`: Abstract base class for experiment configuration
     - :class:`PPOSetup`: Concrete setup implementation for PPO algorithms  
-    - :class:`TunerSetup`: Setup class for Ray Tune hyperparameter optimization
+    - :class:`TunerSetup`: Setup class to initialize the `tune.Tuner` for experiments..
 
 These classes provide a structured approach to configuring and running
 reinforcement learning experiments with Ray RLlib and Ray Tune integration.
