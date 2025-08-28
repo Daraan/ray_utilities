@@ -1,3 +1,25 @@
+"""Discrete evaluation utilities for Ray RLlib algorithms.
+
+This module provides functionality for running discrete evaluation episodes
+alongside standard evaluation in Ray RLlib experiments. The discrete evaluation
+feature allows for additional evaluation metrics that are logged separately
+from the main evaluation results.
+
+The main function :func:`discrete_evaluate_on_local_env_runner` is a modified
+version of Ray's standard evaluation that logs results to a separate
+``evaluation/discrete`` key in the metrics hierarchy.
+
+Functions:
+    :func:`discrete_evaluate_on_local_env_runner`: Run discrete evaluation episodes
+
+See Also:
+    :class:`ray_utilities.callbacks.algorithm.discrete_eval_callback.DiscreteEvalCallback`:
+        Callback that integrates discrete evaluation into training
+    :data:`ray_utilities.constants.DISC_EVAL_METRIC_RETURN_MEAN`: 
+        Metric key for discrete evaluation results
+    :mod:`ray.rllib.evaluation.metrics`: Ray RLlib evaluation utilities
+"""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
@@ -19,11 +41,60 @@ if TYPE_CHECKING:
 def discrete_evaluate_on_local_env_runner(
     self: Algorithm, env_runner: SingleAgentEnvRunner, metrics_logger: MetricsLogger
 ):
-    """
-    Copy of rays evaluate that logs to a evaluation/discrete key
+    """Run discrete evaluation episodes on a local environment runner.
+
+    This is a modified version of Ray's standard evaluation function that logs
+    results to the ``evaluation/discrete`` path instead of the main evaluation
+    path. This allows for additional evaluation metrics without interfering
+    with the standard evaluation process.
+
+    Args:
+        self: The Ray RLlib :class:`~ray.rllib.algorithms.Algorithm` instance.
+        env_runner: The :class:`~ray.rllib.env.single_agent_env_runner.SingleAgentEnvRunner`
+            to use for evaluation.
+        metrics_logger: The :class:`~ray.rllib.utils.metrics.metrics_logger.MetricsLogger`
+            for recording evaluation metrics.
+
+    Returns:
+        A tuple containing:
+        
+        - **env_runner_results**: Evaluation results dictionary (or ``None`` for new API)
+        - **env_steps**: Number of environment steps taken during evaluation
+        - **agent_steps**: Number of agent steps taken during evaluation  
+        - **all_batches**: List of sample batches from evaluation episodes
+
+    Raises:
+        ValueError: If the local environment runner doesn't have an environment
+            or if parallel evaluation is enabled (not supported for discrete evaluation).
+
+    Example:
+        This function is typically used within a callback rather than called directly::
+        
+        >>> # In a custom callback
+        >>> from ray_utilities.discrete_evaluation import discrete_evaluate_on_local_env_runner
+        >>> 
+        >>> class MyCallback(DefaultCallbacks):
+        ...     def on_algorithm_iteration_end(self, *, algorithm, result, **kwargs):
+        ...         if should_run_discrete_eval():
+        ...             env_runner = algorithm.env_runner
+        ...             metrics_logger = algorithm.metrics_logger  
+        ...             discrete_evaluate_on_local_env_runner(
+        ...                 algorithm, env_runner, metrics_logger
+        ...             )
+
+    Note:
+        - This function respects the algorithm's evaluation configuration settings
+          like ``evaluation_duration`` and ``evaluation_duration_unit``
+        - Results are logged to ``evaluation/discrete/env_runner_results`` path
+        - Compatible with both Ray's old and new API stacks
+        - For the new API stack (Ray >= 2.40.0), results are logged directly
+          via the metrics logger rather than returned
 
     See Also:
-        DiscreteEvalCallback
+        :class:`ray_utilities.callbacks.algorithm.discrete_eval_callback.DiscreteEvalCallback`:
+            Callback that uses this function for automated discrete evaluation
+        :data:`ray_utilities.constants.RAY_NEW_API_STACK_ENABLED`:
+            Version flag for API compatibility
     """
     if hasattr(env_runner, "input_reader") and env_runner.input_reader is None:  # type: ignore[attr-defined]
         raise ValueError(
