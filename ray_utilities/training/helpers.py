@@ -240,13 +240,39 @@ def create_running_reward_updater(initial_array: Optional[list[float]] = None) -
     )
 
 
+@overload
 def setup_trainable(
     hparams: dict[str, Any],
     setup: Optional["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"] = None,
     setup_class: Optional[type["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"]] = None,
     config_overrides: Optional[ConfigType_co | dict[str, Any]] = None,
     model_config: Optional[dict[str, Any] | DefaultModelConfig] = None,
-) -> tuple[dict[str, Any], "ConfigType_co", "AlgorithmType_co", "RewardUpdaters"]:
+    *,
+    create_algo: Literal[False],
+) -> tuple[dict[str, Any], "ConfigType_co", None, "RewardUpdaters"]: ...
+
+
+@overload
+def setup_trainable(
+    hparams: dict[str, Any],
+    setup: Optional["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"] = None,
+    setup_class: Optional[type["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"]] = None,
+    config_overrides: Optional[ConfigType_co | dict[str, Any]] = None,
+    model_config: Optional[dict[str, Any] | DefaultModelConfig] = None,
+    *,
+    create_algo: Literal[True] = True,
+) -> tuple[dict[str, Any], "ConfigType_co", "AlgorithmType_co", "RewardUpdaters"]: ...
+
+
+def setup_trainable(
+    hparams: dict[str, Any],
+    setup: Optional["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"] = None,
+    setup_class: Optional[type["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"]] = None,
+    config_overrides: Optional[ConfigType_co | dict[str, Any]] = None,
+    model_config: Optional[dict[str, Any] | DefaultModelConfig] = None,
+    *,
+    create_algo: bool = True,
+) -> tuple[dict[str, Any], "ConfigType_co", "AlgorithmType_co | None", "RewardUpdaters"]:
     """
     Sets up the trainable by getting the args and config from the given hparams, setup or setup_class.
     Either `setup` or `setup_class` must be provided, if both are provided, `setup` will be used.
@@ -257,6 +283,8 @@ def setup_trainable(
         setup: An instance of `DefaultExperimentSetup` that contains the configuration and arguments.
         setup_class: A class of `DefaultExperimentSetup` that can be used to create the configuration
             and arguments. Ignored if `setup` is provided.
+        create_algo: Will build or load from checkpoint when True (default). Pass False to skip this
+            step, e.g. when the algorithm is created in a Trainable (and the one here is discarded).
 
     Returns:
         A tuple containing the parsed args (as a dict), an AlgorithmConfig, and an Algorithm.
@@ -315,30 +343,33 @@ def setup_trainable(
             args["iterations"] = new_iterations
         else:
             logger.debug("Not adjusting iterations, as it was not an 'auto' value.")
-    if not args["from_checkpoint"]:
-        try:
-            # new API; Note: copies config!
-            algo = config.build_algo(use_copy=True)  # copy=True is default; maybe use False
-        except AttributeError:
-            algo = config.build()
-    # Load from checkpoint
-    elif checkpoint_loader := (
-        setup or setup_class
-    ):  # TODO: possibly do not load algorithm and let Trainable handle it (should be an option)
-        algo = checkpoint_loader.algorithm_from_checkpoint(args["from_checkpoint"], config=config)
-        sync_env_runner_states_after_reload(algo)
-        if config.algo_class is not None and not isinstance(algo, config.algo_class):
-            logger.warning(
-                "Loaded algorithm from checkpoint is not of the expected type %s, got %s. "
-                "Check your setup class %s.algo_class.",
-                config.algo_class,
-                type(algo),
-                type(setup) if setup is not None else setup_class,
-            )
+    if create_algo:
+        if not args["from_checkpoint"]:
+            try:
+                # new API; Note: copies config!
+                algo = config.build_algo(use_copy=True)  # copy=True is default; maybe use False
+            except AttributeError:
+                algo = config.build()
+        # Load from checkpoint
+        elif checkpoint_loader := (
+            setup or setup_class
+        ):  # TODO: possibly do not load algorithm and let Trainable handle it (should be an option)
+            algo = checkpoint_loader.algorithm_from_checkpoint(args["from_checkpoint"], config=config)
+            sync_env_runner_states_after_reload(algo)
+            if config.algo_class is not None and not isinstance(algo, config.algo_class):
+                logger.warning(
+                    "Loaded algorithm from checkpoint is not of the expected type %s, got %s. "
+                    "Check your setup class %s.algo_class.",
+                    config.algo_class,
+                    type(algo),
+                    type(setup) if setup is not None else setup_class,
+                )
+        else:
+            # Should not happen, is covered by checks in get_args_and_config
+            logger.warning("No setup or setup_class provided, using default PPOSetup. ")
+            algo = cast("Algorithm", config.algo_class).from_checkpoint(args["from_checkpoint"])
     else:
-        # Should not happen, is covered by checks in get_args_and_config
-        logger.warning("No setup or setup_class provided, using default PPOSetup. ")
-        algo = cast("Algorithm", config.algo_class).from_checkpoint(args["from_checkpoint"])
+        algo = None
     reward_updaters: RewardUpdaters = {
         "running_reward": create_running_reward_updater(),
         "eval_reward": create_running_reward_updater(),

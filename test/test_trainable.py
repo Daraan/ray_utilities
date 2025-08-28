@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from ray_utilities.typing.trainable_return import TrainableReturnData
 
 
-class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
+class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints, num_cpus=4):
     def test_1_subclass_check(self):
         """This test should run first as it has side-effects concerning ABCMeta"""
         TrainableClass = DefaultTrainable.define(PPOSetup.typed())
@@ -155,6 +155,8 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
             self.assertNotEqual(mini_batch_size1, mini_batch_size2)
             self.assertNotEqual(override_mini_batch_size, mini_batch_size2)
             self.assertNotEqual(override_mini_batch_size, mini_batch_size1)
+            self.assertNotEqual(batch_size1, mini_batch_size1)
+            self.assertNotEqual(batch_size2, mini_batch_size2)
             with patch_args(
                 "--total_steps", batch_size1 * 2,
                 "--use_exact_total_steps",  # Do not adjust total_steps
@@ -189,7 +191,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
             del trainable
             del setup
             with patch_args(
-                "--total_steps", (batch_size1 * 2) + (batch_size2 * 2),  # Should be divisible by new batch_size
+                "--total_steps", 2 * batch_size1 + 2 * batch_size2,  # Should be divisible by new batch_size
                 "--use_exact_total_steps",  # Do not adjust total_steps
                 "--batch_size", batch_size2,
                 "--comment", "B",
