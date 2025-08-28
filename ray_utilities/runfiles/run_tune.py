@@ -1,3 +1,23 @@
+"""High-level utilities for running Ray Tune experiments and local debugging.
+
+This module provides the main entry points for executing Ray RLlib experiments,
+both through Ray Tune for distributed hyperparameter optimization and locally
+for debugging and testing. It handles the setup, execution, and result processing
+of machine learning experiments.
+
+The module bridges experiment setup classes with actual execution, providing
+both production-ready distributed training capabilities and development-friendly
+local execution modes for rapid iteration and debugging.
+
+Key Components:
+    - :func:`run_tune`: Main function for running distributed experiments with Ray Tune
+    - Local execution utilities for debugging without Ray Tune overhead
+    - Automatic parameter sampling and test mode support
+    - Integration with experiment setup classes and trainable functions
+
+This module is typically used as the final step in experiment configuration,
+after setting up algorithms, hyperparameters, and training configurations.
+"""
 from __future__ import annotations
 
 import logging

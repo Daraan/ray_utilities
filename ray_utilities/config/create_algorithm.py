@@ -1,3 +1,25 @@
+"""Algorithm configuration creation utilities for Ray RLlib experiments.
+
+This module provides comprehensive utilities for creating and configuring Ray RLlib
+algorithm configurations based on parsed command-line arguments and experiment
+specifications. It handles the complex setup of algorithms with proper environment
+configuration, callback registration, learner setup, and module specifications.
+
+The main function :func:`create_algorithm_config` serves as a centralized point
+for translating experiment parameters into properly configured RLlib algorithm
+instances, supporting both the new and legacy RLlib APIs.
+
+Key Components:
+    - :func:`create_algorithm_config`: Main configuration creation function
+    - Environment setup with seeding and rendering support
+    - Callback system integration and management
+    - Learner class configuration and mixing
+    - RL module and catalog class handling
+
+The module bridges the gap between high-level experiment specifications and
+low-level RLlib configuration requirements, providing a clean interface for
+complex algorithm setup scenarios.
+"""
 from __future__ import annotations
 
 import logging
@@ -52,20 +74,68 @@ def create_algorithm_config(
     discrete_eval: bool = False,
     base: Optional[_ConfigType] = None,
 ) -> tuple[_ConfigType, RLModuleSpec]:
-    """
-    Creates a basic algorithm
+    """Create a comprehensive Ray RLlib algorithm configuration from experiment parameters.
+
+    This function provides a centralized way to create properly configured RLlib
+    algorithm instances based on parsed command-line arguments and experiment
+    specifications. It handles environment setup, callback registration, learner
+    configuration, and RL module specifications.
+
+    The function supports both new and legacy RLlib APIs and provides extensive
+    customization options for advanced use cases while maintaining sensible
+    defaults for common scenarios.
 
     Args:
-        args: Arguments for the algorithm
-        env_type: Environment type
-        env_seed: Environment seed, deprecated use `SeedEnvsCallback` instead.
-        module_class: RLModule class used for the algorithm.
-            Not recommended to be None must be updated in that case manually afterwards.
-        catalog_class: Catalog used with the `module_class`
-        model_config: Configuration dict describing the torch/tf implemented model, by the module_class
-        config_class: Config class of the Algorithm, defaults to PPOConfig
-        discrete_eval: Wether to add the DiscreteEvalCallback
-        base: Optional config instance to update instead of creating a new one.
+        args: Parsed command-line arguments containing experiment configuration.
+            Can be a dictionary or a :class:`~ray_utilities.config.DefaultArgumentParser` instance.
+        env_type: Environment identifier or Gymnasium environment instance.
+            If not provided, will be extracted from args.
+        env_seed: Environment seed for reproducibility. Deprecated in favor of
+            :class:`~ray_utilities.callbacks.algorithm.seeded_env_callback.SeedEnvsCallback`.
+        new_api: Whether to use the new RLlib API (RLModule/Learner). Defaults to ``True``.
+        module_class: Custom RL module class for the algorithm. Should inherit from
+            :class:`ray.rllib.core.rl_module.RLModule`. If ``None``, requires manual
+            configuration afterward.
+        catalog_class: Catalog class used with the ``module_class`` for model creation.
+            Should inherit from :class:`ray.rllib.core.models.catalog.Catalog`.
+        learner_class: Custom learner class for training. If ``None``, uses algorithm defaults.
+        model_config: Configuration dictionary for the neural network model implementation.
+            Structure depends on the chosen framework and module class.
+        config_class: RLlib algorithm configuration class. Defaults to
+            :class:`ray.rllib.algorithms.ppo.PPOConfig`.
+        framework: Deep learning framework to use (``"torch"`` or ``"tf2"``).
+        discrete_eval: Whether to add discrete evaluation capabilities through
+            :class:`~ray_utilities.callbacks.algorithm.discrete_eval_callback.DiscreteEvalCallback`.
+        base: Optional existing configuration instance to update instead of creating new.
+
+    Returns:
+        A tuple containing:
+            - **config**: Configured RLlib algorithm configuration instance
+            - **module_spec**: RL module specification for the algorithm
+
+    Raises:
+        ExceptionGroup: When neither ``base`` nor ``config_class`` is provided,
+            or when ``config_class`` is not a proper type.
+
+    Example:
+        >>> args = parser.parse_args(["--env", "CartPole-v1", "--framework", "torch"])
+        >>> config, module_spec = create_algorithm_config(
+        ...     args,
+        ...     module_class=MyRLModule,
+        ...     catalog_class=MyCatalog,
+        ...     model_config={"hidden_layers": [256, 256]},
+        ...     framework="torch"
+        ... )
+
+    Note:
+        The function automatically configures environment seeding, callback registration,
+        and evaluation settings based on the provided arguments. For discrete evaluation,
+        ensure the environment supports the required interface.
+
+    See Also:
+        :class:`~ray_utilities.config.DefaultArgumentParser`: Argument parsing
+        :class:`~ray_utilities.callbacks.algorithm.seeded_env_callback.SeedEnvsCallback`: Environment seeding
+        :class:`~ray_utilities.callbacks.algorithm.discrete_eval_callback.DiscreteEvalCallback`: Discrete evaluation
     """
     if not base and not isinstance(config_class, type):
         raise ExceptionGroup(
