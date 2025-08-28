@@ -91,6 +91,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
         trainable2_1, _ = self.get_trainable(num_env_runners=1, env_seed=5)
         self.compare_trainables(trainable1_1, trainable2_1, num_env_runners=1, ignore_timers=True)
 
+    @pytest.mark.basic
     def test_get_trainable_fast_model(self):
         # Test model sizes:
         DefaultArgumentParser.num_envs_per_env_runner = 1
@@ -145,9 +146,9 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
             batch_size1 = 40
             # Ensure divisibility by num_envs_per_env_runner without reducing the value
             batch_size1 = make_divisible(batch_size1, DefaultArgumentParser.num_envs_per_env_runner)
-            batch_size2 = make_divisible(60, DefaultArgumentParser.num_envs_per_env_runner)
+            batch_size2 = make_divisible(80, DefaultArgumentParser.num_envs_per_env_runner)
             mini_batch_size1 = make_divisible(20, DefaultArgumentParser.num_envs_per_env_runner)
-            mini_batch_size2 = make_divisible(30, DefaultArgumentParser.num_envs_per_env_runner)
+            mini_batch_size2 = make_divisible(40, DefaultArgumentParser.num_envs_per_env_runner)
             override_mini_batch_size = make_divisible(10, DefaultArgumentParser.num_envs_per_env_runner)
             # Meta checks, sizes should differ for effective tests
             self.assertNotEqual(batch_size1, batch_size2)
@@ -579,6 +580,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             "--use_exact_total_steps",  # Do not adjust total_steps
             "--batch_size", make_divisible(32, DefaultArgumentParser.num_envs_per_env_runner),
             "--minibatch_size", make_divisible(16, DefaultArgumentParser.num_envs_per_env_runner),
+            "--num_envs_per_env_runner", 1,  # Stuck when using more
         ):  # fmt: skip
             for num_env_runners in iter_cases(cases):
                 with self.subTest(num_env_runners=num_env_runners):

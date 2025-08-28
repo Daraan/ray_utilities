@@ -535,8 +535,6 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             # param_space["run_seed"] = tune.randint(0, 2**16)  # potential seed for config
 
         # Other args not shown in the CLI
-        # NOTE: This is None when the Old API / no module_spec is used!
-        param_space["model_config"] = module_spec and module_spec.model_config  # NOTE: Currently unused
         # Log CLI args as hyperparameters
         param_space["cli_args"] = self.clean_args_to_hparams(self.args)
         self.param_space = param_space
