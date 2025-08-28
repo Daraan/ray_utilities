@@ -1,3 +1,12 @@
+"""Default trainable classes for Ray RLlib experiments with checkpointing and progress tracking.
+
+This module provides base classes and utilities for creating trainable algorithms
+that integrate with Ray Tune. It includes support for checkpointing, progress bars,
+git metadata tracking, and experiment setup management.
+
+The main classes provide a framework for running reinforcement learning experiments
+with standardized logging, restoration, and state management capabilities.
+"""
 from __future__ import annotations
 
 import importlib.metadata
@@ -82,9 +91,25 @@ _UNKNOWN_GIT_SHA = "unknown"
 
 
 def _validate_algorithm_config_afterward(func):
-    """
-    Decorator to validate the algorithm config after the function is called.
-    This fixes some values on reloaded algorithms that can fail tests.
+    """Decorator to validate the algorithm config after a method call.
+
+    This decorator ensures that the algorithm configuration remains valid
+    after method execution, which is important for reloaded algorithms
+    that might have inconsistent state that could fail validation tests.
+
+    Args:
+        func: The method to decorate. Should be a method of a class that
+            has an ``algorithm_config`` attribute.
+
+    Returns:
+        The decorated function that validates the algorithm config after execution.
+
+    Example:
+        >>> class MyTrainable:
+        ...     @_validate_algorithm_config_afterward
+        ...     def setup_method(self):
+        ...         # Method implementation
+        ...         pass
     """
 
     def wrapper(self, *args, **kwargs):
@@ -96,84 +121,147 @@ def _validate_algorithm_config_afterward(func):
 
 
 class TrainableStateDict(TypedDict):
-    """Returned by `TrainableBase.get_state()`."""
+    """State dictionary structure returned by :meth:`TrainableBase.get_state`.
+
+    This TypedDict defines the complete state structure that can be saved
+    and restored for a trainable algorithm, including the algorithm itself,
+    its configuration, progress tracking information, and metadata.
+
+    Attributes:
+        trainable: The state obtained by :meth:`ray.tune.Trainable.get_state`.
+        algorithm: Optional algorithm state (may not be saved if algorithm
+            handles its own checkpointing).
+        algorithm_config: Serialized algorithm configuration state.
+        algorithm_overrides: Optional configuration overrides applied to the algorithm.
+        iteration: Current training iteration number.
+        pbar_state: Progress bar state for restoration of progress tracking.
+        reward_updaters: Dictionary mapping reward types to their historical values.
+        setup: Experiment setup checkpoint data.
+        current_step: Current environment step count.
+        git_sha: Optional SHA hash of the current git commit for reproducibility.
+    """
 
     trainable: StateDict
-    """The state obtained by tune.Trainable.get_state()."""
+    """The state obtained by :meth:`ray.tune.Trainable.get_state`."""
 
     algorithm: NotRequired[StateDict]  # component; can be ignored
-    """Als Algorithm is a Checkpointable its state might not be saved here"""
+    """Algorithm state (optional since algorithm may handle its own checkpointing)."""
     algorithm_config: StateDict
+    """Serialized algorithm configuration."""
     algorithm_overrides: Optional[dict[str, Any]]
+    """Configuration overrides applied to the algorithm."""
     iteration: int
+    """Current training iteration number."""
     pbar_state: RayTqdmState | TqdmState | RangeState
+    """Progress bar state for restoration."""
 
     reward_updaters: dict[str, list[float]]
+    """Historical reward values for running average calculations."""
 
     setup: SetupCheckpointDict[Any, Any, Any]
+    """Experiment setup checkpoint data."""
 
     current_step: int
+    """Current environment step count."""
 
     git_sha: NotRequired[str]
-    """sha of the current commit"""
+    """SHA hash of the current git commit for reproducibility."""
 
 
 class PartialTrainableStateDict(TypedDict, total=False):
-    """Returned by `TrainableBase.get_state()`."""
+    """Partial state dictionary with all fields optional.
+
+    This TypedDict variant of :class:`TrainableStateDict` makes all fields
+    optional, which is useful for incremental state updates or when only
+    a subset of the state needs to be specified.
+
+    All attributes have the same meaning as in :class:`TrainableStateDict`,
+    but are optional and may not be present in the dictionary.
+    """
 
     trainable: StateDict
-    """The state obtained by tune.Trainable.get_state()."""
+    """The state obtained by :meth:`ray.tune.Trainable.get_state`."""
 
     algorithm: StateDict
+    """Algorithm component state."""
     algorithm_config: StateDict
+    """Serialized algorithm configuration."""
     iteration: int
+    """Current training iteration number."""
     pbar_state: RayTqdmState | TqdmState | RangeState
+    """Progress bar state for restoration."""
 
     reward_updaters: dict[str, list[float]]
+    """Historical reward values for running average calculations."""
 
     setup: SetupCheckpointDict[Any, Any, Any]
+    """Experiment setup checkpoint data."""
 
 
 class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _ConfigType, _AlgorithmType]):
-    """
-    Loading logic:
-        - (classmethod) from_checkpoint -> restore_from_path -> set_state
-            looks for loads class_and_ctor_args.pkl -> class, args&kwargs
+    """Base class for Ray Tune trainable algorithms with comprehensive state management.
 
-    Methods:
+    This class extends both :class:`ray.rllib.utils.checkpoints.Checkpointable` and
+    :class:`ray.tune.Trainable` to provide a complete framework for running
+    reinforcement learning experiments with Ray Tune. It includes support for:
 
-        - Checkpointable methods:
-            save_to_path()  # available in super
-                calls: get_metadata(), pickles type(self) and ctor_args_and_kwargs, get_state
-            restore_from_path()  # available in super, calls set_state and iterates subcomponents
-            from_checkpoint()  # available in super, calls restore_from_path
-            get_state()
-            set_state()
-            get_ctor_args_and_kwargs()
-            get_metadata()
-            get_checkpointable_components() # available in super, extend
+    - Automatic checkpointing and restoration with progress tracking
+    - Git metadata tracking for experiment reproducibility
+    - Progress bar integration with tqdm/tqdm_ray
+    - Experiment setup management with typed argument parsing
+    - Reward tracking and running averages
 
-        - Trainable methods:
-            setup()
-            step()   # Keep abstract
-            save_checkpoint()  # we call save_to_path
-            load_checkpoint() -> restore_from_path (if path) or ... (when dict)
-            reset_config()
-            cleanup()
-            save()  # available; calls save_checkpoint -> save_to_path
-            restore()  # available; calls load_checkpoint
+    Type Parameters:
+        _ParserType: Type of the argument parser (extends Tap)
+        _ConfigType: Type of the algorithm configuration
+        _AlgorithmType: Type of the RL algorithm
+
+    Class Attributes:
+        setup_class: The experiment setup class to use for this trainable.
+            Must be set via the :meth:`define` class method.
+        discrete_eval: Whether to use discrete evaluation episodes.
+        use_pbar: Whether to show progress bars during training.
+
+    Checkpoint and Restoration Flow:
+        1. **Saving**: :meth:`save_to_path` → :meth:`get_state` → :meth:`get_metadata`
+        2. **Loading**: :meth:`from_checkpoint` → :meth:`restore_from_path` → :meth:`set_state`
+
+    Key Methods:
+        **Checkpointable Interface:**
+            - :meth:`get_state`: Returns complete state dictionary
+            - :meth:`set_state`: Restores state from dictionary
+            - :meth:`get_metadata`: Returns experiment metadata with git info
+            - :meth:`get_ctor_args_and_kwargs`: Returns constructor arguments
+
+        **Trainable Interface:**
+            - :meth:`setup`: Initialize the algorithm and experiment
+            - :meth:`step`: Perform one training step (abstract)
+            - :meth:`save_checkpoint`: Save state to checkpoint
+            - :meth:`load_checkpoint`: Load state from checkpoint
+
+    Example:
+        >>> class MyTrainable(TrainableBase[MyParser, AlgorithmConfig, PPO]):
+        ...     def step(self):
+        ...         return self.algorithm.train()
+        >>> 
+        >>> DefinedTrainable = MyTrainable.define(MySetup)
+        >>> trainable = DefinedTrainable()
     """
 
     setup_class: _ExperimentSetup[_ParserType, _ConfigType, _AlgorithmType]
-    """
-    Defines the setup class to use for this trainable, needs a call to `define` to create a subclass.
-    with this value set.
+    """Experiment setup class that defines the configuration and algorithm.
+    
+    This class attribute must be set via the :meth:`define` class method
+    before the trainable can be instantiated. It provides the blueprint
+    for creating and configuring the RL algorithm.
     """
     discrete_eval: bool = False
+    """Whether to use discrete evaluation episodes instead of continuous evaluation."""
     use_pbar: bool = True
+    """Whether to display progress bars during training using tqdm."""
 
     _git_repo_sha: str = _UNKNOWN_GIT_SHA
-    """Current sha of the repo, set on define"""
+    """SHA hash of the current git commit, set during class definition for reproducibility."""
 
     @classmethod
     def define(
@@ -184,15 +272,47 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         use_pbar: bool = True,
         fix_argv: bool = False,
     ) -> type[DefaultTrainable[_ParserTypeInner, _ConfigTypeInner, _AlgorithmTypeInner]]:
-        """
-        This creates a subclass with ``setup_class`` set to the given class.
+        """Create a trainable subclass with the specified experiment setup.
+
+        This class method creates a new trainable class that is bound to a specific
+        experiment setup. The resulting class can be instantiated and used with
+        Ray Tune for training. It also captures git metadata for reproducibility.
 
         Args:
-            fix_argv: If True, the current sys.argv will be fixed to the setup_class args.
-                When instantiated - and not other args are explicitly provided during __init__ -
-                these saved args are used to initialize the setup_class.
-                **disregarding the current sys.argv**, this is necessary in remote contexts where
-                the initial sys.argv is not available.
+            setup_cls: The experiment setup class that defines how to create
+                and configure the RL algorithm. Must be a subclass of the
+                experiment setup base class.
+            discrete_eval: Whether to use discrete evaluation episodes instead
+                of continuous evaluation. Defaults to False.
+            use_pbar: Whether to display progress bars during training.
+                Defaults to True.
+            fix_argv: Whether to fix the current :data:`sys.argv` to the setup class.
+                When True, the current command-line arguments are saved and used
+                for initialization in remote contexts where the original argv
+                is not available. Defaults to False.
+
+        Returns:
+            A new trainable class with the setup class bound and git metadata
+            captured. The returned class can be instantiated for training.
+
+        Raises:
+            UserWarning: If the git repository has uncommitted changes when
+                capturing the commit SHA.
+
+        Example:
+            >>> from my_experiments import MySetup
+            >>> MyTrainable = TrainableBase.define(
+            ...     MySetup,
+            ...     discrete_eval=True,
+            ...     use_pbar=True
+            ... )
+            >>> # Now MyTrainable can be used with Ray Tune
+            >>> tune.run(MyTrainable, config={...})
+
+        Note:
+            The ``fix_argv`` parameter is particularly useful in distributed
+            training scenarios where the trainable is instantiated on remote
+            workers that don't have access to the original command-line arguments.
         """
         # Avoid undefined variable error in class body
         discrete_eval_ = discrete_eval

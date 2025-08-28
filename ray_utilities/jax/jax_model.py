@@ -1,3 +1,21 @@
+"""JAX-based model implementations for Ray RLlib.
+
+This module provides JAX-specific model classes that integrate with the Ray RLlib
+framework. It includes:
+
+- Base model classes that extend RLlib's Model interface
+- Flax-based neural network model implementations
+- Protocol definitions for pure JAX models
+- Type-safe interfaces for JAX array operations
+
+The models support both Flax (JAX's neural network library) and pure JAX
+implementations, allowing flexibility in how neural networks are defined
+and used within the RLlib ecosystem.
+
+Type Variables:
+    ConfigType: Configuration type bound to GeneralParams
+    ModelType: Model type bound to Flax Module
+"""
 from __future__ import annotations
 
 import abc
@@ -31,13 +49,66 @@ ModelType = TypeVar("ModelType", bound="nn.Module", default="nn.Module | FlaxTyp
 
 
 class BaseModel(Model):
+    """Base JAX model class extending Ray RLlib's Model interface.
+
+    This class provides a JAX-specific implementation of the RLlib Model interface,
+    serving as a base for all JAX-based neural network models used in reinforcement
+    learning algorithms.
+
+    The class implements the standard Model interface but adapts it for JAX operations,
+    including proper handling of JAX arrays and functional programming patterns.
+
+    Abstract Methods:
+        _forward: Must be implemented by subclasses to define the forward pass
+            using JAX operations.
+
+    Warning:
+        Some methods like :meth:`get_num_parameters` may not be fully implemented
+        and will emit warnings when called.
+    """
+
     def __call__(self, input_dict: dict[str, Any], *args, **kwargs) -> TensorType:
+        """Forward pass through the model.
+
+        Args:
+            input_dict: Dictionary containing input tensors/arrays.
+            *args: Additional positional arguments passed to _forward.
+            **kwargs: Additional keyword arguments passed to _forward.
+
+        Returns:
+            Output tensor/array from the forward pass.
+        """
         return self._forward(input_dict, *args, **kwargs)  # type: ignore # wrong in rllib
 
     @abc.abstractmethod
-    def _forward(self, input_dict: dict, *, parameters, **kwargs) -> jax.Array: ...  # pyright: ignore[reportIncompatibleMethodOverride]
+    def _forward(self, input_dict: dict, *, parameters, **kwargs) -> jax.Array:
+        """Abstract method for implementing the forward pass.
+
+        Args:
+            input_dict: Dictionary containing input data.
+            parameters: Model parameters (weights and biases).
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            JAX array with the model output.
+        """
+        ...  # pyright: ignore[reportIncompatibleMethodOverride]
 
     def get_num_parameters(self) -> tuple[int, int]:
+        """Get the number of trainable and non-trainable parameters.
+
+        Warning:
+            This method may not be fully implemented and could return
+            incorrect values. It attempts to count parameters by traversing
+            the JAX tree structure.
+
+        Returns:
+            Tuple of (trainable_params, non_trainable_params). Currently
+            assumes all parameters are trainable, so non-trainable count is 0.
+
+        Raises:
+            Exception: If parameter counting fails, returns placeholder values (42, 42).
+        """
         # Unknown
         logger.warning("Warning num_parameters called which might be wrong")
         try:
