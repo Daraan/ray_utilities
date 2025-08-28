@@ -1,3 +1,57 @@
+"""Post-processing utilities for Ray RLlib training results and metrics.
+
+This module provides comprehensive utilities for processing, filtering, and formatting
+Ray RLlib training results. It includes functions for metric filtering, video handling,
+and result validation that are essential for clean experiment logging and analysis.
+
+The module handles the complex nested structure of Ray RLlib results and provides
+tools to extract only the relevant metrics while properly handling video data,
+timers, and other specialized result types.
+
+Key Features:
+    - **Metric Filtering**: Extract only essential metrics from verbose RLlib results
+    - **Video Processing**: Handle video recording and temporary file creation
+    - **Result Validation**: Ensure result dictionaries match expected schemas
+    - **Flexible Logging**: Support different levels of metric detail for various loggers
+
+Main Functions:
+    :func:`filter_metrics`: Extract essential metrics from RLlib results
+    :func:`remove_unwanted_metrics`: Remove top-level unwanted keys
+    :func:`create_log_metrics`: Create structured metrics for logging
+    :func:`save_videos`: Convert video arrays to temporary files
+    :func:`remove_videos`: Strip video data for JSON logging
+
+Constants:
+    :data:`RESULTS_TO_KEEP`: Core metrics to preserve during filtering
+    :data:`RESULTS_TO_REMOVE`: Top-level keys to exclude from results
+
+Example:
+    Basic metric filtering for clean logging::
+    
+        from ray_utilities.postprocessing import filter_metrics, create_log_metrics
+        
+        # Get clean metrics from RLlib result
+        filtered = filter_metrics(algorithm_result)
+        
+        # Create structured log metrics with video handling
+        log_metrics = create_log_metrics(
+            algorithm_result,
+            save_video=True,
+            log_stats="minimal"
+        )
+        
+    Custom metric filtering::
+    
+        # Keep additional metrics beyond defaults
+        extra_keys = [("custom_metric",), ("learner_results", "loss")]
+        filtered = filter_metrics(result, extra_keys_to_keep=extra_keys)
+
+See Also:
+    :mod:`ray.rllib.utils.metrics`: Ray RLlib metrics definitions
+    :mod:`ray_utilities.video.numpy_to_video`: Video file creation utilities
+    :mod:`ray_utilities.constants`: Metric key constants and video configurations
+"""
+
 from __future__ import annotations
 
 # pyright: enableExperimentalFeatures=true
@@ -88,8 +142,36 @@ RESULTS_TO_KEEP.update((key,) for key in CometLoggerCallback._system_results)
 RESULTS_TO_KEEP.update((key,) for key in CometLoggerCallback._exclude_results)
 RESULTS_TO_KEEP.update((key,) for key in TrainableReturnData.__required_keys__)
 assert all(isinstance(key, (tuple, list)) for key in RESULTS_TO_KEEP)
+"""set[tuple[str, ...]]: Essential metric key paths to preserve during filtering.
+
+This set defines the hierarchical paths of metrics that should be retained when
+filtering Ray RLlib results. It includes:
+
+- Core training and evaluation metrics (episode returns, step counts)
+- System and metadata fields required by logging callbacks
+- Trial identification and iteration tracking
+- Required keys from trainable return data structures
+
+The tuple format represents nested dictionary paths, e.g., 
+``(EVALUATION_RESULTS, ENV_RUNNER_RESULTS, EPISODE_RETURN_MEAN)`` corresponds
+to accessing ``result["evaluation"]["env_runner_results"]["episode_return_mean"]``.
+
+Note:
+    These keys should not overlap with :data:`RESULTS_TO_REMOVE` to avoid
+    conflicting filtering behavior.
+
+See Also:
+    :func:`filter_metrics`: Uses this set for metric extraction
+    :class:`ray.air.integrations.comet.CometLoggerCallback`: Defines additional required keys
+"""
 
 RESULTS_TO_REMOVE = {"fault_tolerance", "num_agent_steps_sampled_lifetime", "learners", "timers"}
+"""set[str]: Top-level result keys to remove during metric cleaning.
+
+These keys contain internal Ray RLlib state or verbose debugging information that
+is typically not needed for experiment analysis and logging. Removing them keeps
+the result dictionaries clean and focused on essential metrics.
+"""
 
 _MISSING: Any = object()
 
@@ -124,11 +206,32 @@ def remove_unwanted_metrics(results: Mapping[Any, Any], *, cast_to: TypeForm[_T]
 
 
 def remove_unwanted_metrics(results: _M, *, cast_to: TypeForm[_T] = _MISSING) -> _T | _M:  # noqa: ARG001
-    """
-    Removes unwanted top-level keys from the results.
+    """Remove unwanted top-level keys from Ray RLlib results.
 
-    See:
-    - `RESULTS_TO_REMOVE`
+    This function filters out internal Ray RLlib keys that are typically not needed
+    for experiment analysis, such as fault tolerance information, internal learner
+    state, and verbose debugging data.
+
+    Args:
+        results: The results dictionary to filter.
+        cast_to: Optional type to cast the result to. Used for type hinting only.
+
+    Returns:
+        A new dictionary with unwanted keys removed.
+
+    Example:
+        >>> results = {
+        ...     "episode_return_mean": 150.0,
+        ...     "fault_tolerance": {...},  # Will be removed
+        ...     "training_iteration": 100
+        ... }
+        >>> clean_results = remove_unwanted_metrics(results)
+        >>> "fault_tolerance" in clean_results
+        False
+
+    See Also:
+        :data:`RESULTS_TO_REMOVE`: Defines which keys are removed
+        :func:`filter_metrics`: More comprehensive metric filtering
     """
     return {k: v for k, v in results.items() if k not in RESULTS_TO_REMOVE}  # type: ignore[return-type]
 
@@ -156,7 +259,60 @@ def filter_metrics(
     *,
     cast_to: TypeForm[_T] = _MISSING,  # noqa: ARG001
 ) -> _T | _D:
-    """Reduces the metrics to only keep `RESULTS_TO_KEEP` and `extra_keys_to_keep`."""
+    """Extract essential metrics from Ray RLlib results using hierarchical key filtering.
+
+    This function filters complex nested Ray RLlib result dictionaries to extract
+    only the essential metrics defined in :data:`RESULTS_TO_KEEP` plus any additional
+    keys specified. It's particularly useful for cleaning verbose RLlib results
+    before logging or analysis.
+
+    Args:
+        results: The Ray RLlib results dictionary to filter. Can be the full
+            algorithm training result or any nested metrics dictionary.
+        extra_keys_to_keep: Additional hierarchical key paths to preserve beyond
+            the default :data:`RESULTS_TO_KEEP`. Each tuple represents a path
+            through the nested dictionary structure.
+        cast_to: Optional type to cast the result to. Used for type hinting only.
+
+    Returns:
+        A new dictionary containing only the specified metrics. The structure
+        matches the original nested hierarchy for the preserved keys.
+
+    Example:
+        Basic filtering with defaults only::
+        
+        >>> results = algorithm.train()  # Large nested dict
+        >>> clean_metrics = filter_metrics(results)
+        >>> # Contains only essential metrics like episode returns, step counts
+        
+        Adding custom metrics::
+        
+        >>> extra_keys = [
+        ...     ("custom_metric",),  # Top-level custom metric
+        ...     ("learner_results", "default_policy", "loss")  # Nested loss metric
+        ... ]
+        >>> filtered = filter_metrics(results, extra_keys_to_keep=extra_keys)
+        
+        Type-safe filtering::
+        
+        >>> from ray_utilities.typing import LogMetricsDict
+        >>> typed_metrics = filter_metrics(results, cast_to=LogMetricsDict)
+
+    Raises:
+        ValueError: If a key path already exists in the result structure with
+            a different value (indicating conflicting metric definitions).
+
+    Note:
+        - The function preserves the nested structure of the original dictionary
+        - Missing keys are silently ignored (no error raised)
+        - The original results dictionary is not modified
+        - Key paths are followed in order, creating nested dictionaries as needed
+
+    See Also:
+        :data:`RESULTS_TO_KEEP`: Default set of essential metric paths
+        :func:`remove_unwanted_metrics`: Simpler top-level key removal
+        :func:`create_log_metrics`: Higher-level metric structuring for logging
+    """
     reduced = {}
     if extra_keys_to_keep:
         keys_to_keep = RESULTS_TO_KEEP.copy()
