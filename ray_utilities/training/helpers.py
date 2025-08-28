@@ -302,7 +302,7 @@ def setup_trainable(
                 dynamic_buffer=args["dynamic_buffer"],
                 batch_size=config.train_batch_size_per_learner,
                 total_steps=args["total_steps"],
-                assure_even=args["use_exact_total_steps"],
+                assure_even=not args["use_exact_total_steps"],
                 min_size=args["min_step_size"],
                 max_size=args["max_step_size"],
             )
