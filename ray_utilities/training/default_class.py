@@ -380,20 +380,22 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     _logger.warning(
                         "No current step found in restored algorithm metrics to re-calculate total_steps, using 0. "
                     )
-
-        # Resulting steps are divisible by current train_batch_size_per_learner
-        # Does not allow for current_steps (divisible by old batch size) + current batch_size
-        args["iterations"] -= self.algorithm._iteration
-        total_steps = get_total_steps(args, self.algorithm.config)
-        if total_steps is not None:
-            # on reload, old batch_size might not be divisible by new batch size
-            # account for past iterations with different batch size
-            total_steps += current_step
+        steps_to_new_goal = args["total_steps"] - current_step
+        iterations_to_new_goal = (
+            steps_to_new_goal // self.algorithm_config.train_batch_size_per_learner + 1
+            if steps_to_new_goal % self.algorithm_config.train_batch_size_per_learner != 0
+            else steps_to_new_goal // self.algorithm_config.train_batch_size_per_learner
+        )
+        args["iterations"] = iterations_to_new_goal
+        steps_with_current_batch_size = get_total_steps(args, self.algorithm.config)
+        if steps_with_current_batch_size is not None:
+            total_steps = steps_with_current_batch_size + current_step
+        else:
+            total_steps = args.get("total_steps", None)
         self._total_steps = {
             "total_steps": total_steps,
             "iterations": "auto",
         }
-        args["iterations"] += self.algorithm._iteration
 
     @property
     def algorithm_config(self) -> _ConfigType:
