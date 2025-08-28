@@ -29,7 +29,7 @@ runs:
       uses: actions/cache@v4
       with:
         path: .venv
-        key: venv-${{ runner.os }}-${{ hashFiles('setup.py') }}
+        key: venv-${{ runner.os }}-${{ hashFiles('setup.py', 'pyproject.toml') }}
         restore-keys: |
           venv-${{ runner.os }}-
     - name: Skip rest of job if cache hit
@@ -43,14 +43,16 @@ runs:
       with:
         python-version: ${{ inputs.python-version }}
         cache: 'pip'
-        cache-dependency-path: setup.py
+        cache-dependency-path: |
+          setup.py
+          pyproject.toml
     - name: Set up Python (no pip cache)
       if: ${{ inputs.use-pip-cache != 'true' && steps.cache-venv.outputs.cache-hit != 'true'}}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ inputs.python-version }}
     - name: Report Cache hit
-      if: ${{ inputs.use-pip-cache == 'true' }}
+      if: ${{ inputs.use-pip-cache == 'true' && steps.cache-venv.outputs.cache-hit != 'true'}}
       shell: bash
       run: |
         if [ "${{ inputs.use-pip-cache }}" == "true" ]; then
@@ -61,6 +63,7 @@ runs:
           fi
         fi
     - name: Set up virtualenv
+      if: ${{ steps.cache-venv.outputs.cache-hit != 'true' }}
       shell: bash
       run: python -m venv .venv
     - name: Install dependencies
