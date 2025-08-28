@@ -191,6 +191,7 @@ reportUnnecessaryComparison = "warning"
 reportUnnecessaryCast = "warning"
 
 [tool.pytest.ini_options]
+console_output_style = "count"
 timeout = 240
 session_timeout = 900
 markers = [

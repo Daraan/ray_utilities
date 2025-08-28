@@ -38,6 +38,7 @@ jobs:
         export KEEP_MAX_DIFF=1
         export DISABLE_BREAKPOINTS=1
         # Split tests because of deadlock
+        # Test all others execluded by tests below
         pytest -k "not test_trainable" -m "not basic" -v -x --fast
   
   test-tuner-and-trainable:
@@ -52,12 +53,13 @@ jobs:
     - name: Test trainable 1/2 (might deadlock)
       run: |
         source .venv/bin/activate
-        pytest -k "test_validate_save_restore" -v --fast --timeout_method=thread
+        pytest test/test_trainable.py::TestClassCheckpointing::test_validate_save_restore -v --fast --timeout_method=thread
+        # includes test_trainable_checkpointing
         pytest -m "not basic" -k "test_trainable and not test_tuner_checkpointing and not test_validate_save_restore" -v --fast
     - name: Test trainable with Tuner 2/2 (might deadlock)
       run: |
         source .venv/bin/activate
-        pytest -k "test_tuner_checkpointing" -v --fast --timeout_method=thread
+        pytest test/test_trainable.py::TestClassCheckpointing::test_tuner_checkpointing -v --fast --timeout_method=thread
     - name: Test trainable multiple EnvRunners 1/2
       run: |
         source .venv/bin/activate
@@ -65,8 +67,8 @@ jobs:
     - name: Test trainable multiple EnvRunners with Tuner 2/2 (might deadlock)
       run: |
         source .venv/bin/activate
-        pytest -k "TestMetricsRestored and test_with_tuner" --mp-only
-        pytest -k "test_tuner_checkpointing" -v --mp-only --timeout_method=thread
+        pytest test/test_setup.py::TestMetricsRestored::test_with_tuner --mp-only 
+        pytest test/test_trainable.py::TestClassCheckpointing::test_tuner_checkpointing -v --mp-only --timeout_method=thread
   
   pytest_minimal:
     runs-on: ubuntu-latest

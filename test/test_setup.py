@@ -16,8 +16,9 @@ from ray_utilities.misc import raise_tune_errors
 from ray_utilities.runfiles import run_tune
 from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 
-os.environ["RAY_DEBUG"] = "legacy"
-# os.environ["RAY_DEBUG"]="0"
+if "RAY_DEBUG" not in os.environ:
+    os.environ["RAY_DEBUG"] = "legacy"
+    # os.environ["RAY_DEBUG"]="0"
 
 import tempfile
 import unittest
@@ -1388,6 +1389,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
 if __name__ == "__main__":
     import unittest
 
-    os.environ["RAY_DEBUG"] = "legacy"
+    if "RAY_DEBUG" not in os.environ:
+        os.environ["RAY_DEBUG"] = "legacy"
 
     unittest.main(defaultTest="TestMetricsRestored.test_with_tuner")
