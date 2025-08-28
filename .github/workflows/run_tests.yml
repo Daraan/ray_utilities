@@ -60,6 +60,15 @@ jobs:
       run: |
         source .venv/bin/activate
         pytest test/test_trainable.py::TestClassCheckpointing::test_tuner_checkpointing -v --fast --timeout_method=thread
+  test-multiple-envrunners:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Python setup and install
+      uses: ./.github/actions/cached-python-setup
+      with:
+        python-version: '3.10'
+        use-pip-cache: false
     - name: Test trainable multiple EnvRunners 1/2
       run: |
         source .venv/bin/activate
