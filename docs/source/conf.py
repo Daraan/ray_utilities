@@ -69,8 +69,25 @@ if False:
     sys.modules["ray.rllib.utils.annotations"].override = lambda _: lambda x: x
 
 
+class Dummy: ...  # fmt: skip
+
+
+class Dummy2: ...  # fmt: skip
+
+
+class TuneMock(_MockModule):
+    Trainable = Dummy
+
+
+tune_mock = TuneMock("ray.tune")
+
+
+class RayMock(_MockModule):
+    tune = tune_mock
+
+
 autodoc_mock(["ray", "gym", "gymnasium"])
-sys.modules["ray"] = _MockModule("ray")
+sys.modules["ray"] = RayMock("ray")
 sys.modules["gym"] = _MockModule("gym")
 sys.modules["gymnasium"] = _MockModule("gymnasium")
 
@@ -83,17 +100,7 @@ sys.modules["ray.tune"] = _MockModule("ray.tune")
 sys.modules["ray.tune.trainable"] = _MockModule("ray.tune.trainable")
 
 
-class Dummy: ...  # fmt: skip
-
-
-class Dummy2: ...  # fmt: skip
-
-
-from ray import tune  # noqa: E402
-
-tune.Trainable = Dummy
-sys.modules["ray.tune"].Trainable = Dummy
-sys.modules["ray"].tune.Trainable = Dummy
+sys.modules["ray.tune"] = tune_mock
 
 sys.modules["ray.tune.trainable"].Trainable = Dummy
 sys.modules["ray.rllib.utils.checkpoints"].Checkpointable = Dummy2
