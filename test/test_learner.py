@@ -14,10 +14,13 @@ if TYPE_CHECKING:
 
 class TestLearners(InitRay, TestHelpers, DisableLoggers):
     # NOTE keep minibatch_size == batch size to keep update on step, otherwise update will happen mid-step
-    @patch_args("-a", "mlp", "--accumulate_gradients_every", "2", "--batch_size", 64, "--minibatch_size", 64)
     def test_ppo_torch_learner_with_gradient_accumulation(self):
-        setup = AlgorithmSetup(init_trainable=False)
-        self.assertEqual(setup.config.train_batch_size_per_learner, 64)
+        batch_size = make_divisible(64, DefaultArgumentParser.num_envs_per_env_runner)
+        with patch_args(
+            "-a", "mlp", "--accumulate_gradients_every", "2", "--batch_size", batch_size, "--minibatch_size", batch_size
+        ):
+            setup = AlgorithmSetup(init_trainable=False)
+        self.assertEqual(setup.config.train_batch_size_per_learner, batch_size)
         # NOTE: Need RemoveMaskedSamplesLearner to assure only one epoch is done
         setup.config.training(
             num_epochs=1,
