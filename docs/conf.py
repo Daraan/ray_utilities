@@ -8,6 +8,7 @@ import sys
 from unittest.mock import MagicMock
 
 from sphinx_autodoc_typehints import mock as autodoc_mock
+from sphinx.ext.autodoc.mock import _MockModule
 
 # Add the project root to Python path
 sys.path.insert(0, os.path.abspath(".."))
@@ -61,7 +62,9 @@ if False:
 
 
 autodoc_mock(["ray", "gym", "gymnasium"])
-import gym, gymnasium, ray  # noqa
+sys.modules["ray"] = _MockModule("ray")
+sys.modules["gym"] = _MockModule("gym")
+sys.modules["gymnasium"] = _MockModule("gymnasium")
 
 sys.modules["ray.rllib.utils.metrics"] = _ray_metrics
 sys.modules["ray"].__version__ = "2.48.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
