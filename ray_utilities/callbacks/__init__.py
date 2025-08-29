@@ -37,7 +37,10 @@ LOG_IGNORE_ARGS = (
     "log_level",
     "use_comet_offline",
 )
-"""Arguments that control logging and execution behavior rather than experiment hyperparameters."""
+"""
+Arguments that control logging and execution behavior rather than experiment hyperparameters.
+These attributes of the `DefaultArgumentParser` / keys of a `Trainable`'s `config` are not processed by logging callbacks.
+"""
 
 
 @overload

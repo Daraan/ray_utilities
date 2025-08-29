@@ -395,13 +395,41 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
     @override(tune.Trainable)
     def setup(self, config: dict[str, Any], *, algorithm_overrides: Optional[dict[str, Any]] = None) -> None:
-        """
+        """Initialize the trainable with Ray Tune configuration and setup experiment components.
+        
+        This method is called automatically by Ray Tune during trainable instantiation.
+        It initializes the RL algorithm, progress tracking, experiment setup, and reward
+        tracking components based on the provided configuration.
+        
+        Args:
+            config: Ray Tune configuration dictionary containing hyperparameters and
+                experiment settings. This includes both standard RLlib configuration
+                and Ray Utilities specific parameters.
+            algorithm_overrides: Optional algorithm configuration overrides to apply
+                during setup. These take precedence over setup class defaults.
+                
         Sets:
-            - algorithm
-            - _pbar
-            - _iteration
-            - _setup
-            - _reward_updaters
+            - algorithm: The Ray RLlib algorithm instance for training
+            - _pbar: Progress bar for training iteration tracking  
+            - _iteration: Current training iteration counter
+            - _setup: Experiment setup instance with parsed configuration
+            - _reward_updaters: List of reward tracking utilities
+            
+        Raises:
+            ValueError: If setup_class is not defined. Use :meth:`define` to create
+                a properly configured trainable class.
+                
+        Note:
+            This method should not be called directly. Instead, Ray Tune calls it
+            automatically during trainable initialization with the configured
+            parameter space.
+            
+        Examples:
+            Proper usage through Ray Tune:
+            
+            >>> TrainableCls = DefaultTrainable.define(PPOSetup)
+            >>> tuner = tune.Tuner(TrainableCls, param_space={"lr": 0.001})
+            >>> # setup() is called automatically during tuner.fit()
         """
         # NOTE: Called during __init__
         # Setup algo, config, args, etc.
@@ -1149,7 +1177,59 @@ class _TrainableSubclassMeta(ABCMeta):
 
 
 class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
-    """Default trainable for ray.tune based on RLlib algorithms."""
+    """Default trainable implementation for Ray RLlib algorithms with Ray Tune integration.
+    
+    This is the primary trainable class for running Ray RLlib experiments within the
+    Ray Utilities framework. It provides automatic training loop management, checkpointing,
+    and evaluation integration with sensible defaults for most RL use cases.
+    
+    **Key Features:**
+    
+    - **Automatic Training Loop**: Handles the complete RL training cycle including
+      evaluation episodes and metrics collection
+    - **Smart Checkpointing**: Supports both iteration and step-based checkpointing
+      with automatic frequency management
+    - **Evaluation Integration**: Seamlessly integrates with discrete evaluation
+      utilities for consistent episode-based evaluation
+    - **Metrics Management**: Automatic reward tracking and statistical aggregation
+    
+    **Usage Patterns:**
+    
+    The class is typically used in one of two ways:
+    
+    1. **With Setup Classes** (Recommended):
+       
+       >>> trainable = DefaultTrainable.define(PPOSetup)
+       >>> tuner = tune.Tuner(trainable, param_space={"lr": tune.grid_search([0.001, 0.01])})
+       
+    2. **Direct Instantiation** (Advanced):
+       
+       >>> trainable = DefaultTrainable()
+       >>> trainable.setup(config={"env": "CartPole-v1", "lr": 0.001})
+    
+    **Training Process:**
+    
+    Each training step involves:
+    
+    1. Execute training iteration via :func:`~ray_utilities.training.functional.training_step`
+    2. Run evaluation episodes if configured
+    3. Update progress tracking and metrics
+    4. Handle automatic checkpointing based on configured frequency
+    
+    **Configuration:**
+    
+    The trainable respects standard Ray Tune configuration along with Ray Utilities
+    specific settings for evaluation, checkpointing, and progress tracking.
+    
+    Attributes:
+        _last_checkpoint_iteration: Tracks the last checkpoint iteration for frequency control
+        _last_checkpoint_step: Tracks the last checkpoint step for step-based checkpointing
+        
+    See Also:
+        :class:`TrainableBase`: Base class with comprehensive state management
+        :func:`~ray_utilities.training.functional.training_step`: Core training function
+        :class:`~ray_utilities.setup.ExperimentSetupBase`: Setup framework for configuration
+    """
 
     _last_checkpoint_iteration = -1
     _last_checkpoint_step = -1

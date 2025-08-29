@@ -308,6 +308,37 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         init_trainable: bool = True,
         parse_args: bool = True,
     ):
+        """Initialize the experiment setup with configuration parsing and validation.
+        
+        This method orchestrates the complete setup process, from argument parsing
+        through configuration creation to trainable initialization. It's typically
+        called automatically during class instantiation.
+        
+        Args:
+            args: Command line arguments to parse. If None, uses the arguments
+                provided during instantiation.
+            init_config: Whether to create and initialize the algorithm configuration.
+            init_param_space: Whether to create the hyperparameter search space
+                for Ray Tune optimization.
+            init_trainable: Whether to create the trainable function/class for training.
+            parse_args: Whether to parse command line arguments.
+                
+        Examples:
+            Manual setup with custom arguments:
+            
+            >>> setup = PPOSetup()
+            >>> setup.setup(["--env", "CartPole-v1", "--lr", "0.001"])
+            
+            Setup without trainable for configuration-only usage:
+            
+            >>> setup.setup(init_trainable=False)
+            >>> setup.config.lr = 0.01  # Config remains mutable
+            >>> setup.create_trainable()  # Create trainable when ready
+            
+        Note:
+            The configuration is automatically frozen after trainable creation
+            to prevent accidental modifications during training.
+        """
         if parse_args:
             self.args = self.parse_args(args or self._fixed_argv, known_only=self.parse_known_only)
         if init_config:
@@ -493,6 +524,27 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         return get_trainable_name(trainable)
 
     def sample_params(self):
+        """Sample hyperparameters from the configured parameter space.
+        
+        Generates a single set of parameter values by sampling from any tune domains
+        in the parameter space. This is useful for test runs or single experiments
+        without full hyperparameter optimization.
+        
+        Returns:
+            Dict of sampled parameter values with tune domains resolved to concrete values.
+            
+        Examples:
+            Sample parameters for a single training run:
+            
+            >>> setup = PPOSetup()
+            >>> setup.add_tune_config({"lr": tune.uniform(0.001, 0.01)})
+            >>> params = setup.sample_params()
+            >>> print(params["lr"])  # Random value between 0.001 and 0.01
+            
+        See Also:
+            :meth:`create_param_space`: Creates the parameter space
+            :func:`ray.tune.search.sample.Domain.sample`: Domain sampling method
+        """
         params = self.create_param_space()
         return {k: v.sample() if isinstance(v, ray.tune.search.sample.Domain) else v for k, v in params.items()}
 
@@ -993,6 +1045,26 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
     # region Tuner
 
     def create_tuner(self: ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]) -> tune.Tuner:
+        """Create a Ray Tune tuner for hyperparameter optimization.
+        
+        Creates a tuner with sensible defaults for reinforcement learning experiments,
+        including episode return maximization and standard stopping criteria.
+        
+        Returns:
+            Configured Ray Tune tuner ready for hyperparameter optimization.
+            
+        Examples:
+            Basic tuning setup:
+            
+            >>> setup = PPOSetup()
+            >>> setup.add_tune_config({"lr": tune.grid_search([0.001, 0.01])})
+            >>> tuner = setup.create_tuner()
+            >>> results = tuner.fit()
+            
+        See Also:
+            :class:`TunerSetup`: Advanced tuner configuration options
+            :class:`ray.tune.Tuner`: Underlying Ray Tune tuner class
+        """
         return TunerSetup(setup=self, eval_metric=EVAL_METRIC_RETURN_MEAN, eval_metric_order="max").create_tuner()
 
     # endregion

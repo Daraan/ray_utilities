@@ -1,33 +1,19 @@
-"""Temporary directory management for Ray Utilities media and logging operations.
+"""Temporary directory management for Ray Utilities operations.
 
-This module provides a centralized temporary directory for storing transient files
-such as logged videos, checkpoints, and other media files that need temporary
-storage before being uploaded to experiment tracking services like Weights & Biases
-or Comet ML.
+Provides a centralized temporary directory for transient files such as videos,
+checkpoints, and media files that need temporary storage before upload to
+experiment tracking services.
 
-The module automatically creates and manages a temporary directory with proper
-cleanup registration, ensuring resources are freed when the application exits.
-It supports both mounted memory directories for performance and standard temporary
-directories as fallback.
+The module creates a managed temporary directory with automatic cleanup and
+prefers mounted memory directories when available for improved performance.
 
-Key Components:
-    - ``TEMP_DIR``: Managed temporary directory instance
-    - ``TEMP_DIR_PATH``: Absolute path to the temporary directory
-    - Automatic cleanup registration for proper resource management
-
-Usage:
-    The temporary directory is automatically created when the module is imported
-    and can be used throughout the application for storing temporary files.
+Attributes:
+    TEMP_DIR: Managed temporary directory instance with automatic cleanup
+    TEMP_DIR_PATH: Absolute path to the temporary directory
 
 Example:
     >>> from ray_utilities.temp_dir import TEMP_DIR_PATH
     >>> video_path = os.path.join(TEMP_DIR_PATH, "episode_video.mp4")
-    >>> # Use video_path for temporary video storage
-
-Note:
-    The module prefers mounted memory directories (``temp_dir``) when available
-    for improved I/O performance, falling back to system temporary directories
-    otherwise.
 """
 
 import atexit

@@ -1,15 +1,20 @@
 """Exact samples connector for precise episode length control in Ray RLlib.
 
+.. warning::
+    This module is highly experimental and **not ready for production use**.
+    The implementation may never work correctly due to fundamental limitations
+    in accessing configuration within the connector framework.
+
 This module provides experimental connectors for controlling the exact number
 of samples processed by learners. The connector trims episodes to match specified
 sample counts, which can be useful for precise batch size control in training.
 
-Warning:
+.. danger::
     This implementation is marked as deprecated and likely non-functional due to
-    configuration access limitations within the connector framework.
+    configuration access limitations within the connector framework. Use at your own risk.
 
 Key Components:
-    - :class:`ExactSamplesConnector`: Episode trimming connector (deprecated)
+    - :class:`ExactSamplesConnector`: Episode trimming connector (experimental/deprecated)
     - :func:`learner_connector_with_exact_samples`: Factory function for connector setup
 
 Note:
@@ -39,11 +44,15 @@ logger = logging.getLogger(__name__)
 class ExactSamplesConnector(ConnectorV2):
     """Experimental connector for trimming episodes to exact sample counts.
     
+    .. warning::
+        This connector is **not ready for production use** and is highly experimental.
+        It may never work correctly and should not be used in any real applications.
+    
     This connector attempts to ensure learners receive exactly the specified number
     of samples by trimming episodes as needed. However, it's marked as deprecated
     due to configuration access limitations within the connector framework.
     
-    Warning:
+    .. danger::
         This connector is likely non-functional because configuration data is not
         available within the connector call context, making it impossible to
         determine the target sample count.
