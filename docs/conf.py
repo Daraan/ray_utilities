@@ -7,12 +7,19 @@ import os
 import sys
 from unittest.mock import MagicMock
 
-from sphinx_autodoc_typehints import mock as autodoc_mock
+from sphinx_autodoc_typehints import mock as autodoc_mock  # pyright: ignore[reportPrivateImportUsage]
 from sphinx.ext.autodoc.mock import _MockModule
 
 # Add the project root to Python path
 sys.path.insert(0, os.path.abspath(".."))
 from docs import _ray_metrics
+
+# -- Project information -----------------------------------------------------
+# https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
+
+project = "ray_utilities"
+copyright = "2025, Daniel Sperber"
+author = "Daniel Sperber"
 
 
 # Mock problematic dependencies that might not be available during doc building
