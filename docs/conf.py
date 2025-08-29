@@ -153,6 +153,7 @@ autodoc_default_options = {
 autodoc_mock_imports = [
     "ray_utilities.connectors.exact_samples_to_learner",
 ]
+autodoc_mock_imports.extend(MOCK_MODULES)
 
 autosummary_generate = True
 
