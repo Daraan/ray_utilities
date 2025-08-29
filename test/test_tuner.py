@@ -28,6 +28,7 @@ from ray.tune.utils.mock_trainable import MOCK_TRAINABLE_NAME, register_mock_tra
 
 from ray_utilities.callbacks.algorithm import exact_sampling_callback
 from ray_utilities.callbacks.tuner.metric_checkpointer import StepCheckpointer  # pyright: ignore[reportDeprecated]
+from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.constants import (
     EVAL_METRIC_RETURN_MEAN,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
@@ -54,6 +55,7 @@ from ray_utilities.testing_utils import (
     patch_args,
 )
 from ray_utilities.training.default_class import DefaultTrainable
+from ray_utilities.training.helpers import make_divisible
 from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
 
 if TYPE_CHECKING:
@@ -87,30 +89,32 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             self.assertNotIsInstance(tuner2._local_tuner._tune_config.search_alg, OptunaSearch)
 
     def test_run_tune_function(self):
-        with patch_args("--num_samples", "3", "--num_jobs", "3", "--batch_size", BATCH_SIZE, "--iterations", "3"):
+        batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
+        with patch_args("--num_samples", "3", "--num_jobs", "3", "--batch_size", batch_size, "--iterations", "3"):
             with AlgorithmSetup(init_trainable=False) as setup:
-                setup.config.training(num_epochs=2, minibatch_size=BATCH_SIZE)
+                setup.config.training(num_epochs=2, minibatch_size=batch_size)
                 setup.config.evaluation(evaluation_interval=1)  # else eval metric not in dict
             results = run_tune(setup)
             assert not isinstance(results, dict)
             # NOTE: This can be OK even if runs fail!
             for result in results:
                 assert result.metrics
-                self.assertEqual(result.metrics["current_step"], 3 * BATCH_SIZE)
+                self.assertEqual(result.metrics["current_step"], 3 * batch_size)
                 self.assertEqual(result.metrics[TRAINING_ITERATION], 3)
             raise_tune_errors(results)
 
     def test_step_checkpointing(self):
+        batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
         with patch_args(
             "--num_samples", "1",
             "--num_jobs", "1",
-            "--batch_size", BATCH_SIZE,
+            "--batch_size", batch_size,
             "--minibatch_size", MINIBATCH_SIZE,
             "--iterations", "5",
-            "--total_steps", BATCH_SIZE * 5,
-            "--use_exact_total_steps"  # do not adjust total_steps
+            "--total_steps", batch_size * 5,
+            "--use_exact_total_steps",  # do not adjust total_steps
             "--checkpoint_frequency_unit", "steps",
-            "--checkpoint_frequency", BATCH_SIZE * 2,
+            "--checkpoint_frequency", batch_size * 2,
         ):  # fmt: skip
             # FIXME: new default steps does not align with other tests!
             setup = AlgorithmSetup()
@@ -143,8 +147,8 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 "1",
             ):
                 t2 = setup.trainable_class.from_checkpoint(checkpoints[-1])
-                assert t2._current_step == BATCH_SIZE * 4, (
-                    f"Expected current_step to be {BATCH_SIZE * 4}, got {t2._current_step}"
+                assert t2._current_step == batch_size * 4, (
+                    f"Expected current_step to be {batch_size * 4}, got {t2._current_step}"
                 )
 
     def test_checkpoint_force_by_trial_callback(self):
@@ -301,19 +305,20 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
 
 
 @pytest.mark.tuner
-@pytest.mark.length("medium")
+@pytest.mark.length(speed="medium")
 class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     @Cases(ENV_RUNNER_CASES)
     def test_retune_with_different_config(self, cases):
         # self.enable_loggers()
         NUM_ITERS_2 = 3
+        batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
 
         class TrainableWithChecksA(TrainableWithChecks):
             def setup_check(self, *args, **kwargs):
                 assert self._iteration == 1, "Trainable should be setup with iteration 1"
 
             def step_pre_check(self):
-                assert self.algorithm_config.train_batch_size_per_learner == BATCH_SIZE * 2, (
+                assert self.algorithm_config.train_batch_size_per_learner == batch_size * 2, (
                     "Batch size should be 2x the original batch size, "
                     f"not {self.algorithm_config.train_batch_size_per_learner}"
                 )
@@ -322,9 +327,9 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 assert result["training_iteration"] >= 2, (
                     f"Expected training_iteration to be at least 2, got {result['training_iteration']}"
                 )
-                expected = 2 * BATCH_SIZE
+                expected = 2 * batch_size
                 expected_lifetime = (
-                    expected * (result["training_iteration"] - 1) + BATCH_SIZE
+                    expected * (result["training_iteration"] - 1) + batch_size
                 )  # first step + 2 iterations
                 # Do not compare ENV_STEPS_SAMPLED when using multiple envs per env runner
                 assert NUM_ENV_STEPS_PASSED_TO_LEARNER in result[ENV_RUNNER_RESULTS]
@@ -343,8 +348,8 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 with patch_args(
                     "--num_samples", "1",
                     "--num_jobs", "1",
-                    "--batch_size", BATCH_SIZE,  # overwrite
-                    "--use_exact_total_steps"  # do not adjust total_steps
+                    "--batch_size", batch_size,  # overwrite
+                    "--use_exact_total_steps",  # do not adjust total_steps
                     "--minibatch_size", MINIBATCH_SIZE,  # keep
                     "--iterations", "1",  # overwrite
                 ):  # fmt: skip
@@ -364,7 +369,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 # Check metrics:
                 result1 = results1[0]
                 assert result1.metrics and result1.config
-                self.assertEqual(result1.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME], BATCH_SIZE)
+                self.assertEqual(result1.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME], batch_size)
                 self.assertEqual(result1.metrics[TRAINING_ITERATION], 1)
                 checkpoint_dir, checkpoints = self.get_checkpoint_dirs(results1[0])
                 self.assertEqual(
@@ -377,9 +382,9 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 with patch_args(
                     "--num_samples", "1",
                     "--num_jobs", "1",
-                    "--batch_size", BATCH_SIZE * 2,
+                    "--batch_size", batch_size * 2,
                     "--minibatch_size", MINIBATCH_SIZE,
-                    "--total_steps", BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE,  # 1 + NUM_ITERS_2 iterations
+                    "--total_steps", batch_size * 2 * NUM_ITERS_2 + batch_size,  # 1 + NUM_ITERS_2 iterations
                     "--use_exact_total_steps",  # do not adjust total_steps
                     "--from_checkpoint", checkpoints[0],
                     "--log_stats", "most",
@@ -390,9 +395,9 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     ):  # second setup to make sure no side-effects are tested
                         setup2.config.env_runners(num_env_runners=num_env_runners)
                         setup2b.config.env_runners(num_env_runners=num_env_runners)
-                    self.assertEqual(setup2.args.total_steps, BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE)
+                    self.assertEqual(setup2.args.total_steps, batch_size * 2 * NUM_ITERS_2 + batch_size)
                     # Auto iteration will be 4; but only 3 new should be done.
-                    self.assertEqual(setup2.args.train_batch_size_per_learner, BATCH_SIZE * 2)
+                    self.assertEqual(setup2.args.train_batch_size_per_learner, batch_size * 2)
                 Trainable2 = setup2b.create_trainable()
                 if TYPE_CHECKING:
                     Trainable2 = setup2b.trainable_class
@@ -416,7 +421,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     trainable2_local.algorithm_config.to_dict(),
                     setup2.config.to_dict(),
                 )
-                self.assertEqual(trainable2_local.algorithm_config.train_batch_size_per_learner, BATCH_SIZE * 2)
+                self.assertEqual(trainable2_local.algorithm_config.train_batch_size_per_learner, batch_size * 2)
                 trainable2_local.stop()
 
                 tuner2 = setup2.create_tuner()
@@ -459,7 +464,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     "Metrics should contain '_checking_class_'. Custom class was likely not used",
                 )
                 # Check iterations change
-                self.assertEqual(result2.metrics["current_step"], BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE)
+                self.assertEqual(result2.metrics["current_step"], batch_size * 2 * NUM_ITERS_2 + batch_size)
                 self.assertEqual(result2.metrics[TRAINING_ITERATION], NUM_ITERS_2 + 1)
                 self.assertEqual(result2.metrics["iterations_since_restore"], NUM_ITERS_2)
 
@@ -467,7 +472,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 # do not check NUM_ENV_STEPS_SAMPLED_LIFETIME when using multiple envs per env runner
                 self.assertEqual(
                     result2.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME],
-                    BATCH_SIZE * 2 * NUM_ITERS_2 + BATCH_SIZE,
+                    batch_size * 2 * NUM_ITERS_2 + batch_size,
                 )
                 checkpoint_dir2, checkpoints2 = self.get_checkpoint_dirs(results2[0])
                 self.assertEqual(
@@ -479,6 +484,8 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
 
     @Cases([0])  # more env runners should have no influence here
     def test_retune_with_tune_argument(self, cases):
+        batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
+
         class TrainableWithChecksB(TrainableWithChecks):
             debug_step = False
 
@@ -489,7 +496,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 with patch_args(
                     "--num_samples", "1",
                     "--num_jobs", 1,
-                    "--batch_size", BATCH_SIZE,  # overwrite
+                    "--batch_size", batch_size,  # overwrite
                     "--minibatch_size", MINIBATCH_SIZE,  # keep
                     "--iterations", "1",  # overwrite
                 ):  # fmt: skip
@@ -513,7 +520,10 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 )
 
                 NUM_RUNS = 5
-                SAMPLE_SPACE = [16, 44, 68]  # should be divisible num_envs_per_env_runner
+                # Define multipliers for sample space; all values will be divisible by num_envs_per_env_runner
+                SAMPLE_SPACE_MULTIPLIERS = [4, 15, 19]
+                assert setup1.config.num_envs_per_env_runner
+                SAMPLE_SPACE = [max(setup1.config.num_envs_per_env_runner * m, 16) for m in SAMPLE_SPACE_MULTIPLIERS]
                 with patch_args(
                     "--num_samples", NUM_RUNS,
                     "--num_jobs", 2 if num_env_runners > 0 else 4,
@@ -565,7 +575,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     # Check that new batch_size was used
                     self.assertEqual(
                         result.metrics["current_step"],
-                        result.config["train_batch_size_per_learner"] * 2 + BATCH_SIZE,
+                        result.config["train_batch_size_per_learner"] * 2 + batch_size,
                         "Expected current_step to be 2x the batch size + initial step",
                     )
 
@@ -947,7 +957,7 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
             else:
                 self.assertEqual(trial.metric_analysis["a"]["max"], param_a._params[i])
             self.assertEqual(trial.metric_analysis["a"]["last"], 30)
-            self.assertEqual(trial.metric_analysis["b"]["last"], second=1.1)
+            self.assertEqual(trial.metric_analysis["b"]["last"], 1.1)
             assert trial.checkpoint
             with open(os.path.join(trial.checkpoint.path, "model.mock"), "rb") as fp:
                 self.assertEqual(trial2_ckpt, pickle.load(fp))

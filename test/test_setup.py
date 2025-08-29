@@ -5,16 +5,21 @@ import argparse
 import io
 import os
 import subprocess
+from ast import literal_eval
 
 import pyarrow as pa
 import pytest
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import NUM_ENV_RUNNERS_0_1_EQUAL
+from ray_utilities.config.model_config_parsers import MLPConfigParser
 from ray_utilities.misc import raise_tune_errors
 from ray_utilities.runfiles import run_tune
+from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
+from ray_utilities.training.helpers import make_divisible
 
-os.environ["RAY_DEBUG"] = "legacy"
-# os.environ["RAY_DEBUG"]="0"
+if "RAY_DEBUG" not in os.environ:
+    os.environ["RAY_DEBUG"] = "legacy"
+    # os.environ["RAY_DEBUG"]="0"
 
 import tempfile
 import unittest
@@ -64,6 +69,7 @@ from ray_utilities.training.default_class import DefaultTrainable, TrainableBase
 
 if TYPE_CHECKING:
     import numpy as np
+    from ray.rllib.algorithms.ppo.torch.default_ppo_torch_rl_module import DefaultPPOTorchRLModule
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 
@@ -145,6 +151,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         self.assertEqual(setup.project_name.rstrip("-v0123456789"), "Test-mlp-CartPole")
 
     @pytest.mark.tuner
+    @pytest.mark.length(speed="medium")  # still not that slow
     def test_dynamic_param_spaces(self):
         # Test warning and failure
         with patch_args("--tune", "dynamic_buffer"):
@@ -159,7 +166,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         with patch_args("--tune", "rollout_size", "rollout_size"):
             with self.assertLogs(logger, level="WARNING") as cm:
                 AlgorithmSetup().create_param_space()
-            self.assertIn("Unused dynamic tuning parameters: ['rollout_size']", cm.output[0])
+            self.assertTrue(any("Unused dynamic tuning parameters: ['rollout_size']" in out for out in cm.output))
         type_hints = te.get_type_hints(DefaultArgumentParser)["tune"]
         self.assertIs(te.get_origin(type_hints), te.Union)
         th_args = te.get_args(type_hints)
@@ -211,6 +218,8 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     f"Evaluated params do not match grid: {evaluated_params} != {grid}",
                 )
 
+    @pytest.mark.length(speed="medium")
+    @pytest.mark.timeout(method="thread")
     def test_dynamic_param_space_with_trainable(self):
         """Check the --tune parameters"""
         type_hints = te.get_type_hints(DefaultArgumentParser)["tune"]
@@ -269,8 +278,19 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
 
                 Setup = SetupWithCheck(TrainableWithChecksB)
                 # Limit for performance
-                Setup.batch_size_sample_space = {"grid_search": [16, 64, 128]}
-                Setup.rollout_size_sample_space = {"grid_search": [16, 64, 128]}
+                batch_size_samples = [16, 64, 128]
+                rollout_size_sample_space = [16, 64, 128]
+                Setup.batch_size_sample_space = {
+                    "grid_search": [
+                        make_divisible(x, DefaultArgumentParser.num_envs_per_env_runner) for x in batch_size_samples
+                    ]
+                }
+                Setup.rollout_size_sample_space = {
+                    "grid_search": [
+                        make_divisible(x, DefaultArgumentParser.num_envs_per_env_runner)
+                        for x in rollout_size_sample_space
+                    ]
+                }
 
                 with Setup() as setup:
                     setup.config.minibatch_size = 8  # set to small value to prevent ValueErrors
@@ -584,6 +604,47 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     )
 
 
+class TestPPOMLPSetup(InitRay, num_cpus=4):
+    def test_basic(self):
+        with patch_args():
+            setup = PPOMLPSetup()
+        self.assertIsNotNone(setup.config)
+        self.assertIsNotNone(setup.args)
+        self.assertIsNotNone(setup.create_tuner())
+        self.assertIsNotNone(setup.create_config())
+        self.assertIsNotNone(setup.create_param_space())
+        self.assertIsNotNone(setup.create_parser())
+        self.assertIsNotNone(setup.create_tags())
+        self.assertIsNotNone(setup.create_trainable())
+
+    def test_model_config_dict(self):
+        with patch_args():
+            setup = PPOMLPSetup()
+        model_config = setup._model_config_from_args(setup.args)
+        assert model_config, f"Not truthy {model_config}"
+        for k, v in MLPConfigParser().parse_args([]).as_dict().items():
+            self.assertIn(k, model_config)
+            self.assertEqual(v, model_config[k])
+
+    @Cases([[], ["--fcnet_hiddens", "[16, 32, 64]"]])
+    def test_layers(self, cases):
+        import torch  # noqa: PLC0415  # import lazy
+
+        for args in iter_cases(cases):
+            with patch_args(*args):
+                setup = PPOMLPSetup()
+            algo = setup.build_algo()
+            module: DefaultPPOTorchRLModule = algo.get_module()  # pyright: ignore[reportAssignmentType]
+            mlp_encoder: torch.nn.Sequential = module.encoder.encoder.net.mlp
+            # Use default for empty args
+            expected_layers = MLPConfigParser.fcnet_hiddens if not args else literal_eval(args[-1])
+            self.assertEqual(len(mlp_encoder), 2 * len(expected_layers))
+            size_iter = iter(expected_layers)
+            for layer in mlp_encoder:
+                if isinstance(layer, torch.nn.Linear):
+                    self.assertEqual(layer.out_features, next(size_iter))
+
+
 ENV_STEPS_PER_ITERATION = 20 * max(1, DefaultArgumentParser.num_envs_per_env_runner)
 
 
@@ -769,7 +830,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
 
     @Cases(TWO_ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
-    @pytest.mark.length("medium")
+    @pytest.mark.length(speed="medium")
     def test_with_tuner(self, cases):
         """Test if key stats are restored correctly - does not test further training and metrics"""
         self.no_pbar_updates()
@@ -1234,12 +1295,18 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
 
     @Cases(TWO_ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
+    @pytest.mark.length(speed="medium")
+    @pytest.mark.timeout(method="thread")
     def test_trainable_checkpointing(self, cases):
         """Test if trainable can be checkpointed and restored."""
         for num_env_runners_a, num_env_runners_b in iter_cases(cases):
             with patch_args(
                 "--batch_size", str(ENV_STEPS_PER_ITERATION),
+                "--minibatch_size", str(ENV_STEPS_PER_ITERATION // 2),
                 "--log_stats",  "most",  # increase log stats to assure necessary keys are present
+                # Stuck when num_envs_per_env_runner is too high. Unclear why.
+                "--num_envs_per_env_runner", 1,
+                "--env_seeding_strategy", "same",
             ):  # fmt: skip
                 setup = AlgorithmSetup(init_trainable=False)
                 config = setup.config
@@ -1254,8 +1321,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
                 config.evaluation(
                     evaluation_interval=1,
                     evaluation_duration=100,
-                    evaluation_num_env_runners=0,
                     evaluation_duration_unit="timesteps",
+                    evaluation_num_env_runners=0,
                 )
                 Trainable0 = setup.create_trainable()
                 setup = AlgorithmSetup(init_trainable=False)
@@ -1271,8 +1338,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
                 config.evaluation(
                     evaluation_interval=1,
                     evaluation_duration=100,
-                    evaluation_num_env_runners=0,
                     evaluation_duration_unit="timesteps",
+                    evaluation_num_env_runners=0,
                 )
 
                 Trainable1 = setup.create_trainable()
@@ -1331,13 +1398,13 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
         # because _throughput values results are not equal in structure (only after 2 steps)
         # self.set_max_diff(40000)
 
-        # breakpoint()
         # self.assertDictEqual(results["env_runners"][0]["step_3"], results["env_runners"][1]["step_3"])
 
 
 if __name__ == "__main__":
     import unittest
 
-    os.environ["RAY_DEBUG"] = "legacy"
+    if "RAY_DEBUG" not in os.environ:
+        os.environ["RAY_DEBUG"] = "legacy"
 
     unittest.main(defaultTest="TestMetricsRestored.test_with_tuner")

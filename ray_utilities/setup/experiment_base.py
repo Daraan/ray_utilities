@@ -5,6 +5,7 @@ import logging
 import os
 import pickle
 import subprocess
+import sys
 import warnings
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
@@ -44,6 +45,11 @@ from ray_utilities.environment import create_env
 from ray_utilities.misc import get_trainable_name
 from ray_utilities.setup.tuner_setup import TunerSetup
 from ray_utilities.training.default_class import TrainableBase
+from ray_utilities.warn import (
+    warn_about_larger_minibatch_size,
+    warn_if_batch_size_not_divisible,
+    warn_if_minibatch_size_not_divisible,
+)
 
 if TYPE_CHECKING:
     import argparse
@@ -276,6 +282,9 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         init_env = create_env(args.env_type)
         env_name = init_env.unwrapped.spec.id  # pyright: ignore[reportOptionalMemberAccess]
         args.env_type = env_name
+        warn_if_batch_size_not_divisible(
+            batch_size=args.train_batch_size_per_learner, num_envs_per_env_runner=args.num_envs_per_env_runner
+        )
         return args
 
     def args_to_dict(self, args: Optional[NamespaceType[ParserType_co] | dict[str, Any]] = None) -> dict[str, Any]:
@@ -293,6 +302,56 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             self.args = self.parse_args(known_only=self.parse_known_only)
         return self.args
 
+    def _merge_args_from_checkpoint(
+        self, parsed: NamespaceType[ParserType_co], checkpoint: str
+    ) -> NamespaceType[ParserType_co]:
+        # Merge args from a checkpoint:
+        path = Path(checkpoint)
+        with open(path / "state.pkl", "rb") as f:
+            state: dict[str, Any] = pickle.load(f)
+        # Create a patched parser with the old values as default values
+        new_parser = self.create_parser()
+        self.parser = new_parser
+        restored_args: dict[str, Any] = vars(state["setup"]["args"])
+        for action in new_parser._actions:
+            if isinstance(parsed, DefaultArgumentParser):
+                action.default = parsed.restore_arg(
+                    action.dest, restored_value=restored_args.get(action.dest, action.default)
+                )
+            else:
+                action.default = restored_args.get(action.dest, action.default)  # set new default values
+            # These are changed in process_args. Problem we do not know if we should
+            # restore them their value or "auto". e.g. --iterations 10 -> need to change iterations
+            if action.dest == "iterations":
+                logger.debug(
+                    "Resetting the parsers iterations default value to 'auto' after checkpoint restore. "
+                    "It will be recreated from the total_steps argument."
+                )
+                action.default = "auto"
+        self.parser = new_parser
+        return self.parser.parse_args()
+
+    @staticmethod
+    def _remove_testing_args_from_argv():
+        """
+        When run under test some shorthand commands might infer with the argument parser.
+        Clean those away.
+
+        Returns:
+            sys.argv with --udiscovery ... -- removed if present.
+        """
+        if "--udiscovery" in sys.argv:
+            start = sys.argv.index("--udiscovery")
+            if "--" in sys.argv[start:]:
+                # slice args away until --
+                end = start + sys.argv[start:].index("--")
+            else:
+                end = len(sys.argv)
+            argv = sys.argv[:start] + sys.argv[end + 1 :]
+            logger.info("Removing testing argument %s from sys.argv.", sys.argv[start : end + 1])
+            return argv
+        return sys.argv
+
     def parse_args(
         self, args: Sequence[str] | None = None, *, known_only: bool | None = None, checkpoint: Optional[str] = None
     ) -> NamespaceType[ParserType_co]:
@@ -307,7 +366,9 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         try:
             # If Tap parser or compatible
             self.parser = cast("ParserType_co", self.parser)
-            parsed = self.parser.parse_args(args, known_only=known_only)
+            parsed = self.parser.parse_args(
+                self._remove_testing_args_from_argv() if args is None else args, known_only=known_only
+            )
             extra_args = self.parser.extra_args
         except TypeError as e:
             if "'known_only' is an invalid invalid keyword" not in str(e):
@@ -323,33 +384,9 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 "The following arguments were not recognized by the parser: %s.",
                 extra_args,
             )
-        # Merge args from a checkpoint:
         checkpoint = checkpoint or parsed.from_checkpoint
         if checkpoint:
-            path = Path(checkpoint)
-            with open(path / "state.pkl", "rb") as f:
-                state: dict[str, Any] = pickle.load(f)
-            # Create a patched parser with the old values as default values
-            new_parser = self.create_parser()
-            self.parser = new_parser
-            restored_args: dict[str, Any] = vars(state["setup"]["args"])
-            for action in new_parser._actions:
-                if isinstance(parsed, DefaultArgumentParser):
-                    action.default = parsed.restore_arg(
-                        action.dest, restored_value=restored_args.get(action.dest, action.default)
-                    )
-                else:
-                    action.default = restored_args.get(action.dest, action.default)  # set new default values
-                # These are changed in process_args. Problem we do not know if we should
-                # restore them their value or "auto". e.g. --iterations 10 -> need to change iterations
-                if action.dest == "iterations":
-                    logger.debug(
-                        "Resetting the parsers iterations default value to 'auto' after checkpoint restore. "
-                        "It will be recreated from the total_steps argument."
-                    )
-                    action.default = "auto"
-            self.parser = new_parser
-            parsed = self.parser.parse_args()
+            parsed = self._merge_args_from_checkpoint(parsed, checkpoint)
 
         self.args = self.postprocess_args(parsed)
         return self.args
@@ -498,8 +535,6 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             # param_space["run_seed"] = tune.randint(0, 2**16)  # potential seed for config
 
         # Other args not shown in the CLI
-        # NOTE: This is None when the Old API / no module_spec is used!
-        param_space["model_config"] = module_spec and module_spec.model_config  # NOTE: Currently unused
         # Log CLI args as hyperparameters
         param_space["cli_args"] = self.clean_args_to_hparams(self.args)
         self.param_space = param_space
@@ -760,15 +795,20 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 cls.algo_class,
             )
         if config is not None:
+            warn_if_batch_size_not_divisible(
+                batch_size=config.train_batch_size_per_learner, num_envs_per_env_runner=config.num_envs_per_env_runner
+            )
             if config.minibatch_size is not None and config.minibatch_size > config.train_batch_size_per_learner:
-                logger.warning(
-                    "minibatch_size %d is larger than train_batch_size_per_learner %d, this can result in an error. "
-                    "Reducing the minibatch_size to the train_batch_size_per_learner.",
-                    config.minibatch_size,
-                    config.train_batch_size_per_learner,
-                    stacklevel=2,
+                warn_about_larger_minibatch_size(
+                    minibatch_size=config.minibatch_size,
+                    train_batch_size_per_learner=config.train_batch_size_per_learner,
+                    note_adjustment=True,
                 )
                 config.minibatch_size = config.train_batch_size_per_learner
+            warn_if_minibatch_size_not_divisible(
+                minibatch_size=config.minibatch_size,
+                num_envs_per_env_runner=config.num_envs_per_env_runner,
+            )
             kwargs = {"config": config, **kwargs}
         try:
             # Algorithm checkpoint is likely in subdir.
@@ -1175,6 +1215,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         config: ConfigType_co | Literal[False] = data.get("config", False)
         new.param_space = data["param_space"]
         if init_config is None and data["__init_config__"] and config:
+            # TODO: error needs overhaul
             logger.warning(
                 "Having __init_config__=True in the state while also passing config ignores the saved config object."
                 " You can control the behavior and disable this warning by setting init_config=True/False "

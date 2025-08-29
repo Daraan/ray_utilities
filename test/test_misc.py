@@ -1,3 +1,4 @@
+import random
 from unittest import TestCase
 
 import pytest
@@ -7,6 +8,7 @@ from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 from ray_utilities.misc import RE_GET_TRIAL_ID
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import Cases, DisableLoggers, iter_cases
+from ray_utilities.training.helpers import make_divisible
 
 
 @pytest.mark.basic
@@ -67,3 +69,9 @@ class TestMisc(TestCase):
         self.assertEqual(match.group(1), "sd353_00002")
         self.assertEqual(match.groups(), ("sd353_00002",))
         self.assertEqual(match.groupdict(), {"trial_id": "sd353_00002"})
+
+    def test_make_divisible(self):
+        a, b = random.randint(1, 1000), random.randint(1, 1000)
+        a_div = make_divisible(a, b)
+        self.assertEqual(a_div % b, 0)
+        self.assertGreaterEqual(a_div, a)

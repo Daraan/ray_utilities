@@ -1,16 +1,21 @@
 from __future__ import annotations
-# pyright: enableExperimentalFeatures=true
 
+# pyright: enableExperimentalFeatures=true
 import logging
+import sys
+from contextlib import contextmanager
 from typing import Any, Optional, TypeVar
 
 from tap import Tap
-from typing_extensions import Annotated, Literal, get_type_hints, get_args, get_origin, Sentinel
+from typing_extensions import Annotated, Literal, Sentinel, get_args, get_origin, get_type_hints
 
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, split_timestep_budget
 from ray_utilities.misc import AutoInt
-from contextlib import contextmanager
-import sys
+from ray_utilities.warn import (
+    warn_about_larger_minibatch_size,
+    warn_if_batch_size_not_divisible,
+    warn_if_minibatch_size_not_divisible,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +296,7 @@ class _EnvRunnerParser(Tap):
     evaluation_num_env_runners: int = 0
     """Number of CPU workers to use for evaluation"""
 
-    num_envs_per_env_runner: int = 4
+    num_envs_per_env_runner: int = 8
     """Number of parallel environments per env runner"""
 
     def configure(self) -> None:
@@ -333,14 +338,20 @@ class RLlibArgumentParser(_EnvRunnerParser):
         )
 
     def process_args(self):
+        # Emit warnings:
+        warn_if_batch_size_not_divisible(
+            batch_size=self.train_batch_size_per_learner, num_envs_per_env_runner=self.num_envs_per_env_runner
+        )
         if self.minibatch_size > self.train_batch_size_per_learner:
-            logger.warning(
-                "minibatch_size %d is larger than train_batch_size_per_learner %d, this can result in an error. "
-                "Reducing the minibatch_size to the train_batch_size_per_learner.",
-                self.minibatch_size,
-                self.train_batch_size_per_learner,
+            warn_about_larger_minibatch_size(
+                minibatch_size=self.minibatch_size,
+                train_batch_size_per_learner=self.train_batch_size_per_learner,
+                note_adjustment=True,
             )
             self.minibatch_size = self.train_batch_size_per_learner
+        warn_if_minibatch_size_not_divisible(
+            minibatch_size=self.minibatch_size, num_envs_per_env_runner=self.num_envs_per_env_runner
+        )
         return super().process_args()
 
 

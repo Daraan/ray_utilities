@@ -1,8 +1,10 @@
 # pyright: enableExperimentalFeatures=true
 from __future__ import annotations
 
+import dataclasses
 import logging
 import math
+from copy import deepcopy
 from functools import partial
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, Optional, TypeVar, cast, overload
@@ -24,9 +26,15 @@ from ray_utilities.config import seed_environments_for_config
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, calculate_steps
 from ray_utilities.misc import AutoInt
+from ray_utilities.warn import (
+    warn_about_larger_minibatch_size,
+    warn_if_batch_size_not_divisible,
+    warn_if_minibatch_size_not_divisible,
+)
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
+    from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
     from ray.rllib.env.env_runner import EnvRunner
 
     from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
@@ -80,6 +88,26 @@ def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict) -> int:
     )
 
 
+def patch_model_config(config: AlgorithmConfig, model_config: dict[str, Any] | DefaultModelConfig):
+    """Updates the config.model_config and rl_module_spec.model_config with the given model_config."""
+    if dataclasses.is_dataclass(model_config):
+        model_config = dataclasses.asdict(model_config)
+    model_config = deepcopy(model_config)
+    if isinstance(config._model_config, dict):
+        config._model_config.update(model_config)
+    elif config._model_config is not None:
+        config._model_config = dataclasses.asdict(config._model_config) | model_config
+    else:
+        config._model_config = model_config
+    if config._rl_module_spec:
+        if config._rl_module_spec.model_config is None:
+            config._rl_module_spec.model_config = config._model_config
+        elif isinstance(config._rl_module_spec.model_config, dict):
+            config._rl_module_spec.model_config.update(model_config)
+        else:
+            config._rl_module_spec.model_config = dataclasses.asdict(config._rl_module_spec.model_config) | model_config
+
+
 def _patch_with_param_space(
     args: dict[str, Any],
     config: _AlgorithmConfigT,
@@ -89,6 +117,8 @@ def _patch_with_param_space(
 ) -> tuple[dict[str, Any], _AlgorithmConfigT]:
     same_keys = set(args.keys()) & set(hparams.keys())
     args["__overwritten_keys__"] = {}
+    if "model_config" in hparams:
+        patch_model_config(config, hparams["model_config"])
     if not same_keys:
         logger.debug("No keys to patch in args with hparams: %s", hparams)
         return args, config
@@ -98,10 +128,10 @@ def _patch_with_param_space(
         and config.minibatch_size is not None
         and config.minibatch_size > hparams["train_batch_size_per_learner"]
     ):
-        logger.info(
-            "Overriding minibatch_size %d with train_batch_size_per_learner %d as it may not be higher",
-            config.minibatch_size,
-            hparams["train_batch_size_per_learner"],
+        warn_about_larger_minibatch_size(
+            minibatch_size=config.minibatch_size,
+            train_batch_size_per_learner=hparams["train_batch_size_per_learner"],
+            note_adjustment=True,
         )
         msg_dict["minibatch_size"] = f"{config.minibatch_size} -> {hparams['train_batch_size_per_learner']}"
         if config_inplace:
@@ -128,6 +158,7 @@ def get_args_and_config(
     hparams: dict,
     setup: Optional["ExperimentSetupBase[Any, ConfigType_co, Any]"] = None,
     setup_class: Optional[type["ExperimentSetupBase[Any, ConfigType_co, Any]"]] = None,
+    model_config: Optional[dict[str, Any] | DefaultModelConfig] = None,
 ) -> tuple[dict[str, Any], ConfigType_co]:
     """
     Constructs the args and config from the given hparams, setup or setup_class.
@@ -158,6 +189,8 @@ def get_args_and_config(
         config = setup_class.config_from_args(SimpleNamespace(**args))
     else:
         raise ValueError("Either setup or setup_class must be provided.")
+    if model_config is not None:
+        patch_model_config(config, model_config)
     args, config = _patch_with_param_space(args, config, hparams=hparams)
     # endregion
 
@@ -207,12 +240,39 @@ def create_running_reward_updater(initial_array: Optional[list[float]] = None) -
     )
 
 
+@overload
 def setup_trainable(
     hparams: dict[str, Any],
     setup: Optional["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"] = None,
     setup_class: Optional[type["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"]] = None,
     config_overrides: Optional[ConfigType_co | dict[str, Any]] = None,
-) -> tuple[dict[str, Any], "ConfigType_co", "AlgorithmType_co", "RewardUpdaters"]:
+    model_config: Optional[dict[str, Any] | DefaultModelConfig] = None,
+    *,
+    create_algo: Literal[False],
+) -> tuple[dict[str, Any], "ConfigType_co", None, "RewardUpdaters"]: ...
+
+
+@overload
+def setup_trainable(
+    hparams: dict[str, Any],
+    setup: Optional["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"] = None,
+    setup_class: Optional[type["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"]] = None,
+    config_overrides: Optional[ConfigType_co | dict[str, Any]] = None,
+    model_config: Optional[dict[str, Any] | DefaultModelConfig] = None,
+    *,
+    create_algo: Literal[True] = True,
+) -> tuple[dict[str, Any], "ConfigType_co", "AlgorithmType_co", "RewardUpdaters"]: ...
+
+
+def setup_trainable(
+    hparams: dict[str, Any],
+    setup: Optional["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"] = None,
+    setup_class: Optional[type["ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]"]] = None,
+    config_overrides: Optional[ConfigType_co | dict[str, Any]] = None,
+    model_config: Optional[dict[str, Any] | DefaultModelConfig] = None,
+    *,
+    create_algo: bool = True,
+) -> tuple[dict[str, Any], "ConfigType_co", "AlgorithmType_co | None", "RewardUpdaters"]:
     """
     Sets up the trainable by getting the args and config from the given hparams, setup or setup_class.
     Either `setup` or `setup_class` must be provided, if both are provided, `setup` will be used.
@@ -223,6 +283,8 @@ def setup_trainable(
         setup: An instance of `DefaultExperimentSetup` that contains the configuration and arguments.
         setup_class: A class of `DefaultExperimentSetup` that can be used to create the configuration
             and arguments. Ignored if `setup` is provided.
+        create_algo: Will build or load from checkpoint when True (default). Pass False to skip this
+            step, e.g. when the algorithm is created in a Trainable (and the one here is discarded).
 
     Returns:
         A tuple containing the parsed args (as a dict), an AlgorithmConfig, and an Algorithm.
@@ -231,12 +293,13 @@ def setup_trainable(
             - The returned config of algorithm.config, to prevent unexpected behavior this config
               object is frozen.
             - The type of the Algorithm is determined by the `algo_class` attribute of the config.
-            This is not entirely type-safe.
+              This is not entirely type-safe.
     """
     args, config = get_args_and_config(
         hparams,
         setup=setup,
         setup_class=setup_class,
+        model_config=model_config,
     )
     if config_overrides:
         if isinstance(config_overrides, AlgorithmConfig):
@@ -245,12 +308,18 @@ def setup_trainable(
             batch_size = config_overrides.get("train_batch_size_per_learner", config.train_batch_size_per_learner)
             minibatch_size = config_overrides.get("minibatch_size", config.minibatch_size)
             if minibatch_size > batch_size:
-                logger.info(
-                    "Overriding minibatch_size %d with train_batch_size_per_learner %d as it may not be higher",
-                    minibatch_size,
-                    batch_size,
+                warn_about_larger_minibatch_size(
+                    minibatch_size=minibatch_size, train_batch_size_per_learner=batch_size, note_adjustment=True
                 )
                 config_overrides["minibatch_size"] = batch_size
+        warn_if_batch_size_not_divisible(
+            batch_size=config_overrides.get("train_batch_size_per_learner", config.train_batch_size_per_learner),
+            num_envs_per_env_runner=config_overrides.get("num_envs_per_env_runner", config.num_envs_per_env_runner),
+        )
+        warn_if_minibatch_size_not_divisible(
+            minibatch_size=config_overrides.get("minibatch_size", config.minibatch_size),
+            num_envs_per_env_runner=config_overrides.get("num_envs_per_env_runner", config.num_envs_per_env_runner),
+        )
         config = cast("ConfigType_co", config.update_from_dict(config_overrides))
     if "train_batch_size_per_learner" in hparams or (
         config_overrides and "train_batch_size_per_learner" in config_overrides
@@ -261,7 +330,7 @@ def setup_trainable(
                 dynamic_buffer=args["dynamic_buffer"],
                 batch_size=config.train_batch_size_per_learner,
                 total_steps=args["total_steps"],
-                assure_even=args["use_exact_total_steps"],
+                assure_even=not args["use_exact_total_steps"],
                 min_size=args["min_step_size"],
                 max_size=args["max_step_size"],
             )
@@ -274,30 +343,33 @@ def setup_trainable(
             args["iterations"] = new_iterations
         else:
             logger.debug("Not adjusting iterations, as it was not an 'auto' value.")
-    if not args["from_checkpoint"]:
-        try:
-            # new API; Note: copies config!
-            algo = config.build_algo(use_copy=True)  # copy=True is default; maybe use False
-        except AttributeError:
-            algo = config.build()
-    # Load from checkpoint
-    elif checkpoint_loader := (
-        setup or setup_class
-    ):  # TODO: possibly do not load algorithm and let Trainable handle it (should be an option)
-        algo = checkpoint_loader.algorithm_from_checkpoint(args["from_checkpoint"], config=config)
-        sync_env_runner_states_after_reload(algo)
-        if config.algo_class is not None and not isinstance(algo, config.algo_class):
-            logger.warning(
-                "Loaded algorithm from checkpoint is not of the expected type %s, got %s. "
-                "Check your setup class %s.algo_class.",
-                config.algo_class,
-                type(algo),
-                type(setup) if setup is not None else setup_class,
-            )
+    if create_algo:
+        if not args["from_checkpoint"]:
+            try:
+                # new API; Note: copies config!
+                algo = config.build_algo(use_copy=True)  # copy=True is default; maybe use False
+            except AttributeError:
+                algo = config.build()
+        # Load from checkpoint
+        elif checkpoint_loader := (
+            setup or setup_class
+        ):  # TODO: possibly do not load algorithm and let Trainable handle it (should be an option)
+            algo = checkpoint_loader.algorithm_from_checkpoint(args["from_checkpoint"], config=config)
+            sync_env_runner_states_after_reload(algo)
+            if config.algo_class is not None and not isinstance(algo, config.algo_class):
+                logger.warning(
+                    "Loaded algorithm from checkpoint is not of the expected type %s, got %s. "
+                    "Check your setup class %s.algo_class.",
+                    config.algo_class,
+                    type(algo),
+                    type(setup) if setup is not None else setup_class,
+                )
+        else:
+            # Should not happen, is covered by checks in get_args_and_config
+            logger.warning("No setup or setup_class provided, using default PPOSetup. ")
+            algo = cast("Algorithm", config.algo_class).from_checkpoint(args["from_checkpoint"])
     else:
-        # Should not happen, is covered by checks in get_args_and_config
-        logger.warning("No setup or setup_class provided, using default PPOSetup. ")
-        algo = cast("Algorithm", config.algo_class).from_checkpoint(args["from_checkpoint"])
+        algo = None
     reward_updaters: RewardUpdaters = {
         "running_reward": create_running_reward_updater(),
         "eval_reward": create_running_reward_updater(),
@@ -491,3 +563,10 @@ def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
                 # kwargs is not save to use here, not used on all code paths
                 timeout_seconds=0.0,  # This is a state update -> Fire-and-forget.
             )
+
+
+def make_divisible(a: int, b: int | None) -> int:
+    """Make a divisible by b"""
+    if b is not None and a % b != 0:
+        a = (a // b + 1) * b
+    return a

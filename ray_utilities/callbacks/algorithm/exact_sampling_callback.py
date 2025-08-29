@@ -37,7 +37,7 @@ def _remove_or_trim_samples(samples: list[EpisodeType], total_samples: int, exac
     _total_samples_before = total_samples
     diff = total_samples - exact_timesteps
     lengths = [len(sae) for sae in samples]
-    index = None
+    index = None  # set to int in comprehension below
     exact_matches = [(index := i) if length == diff else False for i, length in enumerate(lengths)]
     # If there is a sample with exact length, remove it. Appears to be the most likely case.
     if index is not None:
@@ -60,10 +60,12 @@ def _remove_or_trim_samples(samples: list[EpisodeType], total_samples: int, exac
 
     # Should avoid trimming done episodes (might raise an error in metrics later)
     # trim multiple not done-episodes
+    # TODO: is all episodes are short, trim whole episodes instead of all a little
     trimmed = 0
+    min_trim = diff
     for i, sample in enumerate(reversed(samples), start=1):
         if not sample.is_done and len(sample) > 1:
-            max_trim = min(diff, len(sample) - 1)  # at least one timestep should remain
+            max_trim = min(min_trim, len(sample) - 1)  # at least one timestep should remain
             assert max_trim > 0
             # if it has length < 2; and diff >=2 could also remove episode.
             samples[-i] = sample[:-max_trim]
@@ -71,7 +73,18 @@ def _remove_or_trim_samples(samples: list[EpisodeType], total_samples: int, exac
             trimmed += max_trim
             if trimmed >= diff:
                 return
-            diff -= max_trim
+            min_trim -= max_trim  # reduce
+    # if there are (now) some samples with length 1, we can maybe remove them:
+    # TODO: Test if its okay to pop samples
+    len_samples = len(samples)  # at start
+    for i, sample in enumerate(reversed(samples), start=1):
+        if not sample.is_done and len(sample) == 1:
+            assert len(samples.pop(len_samples - i)) == 1
+            logger.debug("Removed a sample with length 1: %s", sample)
+            len_samples -= 1
+            trimmed += 1
+            if trimmed >= diff:
+                return
     # Out of options need to trim a done episode if it has enough timesteps
     for i, sample in enumerate(samples):
         if len(sample) >= diff + 1:
@@ -105,8 +118,7 @@ def exact_sampling_callback(
     *,
     env_runner: SingleAgentEnvRunner,
     metrics_logger: MetricsLogger,
-    samples: list[EpisodeType],  # could also be SampleBatch
-    worker: Optional["EnvRunner"] = None,
+    samples: list[EpisodeType],  # could also be SampleBatch. Is not a copy.
     **kwargs,
 ) -> None:
     if env_runner.config.in_evaluation:
@@ -135,7 +147,8 @@ def exact_sampling_callback(
             )
     if total_samples != exact_timesteps:
         logger.error(
-            "Total samples %s does not match exact timesteps %s. Some calculations might be off.",
+            "Total samples %s does not match exact timesteps %s. Some calculations might be off. "
+            "This callback failed to reduce the samples.",
             total_samples,
             exact_timesteps,
         )

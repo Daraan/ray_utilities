@@ -1,4 +1,4 @@
-"""NOTE: Experimental, not tested yet."""
+"""NOTE: Experimental, edge cases not tested yet."""
 
 from __future__ import annotations
 

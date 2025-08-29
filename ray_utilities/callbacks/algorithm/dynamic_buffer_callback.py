@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from ray_utilities.callbacks.algorithm.callback_mixins import BudgetMixin, StepCounterMixin
 from ray_utilities.callbacks.algorithm.dynamic_hyperparameter import DynamicHyperparameterCallback, UpdateFunction
 from ray_utilities.dynamic_config.dynamic_buffer_update import update_buffer_and_rollout_size
+from ray_utilities.warn import warn_if_batch_size_not_divisible
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms.algorithm import Algorithm
@@ -97,13 +98,19 @@ class DynamicBufferUpdate(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
             )
             self._env_steps_current = env_steps
             assert algorithm.config
-            # algorihm.config.train_batch_size_per_learner = n_steps
+            assert algorithm.config.num_envs_per_env_runner is not None
+            # Warn if steps are not divisible by num_envs_per_env_runner
+            warn_if_batch_size_not_divisible(
+                batch_size=env_steps, num_envs_per_env_runner=algorithm.config.num_envs_per_env_runner
+            )
             self._update_algorithm(algorithm, key="_train_batch_size_per_learner", value=env_steps)
             # decrease minibatch size if necessary to minibatch == batch_size
             if env_steps < self._initial_minibatch_size:
                 logger.debug(
-                    "Minibatch size changed from %s to %s. The first value might be wrong if adjusted after the callback init",
+                    "Minibatch size changed from %s to %s; as it is larger than the new batch size %d. "
+                    "Note: The first noted value might be incorrect if adjusted after the callback init",
                     self._initial_minibatch_size,
+                    env_steps,
                     env_steps,
                 )
                 self._update_algorithm(algorithm, key="minibatch_size", value=env_steps)

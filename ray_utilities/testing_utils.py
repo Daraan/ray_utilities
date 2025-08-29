@@ -77,13 +77,14 @@ from typing_extensions import Final, NotRequired, Required, Sentinel, get_origin
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import logger as dynamic_buffer_logger
 from ray_utilities.misc import raise_tune_errors
-from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
+from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger as experiment_base_logger
+from ray_utilities.setup.ppo_mlp_setup import MLPArgumentParser, PPOMLPSetup
 from ray_utilities.setup.tuner_setup import TunerSetup
 from ray_utilities.setup.tuner_setup import logger as tuner_setup_logger
 from ray_utilities.training.default_class import DefaultTrainable, TrainableBase, TrainableStateDict
 from ray_utilities.training.functional import training_step
-from ray_utilities.training.helpers import nan_to_zero_hist_leaves
+from ray_utilities.training.helpers import make_divisible, nan_to_zero_hist_leaves
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -98,7 +99,6 @@ if TYPE_CHECKING:
     from ray.tune import Result
 
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co
-    from ray_utilities.training.default_class import TrainableBase
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
     from ray_utilities.typing.metrics import LogMetricsDict
 
@@ -313,13 +313,28 @@ def _remove_throughput_stats(stats: dict[str, Any]):
 
 class TestHelpers(unittest.TestCase):
     # region setups
+    _fast_model_fcnet_hiddens: int = 1
 
     def setUp(self):
         AlgorithmSetup.PROJECT = "TESTING"
         os.environ["WANDB_API_KEY"] = "test"
+        assert TrainableBase.cls_model_config is None
+        TrainableBase.cls_model_config = {}
+        self.mock_reduced_model = mock.patch.dict(
+            TrainableBase.cls_model_config,
+            {"fcnet_hiddens": [self._fast_model_fcnet_hiddens], "head_fcnet_hiddens": []},
+        )
+        self.mock_reduced_model.start()
         super().setUp()
         self._env_seed_rng = random.Random(111)
         atexit.register(self._clean_output_dir)
+
+    def tearDown(self):
+        TrainableBase.cls_model_config = None
+        self.mock_reduced_model.stop()
+        for trainable in self._created_trainables:
+            trainable.stop()
+        super().tearDown()
 
     @staticmethod
     def _clean_output_dir():
@@ -358,11 +373,6 @@ class TestHelpers(unittest.TestCase):
 
     _created_trainables: ClassVar[list[TrainableBase]] = []
 
-    def tearDown(self):
-        for trainable in self._created_trainables:
-            trainable.stop()
-        super().tearDown()
-
     @patch_args(
         "--iterations", "5",
         "--total_steps", "320",
@@ -372,11 +382,24 @@ class TestHelpers(unittest.TestCase):
         "--min_step_size", "16",  # try not to adjust total_steps
         "--max_step_size", "16",  # try not to adjust total_steps
     )  # fmt: skip
-    def get_trainable(self, *, num_env_runners: int = 0, env_seed: int | None | _NOT_PROVIDED = _NOT_PROVIDED):
+    def get_trainable(
+        self,
+        *,
+        num_env_runners: int = 0,
+        env_seed: int | None | _NOT_PROVIDED = _NOT_PROVIDED,
+        train: bool = True,
+        fast_model=True,
+    ):
         # NOTE: In this test attributes are shared BY identity, this is just a weak test.
+        if fast_model:
+            self._model_config = {"fcnet_hiddens": [self._fast_model_fcnet_hiddens], "head_fcnet_hiddens": []}
+        else:
+            self._model_config = None
         self.TrainableClass: type[DefaultTrainable[DefaultArgumentParser, PPOConfig, PPO]] = DefaultTrainable.define(
-            PPOSetup.typed()
+            PPOMLPSetup.typed(), model_config=self._model_config
         )
+        if self._model_config is not None:
+            self.TrainableClass.cls_model_config = self._model_config
         # this initializes the algorithm; overwrite batch_size of 64 again.
         # This does not modify the state["setup"]["config"]
         overrides = AlgorithmConfig.overrides(
@@ -387,7 +410,17 @@ class TestHelpers(unittest.TestCase):
             if not hasattr(self, "_env_seed_rng"):
                 self.setUp()
             env_seed = self._env_seed_rng.randint(0, 2**15 - 1)
-        trainable = self.TrainableClass({"env_seed": env_seed}, algorithm_overrides=overrides)
+        with (
+            MLPArgumentParser.patch_args(
+                "--fcnet_hiddens", self._model_config["fcnet_hiddens"][0], # pyright: ignore[reportOptionalSubscript]
+                "--head_fcnet_hiddens", "[]",
+            )
+            if fast_model
+            else nullcontext()
+        ):  # fmt: skip
+            trainable = self.TrainableClass(
+                {"env_seed": env_seed}, algorithm_overrides=overrides, model_config=self._model_config
+            )
         self._created_trainables.append(trainable)
         self.assertEqual(trainable._algorithm_overrides, overrides)
         self.assertEqual(overrides.keys(), OVERRIDE_KEYS)
@@ -399,6 +432,8 @@ class TestHelpers(unittest.TestCase):
         self.assertEqual(trainable._setup.args.total_steps, 320)
         self.assertEqual(trainable._setup.args.train_batch_size_per_learner, 64)  # not overwritten
 
+        if not train:
+            return trainable, None
         result1 = trainable.train()
         return trainable, result1
 
@@ -1053,11 +1088,16 @@ class TestHelpers(unittest.TestCase):
         Attention:
             Does perform a step on each trainable
         """
+        if minibatch_size != make_divisible(minibatch_size, DefaultArgumentParser.train_batch_size_per_learner):
+            logger.warning(
+                "compare_trainables: Minibatch size is not divisible by train_batch_size_per_learner. "
+                "If this test fails pass the divisible minibatch_size as an argument."
+            )
         self.maxDiff = None
         with self.subTest("Step 1: Compare trainables " + msg, **subtest_kwargs):
             if hasattr(trainable, "_args") or hasattr(trainable2, "_args"):
                 self.assertDictEqual(trainable2._args, trainable._args)  # type: ignore[attr-defined]
-            self.assertEqual(trainable.algorithm_config.minibatch_size, minibatch_size)
+            self.assertEqual(trainable.algorithm_config.minibatch_size, minibatch_size)  # <-- passed as divisible?
             self.assertEqual(trainable2.algorithm_config.minibatch_size, trainable.algorithm_config.minibatch_size)
             self.assertEqual(trainable2._iteration, trainable._iteration)
 

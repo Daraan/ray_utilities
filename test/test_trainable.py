@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 from copy import deepcopy
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest import mock, skip
 
 import cloudpickle
@@ -15,6 +15,7 @@ from ray.rllib.utils.metrics import EVALUATION_RESULTS
 from ray.tune.utils import validate_save_restore
 from ray.util.multiprocessing import Pool
 
+from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN, PERTURBED_HPARAMS
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.testing_utils import (
@@ -28,6 +29,7 @@ from ray_utilities.testing_utils import (
     patch_args,
 )
 from ray_utilities.training.default_class import DefaultTrainable
+from ray_utilities.training.helpers import make_divisible
 from test._mp_trainable import remote_process
 
 try:
@@ -36,10 +38,12 @@ except ImportError:
     _TrainingResult = None
 
 if TYPE_CHECKING:
+    from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
+
     from ray_utilities.typing.trainable_return import TrainableReturnData
 
 
-class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints):
+class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints, num_cpus=4):
     def test_1_subclass_check(self):
         """This test should run first as it has side-effects concerning ABCMeta"""
         TrainableClass = DefaultTrainable.define(PPOSetup.typed())
@@ -87,6 +91,33 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
         trainable2_1, _ = self.get_trainable(num_env_runners=1, env_seed=5)
         self.compare_trainables(trainable1_1, trainable2_1, num_env_runners=1, ignore_timers=True)
 
+    @pytest.mark.basic
+    def test_get_trainable_fast_model(self):
+        # Test model sizes:
+        DefaultArgumentParser.num_envs_per_env_runner = 1
+        trainable1, _ = self.get_trainable(num_env_runners=0, env_seed=5, train=False, fast_model=True)
+        assert self._model_config is not None
+        new_trainable = self.TrainableClass()  # with model_config in hparams
+        for trainable in (trainable1, new_trainable):
+            with self.subTest("Model config check", model_config_in_hparams=trainable is new_trainable):
+                runner_module = cast("SingleAgentEnvRunner", trainable.algorithm.env_runner).module
+                assert (
+                    runner_module
+                    and trainable.algorithm.learner_group is not None
+                    and trainable.algorithm.learner_group._learner
+                )
+                learner_module = trainable.algorithm.learner_group._learner.module["default_policy"]
+                for ctx, model_config_dict in [
+                    ("runner", runner_module.model_config),
+                    ("algorithm_config", trainable.algorithm_config.model_config),
+                    ("learner_module", learner_module.model_config),
+                ]:
+                    if trainable is new_trainable:
+                        pass
+                    self.assertEqual(model_config_dict["fcnet_hiddens"], [self._fast_model_fcnet_hiddens], ctx)
+                    self.assertEqual(model_config_dict["head_fcnet_hiddens"], [], ctx)
+                    self.assertDictContainsSubset(self._model_config, model_config_dict, ctx)
+
     @patch_args()
     def test_trainable_class_and_overrides(self):
         # Kind of like setUp for the other tests but with default args
@@ -113,11 +144,23 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
     def test_overrides_after_restore(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             batch_size1 = 40
+            # Ensure divisibility by num_envs_per_env_runner without reducing the value
+            batch_size1 = make_divisible(batch_size1, DefaultArgumentParser.num_envs_per_env_runner)
+            batch_size2 = make_divisible(80, DefaultArgumentParser.num_envs_per_env_runner)
+            mini_batch_size1 = make_divisible(20, DefaultArgumentParser.num_envs_per_env_runner)
+            mini_batch_size2 = make_divisible(40, DefaultArgumentParser.num_envs_per_env_runner)
+            override_mini_batch_size = make_divisible(10, DefaultArgumentParser.num_envs_per_env_runner)
+            # Meta checks, sizes should differ for effective tests
+            self.assertNotEqual(batch_size1, batch_size2)
+            self.assertNotEqual(mini_batch_size1, mini_batch_size2)
+            self.assertNotEqual(override_mini_batch_size, mini_batch_size2)
+            self.assertNotEqual(batch_size1, mini_batch_size1)
+            self.assertNotEqual(batch_size2, mini_batch_size2)
             with patch_args(
-                "--total_steps", "80",
+                "--total_steps", batch_size1 * 2,
                 "--use_exact_total_steps",  # Do not adjust total_steps
                 "--batch_size", batch_size1,
-                "--minibatch_size", "20",
+                "--minibatch_size", mini_batch_size1,
                 "--comment", "A",
                 "--tags", "test",
             ):  # fmt: skip
@@ -125,12 +168,12 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
                     setup.config.evaluation(evaluation_interval=1)
                     setup.config.training(
                         num_epochs=2,
-                        minibatch_size=10,  # overwrite CLI
+                        minibatch_size=override_mini_batch_size,  # overwrite CLI
                     )
                 trainable = setup.trainable_class(algorithm_overrides=AlgorithmConfig.overrides(gamma=0.11, lr=2.0))
-                self.assertEqual(trainable._total_steps["total_steps"], 80)
-                self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 40)
-                self.assertEqual(trainable.algorithm_config.minibatch_size, 10)
+                self.assertEqual(trainable._total_steps["total_steps"], batch_size1 * 2)
+                self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, batch_size1)
+                self.assertEqual(trainable.algorithm_config.minibatch_size, override_mini_batch_size)
                 self.assertEqual(trainable.algorithm_config.num_epochs, 2)
                 self.assertEqual(trainable.algorithm_config.gamma, 0.11)
                 self.assertEqual(trainable.algorithm_config.lr, 2.0)
@@ -147,9 +190,9 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
             del trainable
             del setup
             with patch_args(
-                "--total_steps", 80 + 120,  # Should be divisible by new batch_size
+                "--total_steps", 2 * batch_size1 + 2 * batch_size2,  # Should be divisible by new batch_size
                 "--use_exact_total_steps",  # Do not adjust total_steps
-                "--batch_size", "60",
+                "--batch_size", batch_size2,
                 "--comment", "B",
                 "--from_checkpoint", tmpdir,
             ):  # fmt: skip
@@ -190,10 +233,10 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints)
                 self.assertEqual(trainable2.algorithm_config.gamma, 0.22)
                 self.assertEqual(trainable2.algorithm_config.grad_clip, 4.321)
                 # From CLI
-                self.assertEqual(trainable2.algorithm_config.train_batch_size_per_learner, 60)
-                self.assertEqual(trainable2._total_steps["total_steps"], 80 + 120)
+                self.assertEqual(trainable2.algorithm_config.train_batch_size_per_learner, batch_size2)
+                self.assertEqual(trainable2._total_steps["total_steps"], 2 * batch_size1 + 2 * batch_size2)
                 # NOT restored as set by config_from_args
-                self.assertEqual(trainable2.algorithm_config.minibatch_size, 20)
+                self.assertEqual(trainable2.algorithm_config.minibatch_size, mini_batch_size1)
 
     def test_perturbed_keys(self):
         with (
@@ -285,7 +328,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
     def test_save_checkpoint(self, cases):
         # NOTE: In this test attributes are shared BY identity, this is just a weak test.
         for num_env_runners in iter_cases(cases):
-            trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
+            trainable, _ = self.get_trainable(num_env_runners=num_env_runners, fast_model=True)
             with tempfile.TemporaryDirectory() as tmpdir:
                 # NOTE This loads some parts by identity!
                 saved_ckpt = trainable.save_checkpoint(tmpdir)
@@ -338,32 +381,39 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
         # If this test fails all others will most likely fail too, run it first.
         self.maxDiff = None
         for num_env_runners in iter_cases(cases):
-            trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
-            state = trainable.get_state()
-            # TODO: add no warning test
-            self.assertIn(COMPONENT_ENV_RUNNER, state.get("algorithm", {}))
+            try:
+                trainable, _ = self.get_trainable(num_env_runners=num_env_runners, fast_model=True)
+                state = trainable.get_state()
+                # TODO: add no warning test
+                self.assertIn(COMPONENT_ENV_RUNNER, state.get("algorithm", {}))
 
-            trainable2 = self.TrainableClass()
-            trainable2.set_state(deepcopy(state))
-            # class is missing in config dict
-            self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
-            trainable.stop()
-            trainable2.stop()
+                trainable2 = self.TrainableClass()
+                trainable2.set_state(deepcopy(state))
+                # class is missing in config dict
+                self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
+            finally:
+                try:
+                    trainable.stop()  # pyright: ignore[reportPossiblyUnboundVariable]
+                    trainable2.stop()  # pyright: ignore[reportPossiblyUnboundVariable]
+                except UnboundLocalError:
+                    pass
 
     @Cases(ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases  # might deadlock with num_env_runners >= 2
     def test_safe_to_path(self, cases):
         """Test that the trainable can be saved to a path and restored."""
         for num_env_runners in iter_cases(cases):
-            trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
-            with tempfile.TemporaryDirectory() as tmpdir:
-                trainable.save_to_path(tmpdir)
-                with patch_args():
-                    trainable2 = self.TrainableClass()
-                    trainable2.restore_from_path(tmpdir)
-            self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
-            trainable.stop()
-            trainable2.stop()
+            try:
+                trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    trainable.save_to_path(tmpdir)
+                    with patch_args():
+                        trainable2 = self.TrainableClass()
+                        trainable2.restore_from_path(tmpdir)
+                self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
+            finally:
+                trainable.stop()  # pyright: ignore[reportPossiblyUnboundVariable]
+                trainable2.stop()  # pyright: ignore[reportPossiblyUnboundVariable]
 
     def test_validate_save_restore(self):
         """Basically test if TRAINING_ITERATION is set correctly."""
@@ -428,8 +478,8 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                     # the restore_from_path variant does not do that
                     ignore_env_runner_state=num_env_runners > 0,
                 )
+                trainable_from_checkpoint.stop()
             trainable.stop()
-            trainable_from_checkpoint.stop()
 
     @Cases(ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
@@ -520,23 +570,26 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
     @Cases(ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
     @pytest.mark.tuner
-    @pytest.mark.length("medium")
+    @pytest.mark.length(speed="medium")  # 2-3 min
     def test_tuner_checkpointing(self, cases):
         # self.enable_loggers()
         # self.no_pbar_updates()
         with patch_args(
             "--num_samples", "1",
             "--num_jobs", "1",
-            "--batch_size", "32",
-            "--use_exact_total_steps",  # Do not adjust total_steps
-            "--minibatch_size", "16",
             "--iterations", "3",
+            "--use_exact_total_steps",  # Do not adjust total_steps
+            "--batch_size", make_divisible(32, DefaultArgumentParser.num_envs_per_env_runner),
+            "--minibatch_size", make_divisible(16, DefaultArgumentParser.num_envs_per_env_runner),
+            "--num_envs_per_env_runner", 1,  # Stuck when using more
         ):  # fmt: skip
             for num_env_runners in iter_cases(cases):
                 with self.subTest(num_env_runners=num_env_runners):
                     setup = AlgorithmSetup(init_trainable=False)
                     setup.config.env_runners(num_env_runners=num_env_runners)
-                    setup.config.training(minibatch_size=32)  # insert some noise
+                    setup.config.training(
+                        minibatch_size=make_divisible(32, DefaultArgumentParser.num_envs_per_env_runner)
+                    )  # insert some noise
                     setup.create_trainable()
                     tuner = setup.create_tuner()
                     assert tuner._local_tuner
@@ -572,6 +625,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                             "compare from_path with from_checkpoint",
                             iteration_after_step=step + 1,
                             step=step,
+                            minibatch_size=make_divisible(32, DefaultArgumentParser.num_envs_per_env_runner),
                         )
                         trainable_from_ckpt.stop()
                         trainable_restore = DefaultTrainable.define(setup)()
@@ -592,6 +646,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                             "compare trainable_restore with from_path x2",
                             iteration_after_step=step + 1,
                             step=step,
+                            minibatch_size=make_divisible(32, DefaultArgumentParser.num_envs_per_env_runner),
                         )
                         trainable_from_path.stop()
                         trainable_restore.stop()

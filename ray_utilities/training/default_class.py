@@ -10,7 +10,7 @@ from abc import ABCMeta
 from copy import copy
 from inspect import isclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Collection, Generic, Optional, TypedDict, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Collection, Generic, Optional, TypedDict, TypeVar, cast, overload
 
 import git
 import pyarrow.fs
@@ -41,15 +41,22 @@ from ray_utilities.training.helpers import (
     episode_iterator,
     get_current_step,
     get_total_steps,
+    patch_model_config,
     setup_trainable,
     sync_env_runner_states_after_reload,
 )
 from ray_utilities.typing.trainable_return import RewardUpdaters
+from ray_utilities.warn import (
+    warn_about_larger_minibatch_size,
+    warn_if_batch_size_not_divisible,
+    warn_if_minibatch_size_not_divisible,
+)
 
 if TYPE_CHECKING:
     import git.types  # noqa: TC004  # false positive
     from ray.experimental import tqdm_ray
     from ray.rllib.algorithms import Algorithm
+    from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
     from ray.rllib.env.env_runner import EnvRunner
     from ray.rllib.utils.typing import StateDict
     from tqdm import tqdm
@@ -175,6 +182,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     _git_repo_sha: str = _UNKNOWN_GIT_SHA
     """Current sha of the repo, set on define"""
 
+    cls_model_config: ClassVar[Optional[dict[str, Any] | DefaultModelConfig]] = None
+
     @classmethod
     def define(
         cls,
@@ -183,6 +192,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         discrete_eval: bool = False,
         use_pbar: bool = True,
         fix_argv: bool = False,
+        model_config: Optional[dict[str, Any] | DefaultModelConfig] = None,
     ) -> type[DefaultTrainable[_ParserTypeInner, _ConfigTypeInner, _AlgorithmTypeInner]]:
         """
         This creates a subclass with ``setup_class`` set to the given class.
@@ -206,7 +216,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # Get git metadata now, as when on remote we are in a temp dir
         try:
             repo = git.Repo(search_parent_directories=True)
-        except Exception as e:  # noqa: BLE001
+        except (git.InvalidGitRepositoryError, Exception) as e:
             _logger.warning("Could not get git commit SHA: %s", e)
             cls._git_repo_sha = _UNKNOWN_GIT_SHA
         else:
@@ -225,6 +235,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             setup_class = setup_cls
             discrete_eval = discrete_eval_
             use_pbar = use_pbar_
+            cls_model_config = model_config
 
         DefinedTrainable.__name__ = "Defined" + cls.__name__
 
@@ -241,9 +252,21 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         config: Optional[dict[str, Any]] = None,
         *,
         algorithm_overrides: Optional[dict[str, Any]] = None,
+        model_config: Optional[dict[str, Any] | DefaultModelConfig] = None,
         **kwargs,
     ):
+        """
+        Args:
+            config: The configuration dictionary for the trainable.
+                Special Behavior:
+                    - keys that have the same name as the attribute of the Trainable's setup parsed
+                    arguments namespace (default: `DefaultArgumentParser`) override these attributes.
+                    - A special key is `model_config` that "extends" the model_config of the created
+                      Algorithm.
+            kwargs: passed to __init__ of superclasses, e.g. storage for tune.Trainable
+        """
         self._algorithm_overrides = algorithm_overrides
+        self._model_config = model_config if model_config is not None else self.cls_model_config
         if self._algorithm_overrides and self.setup_class._fixed_argv:
             _logger.warning(
                 "Using a Trainable with fixed argv on the setup_class and algorithm_overrides, "
@@ -325,25 +348,31 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         )
         # NOTE: args is a dict, self._setup.args a Namespace | Tap
         self._reward_updaters: RewardUpdaters
-        args, _algo_config, self.algorithm, self._reward_updaters = setup_trainable(
+        load_algorithm = "cli_args" in config and config["cli_args"].get("from_checkpoint")
+        self.algorithm: _AlgorithmType
+        args, _algo_config, algorithm, self._reward_updaters = setup_trainable(
             hparams=config,
             setup=self._setup,
             setup_class=self.setup_class if isclass(self.setup_class) else None,
             config_overrides=self._algorithm_overrides,
+            model_config=self._model_config,
+            create_algo=True,  # not load_algorithm,  # Not stable enough to init later.
         )
         self._param_overrides: dict[str, Any] = args.get("__overwritten_keys__", {})
         """Changed parameters via the hparams argument, e.g. passed by the tuner. See also: --tune"""
         self._pbar: tqdm | range | tqdm_ray.tqdm = episode_iterator(args, config, use_pbar=self.use_pbar)
         self._iteration: int = 0
         self.log_stats: LogStatsChoices = args[LOG_STATS]
-        assert self.algorithm.config
         # calculate total steps once
         # After components have been setup up load checkpoint if requested
         current_step = 0
-        if "cli_args" in config and config["cli_args"].get("from_checkpoint"):
+        if load_algorithm:
+            self._algo_class: type[_AlgorithmType] | None = _algo_config.algo_class
             _logger.info("At end of setup(), loading from checkpoint: %s", config["cli_args"]["from_checkpoint"])
             # calls restore from path; from_checkpoint could also be a dict here
+            self.algorithm = algorithm
             self.load_checkpoint(config["cli_args"]["from_checkpoint"])
+            assert self.algorithm is not None
             if self.algorithm.metrics:
                 current_step = self.algorithm.metrics.peek(
                     (ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=None
@@ -356,20 +385,27 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     _logger.warning(
                         "No current step found in restored algorithm metrics to re-calculate total_steps, using 0. "
                     )
+        else:
+            assert algorithm is not None
+            self.algorithm = algorithm
+        assert self.algorithm.config
 
-        # Resulting steps are divisible by current train_batch_size_per_learner
-        # Does not allow for current_steps (divisible by old batch size) + current batch_size
-        args["iterations"] -= self.algorithm._iteration
-        total_steps = get_total_steps(args, self.algorithm.config)
-        if total_steps is not None:
-            # on reload, old batch_size might not be divisible by new batch size
-            # account for past iterations with different batch size
-            total_steps += current_step
+        steps_to_new_goal = args["total_steps"] - current_step
+        iterations_to_new_goal = (
+            steps_to_new_goal // self.algorithm_config.train_batch_size_per_learner + 1
+            if steps_to_new_goal % self.algorithm_config.train_batch_size_per_learner != 0
+            else steps_to_new_goal // self.algorithm_config.train_batch_size_per_learner
+        )
+        args["iterations"] = iterations_to_new_goal
+        steps_with_current_batch_size = get_total_steps(args, self.algorithm.config)
+        if steps_with_current_batch_size is not None:
+            total_steps = steps_with_current_batch_size + current_step
+        else:
+            total_steps = args.get("total_steps", None)
         self._total_steps = {
             "total_steps": total_steps,
             "iterations": "auto",
         }
-        args["iterations"] += self.algorithm._iteration
 
     @property
     def algorithm_config(self) -> _ConfigType:
@@ -453,16 +489,17 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # set iterations
         # set reward_updaters
         # config comes from new setup
+        setup_config = self._setup.config.copy(copy_frozen=False)
+        if self._model_config is not None:
+            patch_model_config(setup_config, self._model_config)
         if PERTURBED_HPARAMS in self.config:
             perturbed: dict[str, Any] = {k: self.config[k] for k in self.config[PERTURBED_HPARAMS]}
             # assert perturbed == self.config[PERTURBED_HPARAMS]
-            setup_config = self._setup.config.copy(copy_frozen=False).update_from_dict(perturbed)
-            setup_config.freeze()
+            setup_config = setup_config.update_from_dict(perturbed)
             # Remove __perturbed__ from config so that a future checkpoint hparams does not see them as highest priority
             self._perturbed_config: Optional[dict[str, Any]] = self.config.pop(PERTURBED_HPARAMS)
         else:
             perturbed = {}
-            setup_config = self._setup.config
             self._perturbed_config = None
         algo_kwargs: dict[str, Any] = (
             {**kwargs}
@@ -484,17 +521,17 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 algo_kwargs["config"].minibatch_size is not None
                 and algo_kwargs["config"].train_batch_size_per_learner < algo_kwargs["config"].minibatch_size
             ):
-                _logger.warning(
-                    "minibatch_size %d is larger than train_batch_size_per_learner %d, this can result in an error. "
-                    "Reducing the minibatch_size to the train_batch_size_per_learner.",
-                    algo_kwargs["config"].minibatch_size,
-                    algo_kwargs["config"].train_batch_size_per_learner,
+                warn_about_larger_minibatch_size(
+                    minibatch_size=algo_kwargs["config"].minibatch_size,
+                    train_batch_size_per_learner=algo_kwargs["config"].train_batch_size_per_learner,
+                    note_adjustment=True,
                 )
                 config_overrides["minibatch_size"] = algo_kwargs["config"].train_batch_size_per_learner
                 algo_kwargs["config"].minibatch_size = algo_kwargs["config"].train_batch_size_per_learner
             algo_kwargs["config"].freeze()
         else:
             config_overrides = perturbed or {}
+        setup_config.freeze()
         overrides_at_start = self._algorithm_overrides or {}
         if isinstance(checkpoint, dict):
             keys_to_process = set(checkpoint.keys())  # Sanity check if processed all keys
@@ -503,10 +540,16 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # if checkpoint["algorithm_checkpoint_dir"] is a tempdir (e.g. from tune, this is wrong)
             # However, self.set_state should have take care of algorithm already even if checkpoint dir is missing
             if os.path.exists(checkpoint["algorithm_checkpoint_dir"]):
-                self.algorithm.stop()  # free resources first
-                self.algorithm = self.algorithm.from_checkpoint(
+                if self.algorithm is not None:
+                    self.algorithm.stop()  # free resources first
+                    algo_class = type(self.algorithm)
+                    delattr(self, "algorithm")
+                else:
+                    algo_class = self._algo_class
+                    assert algo_class is not None
+                self.algorithm = algo_class.from_checkpoint(
                     Path(checkpoint["algorithm_checkpoint_dir"]).absolute().as_posix(), **algo_kwargs
-                )
+                )  # pyright: ignore[reportAttributeAccessIssue]
             elif "algorithm_state" in checkpoint:
                 _logger.error(
                     "Algorithm checkpoint directory %s does not exist, will restore from state",
@@ -555,11 +598,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     algo_kwargs["config"].minibatch_size is not None
                     and algo_kwargs["config"].train_batch_size_per_learner < algo_kwargs["config"].minibatch_size
                 ):
-                    _logger.warning(
-                        "minibatch_size %d is larger than train_batch_size_per_learner %d, this can result in an error."
-                        " Reducing the minibatch_size to the train_batch_size_per_learner.",
-                        algo_kwargs["config"].minibatch_size,
-                        algo_kwargs["config"].train_batch_size_per_learner,
+                    warn_about_larger_minibatch_size(
+                        minibatch_size=algo_kwargs["config"].minibatch_size,
+                        train_batch_size_per_learner=algo_kwargs["config"].train_batch_size_per_learner,
+                        note_adjustment=True,
                     )
                     config_overrides["minibatch_size"] = algo_kwargs["config"].train_batch_size_per_learner
                     algo_kwargs["config"].minibatch_size = algo_kwargs["config"].train_batch_size_per_learner
@@ -568,8 +610,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # for component in components:
             #    self.restore_from_path(checkpoint, component=component, **algo_kwargs)
             # free resources first
-            self.algorithm.stop()
-            self.algorithm = self.algorithm.from_checkpoint((Path(checkpoint) / "algorithm").as_posix(), **algo_kwargs)
+            self.algorithm.stop()  # free resources first
+            self.algorithm = cast(
+                "_AlgorithmType",
+                (self.algorithm or self._algo_class).from_checkpoint(
+                    (Path(checkpoint) / "algorithm").as_posix(),
+                    **algo_kwargs,
+                ),
+            )
             sync_env_runner_states_after_reload(self.algorithm)
         else:
             raise ValueError(f"Checkpoint must be a dict or a path. Not {type(checkpoint)}")
@@ -580,6 +628,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     v,
                     getattr(self.algorithm_config, k),
                 )
+        warn_if_batch_size_not_divisible(
+            batch_size=self.algorithm_config.train_batch_size_per_learner,
+            num_envs_per_env_runner=self.algorithm_config.num_envs_per_env_runner,
+        )
+        warn_if_minibatch_size_not_divisible(
+            minibatch_size=self.algorithm_config.minibatch_size,
+            num_envs_per_env_runner=self.algorithm_config.num_envs_per_env_runner,
+        )
 
     # endregion
 
@@ -820,6 +876,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 "Updating env_runner config after restore, did not match after set_state",
             )
             self.algorithm.env_runner.config = self.algorithm_config.copy(copy_frozen=True)
+            if self.algorithm.learner_group is not None and self.algorithm.learner_group.is_local:
+                self.algorithm.learner_group._learner.config = self.algorithm_config.copy(copy_frozen=True)  # pyright: ignore[reportOptionalMemberAccess]
         if self.algorithm.env_runner_group:
             # TODO: Passing config here likely has no effect at all; possibly sync metrics with custom function
             # Does not sync config!, recreate env_runner_group or force sync. Best via reference
@@ -871,7 +929,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     @override(Checkpointable)
     def get_checkpointable_components(self) -> list[tuple[str, Checkpointable]]:
         components = super().get_checkpointable_components()
-        components.append(("algorithm", self.algorithm))
+        if self.algorithm is not None:  # pyright: ignore[reportUnnecessaryComparison]
+            components.append(("algorithm", self.algorithm))
         return components
 
     @override(Checkpointable)
@@ -912,7 +971,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         if self._git_repo_sha == _UNKNOWN_GIT_SHA:
             try:
                 repo = git.Repo(search_parent_directories=True)
-            except Exception as e:  # noqa: BLE001
+            except (git.InvalidGitRepositoryError, Exception) as e:
                 _logger.error("Failed to get git Repo for metadata: %s", e)
             else:
                 self._git_repo_sha = cast("git.types.AnyGitObject", repo.head.object).hexsha
