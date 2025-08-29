@@ -647,6 +647,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                             "compare trainable_restore with from_path x2",
                             iteration_after_step=step + 1,
                             step=step,
+                            minibatch_size=make_divisible(32, DefaultArgumentParser.num_envs_per_env_runner),
                         )
                         trainable_from_path.stop()
                         trainable_restore.stop()

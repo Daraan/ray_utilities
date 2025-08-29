@@ -15,6 +15,7 @@ from ray_utilities.config.model_config_parsers import MLPConfigParser
 from ray_utilities.misc import raise_tune_errors
 from ray_utilities.runfiles import run_tune
 from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
+from ray_utilities.training.helpers import make_divisible
 
 if "RAY_DEBUG" not in os.environ:
     os.environ["RAY_DEBUG"] = "legacy"
@@ -150,6 +151,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         self.assertEqual(setup.project_name.rstrip("-v0123456789"), "Test-mlp-CartPole")
 
     @pytest.mark.tuner
+    @pytest.mark.length(speed="medium")  # still not that slow
     def test_dynamic_param_spaces(self):
         # Test warning and failure
         with patch_args("--tune", "dynamic_buffer"):
@@ -276,8 +278,19 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
 
                 Setup = SetupWithCheck(TrainableWithChecksB)
                 # Limit for performance
-                Setup.batch_size_sample_space = {"grid_search": [16, 64, 128]}
-                Setup.rollout_size_sample_space = {"grid_search": [16, 64, 128]}
+                batch_size_samples = [16, 64, 128]
+                rollout_size_sample_space = [16, 64, 128]
+                Setup.batch_size_sample_space = {
+                    "grid_search": [
+                        make_divisible(x, DefaultArgumentParser.num_envs_per_env_runner) for x in batch_size_samples
+                    ]
+                }
+                Setup.rollout_size_sample_space = {
+                    "grid_search": [
+                        make_divisible(x, DefaultArgumentParser.num_envs_per_env_runner)
+                        for x in rollout_size_sample_space
+                    ]
+                }
 
                 with Setup() as setup:
                     setup.config.minibatch_size = 8  # set to small value to prevent ValueErrors

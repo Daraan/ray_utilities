@@ -28,6 +28,7 @@ from ray.tune.utils.mock_trainable import MOCK_TRAINABLE_NAME, register_mock_tra
 
 from ray_utilities.callbacks.algorithm import exact_sampling_callback
 from ray_utilities.callbacks.tuner.metric_checkpointer import StepCheckpointer  # pyright: ignore[reportDeprecated]
+from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.constants import (
     EVAL_METRIC_RETURN_MEAN,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
@@ -54,6 +55,7 @@ from ray_utilities.testing_utils import (
     patch_args,
 )
 from ray_utilities.training.default_class import DefaultTrainable
+from ray_utilities.training.helpers import make_divisible
 from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
 
 if TYPE_CHECKING:
@@ -87,30 +89,32 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             self.assertNotIsInstance(tuner2._local_tuner._tune_config.search_alg, OptunaSearch)
 
     def test_run_tune_function(self):
-        with patch_args("--num_samples", "3", "--num_jobs", "3", "--batch_size", BATCH_SIZE, "--iterations", "3"):
+        batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
+        with patch_args("--num_samples", "3", "--num_jobs", "3", "--batch_size", batch_size, "--iterations", "3"):
             with AlgorithmSetup(init_trainable=False) as setup:
-                setup.config.training(num_epochs=2, minibatch_size=BATCH_SIZE)
+                setup.config.training(num_epochs=2, minibatch_size=batch_size)
                 setup.config.evaluation(evaluation_interval=1)  # else eval metric not in dict
             results = run_tune(setup)
             assert not isinstance(results, dict)
             # NOTE: This can be OK even if runs fail!
             for result in results:
                 assert result.metrics
-                self.assertEqual(result.metrics["current_step"], 3 * BATCH_SIZE)
+                self.assertEqual(result.metrics["current_step"], 3 * batch_size)
                 self.assertEqual(result.metrics[TRAINING_ITERATION], 3)
             raise_tune_errors(results)
 
     def test_step_checkpointing(self):
+        batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
         with patch_args(
             "--num_samples", "1",
             "--num_jobs", "1",
-            "--batch_size", BATCH_SIZE,
+            "--batch_size", batch_size,
             "--minibatch_size", MINIBATCH_SIZE,
             "--iterations", "5",
-            "--total_steps", BATCH_SIZE * 5,
-            "--use_exact_total_steps"  # do not adjust total_steps
+            "--total_steps", batch_size * 5,
+            "--use_exact_total_steps",  # do not adjust total_steps
             "--checkpoint_frequency_unit", "steps",
-            "--checkpoint_frequency", BATCH_SIZE * 2,
+            "--checkpoint_frequency", batch_size * 2,
         ):  # fmt: skip
             # FIXME: new default steps does not align with other tests!
             setup = AlgorithmSetup()
@@ -143,8 +147,8 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 "1",
             ):
                 t2 = setup.trainable_class.from_checkpoint(checkpoints[-1])
-                assert t2._current_step == BATCH_SIZE * 4, (
-                    f"Expected current_step to be {BATCH_SIZE * 4}, got {t2._current_step}"
+                assert t2._current_step == batch_size * 4, (
+                    f"Expected current_step to be {batch_size * 4}, got {t2._current_step}"
                 )
 
     def test_checkpoint_force_by_trial_callback(self):
