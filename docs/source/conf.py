@@ -78,6 +78,20 @@ sys.modules["ray.rllib.utils.metrics"] = _ray_metrics
 sys.modules["ray"].__version__ = "2.48.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
 sys.modules["gym"].__version__ = "0.26.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
 sys.modules["gymnasium"].__version__ = "1.0.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
+sys.modules["ray.rllib.utils.checkpoints"] = _MockModule("ray.rllib.utils.checkpoints")
+sys.modules["ray.tune"] = _MockModule("ray.tune")
+
+
+class dummy:
+    pass
+
+
+class dummy2:
+    pass
+
+
+sys.modules["ray.tune"].Trainable = dummy
+sys.modules["ray.rllib.utils.checkpoints"].Checkpointable = dummy2
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
