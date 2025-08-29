@@ -84,7 +84,7 @@ from ray_utilities.setup.tuner_setup import TunerSetup
 from ray_utilities.setup.tuner_setup import logger as tuner_setup_logger
 from ray_utilities.training.default_class import DefaultTrainable, TrainableBase, TrainableStateDict
 from ray_utilities.training.functional import training_step
-from ray_utilities.training.helpers import nan_to_zero_hist_leaves
+from ray_utilities.training.helpers import make_divisible, nan_to_zero_hist_leaves
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -1088,11 +1088,16 @@ class TestHelpers(unittest.TestCase):
         Attention:
             Does perform a step on each trainable
         """
+        if minibatch_size != make_divisible(minibatch_size, DefaultArgumentParser.train_batch_size_per_learner):
+            logger.warning(
+                "compare_trainables: Minibatch size is not divisible by train_batch_size_per_learner. "
+                "If this test fails pass the divisible minibatch_size as an argument."
+            )
         self.maxDiff = None
         with self.subTest("Step 1: Compare trainables " + msg, **subtest_kwargs):
             if hasattr(trainable, "_args") or hasattr(trainable2, "_args"):
                 self.assertDictEqual(trainable2._args, trainable._args)  # type: ignore[attr-defined]
-            self.assertEqual(trainable.algorithm_config.minibatch_size, minibatch_size)
+            self.assertEqual(trainable.algorithm_config.minibatch_size, minibatch_size)  # <-- passed as divisible?
             self.assertEqual(trainable2.algorithm_config.minibatch_size, trainable.algorithm_config.minibatch_size)
             self.assertEqual(trainable2._iteration, trainable._iteration)
 
