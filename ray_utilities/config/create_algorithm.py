@@ -258,6 +258,7 @@ def create_algorithm_config(
         # results in the evaluation workers not using this optimal policy!
         evaluation_config=PPOConfig.overrides(
             explore=False,
+            num_envs_per_env_runner=min(5, args["num_envs_per_env_runner"]),
         ),
     )
     # Stateless callbacks

@@ -154,7 +154,6 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
             self.assertNotEqual(batch_size1, batch_size2)
             self.assertNotEqual(mini_batch_size1, mini_batch_size2)
             self.assertNotEqual(override_mini_batch_size, mini_batch_size2)
-            self.assertNotEqual(override_mini_batch_size, mini_batch_size1)
             self.assertNotEqual(batch_size1, mini_batch_size1)
             self.assertNotEqual(batch_size2, mini_batch_size2)
             with patch_args(

@@ -59,8 +59,10 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
         # TODO: Why does exact sampling not trim down the steps when they are not divisible by num_envs_per_env_runner?
         # A: Episodes are trimmed to at most 1, as those are kept we might end up with more steps.
         # When there are many short episodes (high num_envs_per_env_runner) this can easily happen.
-        step_sizes = [32, 64, 128]
-        step_sizes = [make_divisible(x, DefaultArgumentParser.num_envs_per_env_runner) for x in step_sizes]
+        min_step_size = 32  # step sizes should be base x 1, x2, x4
+        step_sizes = [
+            make_divisible(min_step_size, DefaultArgumentParser.num_envs_per_env_runner) * 2**i for i in range(3)
+        ]
         lower_step_size = step_sizes[0]
         total_steps = sum(s * 2**i for s, i in zip(step_sizes, range(len(step_sizes) - 1, -1, -1)))
 
@@ -93,7 +95,7 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
         state0 = module.get_state()
 
         counter = Counter()
-        self.assertEqual(setup.args.total_steps, second=total_steps)
+        self.assertEqual(setup.args.total_steps, total_steps, f"steps sizes are {step_sizes}")
         self.assertEqual(setup.args.iterations, 12)
         for iteration in range(setup.args.iterations):  # pyright: ignore[reportArgumentType]
             # do before on_train_result update
