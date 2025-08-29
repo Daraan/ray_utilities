@@ -51,6 +51,7 @@ MOCK_MODULES = [
     "gym",
     "pyarrow",
     "pyarrow.fs",
+    "git",
 ]
 if False:
     # mock it myself
