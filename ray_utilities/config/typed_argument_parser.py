@@ -1,3 +1,12 @@
+"""Typed argument parser classes and utilities for Ray RLlib experiments.
+
+This module provides extended argument parser classes that support type annotations,
+meta-annotations for checkpoint restoration, and integration with Ray Tune experiments.
+It includes mixins for various argument types and utilities for handling "auto" values.
+
+The module extends the :mod:`tap` (Typed Argument Parser) library with additional
+functionality specific to machine learning experiments and checkpointing workflows.
+"""
 from __future__ import annotations
 
 # pyright: enableExperimentalFeatures=true
@@ -21,6 +30,14 @@ logger = logging.getLogger(__name__)
 
 
 def _auto_int_transform(x) -> int | Literal["auto"]:
+    """Transform string values to integers, preserving "auto" literal.
+
+    Args:
+        x: String value that is either a number or "auto".
+
+    Returns:
+        Integer value if parseable, otherwise the literal "auto".
+    """
     return int(x) if x != "auto" else x
 
 
@@ -30,39 +47,86 @@ _NO_DEFAULT = Sentinel("_NO_DEFAULT")
 NO_VALUE = Sentinel("NO_VALUE")
 
 NeverRestore = Annotated[_T, "NeverRestore"]
-"""Marks a field that is never restored and always reset to its default value when restoring from a checkpoint."""
+"""Type annotation marker for fields that should never be restored from checkpoints.
+
+When a field is annotated with this marker, it will always be reset to its default
+value when restoring from a checkpoint, regardless of what value was saved.
+
+Example:
+    >>> from typing_extensions import Annotated
+    >>> class Args:
+    ...     temp_setting: NeverRestore[bool] = False
+"""
+
 AlwaysRestore = Annotated[_T, "AlwaysRestore"]
+"""Type annotation marker for fields that should always be restored from checkpoints.
+
+Fields marked with this annotation will always use the value from the checkpoint,
+even if there are conflicting values from other sources like configuration files.
+
+Example:
+    >>> from typing_extensions import Annotated
+    >>> class Args:
+    ...     model_path: AlwaysRestore[str] = "default_model"
 """
-Marks a field that should always be restored and not ignored
-e.g. it should not be superseeded by a get_args_from_config.
-"""
+
 RestoreIfDefault = Annotated[_T, "RestoreIf", NO_VALUE]  # note do not use a generic here
-"""NOT IN USE. Restore if the current value is the given default value"""
+"""Type annotation marker for conditional restoration (currently not in use).
+
+This marker would restore a value only if the current value matches the given default.
+"""
 
 NotAModelParameter = Annotated[_T, "NotAModelParameter"]
-"""
-Marks a key do be not available to the model, i.e. ``num_jobs``.
+"""Type annotation marker for arguments that are not model parameters.
 
-These values will not be included in the `"cli_args"` key of the trainable's config and
-therefore not uploaded to wandb / comet.
+Arguments marked with this annotation will be excluded from the model's configuration
+and will not be included in the ``"cli_args"`` key of the trainable's config.
+This prevents these values from being uploaded to experiment tracking systems
+like Weights & Biases or Comet.
+
+Example:
+    >>> class Args:
+    ...     num_jobs: NotAModelParameter[int] = 4  # Infrastructure setting, not a hyperparameter
 
 See Also:
-    ``clean_args_to_hparams``
-    ``remove_ignored_args``
-    ``LOG_IGNORE_ARGS``
+    :func:`clean_args_to_hparams`: Function that processes these annotations.
+    :func:`remove_ignored_args`: Function that filters out these arguments.
+    :data:`LOG_IGNORE_ARGS`: Configuration for logging exclusions.
 """
 
 
 class SupportsMetaAnnotations(Tap):
-    """
-    Mixin class for argument parsers that support meta annotations:
+    """Mixin class for argument parsers that support meta annotations for checkpoint handling.
 
-    - `AlwaysRestore`: Always restore the value from a checkpoint.
-    - `NeverRestore`: Never restore the value from a checkpoint, always use the default value
-    - `NotAModelParameter`: Mark the argument as not a model parameter, i.e. not included in the model's config.
+    This class extends :class:`tap.Tap` to provide support for special type annotations
+    that control how arguments are handled during checkpoint restoration and experiment
+    configuration. It processes annotations at configuration time and provides methods
+    to query and restore arguments based on their annotations.
+
+    Supported meta annotations:
+        - :data:`AlwaysRestore`: Always restore the value from a checkpoint
+        - :data:`NeverRestore`: Never restore from checkpoint, always use default
+        - :data:`NotAModelParameter`: Exclude from model configuration
+
+    Attributes:
+        _always_restore: Set of argument names marked with AlwaysRestore
+        _never_restore: Set of argument names marked with NeverRestore
+        _non_cli_args: Set of argument names marked with NotAModelParameter
+
+    Raises:
+        ValueError: If a NeverRestore argument lacks a default value
     """
 
     def configure(self) -> None:
+        """Configure the parser by processing meta annotations from type hints.
+
+        This method analyzes all type annotations from the current class and its
+        parent classes to identify arguments with special restoration behavior.
+        It populates internal sets for tracking different annotation types.
+
+        Raises:
+            ValueError: If an argument is marked NeverRestore but has no default value.
+        """
         super().configure()
         complete_annotations = self._get_from_self_and_super(
             extract_func=lambda super_class: dict(get_type_hints(super_class, include_extras=True))
@@ -89,30 +153,47 @@ class SupportsMetaAnnotations(Tap):
             k for k, v in complete_annotations.items() if get_origin(v) is Annotated and non_a_hp in get_args(v)
         }
 
-    def get_to_restore_values(self):
+    def get_to_restore_values(self) -> set[str]:
+        """Get the set of argument names that should always be restored from checkpoints.
+
+        Returns:
+            Set of argument names marked with :data:`AlwaysRestore` annotation.
+        """
         return self._always_restore
 
-    def get_non_cli_args(self):
+    def get_non_cli_args(self) -> set[str]:
+        """Get the set of argument names that are not model parameters.
+
+        Returns:
+            Set of argument names marked with :data:`NotAModelParameter` annotation.
+            These arguments will be excluded from model configuration and experiment tracking.
+        """
         return self._non_cli_args
 
     def restore_arg(self, name: str, *, restored_value: Any | NO_VALUE, default: Any = NO_VALUE) -> Any | NO_VALUE:
-        """
-        If a value is annotated with NeverRestore its default value is returned as defined in the class.
-        An argument with AlwaysRestore will ignore the value stored on this instance and
-        return the `restored_value` instead.
+        """Restore an argument value based on its meta annotations.
 
-        Use the attribute stored on this parser?
+        Determines the appropriate value for an argument during checkpoint restoration
+        based on its meta annotations. The restoration logic follows these rules:
 
-        AlwaysRestore: Return restored_value
-        NeverRestore: return default or the default value set in the class
-        Otherwise: return the restored_value of the argument.
-            However if it is explicitly set to NO_VALUE, return the current_value.
-            In case the attribute does not exist return the `default` value.
-            This might be the Sentinel value NO_VALUE.
+        1. If annotated with :data:`NeverRestore`: Returns the class default value
+        2. If annotated with :data:`AlwaysRestore`: Returns the restored value
+        3. Otherwise: Uses standard restoration logic
 
-        Note:
-            Depending on the setup, e.g. when config_from_args is used, AlwaysRestore
-            values need to be checked again afterwards.
+        Args:
+            name: The name of the argument to restore.
+            restored_value: The value from the checkpoint, or :data:`NO_VALUE` if not found.
+            default: The default value to use, or :data:`NO_VALUE` if not provided.
+
+        Returns:
+            The value to use for this argument, or :data:`NO_VALUE` if no value
+            should be set.
+
+        Example:
+            >>> parser = MyParser()
+            >>> # For a NeverRestore argument, always gets default
+            >>> value = parser.restore_arg("temp_dir", restored_value="/tmp/old", default="/tmp/new")
+            >>> # Returns "/tmp/new" regardless of restored_value
         """
         current_value = getattr(self, name, NO_VALUE)
         current_value_is_default = current_value == getattr(type(self), name, None)
@@ -148,29 +229,50 @@ class SupportsMetaAnnotations(Tap):
 
 
 class PatchArgsMixin(Tap):
-    """
-    Mixin class that allows to provide parameters that can be overwritten by the command line arguments.
+    """Mixin class that allows temporarily overriding command line arguments.
+
+    This mixin provides a context manager that can merge additional arguments
+    with the existing :data:`sys.argv`, while preserving the priority of
+    command-line arguments passed directly to the script.
+
+    The patching mechanism allows setting default values for arguments that
+    can still be overridden by explicit command-line arguments.
 
     Example:
-        # python file.py --another_arg cli_value
-        with DefaultArgumentParser.patch_args(
-            "--my_arg", "value",
-            "--another_arg", "another_value",
-        ):
-            # Inside this context, the arguments are patched. Custom provided CLI args have the highest priority.
-            # For example, if `--another_arg cli_value` is provided in the command line,
-            # it will overwrite the value "another_value".
+        >>> # python script.py --another_arg cli_value
+        >>> with MyParser.patch_args(
+        ...     "--my_arg", "default_value",
+        ...     "--another_arg", "patch_value",
+        ... ):
+        ...     parser = MyParser()
+        ...     # parser.my_arg == "default_value"
+        ...     # parser.another_arg == "cli_value"  # CLI takes priority
     """
 
     @classmethod
     @contextmanager
     def patch_args(cls, *args: str | Any):
-        """
-        Context manager to temporarily *merge* sys.argv with additional arguments.
-        Arguments present in sys.argv will take a *higher* priority.
+        """Context manager to temporarily merge additional arguments with sys.argv.
+
+        Arguments present in the original :data:`sys.argv` will take higher priority
+        than the patched arguments. This allows setting default values while
+        preserving user-specified command-line arguments.
+
+        Args:
+            *args: Alternating argument names and values to patch.
+                Should be in the format: ``"--arg1", "value1", "--arg2", "value2"``.
+
+        Yields:
+            None. The context modifies :data:`sys.argv` temporarily.
+
+        Example:
+            >>> with MyParser.patch_args("--lr", 0.001, "--batch_size", 32):
+            ...     parser = MyParser()
+            ...     # parser now has lr=0.001 and batch_size=32 as defaults
 
         See Also:
-            - testing_utils.patch_args as an alternative
+            :func:`ray_utilities.testing_utils.patch_args`: Alternative implementation
+                for testing scenarios.
         """
         original_argv = sys.argv[:]
         # Parse the original and patch args separately

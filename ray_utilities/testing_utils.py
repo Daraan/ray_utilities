@@ -1,3 +1,18 @@
+"""Testing utilities and mock classes for Ray RLlib experiments.
+
+This module provides comprehensive testing infrastructure for Ray RLlib and related
+workflows, including:
+
+- Custom test case base classes with specialized setup/teardown
+- Mock implementations of Ray Tune components for testing
+- Debugging utilities including remote debugging support
+- JAX testing utilities and numerical comparison helpers
+- Progress bar and checkpoint testing utilities
+
+The module is designed to support both unit tests and integration tests for
+machine learning experiments, with particular focus on reinforcement learning
+workflows using Ray RLlib.
+"""
 # pyright: reportOptionalMemberAccess=information
 # pyright: enableExperimentalFeatures=true
 

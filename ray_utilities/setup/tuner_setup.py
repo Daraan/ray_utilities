@@ -1,3 +1,25 @@
+"""Ray Tune integration for hyperparameter optimization of RLlib experiments.
+
+This module provides the :class:`TunerSetup` class that integrates Ray Tune
+hyperparameter optimization with Ray RLlib experiment setups. It handles the
+configuration of search algorithms, schedulers, stoppers, and run management
+for scalable hyperparameter tuning workflows.
+
+The module bridges the gap between experiment setup classes and Ray Tune,
+providing a clean interface for running hyperparameter optimization with
+minimal configuration while supporting advanced features like Optuna integration,
+pruning, and custom trial naming.
+
+Key Components:
+    - :class:`TunerSetup`: Main class for configuring and running hyperparameter tuning
+    - Protocol definitions for type safety and flexibility
+    - Integration with Optuna search algorithms and pruning
+    - Custom stoppers and schedulers for efficient optimization
+
+The setup integrates seamlessly with :class:`~ray_utilities.setup.experiment_base.ExperimentSetupBase`
+subclasses to provide a complete solution for hyperparameter optimization of
+reinforcement learning experiments.
+"""
 from __future__ import annotations
 
 import logging
@@ -62,6 +84,53 @@ class _TunerSetupBase(Protocol):
 
 
 class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
+    """Configuration and management class for Ray Tune hyperparameter optimization.
+
+    This class provides a comprehensive interface for setting up and running
+    hyperparameter optimization experiments with Ray Tune, integrating seamlessly
+    with Ray RLlib experiment setups. It handles the configuration of search
+    algorithms, schedulers, stoppers, and callbacks to provide efficient and
+    scalable hyperparameter tuning.
+
+    The class supports various optimization features including Optuna integration
+    for advanced search algorithms, automatic pruning of poor-performing trials,
+    custom trial naming, and flexible stopping criteria based on training progress.
+
+    Features:
+        - Integration with :class:`~ray_utilities.setup.experiment_base.ExperimentSetupBase`
+        - Optuna search algorithm support with pruning capabilities
+        - Flexible stopping criteria (total steps, iterations, custom functions)
+        - Automatic trial naming and experiment organization
+        - Callback system for monitoring and custom behaviors
+        - Support for both maximization and minimization objectives
+
+    Args:
+        eval_metric: Name of the metric to optimize (default: ``"eval/episode_return_mean"``)
+        eval_metric_order: Whether to maximize (``"max"``) or minimize (``"min"``) the metric
+        setup: The experiment setup instance to optimize
+        extra_tags: Additional tags for experiment organization
+
+    Attributes:
+        eval_metric: The metric being optimized
+        eval_metric_order: Optimization direction ("max" or "min")
+        trial_name_creator: Function for generating trial names
+
+    Example:
+        >>> from ray_utilities.setup import PPOSetup
+        >>> setup = PPOSetup()
+        >>> tuner_setup = TunerSetup(
+        ...     eval_metric="eval/episode_return_mean",
+        ...     eval_metric_order="max",
+        ...     setup=setup
+        ... )
+        >>> tuner = tuner_setup.create_tuner()
+        >>> results = tuner.fit()
+
+    See Also:
+        :class:`~ray_utilities.setup.experiment_base.ExperimentSetupBase`: Base experiment setup
+        :class:`~ray_utilities.config._tuner_callbacks_setup.TunerCallbackSetup`: Callback management
+        :func:`~ray_utilities.misc.trial_name_creator`: Trial naming function
+    """
     trial_name_creator = trial_name_creator
 
     def __init__(
@@ -82,10 +151,35 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
         return self._setup.project_name
 
     def create_stoppers(self) -> list[Stopper]:
-        """
-        Create a stopper for the tuner based on the setup configuration.
-        If `optimize_config` is enabled, it uses OptunaSearchWithPruner.
-        Otherwise, it returns None or an empty list.
+        """Create stopping criteria for hyperparameter optimization trials.
+
+        This method configures various stopping conditions based on the experiment
+        setup configuration. It supports stopping based on total training steps,
+        maximum iterations, and custom stopping functions.
+
+        The method automatically detects the setup configuration and adds appropriate
+        stoppers to ensure trials terminate when desired conditions are met, helping
+        to manage computational resources efficiently.
+
+        Returns:
+            List of :class:`ray.tune.stopper.Stopper` instances that will be used
+            to determine when trials should be stopped.
+
+        Stoppers Added:
+            - **Total Steps Stopper**: When ``args.total_steps`` is specified, stops
+              trials that reach the target number of environment steps
+            - **Maximum Iteration Stopper**: When ``args.iterations`` is specified,
+              stops trials that exceed the maximum number of training iterations
+            - **Custom Function Stoppers**: Additional stopping logic based on trial results
+
+        Note:
+            The stoppers are combined into a :class:`ray.tune.stopper.CombinedStopper`
+            when multiple conditions are present, ensuring trials stop when any
+            condition is met.
+
+        See Also:
+            :class:`~ray_utilities.tune.stoppers.maximum_iteration_stopper.MaximumResultIterationStopper`: Custom iteration stopper
+            :func:`~ray_utilities.training.helpers.get_current_step`: Helper for extracting step counts
         """
         stoppers = []
         if isinstance(self._setup.args.total_steps, (int, float)):

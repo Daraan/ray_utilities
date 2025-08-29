@@ -1,3 +1,24 @@
+"""Dynamic buffer and batch size calculation utilities for adaptive RL training.
+
+This module provides mathematical functions and utilities for dynamically adjusting
+training parameters such as buffer sizes, batch sizes, and rollout lengths during
+reinforcement learning training. The adjustments are based on training progress
+and follow exponential increase strategies to optimize sample efficiency and
+computational resource utilization.
+
+Key Functions:
+    - :func:`calculate_stepwise_exp_increase`: Exponential factor calculation
+    - :func:`update_buffer_and_rollout_size`: Comprehensive parameter updates
+    - :func:`calculate_steps`: Step count calculations for parameter adjustments
+    - :func:`calculate_iterations`: Iteration count calculations
+
+These utilities are designed to be used with dynamic training callbacks and
+setup mixins to provide adaptive behavior during long training runs.
+
+Constants:
+    - ``MIN_DYNAMIC_BATCH_SIZE``: Minimum allowed dynamic batch size (16)
+    - ``MAX_DYNAMIC_BATCH_SIZE``: Maximum allowed dynamic batch size (16384)
+"""
 from __future__ import annotations
 
 import logging
@@ -30,6 +51,35 @@ def calculate_stepwise_exp_increase(
     global_step: int,
     num_increase_factors: int = 8,
 ) -> int:
+    """Calculate exponential increase factor based on training progress.
+
+    This function computes an exponential scaling factor that increases as training
+    progresses, allowing parameters like batch size or buffer size to grow adaptively.
+    The factor follows a step-wise exponential pattern, doubling at regular intervals
+    based on the ratio of current to total training steps.
+
+    Args:
+        total_steps: Total number of training steps planned for the experiment.
+        global_step: Current training step (0-indexed).
+        num_increase_factors: Number of doubling intervals across the training.
+            Higher values result in more frequent doublings. Defaults to 8.
+
+    Returns:
+        Exponential increase factor as an integer power of 2, ranging from 1 to 128.
+        The factor is capped at 128 to prevent excessive resource usage.
+
+    Example:
+        >>> # At 25% progress with 8 factors, factor is 2
+        >>> calculate_stepwise_exp_increase(total_steps=1000, global_step=250)
+        2
+        >>> # At 75% progress with 8 factors, factor is 16  
+        >>> calculate_stepwise_exp_increase(total_steps=1000, global_step=750)
+        16
+
+    Note:
+        The function prevents explosion by limiting the global_step to total_steps,
+        ensuring the maximum factor remains at 128 (2^7).
+    """
     if global_step + 1 > total_steps:
         global_step = total_steps  # prevent explosion; limit factor to 128
     return int(2 ** (np.ceil((((global_step + 1) * num_increase_factors) / (1 + total_steps))) - 1))

@@ -1,3 +1,46 @@
+"""Progress bar utilities for Ray Tune experiments and training monitoring.
+
+This module provides enhanced progress bar functionality for monitoring Ray Tune
+experiments and training progress. It includes utilities for displaying training
+and evaluation metrics in real-time with formatted progress indicators.
+
+The progress bars integrate with both Ray's distributed progress tracking and
+standard tqdm progress bars, providing a unified interface for experiment monitoring.
+
+Key Features:
+    - Real-time training and evaluation metric display
+    - Automatic unit formatting (K, M for large numbers)
+    - Support for both local and distributed progress tracking
+    - Integration with Ray Tune's progress reporting
+    - Colored and formatted metric displays
+
+Example:
+    Basic progress bar usage with training metrics::
+    
+        from ray_utilities.callbacks.progress_bar import update_pbar
+        from tqdm import tqdm
+        
+        pbar = tqdm(total=1000000, desc="Training")
+        
+        # Update with training and evaluation results
+        update_pbar(pbar, 
+                   eval_results={"mean": 150.0}, 
+                   train_results={"mean": 100.0, "max": 200.0})
+
+Functions:
+    :func:`update_pbar`: Update progress bar with training/evaluation metrics
+    
+Type Definitions:
+    :class:`TrainRewardMetrics`: Training reward metric structure
+    :class:`EvalRewardMetrics`: Evaluation reward metric structure
+    :class:`DiscreteEvalRewardMetrics`: Discrete evaluation reward metrics
+
+See Also:
+    :mod:`ray.experimental.tqdm_ray`: Ray's distributed progress bars
+    :mod:`tqdm`: Standard progress bar library
+    :mod:`ray_utilities.misc`: Related utility functions for metric processing
+"""
+
 from __future__ import annotations
 
 import logging
@@ -18,23 +61,58 @@ logger = logging.getLogger(__name__)
 
 
 class TrainRewardMetrics(TypedDict, total=False):
+    """Training reward metrics for progress bar display.
+    
+    Attributes:
+        mean: Mean episode return during training
+        max: Maximum episode return observed  
+        roll: Rolling average of episode returns (optional)
+    """
     mean: float
     max: float
     roll: float
 
 
 class EvalRewardMetrics(TypedDict):
+    """Evaluation reward metrics for progress bar display.
+    
+    Attributes:
+        mean: Mean episode return during evaluation
+        roll: Rolling average of evaluation returns (optional)
+    """
     mean: float
     roll: NotRequired[float]
 
 
 class DiscreteEvalRewardMetrics(TypedDict):
+    """Discrete evaluation reward metrics for progress bar display.
+    
+    Attributes:
+        mean: Mean episode return during discrete evaluation
+        roll: Rolling average of discrete evaluation returns (optional)
+    """
     mean: float
     roll: NotRequired[float]
 
 
 def _unit_division(amount: int) -> tuple[int, str]:
-    """Divides the amount by 1_000_000 or 1_000 and returns the unit."""
+    """Convert large numbers to human-readable format with unit suffixes.
+    
+    Args:
+        amount: The number to format
+        
+    Returns:
+        A tuple of (scaled_amount, unit_suffix) where unit_suffix is one of
+        "", "K" (thousands), or "M" (millions).
+        
+    Example:
+        >>> _unit_division(1500)
+        (1, "K")
+        >>> _unit_division(2500000) 
+        (2, "M")
+        >>> _unit_division(500)
+        (500, "")
+    """
     if amount >= 1_000_000:
         return amount // 1_000_000, "M"
     if amount >= 1_000:

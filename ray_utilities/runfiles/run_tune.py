@@ -1,3 +1,23 @@
+"""High-level utilities for running Ray Tune experiments and local debugging.
+
+This module provides the main entry points for executing Ray RLlib experiments,
+both through Ray Tune for distributed hyperparameter optimization and locally
+for debugging and testing. It handles the setup, execution, and result processing
+of machine learning experiments.
+
+The module bridges experiment setup classes with actual execution, providing
+both production-ready distributed training capabilities and development-friendly
+local execution modes for rapid iteration and debugging.
+
+Key Components:
+    - :func:`run_tune`: Main function for running distributed experiments with Ray Tune
+    - Local execution utilities for debugging without Ray Tune overhead
+    - Automatic parameter sampling and test mode support
+    - Integration with experiment setup classes and trainable functions
+
+This module is typically used as the final step in experiment configuration,
+after setting up algorithms, hyperparameters, and training configurations.
+"""
 from __future__ import annotations
 
 import logging
@@ -73,23 +93,52 @@ def run_tune(
     *,
     raise_errors: bool = True,
 ) -> TrainableReturnData | ResultGrid:
-    """
-    Runs the tuning process for a given experiment setup.
+    """Execute hyperparameter tuning for Ray RLlib experiments.
+
+    This function orchestrates the complete tuning workflow, including experiment setup,
+    test mode handling, seed configuration, and result management. It provides the main
+    entry point for running hyperparameter optimization experiments.
 
     Args:
-        setup: The experiment setup containing the configuration and trainable.
-        test_mode_func: A callable function to execute in test mode.
-            This function should take the trainable and args as parameters.
-        raise_errors: If True, raises errors encountered during tuning.
+        setup: Experiment setup instance or class. If a class is provided, it will be
+            instantiated with default parameters. Must inherit from :class:`ExperimentSetupBase`.
+        test_mode_func: Optional function to execute in test mode instead of full tuning.
+            Should accept the trainable and setup as arguments and return results.
+        raise_errors: Whether to raise exceptions encountered during tuning. If False,
+            errors are logged but execution continues.
 
     Returns:
-        ResultGrid: The results of the tuning process.
+        Ray Tune results from the hyperparameter optimization process, or test results
+        if running in test mode. Returns a :class:`ray.tune.ResultGrid` for full tuning
+        or :class:`TrainableReturnData` for test mode execution.
 
-    Notes:
-        - If `args.test` is True and `args.not_parallel` is True, the function will run the `test_mode_func`,
-          without parallelization and tuner setup.
-        - Offline experiments will be uploaded after the tuning process.
-          NOT FOR WANDB currently!
+    Examples:
+        Basic usage with a setup class:
+        
+        >>> from ray_utilities.setup import PPOSetup
+        >>> results = run_tune(PPOSetup)
+        
+        With a configured setup instance:
+        
+        >>> setup = PPOSetup()
+        >>> setup.config.lr = 0.001
+        >>> results = run_tune(setup)
+        
+        Using test mode:
+        
+        >>> def test_func(trainable, setup):
+        ...     return trainable(setup.sample_params())
+        >>> results = run_tune(PPOSetup, test_mode_func=test_func)
+
+    Note:
+        - Test mode is activated when ``args.test=True`` and ``args.not_parallel=True``
+        - Offline experiment tracking uploads are handled automatically after completion. When ``args.comet`` or ``args.wandb`` are set to ``offline+upload``.
+        - Seeds are automatically configured across Ray, torch, and numpy when specified
+
+    See Also:
+        :class:`ray_utilities.setup.ExperimentSetupBase`: Base class for experiment setups
+        :func:`_run_without_tuner`: Test mode execution function
+        :func:`ray.tune.run`: Underlying Ray Tune execution
     """
     # full parser example see: https://github.com/ray-project/ray/blob/master/rllib/utils/test_utils.py#L61
 

@@ -1,4 +1,26 @@
 # pyright: enableExperimentalFeatures=true
+"""Functional interface for Ray RLlib training with Ray Tune integration.
+
+This module provides functional-style training utilities that integrate Ray RLlib
+algorithms with Ray Tune for distributed training and hyperparameter optimization.
+It offers both high-level training functions and lower-level utilities for custom
+training loops.
+
+The main function :func:`default_trainable` serves as a drop-in trainable for Ray Tune
+that handles the complete training lifecycle including algorithm setup, progress
+tracking, evaluation, and result reporting. Additional utilities support custom
+training workflows and advanced use cases.
+
+Key Components:
+    - :func:`default_trainable`: Main trainable function for Ray Tune integration
+    - :func:`training_step`: Core training step implementation with metrics processing
+    - Progress bar integration and experiment tracking utilities
+    - Comprehensive metrics filtering and logging capabilities
+
+The module is designed to work seamlessly with
+:class:`~ray_utilities.setup.experiment_base.ExperimentSetupBase` subclasses
+and provides a bridge between experiment configuration and actual training execution.
+"""
 from __future__ import annotations
 
 import tempfile
@@ -47,13 +69,55 @@ def default_trainable(
     setup_class: Optional[type[DefaultExperimentSetup]] = None,
     disable_report: bool = False,
 ) -> TrainableReturnData:
-    """
-    Args:
-        hparams: The hyperparameters selected for the trial from the search space from ray tune.
-            Should include an `args` key with the parsed arguments.
+    """Main trainable function for Ray Tune integration with RLlib algorithms.
 
-    Attention:
-        Best practice is to not refer to any objects from outer scope in the training_function
+    This function provides a complete training interface that can be used directly
+    with Ray Tune for hyperparameter optimization or distributed training. It handles
+    the full training lifecycle including algorithm setup, training loops, progress
+    tracking, evaluation, and result reporting.
+
+    The function automatically configures the RLlib algorithm based on the provided
+    experiment setup and hyperparameters, runs the training loop with progress
+    monitoring, and returns properly formatted results for Ray Tune consumption.
+
+    Args:
+        hparams: Hyperparameters dictionary from Ray Tune containing the search space
+            selections. Must include an ``args`` key with parsed command-line arguments
+            from :class:`~ray_utilities.config.DefaultArgumentParser`.
+        use_pbar: Whether to display a progress bar during training. Defaults to ``True``.
+        discrete_eval: Whether to enable discrete evaluation metrics processing.
+            Defaults to ``False``.
+        setup: Pre-configured experiment setup instance. If provided, ``setup_class``
+            should not be specified.
+        setup_class: Class to instantiate for experiment setup. Used when ``setup``
+            is not provided.
+        disable_report: Whether to disable Ray Tune result reporting. Useful for
+            debugging or custom result handling. Defaults to ``False``.
+
+    Returns:
+        Training results dictionary compatible with Ray Tune, containing metrics,
+        episode information, and evaluation results.
+
+    Example:
+        >>> # Direct usage
+        >>> from ray_utilities.setup import PPOSetup
+        >>> hparams = {"args": parser.parse_args()}
+        >>> results = default_trainable(hparams, setup_class=PPOSetup)
+        
+        >>> # With Ray Tune
+        >>> tuner = tune.Tuner(
+        ...     tune.with_parameters(default_trainable, setup_class=PPOSetup),
+        ...     param_space={"args": tune.grid_search([args1, args2])}
+        ... )
+
+    Note:
+        Best practice is to avoid referring to objects from outer scope within
+        this function to ensure proper isolation in distributed environments.
+
+    See Also:
+        :func:`training_step`: Core training step implementation
+        :func:`~ray_utilities.training.helpers.setup_trainable`: Trainable setup helper
+        :class:`~ray_utilities.setup.experiment_base.ExperimentSetupBase`: Base setup class
     """
     args, config, algo, reward_updaters = setup_trainable(hparams=hparams, setup=setup, setup_class=setup_class)
 
@@ -155,6 +219,55 @@ def training_step(
     disable_report: bool = False,
     log_stats: LogStatsChoices = "minimal",
 ) -> tuple["StrictAlgorithmReturnData", "LogMetricsDict", "RewardsDict"]:
+    """Execute a single training step with comprehensive metrics processing.
+
+    This function performs one training iteration of the RLlib algorithm, processes
+    the results to extract key metrics, updates running reward trackers, and reports
+    results to Ray Tune. It handles both continuous and discrete evaluation metrics.
+
+    The function abstracts the core training loop logic used by :func:`default_trainable`
+    and can be used independently for custom training workflows that need fine-grained
+    control over the training process.
+
+    Args:
+        algo: The RLlib algorithm instance to train. Should be properly configured
+            and ready for training.
+        reward_updaters: Dictionary of reward tracking functions that maintain running
+            averages for training and evaluation rewards. Must include ``"running_reward"``,
+            ``"eval_reward"``, and optionally ``"disc_eval_reward"`` for discrete evaluation.
+        discrete_eval: Whether to process discrete evaluation metrics. When ``True``,
+            expects discrete evaluation results in the algorithm output. Defaults to ``False``.
+        disable_report: Whether to skip reporting results to Ray Tune. Useful for
+            debugging or when using custom result handling. Defaults to ``False``.
+        log_stats: Level of detail for metrics logging. Controls which metrics are
+            included in the processed output. Defaults to ``"minimal"``.
+
+    Returns:
+        A tuple containing:
+            - **result**: Raw algorithm training results with all metrics and metadata
+            - **metrics**: Processed and filtered metrics ready for logging/reporting
+            - **rewards**: Dictionary with running reward values and current episode means
+
+    Example:
+        >>> from ray_utilities.training.helpers import create_running_reward_updater
+        >>> reward_updaters = {
+        ...     "running_reward": create_running_reward_updater(),
+        ...     "eval_reward": create_running_reward_updater(),
+        ... }
+        >>> result, metrics, rewards = training_step(
+        ...     algo, reward_updaters, log_stats="full"
+        ... )
+
+    Note:
+        This function automatically handles Ray Tune result reporting unless disabled.
+        Checkpointing is performed selectively based on evaluation timing to optimize
+        performance.
+
+    See Also:
+        :func:`default_trainable`: High-level trainable that uses this function
+        :func:`~ray_utilities.postprocessing.create_log_metrics`: Metrics processing
+        :func:`~ray_utilities.training.helpers.create_running_reward_updater`: Reward tracking
+    """
     # Prevent unbound variables
     metrics: TrainableReturnData | LogMetricsDict = {}  # type: ignore[assignment]
     disc_eval_mean = None

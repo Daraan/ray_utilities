@@ -1,3 +1,18 @@
+"""JAX-based learner implementation for Ray RLlib.
+
+This module provides a JAX-specific implementation of the RLlib Learner interface,
+enabling the use of JAX for neural network training within the Ray RLlib framework.
+The implementation includes support for:
+
+- JAX neural network modules and state management
+- Integration with Ray RLlib's learner architecture
+- PPO algorithm support with JAX backends
+- Gradient accumulation and optimization workflows
+
+Note:
+    This is an experimental implementation with some methods marked as incomplete
+    or having warnings about their implementation status.
+"""
 from __future__ import annotations
 
 import logging
@@ -20,13 +35,43 @@ if TYPE_CHECKING:
     from ray.rllib.core.rl_module.rl_module import RLModule, RLModuleSpec
     from ray.rllib.utils.typing import ModuleID, Optimizer, Param, ParamDict, TensorType
 
-    from ray_utilities.jax.jax_module import JaxActorCriticStateDict, JaxModule, JaxStateDict
+    from ray_utilities.jax.jax_module import JaxModule, JaxStateDict
     from ray_utilities.jax.ppo.jax_ppo_module import JaxPPOModule
 
 logger = logging.getLogger(__name__)
 
 
 class JaxLearner(Learner):
+    """JAX-based implementation of the Ray RLlib Learner interface.
+
+    This class provides a JAX backend for neural network training within the
+    Ray RLlib framework. It extends the base :class:`ray.rllib.core.learner.learner.Learner`
+    class to support JAX-specific operations and state management.
+
+    The learner handles:
+        - JAX neural network modules and their states
+        - Optimizer configuration and gradient accumulation
+        - Integration with RLlib's training pipeline
+        - PPO algorithm support with JAX backends
+
+    Attributes:
+        framework: Set to "jax" to indicate the backend framework.
+        config: The PPO configuration object.
+        _accumulate_gradients_every_initial: Number of batches to accumulate
+            gradients over before applying updates.
+        _states: Dictionary mapping module IDs to their JAX states.
+
+    Warning:
+        This is an experimental implementation. Some methods may emit warnings
+        about incomplete functionality or may not be fully implemented.
+
+    Example:
+        >>> learner = JaxLearner(
+        ...     config=ppo_config,
+        ...     module_spec=module_spec
+        ... )
+        >>> # Use with RLlib training pipeline
+    """
     framework = "jax"
 
     def __init__(
@@ -36,6 +81,20 @@ class JaxLearner(Learner):
         module_spec: Optional[RLModuleSpec | MultiRLModuleSpec] = None,
         module: Optional[RLModule] = None,
     ):
+        """Initialize the JAX learner with configuration and module specifications.
+
+        Args:
+            config: PPO algorithm configuration object containing learning parameters
+                and optimizer settings.
+            module_spec: Optional specification for creating the RLModule. Either this
+                or ``module`` should be provided.
+            module: Optional pre-instantiated RLModule. Either this or ``module_spec``
+                should be provided.
+
+        Note:
+            This constructor calls the parent's ``configure_optimizers_for_module``
+            method and sets up gradient accumulation based on the learner configuration.
+        """
         # calls configure_optimziers_for_module
         super().__init__(config=config, module_spec=module_spec, module=module)
         self.config: PPOConfig

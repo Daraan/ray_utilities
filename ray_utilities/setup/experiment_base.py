@@ -1,4 +1,18 @@
 # pyright: enableExperimentalFeatures=true
+"""Base classes and utilities for Ray RLlib experiment setup and configuration.
+
+Provides the foundational :class:`ExperimentSetupBase` class for all experiment setups
+in the Ray Utilities framework. Handles the complete lifecycle of reinforcement learning
+experiments from argument parsing to training management.
+
+Key Components:
+    - :class:`ExperimentSetupBase`: Abstract base class for experiment configuration
+    - :class:`SetupCheckpointDict`: Type definition for experiment checkpoints
+    - Utility functions for environment creation and project management
+
+The module integrates with Ray RLlib, Ray Tune, and Comet ML for scalable RL experiments
+with logging, checkpointing, and hyperparameter optimization.
+"""
 from __future__ import annotations
 
 import logging
@@ -95,45 +109,98 @@ _MaybeNone = Any
 
 
 class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, AlgorithmType_co]):
-    """
-    TypedDict for the setup checkpoint.
-    Contains the args, config, param_space, and setup_class.
+    """Type definition for experiment setup checkpoint data.
+
+    This :class:`typing.TypedDict` defines the structure of checkpoint data saved
+    and restored by :class:`ExperimentSetupBase` instances. It ensures type safety
+    and consistency when serializing experiment configurations for restoration.
+
+    The checkpoint contains all necessary information to recreate an experiment
+    setup, including parsed arguments, algorithm configuration, parameter space
+    for hyperparameter tuning, and metadata about the setup class.
+
+    Type Parameters:
+        ParserType_co: Type of the argument parser used in the setup
+        ConfigType_co: Type of the RLlib algorithm configuration
+        AlgorithmType_co: Type of the RLlib algorithm
+
+    See Also:
+        :meth:`ExperimentSetupBase.save_checkpoint`: Method that creates these checkpoints
+        :meth:`ExperimentSetupBase.restore_checkpoint`: Method that restores from these checkpoints
     """
 
     args: ParserType_co
-    """Duck-typed SimpleNamespace"""
+    """Parsed command-line arguments. Typically a :class:`~ray_utilities.config.DefaultArgumentParser` instance."""
+    
     param_space: dict[str, Any] | TypedDict[{"__params_not_created__": Literal[True]}]
+    """Parameter space for hyperparameter tuning.
+    
+    Result of :meth:`~ExperimentSetupBase.create_param_space`. If the method was never
+    called, this contains a single key ``__params_not_created__`` set to ``True``.
     """
-    Result of create_param_space.
-    However, as the function might never have been called, this might be dict with a single key __params_not_created__
-    """
+    
     setup_class: type[ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]]
+    """Class type of the experiment setup for proper restoration."""
+    
     config: ConfigType_co
+    """RLlib algorithm configuration instance."""
+    
     __init_config__: bool
-    """If True, the config is initialized from the args, `config` is ignored and should be unset"""
+    """Initialization flag for configuration.
+    
+    When ``True``, the config should be initialized from the args and the stored
+    ``config`` field should be ignored and remain unset.
+    """
     config_overrides: dict[str, Any]
     """Hold the current dict created by updating config_overrides"""
 
 
 class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmType_co]):
-    """
-    Base class for experiment setup, providing a framework for argument parsing, configuration,
-    and trainable algorithm instantiation to be compatible with ray.tune.Tuner.
+    """Abstract base class for Ray RLlib experiment setup and configuration.
 
-    This class is intended to be subclassed for specific experiment setups.
+    This class provides a comprehensive framework for setting up reinforcement learning
+    experiments with Ray RLlib and Ray Tune. It handles argument parsing, algorithm
+    configuration, environment setup, callback management, and trainable instantiation.
 
-    Methods:
-    - create_parser
-    - create_config
+    The class is designed to be subclassed for specific experiment types, providing
+    a consistent interface for experiment configuration while allowing customization
+    of algorithm types, configurations, and training behaviors.
+
+    Key Features:
+        - Type-safe configuration with generic algorithm and config types
+        - Integrated argument parsing with :class:`~ray_utilities.config.DefaultArgumentParser`
+        - Environment creation and configuration management
+        - Callback system integration for training customization
+        - Project name management with tag substitution
+        - Checkpoint and restoration capabilities
+        - Ray Tune compatibility for hyperparameter optimization
+
+    Type Parameters:
+        ParserType_co: Type of the argument parser, typically :class:`~ray_utilities.config.DefaultArgumentParser`
+        ConfigType_co: Type of the RLlib algorithm configuration (e.g., :class:`ray.rllib.algorithms.ppo.PPOConfig`)
+        AlgorithmType_co: Type of the RLlib algorithm (e.g., :class:`ray.rllib.algorithms.ppo.PPO`)
 
     Attributes:
-        PROJECT: A string used by `project_name` to determine the project name,
-            this is `Unnamed Project` by default, if not changed a warning is logged.
+        PROJECT: Base name for the project used in :attr:`project_name`. Can include
+            template tags like ``<env_type>`` that are substituted with argument values.
+        config_class: Class type for the RLlib algorithm configuration.
+        algo_class: Class type for the RLlib algorithm.
+        use_dev_project: When ``True``, uses "dev-workspace" as project name in test mode.
+        parse_known_only: When ``True``, ignores unrecognized arguments instead of failing.
 
-    Generics:
-        ParserType: Type of the ArgumentParser, e.g. DefaultArgumentParser
-        ConfigType_co: Type of the AlgorithmConfig, e.g. PPOConfig
-        AlgorithmType_co: Type of the Algorithm, e.g. PPO
+    Example:
+        >>> class PPOExperiment(ExperimentSetupBase[DefaultArgumentParser, PPOConfig, PPO]):
+        ...     PROJECT = "CartPole-<agent_type>"
+        ...     config_class = PPOConfig
+        ...     algo_class = PPO
+        ...     
+        ...     def create_config(self, args):
+        ...         return self.config_class().environment("CartPole-v1")
+
+    See Also:
+        :class:`~ray_utilities.setup.algorithm_setup.AlgorithmSetup`: Concrete implementation
+        :class:`~ray_utilities.setup.tuner_setup.TunerSetup`: For hyperparameter tuning
+        :class:`~ray_utilities.training.default_class.DefaultTrainable`: Associated trainable class
     """
 
     default_extra_tags: ClassVar[list[str]] = [
@@ -247,6 +314,37 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         init_trainable: bool = True,
         parse_args: bool = True,
     ):
+        """Initialize the experiment setup with configuration parsing and validation.
+        
+        This method orchestrates the complete setup process, from argument parsing
+        through configuration creation to trainable initialization. It's typically
+        called automatically during class instantiation.
+        
+        Args:
+            args: Command line arguments to parse. If None, uses the arguments
+                provided during instantiation.
+            init_config: Whether to create and initialize the algorithm configuration.
+            init_param_space: Whether to create the hyperparameter search space
+                for Ray Tune optimization.
+            init_trainable: Whether to create the trainable function/class for training.
+            parse_args: Whether to parse command line arguments.
+                
+        Examples:
+            Manual setup with custom arguments:
+            
+            >>> setup = PPOSetup()
+            >>> setup.setup(["--env", "CartPole-v1", "--lr", "0.001"])
+            
+            Setup without trainable for configuration-only usage:
+            
+            >>> setup.setup(init_trainable=False)
+            >>> setup.config.lr = 0.01  # Config remains mutable
+            >>> setup.create_trainable()  # Create trainable when ready
+            
+        Note:
+            The configuration is automatically frozen after trainable creation
+            to prevent accidental modifications during training.
+        """
         if parse_args:
             self.args = self.parse_args(args or self._fixed_argv, known_only=self.parse_known_only)
         if init_config:
@@ -463,6 +561,27 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         return get_trainable_name(trainable)
 
     def sample_params(self):
+        """Sample hyperparameters from the configured parameter space.
+        
+        Generates a single set of parameter values by sampling from any tune domains
+        in the parameter space. This is useful for test runs or single experiments
+        without full hyperparameter optimization.
+        
+        Returns:
+            Dict of sampled parameter values with tune domains resolved to concrete values.
+            
+        Examples:
+            Sample parameters for a single training run:
+            
+            >>> setup = PPOSetup()
+            >>> setup.add_tune_config({"lr": tune.uniform(0.001, 0.01)})
+            >>> params = setup.sample_params()
+            >>> print(params["lr"])  # Random value between 0.001 and 0.01
+            
+        See Also:
+            :meth:`create_param_space`: Creates the parameter space
+            :func:`ray.tune.search.sample.Domain.sample`: Domain sampling method
+        """
         params = self.create_param_space()
         return {k: v.sample() if isinstance(v, ray.tune.search.sample.Domain) else v for k, v in params.items()}
 
@@ -966,6 +1085,26 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
     # region Tuner
 
     def create_tuner(self: ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]) -> tune.Tuner:
+        """Create a Ray Tune tuner for hyperparameter optimization.
+        
+        Creates a tuner with sensible defaults for reinforcement learning experiments,
+        including episode return maximization and standard stopping criteria.
+        
+        Returns:
+            Configured Ray Tune tuner ready for hyperparameter optimization.
+            
+        Examples:
+            Basic tuning setup:
+            
+            >>> setup = PPOSetup()
+            >>> setup.add_tune_config({"lr": tune.grid_search([0.001, 0.01])})
+            >>> tuner = setup.create_tuner()
+            >>> results = tuner.fit()
+            
+        See Also:
+            :class:`TunerSetup`: Advanced tuner configuration options
+            :class:`ray.tune.Tuner`: Underlying Ray Tune tuner class
+        """
         return TunerSetup(setup=self, eval_metric=EVAL_METRIC_RETURN_MEAN, eval_metric_order="max").create_tuner()
 
     # endregion

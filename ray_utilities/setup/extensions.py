@@ -1,3 +1,23 @@
+"""Extension mixins for dynamic configuration in Ray RLlib experiment setups.
+
+This module provides mixin classes that extend the base experiment setup functionality
+with dynamic configuration capabilities. These mixins can be composed with base setup
+classes to add features like dynamic buffer sizing, batch size adjustment, and
+adaptive evaluation intervals during training.
+
+The mixins are designed to work together and with the base
+:class:`~ray_utilities.setup.experiment_base.ExperimentSetupBase` class through
+multiple inheritance, providing modular functionality that can be mixed and matched
+based on experiment requirements.
+
+Key Components:
+    - :class:`SetupWithDynamicBuffer`: Dynamic experience buffer sizing
+    - :class:`SetupWithDynamicBatchSize`: Dynamic batch size and gradient accumulation
+    - :class:`SetupForDynamicTuning`: Base class for dynamic configuration mixins
+
+These extensions integrate with Ray Tune's parameter spaces and RLlib callbacks
+to provide adaptive behavior during training and hyperparameter optimization.
+"""
 from __future__ import annotations
 
 import logging
@@ -25,9 +45,41 @@ class SetupForDynamicTuning(ExperimentSetupBase[ParserType_co, ConfigType_co, Al
 
 
 class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType_co, ConfigType_co, AlgorithmType_co]):
-    """
+    """Mixin class for dynamic experience buffer sizing in RLlib experiments.
+
+    This mixin adds the capability to dynamically adjust the experience buffer
+    (rollout) size during training or hyperparameter optimization. It provides
+    both predefined parameter spaces for tuning and automatic callback integration
+    for adaptive buffer management.
+
+    The mixin automatically adds the :class:`~ray_utilities.callbacks.algorithm.dynamic_buffer_callback.DynamicBufferUpdate`
+    callback when dynamic buffer sizing is enabled, and includes evaluation
+    interval adjustment to work properly with the dynamic buffer updates.
+
+    Features:
+        - Predefined rollout size parameter space for Ray Tune optimization
+        - Automatic callback registration for dynamic buffer updates
+        - Integration with dynamic evaluation intervals
+        - Supports both grid search and adaptive parameter selection
+
+    Class Attributes:
+        rollout_size_sample_space: Ray Tune parameter space with common rollout sizes
+            ranging from 16 to 16384 steps, suitable for grid search optimization.
+
     Note:
-        Use before other setups that add DynamicEvalInterval to avoid error log on missing key.
+        This mixin should be used before other setups that add
+        :class:`~ray_utilities.callbacks.algorithm.dynamic_evaluation_callback.DynamicEvalInterval`
+        to avoid error logs about missing configuration keys.
+
+    Example:
+        >>> class MySetup(SetupWithDynamicBuffer, ExperimentSetupBase):
+        ...     config_class = PPOConfig
+        ...     algo_class = PPO
+
+    See Also:
+        :class:`~ray_utilities.callbacks.algorithm.dynamic_buffer_callback.DynamicBufferUpdate`: Buffer update callback
+        :class:`~ray_utilities.callbacks.algorithm.dynamic_evaluation_callback.DynamicEvalInterval`: Evaluation callback
+        :class:`SetupWithDynamicBatchSize`: Companion mixin for batch size dynamics
     """
 
     rollout_size_sample_space: ClassVar[ParameterSpace[int]] = tune.grid_search(
@@ -67,10 +119,55 @@ class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType_co, ConfigType_co,
 
 
 class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType_co, ConfigType_co, AlgorithmType_co]):
-    """
+    """Mixin class for dynamic batch size adjustment through gradient accumulation.
+
+    This mixin enables dynamic batch size control during training by utilizing
+    gradient accumulation rather than directly modifying the ``train_batch_size_per_learner``.
+    This approach provides more flexible batch size management while maintaining
+    computational efficiency.
+
+    The mixin automatically integrates the :class:`~ray_utilities.callbacks.algorithm.dynamic_batch_size.DynamicGradientAccumulation`
+    callback when dynamic batch sizing is enabled, allowing the effective batch size
+    to be adjusted dynamically based on training progress or hyperparameter optimization.
+
+    Features:
+        - Dynamic batch size control via gradient accumulation
+        - Predefined batch size parameter space for Ray Tune optimization
+        - Automatic callback registration for gradient accumulation management
+        - Integration with dynamic evaluation intervals
+        - Maintains computational efficiency through gradient accumulation
+
+    Class Attributes:
+        batch_size_sample_space: Ray Tune parameter space with batch sizes ranging
+            from 16 to 16384, suitable for grid search or adaptive optimization.
+
     Note:
-        When using the dynamic_batch callback the setup uses gradient accumulation to control the batch size.
-        It does not increase the train_batch_size_per_learner. For that select the dynamic rollout size setup.
+        This setup uses gradient accumulation to control the effective batch size
+        rather than increasing ``train_batch_size_per_learner`` directly. For direct
+        batch size parameter tuning, use :class:`SetupWithDynamicBuffer` which
+        controls the ``rollout_size`` parameter instead.
+
+    Warning:
+        The ``batch_size`` parameter added to the parameter space refers to the
+        effective batch size achieved through gradient accumulation, not the
+        direct gradient accumulation multiplier values.
+
+    Example:
+        >>> class MySetup(SetupWithDynamicBatchSize, ExperimentSetupBase):
+        ...     config_class = PPOConfig
+        ...     algo_class = PPO
+        ...     
+        ...     def create_config(self, args):
+        ...         config = super().create_config(args)
+        ...         if args.dynamic_batch:
+        ...             # Gradient accumulation will be handled automatically
+        ...             pass
+        ...         return config
+
+    See Also:
+        :class:`~ray_utilities.callbacks.algorithm.dynamic_batch_size.DynamicGradientAccumulation`: Gradient accumulation callback
+        :class:`SetupWithDynamicBuffer`: Companion mixin for buffer size dynamics
+        :class:`~ray_utilities.callbacks.algorithm.dynamic_evaluation_callback.DynamicEvalInterval`: Evaluation callback
     """
 
     batch_size_sample_space: ClassVar[ParameterSpace[int]] = tune.grid_search(
@@ -89,9 +186,22 @@ class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType_co, ConfigType_
 
     @classmethod
     def _create_dynamic_batch_size_params(cls):
-        """
-        Attentions:
-            Adds batch_size and not values for gradient accumulation!
+        """Create parameter space for dynamic batch size tuning.
+
+        Returns a deep copy of the class's batch size sample space for use in
+        hyperparameter optimization. The returned parameter space contains
+        batch size values that will be achieved through gradient accumulation.
+
+        Returns:
+            A Ray Tune parameter space containing batch size values for optimization.
+
+        Note:
+            The returned parameters represent effective batch sizes achieved through
+            gradient accumulation, not the gradient accumulation multiplier values directly.
+
+        Warning:
+            This method adds ``batch_size`` parameters to the tuning space, not
+            values for direct gradient accumulation control.
         """
         # TODO: control this somehow via args
         return deepcopy(cls.batch_size_sample_space)

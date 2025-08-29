@@ -1,6 +1,19 @@
-"""
-This module provides a temporary directory for utility functions, e.g. to store
-logged videos to be uploaded to wandb/comet.
+"""Temporary directory management for Ray Utilities operations.
+
+Provides a centralized temporary directory for transient files such as videos,
+checkpoints, and media files that need temporary storage before upload to
+experiment tracking services.
+
+The module creates a managed temporary directory with automatic cleanup and
+prefers mounted memory directories when available for improved performance.
+
+Attributes:
+    TEMP_DIR: Managed temporary directory instance with automatic cleanup
+    TEMP_DIR_PATH: Absolute path to the temporary directory
+
+Example:
+    >>> from ray_utilities.temp_dir import TEMP_DIR_PATH
+    >>> video_path = os.path.join(TEMP_DIR_PATH, "episode_video.mp4")
 """
 
 import atexit

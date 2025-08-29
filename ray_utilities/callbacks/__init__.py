@@ -1,3 +1,16 @@
+"""Callbacks for Ray RLlib algorithms and Ray Tune experiments.
+
+This module contains callback classes for Ray RLlib algorithms and Ray Tune tuners,
+plus utilities for cleaning command-line arguments before passing them to logging
+callbacks.
+
+Main Components:
+    - Algorithm callbacks in :mod:`~ray_utilities.callbacks.algorithm`
+    - Tuner callbacks in :mod:`~ray_utilities.callbacks.tuner`  
+    - :func:`remove_ignored_args`: Filter arguments for experiment logging
+    - :data:`LOG_IGNORE_ARGS`: Arguments to exclude from logging
+"""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, TypeVar, cast, overload
@@ -25,7 +38,8 @@ LOG_IGNORE_ARGS = (
     "use_comet_offline",
 )
 """
-Keys that should not be processed by logging callbacks
+Arguments that control logging and execution behavior rather than experiment hyperparameters.
+These attributes of the `DefaultArgumentParser` / keys of a `Trainable`'s `config` are not processed by logging callbacks.
 """
 
 
@@ -44,14 +58,30 @@ def remove_ignored_args(
 def remove_ignored_args(
     args: Mapping[_K, Any] | Tap | argparse.Namespace | Any, *, remove: Iterable[_K | str] = LOG_IGNORE_ARGS
 ) -> Mapping[_K, Any] | dict[str, Any]:
-    """
-    Remove ignored keys from args
+    """Remove logging-specific arguments from experiment parameters.
+
+    Filters out arguments that control logging and execution behavior rather than
+    experiment hyperparameters. Designed for cleaning parameters before passing
+    to experiment tracking platforms.
 
     Args:
-        args: Arguments to process
+        args: Arguments to process (dict, :class:`argparse.Namespace`, :class:`tap.Tap`, 
+            or object with ``as_dict()`` method).
+        remove: Argument names to remove. Defaults to :data:`LOG_IGNORE_ARGS`.
 
     Returns:
-        dict: Arguments with ignored keys removed
+        Dictionary with specified arguments removed. Callable values are also filtered out.
+
+    Example:
+        >>> args = argparse.Namespace(lr=0.001, wandb=True, epochs=10)
+        >>> clean_args = remove_ignored_args(args)
+        >>> "wandb" in clean_args
+        False
+        >>> clean_args["lr"]
+        0.001
+
+    Note:
+        The original argument object is not modified.
     """
     if not isinstance(args, (dict, Mapping)):
         if hasattr(args, "as_dict"):  # Tap
