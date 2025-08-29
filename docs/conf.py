@@ -7,6 +7,7 @@ import os
 import sys
 from unittest.mock import MagicMock
 
+from sphinx_autodoc_typehints import mock as autodoc_mock
 
 # Add the project root to Python path
 sys.path.insert(0, os.path.abspath(".."))
@@ -55,13 +56,17 @@ if False:
     for mod_name in MOCK_MODULES[:0]:
         sys.modules[mod_name] = Mock()
 
-    sys.modules["ray.rllib.utils.metrics"] = _ray_metrics
-    sys.modules["ray"].__version__ = "2.48.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
-    sys.modules["gym"].__version__ = "0.26.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
-    sys.modules["gymnasium"].__version__ = "1.0.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
     sys.modules["ray.rllib.utils.annotations"] = Mock()
     sys.modules["ray.rllib.utils.annotations"].override = lambda _: lambda x: x
 
+
+autodoc_mock(["ray", "gym", "gymnasium"])
+import gym, gymnasium, ray  # noqa
+
+sys.modules["ray.rllib.utils.metrics"] = _ray_metrics
+sys.modules["ray"].__version__ = "2.48.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
+sys.modules["gym"].__version__ = "0.26.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
+sys.modules["gymnasium"].__version__ = "1.0.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
