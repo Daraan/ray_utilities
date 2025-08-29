@@ -44,6 +44,7 @@ MOCK_MODULES = [
     "jax",
     "flax",
     "cv2",
+    "tree",
     "dotenv",
     "tqdm",
     # "colorlog",

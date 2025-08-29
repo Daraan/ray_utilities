@@ -5,3 +5,4 @@ sphinx-copybutton>=0.5
 myst-parser>=4.0
 typed-argument-parser
 colorlog
+typing_extensions
