@@ -10,9 +10,11 @@ from __future__ import annotations
 import datetime
 import functools
 import re
+import sys
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from exceptiongroup import ExceptionGroup
+if sys.version_info < (3, 11):
+    from exceptiongroup import ExceptionGroup
 from ray.experimental import tqdm_ray
 from ray.tune.result_grid import ResultGrid
 from tqdm import tqdm
