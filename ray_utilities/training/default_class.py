@@ -348,26 +348,31 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         )
         # NOTE: args is a dict, self._setup.args a Namespace | Tap
         self._reward_updaters: RewardUpdaters
-        args, _algo_config, self.algorithm, self._reward_updaters = setup_trainable(
+        load_algorithm = "cli_args" in config and config["cli_args"].get("from_checkpoint")
+        self.algorithm: _AlgorithmType
+        args, _algo_config, algorithm, self._reward_updaters = setup_trainable(
             hparams=config,
             setup=self._setup,
             setup_class=self.setup_class if isclass(self.setup_class) else None,
             config_overrides=self._algorithm_overrides,
             model_config=self._model_config,
+            create_algo=True,  # not load_algorithm,  # Not stable enough to init later.
         )
         self._param_overrides: dict[str, Any] = args.get("__overwritten_keys__", {})
         """Changed parameters via the hparams argument, e.g. passed by the tuner. See also: --tune"""
         self._pbar: tqdm | range | tqdm_ray.tqdm = episode_iterator(args, config, use_pbar=self.use_pbar)
         self._iteration: int = 0
         self.log_stats: LogStatsChoices = args[LOG_STATS]
-        assert self.algorithm.config
         # calculate total steps once
         # After components have been setup up load checkpoint if requested
         current_step = 0
-        if "cli_args" in config and config["cli_args"].get("from_checkpoint"):
+        if load_algorithm:
+            self._algo_class: type[_AlgorithmType] | None = _algo_config.algo_class
             _logger.info("At end of setup(), loading from checkpoint: %s", config["cli_args"]["from_checkpoint"])
             # calls restore from path; from_checkpoint could also be a dict here
+            self.algorithm = algorithm
             self.load_checkpoint(config["cli_args"]["from_checkpoint"])
+            assert self.algorithm is not None
             if self.algorithm.metrics:
                 current_step = self.algorithm.metrics.peek(
                     (ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=None
@@ -380,6 +385,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     _logger.warning(
                         "No current step found in restored algorithm metrics to re-calculate total_steps, using 0. "
                     )
+        else:
+            assert algorithm is not None
+            self.algorithm = algorithm
+        assert self.algorithm.config
+
         steps_to_new_goal = args["total_steps"] - current_step
         iterations_to_new_goal = (
             steps_to_new_goal // self.algorithm_config.train_batch_size_per_learner + 1
@@ -530,10 +540,16 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # if checkpoint["algorithm_checkpoint_dir"] is a tempdir (e.g. from tune, this is wrong)
             # However, self.set_state should have take care of algorithm already even if checkpoint dir is missing
             if os.path.exists(checkpoint["algorithm_checkpoint_dir"]):
-                self.algorithm.stop()  # free resources first
-                self.algorithm = self.algorithm.from_checkpoint(
+                if self.algorithm is not None:
+                    self.algorithm.stop()  # free resources first
+                    algo_class = type(self.algorithm)
+                    delattr(self, "algorithm")
+                else:
+                    algo_class = self._algo_class
+                    assert algo_class is not None
+                self.algorithm = algo_class.from_checkpoint(
                     Path(checkpoint["algorithm_checkpoint_dir"]).absolute().as_posix(), **algo_kwargs
-                )
+                )  # pyright: ignore[reportAttributeAccessIssue]
             elif "algorithm_state" in checkpoint:
                 _logger.error(
                     "Algorithm checkpoint directory %s does not exist, will restore from state",
@@ -594,8 +610,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # for component in components:
             #    self.restore_from_path(checkpoint, component=component, **algo_kwargs)
             # free resources first
-            self.algorithm.stop()
-            self.algorithm = self.algorithm.from_checkpoint((Path(checkpoint) / "algorithm").as_posix(), **algo_kwargs)
+            self.algorithm.stop()  # free resources first
+            self.algorithm = cast(
+                "_AlgorithmType",
+                (self.algorithm or self._algo_class).from_checkpoint(
+                    (Path(checkpoint) / "algorithm").as_posix(),
+                    **algo_kwargs,
+                ),
+            )
             sync_env_runner_states_after_reload(self.algorithm)
         else:
             raise ValueError(f"Checkpoint must be a dict or a path. Not {type(checkpoint)}")
@@ -907,7 +929,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     @override(Checkpointable)
     def get_checkpointable_components(self) -> list[tuple[str, Checkpointable]]:
         components = super().get_checkpointable_components()
-        components.append(("algorithm", self.algorithm))
+        if self.algorithm is not None:  # pyright: ignore[reportUnnecessaryComparison]
+            components.append(("algorithm", self.algorithm))
         return components
 
     @override(Checkpointable)
