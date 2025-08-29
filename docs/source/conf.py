@@ -89,7 +89,11 @@ class Dummy: ...  # fmt: skip
 class Dummy2: ...  # fmt: skip
 
 
+from ray import tune  # noqa: E402
+
+tune.Trainable = Dummy
 sys.modules["ray.tune"].Trainable = Dummy
+
 sys.modules["ray.tune.trainable"].Trainable = Dummy
 sys.modules["ray.rllib.utils.checkpoints"].Checkpointable = Dummy2
 
