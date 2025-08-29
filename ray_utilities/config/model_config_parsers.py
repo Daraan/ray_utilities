@@ -55,7 +55,7 @@ class MLPConfigParser(Tap):
     an RLModule with a [32, 32] encoder, a [64, act-dim] policy head, and a [64, 1]
     value head (if applicable).
 
-    Passing a list string: --fcnet_hiddens="[256, 256]" is equivalent to --fcnet_hiddens 256 256
+    Passing a list as a string: --fcnet_hiddens="[256, 256]" is equivalent to --fcnet_hiddens 256 256
     """
 
     fcnet_activation: str = DefaultModelConfig.fcnet_activation  # tanh
