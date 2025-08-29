@@ -82,16 +82,14 @@ sys.modules["ray.rllib.utils.checkpoints"] = _MockModule("ray.rllib.utils.checkp
 sys.modules["ray.tune"] = _MockModule("ray.tune")
 
 
-class dummy:
-    pass
+class Dummy: ...  # fmt: skip
 
 
-class dummy2:
-    pass
+class Dummy2: ...  # fmt: skip
 
 
-sys.modules["ray.tune"].Trainable = dummy
-sys.modules["ray.rllib.utils.checkpoints"].Checkpointable = dummy2
+sys.modules["ray.tune"].Trainable = Dummy
+sys.modules["ray.rllib.utils.checkpoints"].Checkpointable = Dummy2
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
@@ -130,6 +128,8 @@ exclude_patterns = [
     "ray_utilities/connectors/exact_samples_to_learner.pyray_utilities/jax/*",  # Exclude JAX modules as requested
     "experiments/*",  # Exclude experiment folder as requested
     "testing_utils.py",  # Exclude testing utilities as requested
+    "test/*",
+    "setup.py",
 ]
 
 # -- Options for HTML output -------------------------------------------------
