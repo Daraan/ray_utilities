@@ -15,7 +15,7 @@ permissions:
 
 jobs:
 
-  test-basic-and-non-tuner:
+  test-standard-and-non-tuner-fast:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -31,7 +31,8 @@ jobs:
         export KEEP_MAX_DIFF=1
         export DISABLE_BREAKPOINTS=1
         # Run basic tests. If these fail others likely fail as well
-        pytest -xv -m basic
+        # NOTE that fast is a patched default in conftest.py
+        pytest -xv -m "basic and length(speed='fast')"
     - name: Test with pytest
       run: |
         source .venv/bin/activate
@@ -39,7 +40,32 @@ jobs:
         export DISABLE_BREAKPOINTS=1
         # Split tests because of deadlock
         # Test all others execluded by tests below
-        pytest -k "not test_trainable" -m "not basic" -v -x --fast
+        pytest -k "not test_trainable" -m "not basic and length(speed='fast')" -v -x --fast
+  test-standard-medium-length:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Python setup and install
+      uses: ./.github/actions/cached-python-setup
+      with:
+        python-version: '3.10'
+        use-pip-cache: true
+
+    - name: Test basic
+      run: |
+        source .venv/bin/activate
+        export KEEP_MAX_DIFF=1
+        export DISABLE_BREAKPOINTS=1
+        # Run basic tests. If these fail others likely fail as well
+        pytest -xv -m "basic and not length(speed='fast')"
+    - name: Test with pytest
+      run: |
+        source .venv/bin/activate
+        export KEEP_MAX_DIFF=1
+        export DISABLE_BREAKPOINTS=1
+        # Split tests because of deadlock
+        # Test all others execluded by tests below
+        pytest -k "not test_trainable" -m "not basic and not length(speed='fast')" -v -x --fast
   
   test-tuner-and-trainable:
     runs-on: ubuntu-latest

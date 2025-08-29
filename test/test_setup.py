@@ -216,6 +216,8 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     f"Evaluated params do not match grid: {evaluated_params} != {grid}",
                 )
 
+    @pytest.mark.length(speed="medium")
+    @pytest.mark.timeout(method="thread")
     def test_dynamic_param_space_with_trainable(self):
         """Check the --tune parameters"""
         type_hints = te.get_type_hints(DefaultArgumentParser)["tune"]
@@ -815,7 +817,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
 
     @Cases(TWO_ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
-    @pytest.mark.length("medium")
+    @pytest.mark.length(speed="medium")
     def test_with_tuner(self, cases):
         """Test if key stats are restored correctly - does not test further training and metrics"""
         self.no_pbar_updates()
@@ -1280,7 +1282,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
 
     @Cases(TWO_ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
-    @pytest.mark.length("medium")
+    @pytest.mark.length(speed="medium")
     @pytest.mark.timeout(method="thread")
     def test_trainable_checkpointing(self, cases):
         """Test if trainable can be checkpointed and restored."""

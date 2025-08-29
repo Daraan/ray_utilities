@@ -571,7 +571,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
     @Cases(ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
     @pytest.mark.tuner
-    @pytest.mark.length("medium")  # 2-3 min
+    @pytest.mark.length(speed="medium")  # 2-3 min
     def test_tuner_checkpointing(self, cases):
         # self.enable_loggers()
         # self.no_pbar_updates()

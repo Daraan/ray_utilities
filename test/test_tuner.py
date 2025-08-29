@@ -301,7 +301,7 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
 
 
 @pytest.mark.tuner
-@pytest.mark.length("medium")
+@pytest.mark.length(speed="medium")
 class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     @Cases(ENV_RUNNER_CASES)
     def test_retune_with_different_config(self, cases):
