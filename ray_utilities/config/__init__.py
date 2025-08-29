@@ -1,4 +1,13 @@
-"""Ray AlgorithmConfig and argument parsing utilities."""
+"""Configuration utilities for Ray RLlib algorithms and argument parsing.
+
+Provides utilities for configuring Ray RLlib algorithms, managing callbacks,
+and parsing command-line arguments for experiments.
+
+Main Components:
+    - :class:`DefaultArgumentParser`: Enhanced argument parser for experiments
+    - :func:`add_callbacks_to_config`: Add callbacks to algorithm configurations
+    - :func:`seed_environments_for_config`: Set up environment seeding
+"""
 
 from __future__ import annotations
 

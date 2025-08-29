@@ -1,52 +1,19 @@
 """Type definitions and aliases for Ray Utilities components.
 
-This module provides comprehensive type definitions used throughout the Ray Utilities
-package. It includes type aliases for Ray RLlib return data, metrics dictionaries,
-trainable configurations, and other commonly used types.
+Provides type definitions for Ray RLlib return data, metrics dictionaries,
+trainable configurations, and other commonly used types throughout the package.
 
-The types are designed to provide better IDE support, type checking, and
-documentation for the complex data structures used in Ray Tune and RLlib experiments.
-
-**Key Type Categories:**
-
-- **Return Data Types**: Structured return values from algorithms and trainables
-- **Metrics Types**: Dictionary structures for logging and metrics
-- **Configuration Types**: Experiment and algorithm configuration types  
-- **Callable Types**: Function signatures for trainables and callbacks
-
-**Main Type Aliases:**
-    :data:`AlgorithmReturnData`: Ray RLlib algorithm training results
-    :data:`TrainableReturnData`: Ray Tune trainable return structure
-    :data:`LogMetricsDict`: Structured metrics for logging frameworks
-    :data:`RewardsDict`: Episode reward tracking structure
+Main Type Aliases:
+    - :data:`AlgorithmReturnData`: Ray RLlib algorithm training results
+    - :data:`TrainableReturnData`: Ray Tune trainable return structure
+    - :data:`LogMetricsDict`: Structured metrics for logging frameworks
+    - :data:`RewardsDict`: Episode reward tracking structure
 
 Example:
-    Using type annotations for better code clarity::
-    
-        from ray_utilities.typing import AlgorithmReturnData, LogMetricsDict
-        
-        def process_training_results(results: AlgorithmReturnData) -> LogMetricsDict:
-            # Type checker knows the structure of results
-            episode_return = results["env_runner_results"]["episode_return_mean"]
-            return {"training_return": episode_return}
-            
-    Type-safe trainable definition::
-    
-        from ray_utilities.typing import TrainableReturnData
-        from ray.tune import Trainable
-        
-        class MyTrainable(Trainable):
-            def step(self) -> TrainableReturnData:
-                # Return structure is type-checked
-                return {
-                    "episode_return_mean": 100.0,
-                    "training_iteration": self.iteration,
-                    "done": False
-                }
-
-Compatibility:
-    This module requires modern typing features and may use experimental
-    typing extensions for the latest type annotation capabilities.
+    >>> from ray_utilities.typing import AlgorithmReturnData
+    >>> def process_results(results: AlgorithmReturnData) -> float:
+    ...     return results["env_runner_results"]["episode_return_mean"]
+"""
 
 See Also:
     :mod:`ray_utilities.typing.algorithm_return`: Algorithm-specific return types

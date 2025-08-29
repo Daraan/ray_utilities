@@ -1,26 +1,17 @@
 # pyright: enableExperimentalFeatures=true
 """Base classes and utilities for Ray RLlib experiment setup and configuration.
 
-This module provides the foundational :class:`ExperimentSetupBase` class that serves
-as the abstract base for all experiment setups in the Ray Utilities framework. It
-handles the complete lifecycle of reinforcement learning experiments, from argument
-parsing and environment configuration to algorithm setup and training management.
-
-The module integrates with Ray RLlib, Ray Tune, and various configuration utilities
-to provide a unified interface for running scalable RL experiments with proper
-logging, checkpointing, and hyperparameter optimization support.
+Provides the foundational :class:`ExperimentSetupBase` class for all experiment setups
+in the Ray Utilities framework. Handles the complete lifecycle of reinforcement learning
+experiments from argument parsing to training management.
 
 Key Components:
     - :class:`ExperimentSetupBase`: Abstract base class for experiment configuration
     - :class:`SetupCheckpointDict`: Type definition for experiment checkpoints
-    - Type variables for generic algorithm and configuration types
     - Utility functions for environment creation and project management
 
-Integration:
-    - Ray RLlib algorithms and configurations
-    - Ray Tune for hyperparameter optimization  
-    - Comet ML for experiment tracking
-    - Custom callback and configuration systems
+The module integrates with Ray RLlib, Ray Tune, and Comet ML for scalable RL experiments
+with logging, checkpointing, and hyperparameter optimization.
 """
 from __future__ import annotations
 

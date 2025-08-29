@@ -1,50 +1,22 @@
 """Advanced learner implementations and mixins for Ray RLlib.
 
-This module provides specialized learner classes and utilities for extending
-Ray RLlib's learning capabilities. It includes experimental features like
-gradient accumulation, debugging connectors, and sample filtering.
-
-The module also provides the :func:`mix_learners` utility for combining
-multiple learner classes into a single inheritance hierarchy, which is
-useful for composing different learner features.
+Provides specialized learner classes and utilities for extending Ray RLlib's
+learning capabilities, including experimental features like gradient accumulation,
+debugging connectors, and sample filtering.
 
 Key Components:
     - :func:`mix_learners`: Combine multiple learner classes
-    - :class:`LearnerWithDebugConnectors`: Add debugging to connector pipeline
-    - :class:`RemoveMaskedSamplesLearner`: Filter out masked samples
-    - :class:`PPOTorchLearnerWithGradientAccumulation`: Experimental gradient accumulation
+    - Debugging and filtering learner mixins
+    - Experimental gradient accumulation support
 
 Example:
-    Combining multiple learner features::
-    
-        from ray_utilities.learners import mix_learners
-        from ray_utilities.learners.leaner_with_debug_connector import LearnerWithDebugConnectors
-        from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
-        from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import PPOTorchLearner
-        
-        # Create a composite learner with debugging and sample filtering
-        CustomLearner = mix_learners([
-            LearnerWithDebugConnectors,
-            RemoveMaskedSamplesLearner, 
-            PPOTorchLearner
-        ])
-        
-        # Use in algorithm configuration
-        config.learners(learner_class=CustomLearner)
-
-Functions:
-    :func:`mix_learners`: Combine multiple learner classes into one
-
-Classes:
-    Available through submodules - see individual modules for documentation
+    >>> from ray_utilities.learners import mix_learners
+    >>> # Combine multiple learner features
+    >>> CustomLearner = mix_learners([DebugLearner, FilterLearner, BaseLearner])
 
 Warning:
-    Some learner implementations are experimental and may not be fully tested.
-    Always validate behavior in your specific use case before production use.
-
-See Also:
-    :mod:`ray.rllib.core.learner`: Base Ray RLlib learner interfaces
-    :mod:`ray_utilities.config.create_algorithm`: For using custom learners in configs
+    Some implementations are experimental and may require validation before production use.
+"""
 """
 
 from __future__ import annotations

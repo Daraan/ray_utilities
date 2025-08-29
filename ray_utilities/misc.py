@@ -1,8 +1,8 @@
 """Miscellaneous utilities for Ray RLlib workflows.
 
-This module provides various utility functions for working with Ray Tune experiments,
-progress bars, and data structures. It includes functions for trial naming, trainable
-introspection, dictionary operations, and error handling.
+Provides various utility functions for working with Ray Tune experiments,
+progress bars, and data structures. Includes functions for trial naming,
+trainable introspection, dictionary operations, and error handling.
 """
 from __future__ import annotations
 

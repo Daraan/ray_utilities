@@ -1,9 +1,7 @@
 """Ray Utilities: Advanced utilities for Ray Tune and RLlib experiments.
 
-This package provides a comprehensive set of utilities, classes, and functions to streamline
+Provides a comprehensive set of utilities, classes, and functions to streamline
 Ray Tune hyperparameter optimization and Ray RLlib reinforcement learning experiments.
-It includes trainable classes, configuration utilities, logging enhancements, and testing
-infrastructure.
 
 Main Components:
     - :class:`DefaultTrainable`: Base trainable class with checkpoint/restore functionality
@@ -13,23 +11,11 @@ Main Components:
     - :data:`AlgorithmReturnData`: Type definitions for algorithm return values
 
 Example:
-    Basic usage of the main utilities::
-
-        import ray_utilities as ru
-        
-        # Set up logging and seeding
-        logger = ru.nice_logger(__name__)
-        ru.seed_everything(env=None, seed=42)
-        
-        # Create a trainable and run experiment
-        trainable = ru.create_default_trainable(config_class=PPOConfig)
-        ru.run_tune(trainable, param_space=config, num_samples=10)
-
-See Also:
-    - :mod:`ray_utilities.training`: Trainable classes and training utilities
-    - :mod:`ray_utilities.config`: Configuration and argument parsing utilities
-    - :mod:`ray_utilities.misc`: Miscellaneous helper functions
-    - :mod:`ray_utilities.testing_utils`: Testing infrastructure for RLlib
+    >>> import ray_utilities as ru
+    >>> logger = ru.nice_logger(__name__)
+    >>> ru.seed_everything(env=None, seed=42)
+    >>> trainable = ru.create_default_trainable(config_class=PPOConfig)
+    >>> ru.run_tune(trainable, param_space=config, num_samples=10)
 """
 
 # ruff: noqa: PLC0415  # imports at top level of file; safe import time if not needed.

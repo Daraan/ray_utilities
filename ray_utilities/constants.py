@@ -1,22 +1,8 @@
 """Constants and configuration values used throughout Ray Utilities.
 
-This module defines important constants, version checks, and configuration values
-used across the Ray Utilities package. It includes version compatibility flags,
-metric keys for Ray RLlib, Comet ML configuration, and video logging constants.
-
-The constants are organized into several categories:
-
-**Version Compatibility**: 
-    Flags for different versions of Ray, Gymnasium, and other dependencies
-    
-**Metric Keys**: 
-    Standardized metric key paths for Ray RLlib results and evaluation
-    
-**Video Logging**: 
-    Constants for video recording and logging in experiments
-    
-**Comet ML Integration**: 
-    Configuration paths and settings for offline experiment tracking
+Defines important constants, version checks, and configuration values used across
+the Ray Utilities package. Includes version compatibility flags, metric keys for
+Ray RLlib, Comet ML configuration, and video logging constants.
 
 Key Constants:
     :data:`RAY_VERSION`: Current Ray version for compatibility checks
@@ -26,30 +12,10 @@ Key Constants:
     :data:`COMET_OFFLINE_DIRECTORY`: Path for offline Comet ML experiments
 
 Example:
-    Using version flags for compatibility::
-    
-        from ray_utilities.constants import RAY_NEW_API_STACK_ENABLED, GYM_V_0_26
-        
-        if RAY_NEW_API_STACK_ENABLED:
-            # Use new Ray API features
-            pass
-        
-        if GYM_V_0_26:
-            # Use Gymnasium instead of legacy gym
-            pass
-            
-    Using metric keys::
-    
-        from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
-        
-        def log_evaluation_results(results):
-            if EVAL_METRIC_RETURN_MEAN in results:
-                print(f"Eval return: {results[EVAL_METRIC_RETURN_MEAN]}")
-
-See Also:
-    :mod:`ray.rllib.utils.metrics`: Ray RLlib metrics definitions
-    :mod:`gymnasium`: Environment library version handling
-    :mod:`comet_ml`: Experiment tracking integration
+    >>> from ray_utilities.constants import RAY_NEW_API_STACK_ENABLED
+    >>> if RAY_NEW_API_STACK_ENABLED:
+    ...     # Use new Ray API features
+    ...     pass
 """
 
 import os

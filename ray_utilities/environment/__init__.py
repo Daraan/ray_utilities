@@ -1,20 +1,15 @@
 """Environment creation and configuration utilities for Ray RLlib experiments.
 
-This module provides utilities for creating and configuring Gymnasium environments
-for use with Ray RLlib algorithms. It includes environment registration, seeding
-utilities, and helper functions for environment name parsing and creation.
-
-The module supports both simple environment creation for development and more
-advanced seeded environment setups for reproducible experiments, though the
-seeded functionality is deprecated in favor of callback-based approaches.
+Provides utilities for creating and configuring Gymnasium environments for use with
+Ray RLlib algorithms. Includes environment registration, seeding utilities, and
+helper functions for environment name parsing.
 
 Key Components:
-    - :func:`create_env`: Simple environment creation with name parsing
-    - :func:`parse_env_name`: Environment name shorthand resolution
-    - :func:`env_creator_with_seed`: Deprecated seeded environment creator
+    - :func:`create_env`: Environment creation with name parsing
+    - :func:`parse_env_name`: Environment name shorthand resolution  
     - :func:`create_env_for_config`: Environment creation from RLlib configs
 
-Environment Name Shortcuts:
+Environment Shortcuts:
     - ``"lunar"`` → ``"LunarLander-v2"``
     - ``"cart"`` / ``"cartpole"`` → ``"CartPole-v1"``
 
