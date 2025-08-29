@@ -80,6 +80,7 @@ sys.modules["gym"].__version__ = "0.26.0+mocked"  # pyright: ignore[reportAttrib
 sys.modules["gymnasium"].__version__ = "1.0.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
 sys.modules["ray.rllib.utils.checkpoints"] = _MockModule("ray.rllib.utils.checkpoints")
 sys.modules["ray.tune"] = _MockModule("ray.tune")
+sys.modules["ray.tune.trainable"] = _MockModule("ray.tune.trainable")
 
 
 class Dummy: ...  # fmt: skip
@@ -89,6 +90,7 @@ class Dummy2: ...  # fmt: skip
 
 
 sys.modules["ray.tune"].Trainable = Dummy
+sys.modules["ray.tune.trainable"].Trainable = Dummy
 sys.modules["ray.rllib.utils.checkpoints"].Checkpointable = Dummy2
 
 # -- Project information -----------------------------------------------------
