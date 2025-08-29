@@ -168,7 +168,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
         Stoppers Added:
             - **Total Steps Stopper**: When ``args.total_steps`` is specified, stops
               trials that reach the target number of environment steps
-            - **Maximum Iteration Stopper**: When ``args.max_step_iterations`` is specified,
+            - **Maximum Iteration Stopper**: When ``args.iterations`` is specified,
               stops trials that exceed the maximum number of training iterations
             - **Custom Function Stoppers**: Additional stopping logic based on trial results
 

@@ -59,8 +59,8 @@ exclude_patterns = [
     '_build', 
     'Thumbs.db', 
     '.DS_Store',
-    # Exclude experimental/unfinished modules from documentation
-    'ray_utilities/connectors/exact_samples_to_learner.py',
+    'testing_utils.py',
+    'ray_utilities/connectors/exact_samples_to_learner.py'
     'ray_utilities/jax/*',  # Exclude JAX modules as requested
     'experiments/*',        # Exclude experiment folder as requested
     'testing_utils.py',     # Exclude testing utilities as requested

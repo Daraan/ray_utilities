@@ -1,6 +1,6 @@
 """Advanced learner implementations and mixins for Ray RLlib.
 
-Provides specialized learner classes and utilities for extending Ray RLlib's
+Provides specialized learner classes and utilities for extending Ray RLlib
 learning capabilities, including experimental features like gradient accumulation,
 debugging connectors, and sample filtering.
 
@@ -13,12 +13,7 @@ Example:
     >>> from ray_utilities.learners import mix_learners
     >>> # Combine multiple learner features
     >>> CustomLearner = mix_learners([DebugLearner, FilterLearner, BaseLearner])
-
-Warning:
-    Some implementations are experimental and may require validation before production use.
 """
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Sequence
@@ -33,7 +28,7 @@ class _MixedLearnerMeta(ABCMeta):
     
     This metaclass allows mixed learner classes to be compared based on their
     base classes rather than their identity, which is important for serialization
-    and class equivalence checking in Ray's distributed environment.
+    and class equivalence checking in Ray distributed environment.
     
     The metaclass ensures that two mixed learner classes with the same base
     classes are considered equivalent regardless of creation order or location.
@@ -57,7 +52,7 @@ def mix_learners(learners: Sequence[type[Learner | Any]]):
 
     This function creates a new learner class that inherits from all provided
     learner classes, allowing you to compose different learner capabilities.
-    It's particularly useful when you want to combine debugging, sample filtering,
+    It is particularly useful when you want to combine debugging, sample filtering,
     and algorithm-specific features.
 
     Args:
