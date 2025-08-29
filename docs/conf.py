@@ -19,6 +19,14 @@ class Mock(MagicMock):
     def __getattr__(cls, name):  # pyright: ignore[reportIncompatibleMethodOverride]
         return MagicMock()
 
+    @classmethod
+    def __ror__(cls, other):
+        return object.__ror__(other)
+
+    @classmethod
+    def __or__(cls, other):
+        return object.__ror__(other)
+
 
 MOCK_MODULES = [
     "comet_ml",
@@ -42,15 +50,17 @@ MOCK_MODULES = [
     "pyarrow",
     "pyarrow.fs",
 ]
-for mod_name in MOCK_MODULES:
-    sys.modules[mod_name] = Mock()
+if False:
+    # mock it myself
+    for mod_name in MOCK_MODULES[:0]:
+        sys.modules[mod_name] = Mock()
 
-sys.modules["ray.rllib.utils.metrics"] = _ray_metrics
-sys.modules["ray"].__version__ = "2.48.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
-sys.modules["gym"].__version__ = "0.26.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
-sys.modules["gymnasium"].__version__ = "1.0.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
-sys.modules["ray.rllib.utils.annotations"] = Mock()
-sys.modules["ray.rllib.utils.annotations"].override = lambda _: lambda x: x
+    sys.modules["ray.rllib.utils.metrics"] = _ray_metrics
+    sys.modules["ray"].__version__ = "2.48.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
+    sys.modules["gym"].__version__ = "0.26.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
+    sys.modules["gymnasium"].__version__ = "1.0.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
+    sys.modules["ray.rllib.utils.annotations"] = Mock()
+    sys.modules["ray.rllib.utils.annotations"].override = lambda _: lambda x: x
 
 
 # -- Project information -----------------------------------------------------
@@ -162,10 +172,7 @@ autodoc_default_options = {
 }
 
 # Exclude experimental modules from autodoc
-autodoc_mock_imports = [
-    "ray_utilities.connectors.exact_samples_to_learner",
-]
-autodoc_mock_imports.extend(MOCK_MODULES)
+autodoc_mock_imports = MOCK_MODULES
 
 autosummary_generate = True
 

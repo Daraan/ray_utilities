@@ -21,6 +21,6 @@ sphinx:
 python:
    install:
    - method: pip
+     options: --no-deps
      path: .
-     options: [--no-deps]
    - requirements: docs/requirements.txt
