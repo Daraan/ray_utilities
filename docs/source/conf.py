@@ -140,9 +140,7 @@ exclude_patterns = [
     "Thumbs.db",
     ".DS_Store",
     "testing_utils.py",
-    "ray_utilities/connectors/exact_samples_to_learner.pyray_utilities/jax/*",  # Exclude JAX modules as requested
-    "experiments/*",  # Exclude experiment folder as requested
-    "testing_utils.py",  # Exclude testing utilities as requested
+    "ray_utilities/connectors/exact_samples_to_learner.py",
     "test/*",
     "setup.py",
 ]
