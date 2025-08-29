@@ -99,6 +99,15 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         with patch_args("--train_batch_size_per_learner", "456"):
             self.assertEqual(AlgorithmSetup().config.train_batch_size_per_learner, 456)
 
+    def test_tags(self):
+        with patch_args("--tags", "tag1", "tag2", "--test", "--num_envs_per_env_runner", 1):
+            tags = AlgorithmSetup(init_trainable=False, init_param_space=False, init_config=False).create_tags()
+        self.assertIn("num_envs=1", tags)
+        self.assertIn("tag1", tags)
+        self.assertIn("tag2", tags)
+        self.assertNotIn("gpu", tags)
+        self.assertIn("test", tags)
+
     def test_frozen_config(self):
         with patch_args():
             setup = AlgorithmSetup()
