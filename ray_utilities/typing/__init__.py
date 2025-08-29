@@ -13,7 +13,6 @@ Example:
     >>> from ray_utilities.typing import AlgorithmReturnData
     >>> def process_results(results: AlgorithmReturnData) -> float:
     ...     return results["env_runner_results"]["episode_return_mean"]
-"""
 
 See Also:
     :mod:`ray_utilities.typing.algorithm_return`: Algorithm-specific return types
