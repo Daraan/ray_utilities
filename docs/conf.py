@@ -7,14 +7,16 @@ import os
 import sys
 from unittest.mock import MagicMock
 
+
 # Add the project root to Python path
 sys.path.insert(0, os.path.abspath(".."))
+from docs import _ray_metrics
 
 
 # Mock problematic dependencies that might not be available during doc building
 class Mock(MagicMock):
     @classmethod
-    def __getattr__(cls, name):
+    def __getattr__(cls, name):  # pyright: ignore[reportIncompatibleMethodOverride]
         return MagicMock()
 
 
@@ -27,9 +29,9 @@ MOCK_MODULES = [
     "cv2",
     "dotenv",
     "tqdm",
-    "colorlog",
-    "typed_argument_parser",
-    "tap",
+    # "colorlog",
+    # "typed_argument_parser",
+    # "tap",
     "ray",
     "torch",
     "numpy",
@@ -37,9 +39,19 @@ MOCK_MODULES = [
     "pandas",
     "gymnasium",
     "gym",
+    "pyarrow",
+    "pyarrow.fs",
 ]
 for mod_name in MOCK_MODULES:
     sys.modules[mod_name] = Mock()
+
+sys.modules["ray.rllib.utils.metrics"] = _ray_metrics
+sys.modules["ray"].__version__ = "2.48.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
+sys.modules["gym"].__version__ = "0.26.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
+sys.modules["gymnasium"].__version__ = "1.0.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
+sys.modules["ray.rllib.utils.annotations"] = Mock()
+sys.modules["ray.rllib.utils.annotations"].override = lambda _: lambda x: x
+
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
@@ -162,8 +174,8 @@ intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "ray": ("https://docs.ray.io/en/latest/", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
-    "torch": ("https://pytorch.org/docs/stable/", None),
-    "jax": ("https://jax.readthedocs.io/en/latest/", None),
+    "torch": ("https://docs.pytorch.org/docs/stable/", None),
+    "jax": ("https://docs.jax.dev/en/latest/", None),
     "gymnasium": ("https://gymnasium.farama.org/", None),
     "scipy": ("https://docs.scipy.org/doc/scipy/", None),
     "pandas": ("https://pandas.pydata.org/docs/", None),
