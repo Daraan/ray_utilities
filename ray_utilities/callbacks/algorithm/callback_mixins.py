@@ -180,7 +180,7 @@ class StepCounterMixin(GetGlobalStepMixin):
             self._planned_current_step += algorithm.config.total_train_batch_size  # pyright: ignore[reportOptionalMemberAccess]
         if self._planned_current_step != (global_step := self._get_global_step(metrics_logger)):
             _logger.error(
-                "%s: Expected step %d (%d + %d) but got %d (difference: %d) instead. Iteration: %d"
+                "%s: Expected step %d (%d + %d) but got %d (difference: %d) instead. Iteration: %d. "
                 "Expected step should at least be smaller but not larger: %s",
                 self.__class__.__name__,
                 self._planned_current_step,

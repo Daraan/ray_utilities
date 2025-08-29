@@ -69,14 +69,17 @@ jobs:
       with:
         python-version: '3.10'
         use-pip-cache: false
-    - name: Test trainable multiple EnvRunners 1/2
+    - name: Test trainable multiple EnvRunners 1/3
       run: |
         source .venv/bin/activate
         pytest -m "not basic" -k "test_trainable and not test_tuner_checkpointing and not test_validate_save_restore"  -v --timeout_method=thread --mp-only
-    - name: Test trainable multiple EnvRunners with Tuner 2/2 (might deadlock)
+    - name: Test trainable multiple EnvRunners metric restore 2/3 (might deadlock)
       run: |
         source .venv/bin/activate
         pytest test/test_setup.py::TestMetricsRestored::test_with_tuner --mp-only 
+    - name: Test trainable multiple EnvRunners with Tuner 3/3 (might deadlock)
+      run: |
+        source .venv/bin/activate
         pytest test/test_trainable.py::TestClassCheckpointing::test_tuner_checkpointing -v --mp-only --timeout_method=thread
   
   pytest_minimal:

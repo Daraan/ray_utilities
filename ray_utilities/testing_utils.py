@@ -99,7 +99,6 @@ if TYPE_CHECKING:
     from ray.tune import Result
 
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co
-    from ray_utilities.training.default_class import TrainableBase
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
     from ray_utilities.typing.metrics import LogMetricsDict
 
@@ -314,13 +313,28 @@ def _remove_throughput_stats(stats: dict[str, Any]):
 
 class TestHelpers(unittest.TestCase):
     # region setups
+    _fast_model_fcnet_hiddens: int = 1
 
     def setUp(self):
         AlgorithmSetup.PROJECT = "TESTING"
         os.environ["WANDB_API_KEY"] = "test"
+        assert TrainableBase.cls_model_config is None
+        TrainableBase.cls_model_config = {}
+        self.mock_reduced_model = mock.patch.dict(
+            TrainableBase.cls_model_config,
+            {"fcnet_hiddens": [self._fast_model_fcnet_hiddens], "head_fcnet_hiddens": []},
+        )
+        self.mock_reduced_model.start()
         super().setUp()
         self._env_seed_rng = random.Random(111)
         atexit.register(self._clean_output_dir)
+
+    def tearDown(self):
+        TrainableBase.cls_model_config = None
+        self.mock_reduced_model.stop()
+        for trainable in self._created_trainables:
+            trainable.stop()
+        super().tearDown()
 
     @staticmethod
     def _clean_output_dir():
@@ -358,13 +372,6 @@ class TestHelpers(unittest.TestCase):
             logger.exception("Failed to remove testing storage path, unknown error")
 
     _created_trainables: ClassVar[list[TrainableBase]] = []
-
-    def tearDown(self):
-        for trainable in self._created_trainables:
-            trainable.stop()
-        super().tearDown()
-
-    _fast_model_fcnet_hiddens: int = 1
 
     @patch_args(
         "--iterations", "5",
