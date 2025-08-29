@@ -1,3 +1,17 @@
+"""Ray RLlib connector for removing masked samples from learner batches.
+
+This module provides the :class:`RemoveMaskedSamplesConnector` which removes
+masked samples that are added by Ray RLlib's AddOneTsToEpisodesAndTruncate
+connector but are not needed for loss calculation.
+
+Key Components:
+    - :class:`RemoveMaskedSamplesConnector`: Connector for masked sample removal
+    - Integration with Ray RLlib's learner connector pipeline
+    - Metrics tracking for environment steps passed to learners
+
+This connector is particularly useful when combined with exact sampling callbacks
+to ensure batches contain precisely the intended number of samples.
+"""
 # ruff: noqa: ARG002
 
 from __future__ import annotations
@@ -21,18 +35,43 @@ _logger = logging.getLogger(__name__)
 
 
 class RemoveMaskedSamplesConnector(ConnectorV2):
-    """
-    A connector to be put at the end of a learner connector pipeline (after GAE) to remove samples
-    added by the `ray.rllib.connectors.learner.add_one_ts_to_episodes_and_truncate.
-    AddOneTsToEpisodesAndTruncate` connector piece that are masked and useless for the loss calculation.
-
-    When combined with the `exact_sampling_callback` this assures that the batch really has the
-    exact number of samples.
-
-    Attention:
-        As a custom learner_connector argument to the AlgorithmConfig will only prepend
-        connectors this connector needs to be added in a different way, e.g. by using the
-        `RemoveMaskedSamplesLearner`.
+    """Connector for removing masked samples from learner batches in Ray RLlib.
+    
+    This connector removes samples that are added by the AddOneTsToEpisodesAndTruncate
+    connector but are masked out and not needed for loss calculation. It's designed
+    to be placed at the end of a learner connector pipeline, after GAE computation.
+    
+    When combined with exact sampling callbacks, this connector ensures that batches
+    contain precisely the intended number of samples by removing masked timesteps
+    that would otherwise inflate batch sizes unnecessarily.
+    
+    The connector processes the loss mask to identify and remove masked samples from
+    all relevant batch keys, while maintaining proper metrics tracking for the
+    actual number of environment steps passed to learners.
+    
+    Features:
+        - Removes masked samples using loss mask information
+        - Updates episode data to maintain consistency
+        - Tracks environment step metrics for monitoring
+        - Provides warnings when loss masks are missing
+        
+    Warning:
+        Since custom learner_connector arguments to AlgorithmConfig only prepend
+        connectors, this connector needs to be added differently, such as by using
+        the RemoveMaskedSamplesLearner wrapper.
+        
+    Example:
+        >>> # Used typically through RemoveMaskedSamplesLearner
+        >>> config.training(learner_class=RemoveMaskedSamplesLearner)
+        
+    Note:
+        This connector modifies episodes using mean values for consistency and should
+        not be used to track the exact number of episodes passed, as the batch is
+        the primary data structure used after processing.
+        
+    See Also:
+        :class:`ray.rllib.connectors.connector_v2.ConnectorV2`: Base connector class
+        :class:`ray_utilities.learners.remove_masked_samples_learner.RemoveMaskedSamplesLearner`: Learner wrapper
     """
 
     _logged_warning = False
