@@ -20,6 +20,7 @@ The setup integrates seamlessly with :class:`~ray_utilities.setup.experiment_bas
 subclasses to provide a complete solution for hyperparameter optimization of
 reinforcement learning experiments.
 """
+
 from __future__ import annotations
 
 import logging
@@ -118,11 +119,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
     Example:
         >>> from ray_utilities.setup import PPOSetup
         >>> setup = PPOSetup()
-        >>> tuner_setup = TunerSetup(
-        ...     eval_metric="eval/episode_return_mean",
-        ...     eval_metric_order="max",
-        ...     setup=setup
-        ... )
+        >>> tuner_setup = TunerSetup(eval_metric="eval/episode_return_mean", eval_metric_order="max", setup=setup)
         >>> tuner = tuner_setup.create_tuner()
         >>> results = tuner.fit()
 
@@ -131,6 +128,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
         :class:`~ray_utilities.config._tuner_callbacks_setup.TunerCallbackSetup`: Callback management
         :func:`~ray_utilities.misc.trial_name_creator`: Trial naming function
     """
+
     trial_name_creator = trial_name_creator
 
     def __init__(

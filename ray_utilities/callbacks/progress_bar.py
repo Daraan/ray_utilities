@@ -16,20 +16,18 @@ Key Features:
 
 Example:
     Basic progress bar usage with training metrics::
-    
+
         from ray_utilities.callbacks.progress_bar import update_pbar
         from tqdm import tqdm
-        
+
         pbar = tqdm(total=1000000, desc="Training")
-        
+
         # Update with training and evaluation results
-        update_pbar(pbar, 
-                   eval_results={"mean": 150.0}, 
-                   train_results={"mean": 100.0, "max": 200.0})
+        update_pbar(pbar, eval_results={"mean": 150.0}, train_results={"mean": 100.0, "max": 200.0})
 
 Functions:
     :func:`update_pbar`: Update progress bar with training/evaluation metrics
-    
+
 Type Definitions:
     :class:`TrainRewardMetrics`: Training reward metric structure
     :class:`EvalRewardMetrics`: Evaluation reward metric structure
@@ -62,12 +60,13 @@ logger = logging.getLogger(__name__)
 
 class TrainRewardMetrics(TypedDict, total=False):
     """Training reward metrics for progress bar display.
-    
+
     Attributes:
         mean: Mean episode return during training
-        max: Maximum episode return observed  
+        max: Maximum episode return observed
         roll: Rolling average of episode returns (optional)
     """
+
     mean: float
     max: float
     roll: float
@@ -75,40 +74,42 @@ class TrainRewardMetrics(TypedDict, total=False):
 
 class EvalRewardMetrics(TypedDict):
     """Evaluation reward metrics for progress bar display.
-    
+
     Attributes:
         mean: Mean episode return during evaluation
         roll: Rolling average of evaluation returns (optional)
     """
+
     mean: float
     roll: NotRequired[float]
 
 
 class DiscreteEvalRewardMetrics(TypedDict):
     """Discrete evaluation reward metrics for progress bar display.
-    
+
     Attributes:
         mean: Mean episode return during discrete evaluation
         roll: Rolling average of discrete evaluation returns (optional)
     """
+
     mean: float
     roll: NotRequired[float]
 
 
 def _unit_division(amount: int) -> tuple[int, str]:
     """Convert large numbers to human-readable format with unit suffixes.
-    
+
     Args:
         amount: The number to format
-        
+
     Returns:
         A tuple of (scaled_amount, unit_suffix) where unit_suffix is one of
         "", "K" (thousands), or "M" (millions).
-        
+
     Example:
         >>> _unit_division(1500)
         (1, "K")
-        >>> _unit_division(2500000) 
+        >>> _unit_division(2500000)
         (2, "M")
         >>> _unit_division(500)
         (500, "")

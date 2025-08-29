@@ -16,21 +16,21 @@ Key Features:
 
 Example:
     Basic video creation from episode recording::
-    
+
         import numpy as np
         from ray_utilities.video.numpy_to_video import create_temp_video
-        
+
         # Episode frames: (time, height, width, channels)
         episode_frames = np.random.randint(0, 255, (100, 64, 64, 3), dtype=np.uint8)
-        
+
         # Create temporary video file
         video_path = create_temp_video(episode_frames)
         print(f"Video saved to: {video_path}")
-        
+
     Using with Ray RLlib callbacks::
-    
+
         from ray_utilities.postprocessing import save_videos
-        
+
         # In a callback, convert video arrays to files
         save_videos(training_results)  # Modifies results in-place
 
@@ -70,23 +70,23 @@ def numpy_to_video(
 
     Args:
         data: Video data as NumPy array or list. Expected shapes:
-            
+
             - **5D**: ``(batch=1, time, channel, height, width)`` - Standard Ray format
             - **4D**: ``(time, channel, height, width)`` or ``(time, height, width, channel)``
             - **List**: List of frame arrays
-            
+
         video_filename: Output filename for the video. Should end with ``.mp4``.
         frame_rate: Frames per second for the output video.
 
     Note:
         **Shape Requirements**:
-        
+
         Ray Tune's logging frameworks (WandB, TensorBoard) expect specific array shapes:
-        
+
         - **3D array**: Single image ``(channel, height, width)``
-        - **4D array**: Batch of images ``(batch, channel, height, width)``  
+        - **4D array**: Batch of images ``(batch, channel, height, width)``
         - **5D array**: Video ``(batch=1, time, channel, height, width)``
-        
+
         This function automatically handles the conversion to the correct OpenCV format
         ``(time, height, width, channel)`` regardless of input shape.
 
@@ -95,9 +95,9 @@ def numpy_to_video(
         >>> # Create sample episode data (10 frames, 3 channels, 64x64)
         >>> frames = np.random.randint(0, 255, (10, 3, 64, 64), dtype=np.uint8)
         >>> numpy_to_video(frames, "episode.mp4", frame_rate=30)
-        
+
         With 5D Ray format::
-        
+
         >>> # Ray format: (1, time, channel, height, width)
         >>> ray_frames = np.random.randint(0, 255, (1, 20, 3, 128, 128), dtype=np.uint8)
         >>> numpy_to_video(ray_frames, "ray_episode.mp4")
@@ -162,20 +162,16 @@ def create_temp_video(
 
     Example:
         Create temporary video for logging::
-        
+
         >>> import numpy as np
         >>> frames = np.random.randint(0, 255, (50, 64, 64, 3), dtype=np.uint8)
         >>> video_path = create_temp_video(frames, frame_rate=30)
         >>> print(video_path)
         '/tmp/ray_utilities/a1b2c3d4e5f6.mp4'
-        
+
         Custom directory and frame rate::
-        
-        >>> video_path = create_temp_video(
-        ...     frames, 
-        ...     dir="/my/videos",
-        ...     frame_rate=60
-        ... )
+
+        >>> video_path = create_temp_video(frames, dir="/my/videos", frame_rate=60)
 
     Note:
         - The filename is generated using :func:`uuid.uuid4` for uniqueness

@@ -6,7 +6,7 @@ helper functions for environment name parsing.
 
 Key Components:
     - :func:`create_env`: Environment creation with name parsing
-    - :func:`parse_env_name`: Environment name shorthand resolution  
+    - :func:`parse_env_name`: Environment name shorthand resolution
     - :func:`create_env_for_config`: Environment creation from RLlib configs
 
 Environment Shortcuts:
@@ -17,6 +17,7 @@ Example:
     >>> env = create_env("cart")  # Creates CartPole-v1
     >>> env = create_env("LunarLander-v2")  # Direct environment ID
 """
+
 from __future__ import annotations
 
 import logging
@@ -49,24 +50,24 @@ _logger = logging.getLogger(__name__)
 
 def parse_env_name(name: str) -> str:
     """Parse environment name, converting shortcuts to full Gymnasium environment IDs.
-    
+
     This function provides convenient shortcuts for commonly used environments,
     allowing users to specify shorter names that are automatically expanded
     to their full Gymnasium environment identifiers.
-    
+
     Args:
         name: Environment name or shortcut. Can be a full Gymnasium environment ID
             or one of the supported shortcuts.
-    
+
     Returns:
         Full Gymnasium environment ID. If the input is already a full ID or
         not a recognized shortcut, returns the input unchanged.
-    
+
     Supported Shortcuts:
         - ``"lunar"`` → ``"LunarLander-v2"``
         - ``"cart"`` → ``"CartPole-v1"``
         - ``"cartpole"`` → ``"CartPole-v1"``
-    
+
     Example:
         >>> parse_env_name("cart")
         "CartPole-v1"
@@ -78,23 +79,23 @@ def parse_env_name(name: str) -> str:
 
 def create_env(name: str, **kwargs) -> gym.Env:
     """Create a Gymnasium environment with optional name shortcut resolution.
-    
+
     This function creates Gymnasium environments while supporting convenient
     name shortcuts for commonly used environments. Additional keyword arguments
     are passed directly to the Gymnasium ``make`` function.
-    
+
     Args:
         name: Environment name or shortcut. Supports the same shortcuts as
             :func:`parse_env_name`.
         **kwargs: Additional keyword arguments passed to ``gym.make()``.
-    
+
     Returns:
         Created Gymnasium environment instance.
-    
+
     Example:
         >>> env = create_env("cart", render_mode="human")
         >>> env = create_env("LunarLander-v2")
-    
+
     See Also:
         :func:`parse_env_name`: Environment name parsing function
         :func:`gym.make`: Gymnasium environment creation function

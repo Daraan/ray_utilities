@@ -21,6 +21,7 @@ Note:
     These utilities require careful handling of downstream connectors that may
     duplicate or mask observations, such as AddOneTsToEpisodesAndTruncate.
 """
+
 from __future__ import annotations
 
 import logging
@@ -43,31 +44,32 @@ logger = logging.getLogger(__name__)
 @deprecated("Likely does not work as no config is available here")
 class ExactSamplesConnector(ConnectorV2):
     """Experimental connector for trimming episodes to exact sample counts.
-    
+
     .. warning::
         This connector is **not ready for production use** and is highly experimental.
         It may never work correctly and should not be used in any real applications.
-    
+
     This connector attempts to ensure learners receive exactly the specified number
     of samples by trimming episodes as needed. However, it's marked as deprecated
     due to configuration access limitations within the connector framework.
-    
+
     .. danger::
         This connector is likely non-functional because configuration data is not
         available within the connector call context, making it impossible to
         determine the target sample count.
-    
+
     The connector would trim episodes by removing timesteps from the end of episodes
     until the total sample count matches the desired exact timesteps.
-    
+
     Args:
         input_observation_space: Observation space specification (unused).
         input_action_space: Action space specification (unused).
-        
+
     See Also:
         :func:`learner_connector_with_exact_samples`: Factory function for setup
         :class:`ray.rllib.connectors.connector_v2.ConnectorV2`: Base connector class
     """
+
     @classmethod
     def creator(
         cls,
@@ -75,17 +77,17 @@ class ExactSamplesConnector(ConnectorV2):
         input_action_space,
     ) -> Self:
         """Create an ExactSamplesConnector instance for learner connector setup.
-        
+
         This class method provides a convenient way to create connector instances
         for use with AlgorithmConfig.training(learner_connector=ExactSamplesConnector.creator).
-        
+
         Args:
             input_observation_space: Observation space specification.
             input_action_space: Action space specification.
-            
+
         Returns:
             A new ExactSamplesConnector instance configured with the provided spaces.
-            
+
         Example:
             >>> config.training(learner_connector=ExactSamplesConnector.creator)
         """
@@ -132,27 +134,27 @@ def learner_connector_with_exact_samples(
     input_action_space,
 ) -> ConnectorV2:
     """Create a learner connector that trims episodes to exact sample counts.
-    
+
     This factory function creates an ExactSamplesConnector for use in learner
     connector pipelines. The connector attempts to ensure precise sample counts
     by trimming episodes as needed.
-    
+
     Warning:
         The AddOneTsToEpisodesAndTruncate connector that may be added afterwards
-        duplicates (but masks) the last observation. This effect needs to be 
+        duplicates (but masks) the last observation. This effect needs to be
         handled separately and may interfere with exact sample counting.
-    
+
     Args:
         input_observation_space: Observation space for the connector.
         input_action_space: Action space for the connector.
-        
+
     Returns:
         A configured ExactSamplesConnector instance.
-        
+
     Note:
         This connector is deprecated and likely non-functional due to configuration
         access limitations.
-        
+
     See Also:
         :class:`ExactSamplesConnector`: The underlying connector implementation
     """

@@ -20,6 +20,7 @@ The module bridges the gap between high-level experiment specifications and
 low-level RLlib configuration requirements, providing a clean interface for
 complex algorithm setup scenarios.
 """
+
 from __future__ import annotations
 
 import logging
@@ -130,7 +131,7 @@ def create_algorithm_config(
         ...     module_class=MyRLModule,
         ...     catalog_class=MyCatalog,
         ...     model_config={"hidden_layers": [256, 256]},
-        ...     framework="torch"
+        ...     framework="torch",
         ... )
 
     Note:

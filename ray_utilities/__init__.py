@@ -70,7 +70,7 @@ def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, An
     typically logged with hierarchical key names.
 
     Args:
-        metrics: A dictionary with potentially slash-separated keys (e.g., 
+        metrics: A dictionary with potentially slash-separated keys (e.g.,
             ``{"eval/return_mean": 100, "train/loss": 0.5}``).
 
     Returns:
@@ -81,7 +81,7 @@ def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, An
         >>> metrics = {
         ...     "train/episode_return_mean": 150.0,
         ...     "eval/env_runner_results/episode_return_mean": 200.0,
-        ...     "timesteps_total": 10000
+        ...     "timesteps_total": 10000,
         ... }
         >>> nested = flat_dict_to_nested(metrics)
         >>> nested["train"]["episode_return_mean"]

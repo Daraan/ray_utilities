@@ -6,7 +6,7 @@ callbacks.
 
 Main Components:
     - Algorithm callbacks in :mod:`~ray_utilities.callbacks.algorithm`
-    - Tuner callbacks in :mod:`~ray_utilities.callbacks.tuner`  
+    - Tuner callbacks in :mod:`~ray_utilities.callbacks.tuner`
     - :func:`remove_ignored_args`: Filter arguments for experiment logging
     - :data:`LOG_IGNORE_ARGS`: Arguments to exclude from logging
 """
@@ -65,7 +65,7 @@ def remove_ignored_args(
     to experiment tracking platforms.
 
     Args:
-        args: Arguments to process (dict, :class:`argparse.Namespace`, :class:`tap.Tap`, 
+        args: Arguments to process (dict, :class:`argparse.Namespace`, :class:`tap.Tap`,
             or object with ``as_dict()`` method).
         remove: Argument names to remove. Defaults to :data:`LOG_IGNORE_ARGS`.
 

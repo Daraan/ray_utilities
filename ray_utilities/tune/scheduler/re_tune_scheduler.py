@@ -12,6 +12,7 @@ Key Components:
 The scheduler extends the standard PBT approach with support for deterministic
 grid search mutations and more flexible population management strategies.
 """
+
 from __future__ import annotations
 
 import logging
@@ -42,20 +43,20 @@ _T = TypeVar("_T")
 
 def _grid_search_sample_function(grid_search_space: Iterable[_T], *, repeat=True) -> Callable[[], _T]:
     """Create a function for sampling from a grid search space.
-    
+
     Returns a parameterless function that yields grid search values either cyclically
     (with repetition) or once through the space (without repetition).
-    
+
     Args:
         grid_search_space: Iterable containing the values to sample from.
         repeat: If True, cycle through values infinitely. If False, each value
             is returned once and then StopIteration is raised.
-            
+
     Returns:
         A parameterless function that returns the next grid search sample.
         When repeat=False, the function raises StopIteration after all values
         have been returned once.
-        
+
     Example:
         >>> sampler = _grid_search_sample_function([1, 2, 3], repeat=True)
         >>> sampler()  # Returns 1
@@ -89,20 +90,20 @@ def _debug_dump_new_config(new_config: dict, mutation_keys: list[str]):
 
 class ReTuneScheduler(PopulationBasedTraining):
     """Enhanced Population Based Training scheduler with grid search and flexible quantiles.
-    
+
     This scheduler extends Ray Tune's PopulationBasedTraining with support for grid search
     mutations, quantile fractions above 0.5, and improved trial management for reinforcement
     learning experiments.
-    
+
     Key enhancements over standard PBT:
         - Grid search mutations for deterministic hyperparameter exploration
         - Support for quantile fractions > 0.5 for exploit-heavy strategies
         - Custom exploration functions with mutation tracking
         - Enhanced logging and debugging capabilities
-    
+
     The scheduler maintains compatibility with the standard PBT interface while providing
     additional flexibility for advanced hyperparameter optimization strategies.
-    
+
     Args:
         time_attr: Attribute to use for time progression tracking.
         metric: Metric name to optimize (e.g., "episode_reward_mean").
@@ -119,23 +120,23 @@ class ReTuneScheduler(PopulationBasedTraining):
         log_config: Whether to log configuration changes.
         require_attrs: Whether to require time_attr and metric in results.
         synch: Whether to use synchronous perturbation.
-        
+
     Example:
         >>> scheduler = ReTuneScheduler(
         ...     metric="episode_reward_mean",
-        ...     mode="max", 
+        ...     mode="max",
         ...     perturbation_interval=50000,
         ...     hyperparam_mutations={
         ...         "lr": {"grid_search": [1e-4, 5e-4, 1e-3]},
-        ...         "batch_size": {"grid_search": [64, 128, 256]}
+        ...         "batch_size": {"grid_search": [64, 128, 256]},
         ...     },
-        ...     quantile_fraction=0.8  # Exploit top 80% of trials
+        ...     quantile_fraction=0.8,  # Exploit top 80% of trials
         ... )
-        
+
     Note:
         Grid search spaces in hyperparam_mutations are automatically converted to
         sampling functions that cycle through the provided values.
-        
+
     See Also:
         :class:`ray.tune.schedulers.pbt.PopulationBasedTraining`: Base PBT scheduler
         :func:`_grid_search_sample_function`: Grid search sampling utilities

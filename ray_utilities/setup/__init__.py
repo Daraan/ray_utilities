@@ -19,7 +19,7 @@ clean separation between experiment configuration and execution.
 - :class:`ExperimentSetupBase`: Abstract foundation for all experiment configurations.
   Handles argument parsing, config validation, and trainable creation
 - :class:`PPOSetup`: Production-ready PPO algorithm setup with sensible defaults
-  and extensive customization options  
+  and extensive customization options
 - :class:`TunerSetup`: Ray Tune integration for hyperparameter optimization with
   support for various schedulers, search algorithms, and stopping criteria
 
@@ -41,10 +41,7 @@ Basic experiment setup:
 
 Hyperparameter optimization:
 
->>> setup.add_tune_config({
-...     "lr": tune.grid_search([0.001, 0.01, 0.1]),
-...     "gamma": tune.uniform(0.9, 0.99)
-... })
+>>> setup.add_tune_config({"lr": tune.grid_search([0.001, 0.01, 0.1]), "gamma": tune.uniform(0.9, 0.99)})
 
 Custom environment with training configuration:
 
@@ -57,6 +54,7 @@ See Also:
     :class:`ray.rllib.algorithms.ppo.PPOConfig`: Underlying algorithm configuration
     :class:`ray.tune.Tuner`: Ray Tune hyperparameter optimization
 """
+
 from .algorithm_setup import PPOSetup
 from .experiment_base import ExperimentSetupBase
 from .tuner_setup import TunerSetup

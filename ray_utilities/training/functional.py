@@ -21,6 +21,7 @@ The module is designed to work seamlessly with
 :class:`~ray_utilities.setup.experiment_base.ExperimentSetupBase` subclasses
 and provides a bridge between experiment configuration and actual training execution.
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -103,11 +104,11 @@ def default_trainable(
         >>> from ray_utilities.setup import PPOSetup
         >>> hparams = {"args": parser.parse_args()}
         >>> results = default_trainable(hparams, setup_class=PPOSetup)
-        
+
         >>> # With Ray Tune
         >>> tuner = tune.Tuner(
         ...     tune.with_parameters(default_trainable, setup_class=PPOSetup),
-        ...     param_space={"args": tune.grid_search([args1, args2])}
+        ...     param_space={"args": tune.grid_search([args1, args2])},
         ... )
 
     Note:
@@ -254,9 +255,7 @@ def training_step(
         ...     "running_reward": create_running_reward_updater(),
         ...     "eval_reward": create_running_reward_updater(),
         ... }
-        >>> result, metrics, rewards = training_step(
-        ...     algo, reward_updaters, log_stats="full"
-        ... )
+        >>> result, metrics, rewards = training_step(algo, reward_updaters, log_stats="full")
 
     Note:
         This function automatically handles Ray Tune result reporting unless disabled.

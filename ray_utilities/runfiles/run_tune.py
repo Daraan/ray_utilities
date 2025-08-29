@@ -18,6 +18,7 @@ Key Components:
 This module is typically used as the final step in experiment configuration,
 after setting up algorithms, hyperparameters, and training configurations.
 """
+
 from __future__ import annotations
 
 import logging
@@ -114,18 +115,18 @@ def run_tune(
 
     Examples:
         Basic usage with a setup class:
-        
+
         >>> from ray_utilities.setup import PPOSetup
         >>> results = run_tune(PPOSetup)
-        
+
         With a configured setup instance:
-        
+
         >>> setup = PPOSetup()
         >>> setup.config.lr = 0.001
         >>> results = run_tune(setup)
-        
+
         Using test mode:
-        
+
         >>> def test_func(trainable, setup):
         ...     return trainable(setup.sample_params())
         >>> results = run_tune(PPOSetup, test_mode_func=test_func)

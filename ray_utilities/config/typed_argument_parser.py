@@ -7,6 +7,7 @@ It includes mixins for various argument types and utilities for handling "auto" 
 The module extends the :mod:`tap` (Typed Argument Parser) library with additional
 functionality specific to machine learning experiments and checkpointing workflows.
 """
+
 from __future__ import annotations
 
 # pyright: enableExperimentalFeatures=true
@@ -241,8 +242,10 @@ class PatchArgsMixin(Tap):
     Example:
         >>> # python script.py --another_arg cli_value
         >>> with MyParser.patch_args(
-        ...     "--my_arg", "default_value",
-        ...     "--another_arg", "patch_value",
+        ...     "--my_arg",
+        ...     "default_value",
+        ...     "--another_arg",
+        ...     "patch_value",
         ... ):
         ...     parser = MyParser()
         ...     # parser.my_arg == "default_value"

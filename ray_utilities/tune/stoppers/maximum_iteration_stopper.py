@@ -12,6 +12,7 @@ Key Components:
 The stopper provides more accurate iteration counting for distributed training
 scenarios where internal iteration counters may not reflect actual training progress.
 """
+
 from __future__ import annotations
 
 import logging
@@ -43,17 +44,17 @@ class MaximumResultIterationStopper(_RayMaximumIterationStopper):
 
     Args:
         max_iter: Maximum number of training iterations before stopping a trial.
-            
+
     Example:
         >>> stopper = MaximumResultIterationStopper(max_iter=1000)
         >>> # Use with Ray Tune
         >>> tune.run(trainable, stop=stopper)
-        
+
     Note:
         When a trial is stopped, the stopper logs the trial ID, current iteration,
         maximum iteration limit, and total environment steps sampled for debugging
         and monitoring purposes.
-        
+
     See Also:
         :class:`ray.tune.stopper.maximum_iteration.MaximumIterationStopper`: Base stopper class
         :data:`ray_utilities.constants.CURRENT_STEP`: Current step metric key
@@ -61,15 +62,15 @@ class MaximumResultIterationStopper(_RayMaximumIterationStopper):
 
     def __call__(self, trial_id: str, result: AutoExtendedLogMetricsDict | dict[str, Any]):
         """Evaluate whether a trial should be stopped based on iteration count.
-        
+
         Args:
             trial_id: Unique identifier for the trial being evaluated.
             result: Dictionary containing trial results and metrics.
-            
+
         Returns:
             True if the trial should be stopped (iteration limit reached),
             False otherwise.
-            
+
         Note:
             When stopping a trial, logs detailed information including the trial ID,
             current iteration, maximum iteration limit, and environment steps sampled.

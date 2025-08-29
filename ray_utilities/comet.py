@@ -1,8 +1,8 @@
 """Comet ML integration utilities for experiment tracking and offline experiment management.
 
-This module provides utilities for integrating with `Comet ML <https://www.comet.ml/>`_ 
-experiment tracking, including API management, workspace handling, and offline experiment 
-uploading. It's designed to work seamlessly with Ray Tune experiments and provides 
+This module provides utilities for integrating with `Comet ML <https://www.comet.ml/>`_
+experiment tracking, including API management, workspace handling, and offline experiment
+uploading. It's designed to work seamlessly with Ray Tune experiments and provides
 automatic project creation and experiment archiving.
 
 The module handles Comet ML offline directory configuration and provides tools for
@@ -18,25 +18,26 @@ Example:
     Basic Comet ML integration::
 
         from ray_utilities.comet import get_comet_api, comet_assure_project_exists
-        
+
         # Ensure project exists
         workspace = "my-workspace"
         project = "my-ray-experiment"
-        comet_assure_project_exists(workspace, project, 
-                                  "Ray Tune hyperparameter optimization")
-        
+        comet_assure_project_exists(workspace, project, "Ray Tune hyperparameter optimization")
+
         # Use in Ray Tune with CometLoggerCallback
         from ray.air.integrations.comet import CometLoggerCallback
-        
-        callbacks = [CometLoggerCallback(
-            project_name=project,
-            workspace=workspace
-        )]
+
+        callbacks = [
+            CometLoggerCallback(
+                project_name=project,
+                workspace=workspace,
+            )
+        ]
 
     Offline experiment management::
-    
+
         from ray_utilities.comet import CometArchiveTracker
-        
+
         # Track and upload offline experiments
         tracker = CometArchiveTracker(auto=True)
         # ... run experiments offline ...
@@ -78,19 +79,19 @@ __all__ = [
 
 def get_comet_api() -> comet_ml.API:
     """Create a persistent Comet API client that makes use of caching.
-    
+
     This function maintains a singleton :class:`comet_ml.API` instance to avoid
     repeated API initialization overhead and enable caching of API responses.
-    
+
     Returns:
         A :class:`comet_ml.API` instance that can be used for workspace and project
         management operations.
-        
+
     Example:
         >>> api = get_comet_api()
         >>> workspaces = api.get_workspaces()
         >>> projects = api.get("my-workspace")
-        
+
     Note:
         The API client requires proper Comet ML authentication via API key.
         See `Comet ML documentation <https://www.comet.ml/docs/python-sdk/API/>`_
@@ -120,9 +121,9 @@ def get_default_workspace() -> str:
         >>> workspace = get_default_workspace()
         >>> print(f"Using workspace: {workspace}")
         Using workspace: my-default-workspace
-        
+
         Setting via environment variable::
-        
+
         >>> import os
         >>> os.environ["COMET_DEFAULT_WORKSPACE"] = "my-custom-workspace"
         >>> get_default_workspace()
@@ -143,22 +144,22 @@ def get_default_workspace() -> str:
 
 def comet_upload_offline_experiments(tracker: Optional[CometArchiveTracker] = None):
     """Upload offline Comet ML experiments using a tracker instance.
-    
+
     This convenience function uploads and moves offline experiments using either
     a provided tracker or the default global tracker instance.
-    
+
     Args:
         tracker: A :class:`CometArchiveTracker` instance to use for uploading.
             If ``None``, uses the default global tracker.
-            
+
     Example:
         >>> # Upload with default tracker
         >>> comet_upload_offline_experiments()
-        
+
         >>> # Upload with custom tracker
         >>> custom_tracker = CometArchiveTracker(path="/custom/path")
         >>> comet_upload_offline_experiments(custom_tracker)
-        
+
     See Also:
         :class:`CometArchiveTracker`: For more control over the upload process
     """
@@ -169,23 +170,23 @@ def comet_upload_offline_experiments(tracker: Optional[CometArchiveTracker] = No
 
 def comet_assure_project_exists(workspace_name: str, project_name: str, project_description: Optional[str] = None):
     """Ensure a Comet ML project exists, creating it if necessary.
-    
+
     This function checks if a project exists in the specified workspace and creates
     it if it doesn't exist. This is useful for automated experiment setups where
     you want to ensure the target project is available before starting experiments.
-    
+
     Args:
         workspace_name: The name of the Comet ML workspace.
         project_name: The name of the project to create or verify.
         project_description: Optional description for the project if it needs to be created.
-            
+
     Example:
         >>> comet_assure_project_exists(
-        ...     workspace_name="my-team", 
+        ...     workspace_name="my-team",
         ...     project_name="ray-tune-experiments",
-        ...     project_description="Hyperparameter optimization with Ray Tune"
+        ...     project_description="Hyperparameter optimization with Ray Tune",
         ... )
-        
+
     Note:
         This function requires appropriate permissions to create projects in the
         specified workspace. If the project already exists, no action is taken.
@@ -202,15 +203,15 @@ def comet_assure_project_exists(workspace_name: str, project_name: str, project_
 
 class CometArchiveTracker:
     """Track and manage offline Comet ML experiment archives for batch uploading.
-    
+
     This class provides functionality to track offline Comet ML experiment archives
     (ZIP files) and upload them in batches when internet connectivity is available.
     It's particularly useful for experiments run on compute clusters or offline
     environments where immediate uploading to Comet ML is not possible.
-    
+
     The tracker can operate in automatic mode (tracking all new archives in a directory)
     or manual mode (explicitly specifying which archives to track).
-    
+
     Args:
         track: Optional sequence of archive paths to track initially. If provided,
             these archives will be included in upload operations.
@@ -218,33 +219,33 @@ class CometArchiveTracker:
             specified path. If ``False``, only manually added archives are tracked.
         path: Directory path where Comet ML offline archives are stored. Defaults
             to the configured :data:`COMET_OFFLINE_DIRECTORY`.
-            
+
     Attributes:
         path: The directory path being monitored for archives.
         archives: List of archive paths currently being tracked.
-        
+
     Example:
         Automatic tracking and upload::
-        
+
         >>> tracker = CometArchiveTracker(auto=True)
         >>> # ... run experiments that create archives ...
         >>> tracker.upload_and_move()  # Upload all new archives
-        
+
         Manual tracking::
-        
+
         >>> tracker = CometArchiveTracker(auto=False)
         >>> tracker.update([Path("experiment1.zip"), Path("experiment2.zip")])
         >>> tracker.upload_and_move()
-        
+
         Custom directory::
-        
+
         >>> tracker = CometArchiveTracker(path="/custom/comet/archives")
         >>> tracker.upload_and_move()
-        
+
     Note:
         Archives are moved to an ``uploaded/`` subdirectory after successful upload
         to avoid re-uploading the same experiments and to keep the main directory clean.
-        
+
     See Also:
         :func:`comet_upload_offline_experiments`: Convenience function using default tracker
         :data:`ray_utilities.constants.COMET_OFFLINE_DIRECTORY`: Default archive directory

@@ -27,21 +27,21 @@ Constants:
 
 Example:
     Basic metric filtering for clean logging::
-    
+
         from ray_utilities.postprocessing import filter_metrics, create_log_metrics
-        
+
         # Get clean metrics from RLlib result
         filtered = filter_metrics(algorithm_result)
-        
+
         # Create structured log metrics with video handling
         log_metrics = create_log_metrics(
             algorithm_result,
             save_video=True,
-            log_stats="minimal"
+            log_stats="minimal",
         )
-        
+
     Custom metric filtering::
-    
+
         # Keep additional metrics beyond defaults
         extra_keys = [("custom_metric",), ("learner_results", "loss")]
         filtered = filter_metrics(result, extra_keys_to_keep=extra_keys)
@@ -152,7 +152,7 @@ filtering Ray RLlib results. It includes:
 - Trial identification and iteration tracking
 - Required keys from trainable return data structures
 
-The tuple format represents nested dictionary paths, e.g., 
+The tuple format represents nested dictionary paths, e.g.,
 ``(EVALUATION_RESULTS, ENV_RUNNER_RESULTS, EPISODE_RETURN_MEAN)`` corresponds
 to accessing ``result["evaluation"]["env_runner_results"]["episode_return_mean"]``.
 
@@ -223,7 +223,7 @@ def remove_unwanted_metrics(results: _M, *, cast_to: TypeForm[_T] = _MISSING) ->
         >>> results = {
         ...     "episode_return_mean": 150.0,
         ...     "fault_tolerance": {...},  # Will be removed
-        ...     "training_iteration": 100
+        ...     "training_iteration": 100,
         ... }
         >>> clean_results = remove_unwanted_metrics(results)
         >>> "fault_tolerance" in clean_results
@@ -280,21 +280,21 @@ def filter_metrics(
 
     Example:
         Basic filtering with defaults only::
-        
+
         >>> results = algorithm.train()  # Large nested dict
         >>> clean_metrics = filter_metrics(results)
         >>> # Contains only essential metrics like episode returns, step counts
-        
+
         Adding custom metrics::
-        
+
         >>> extra_keys = [
         ...     ("custom_metric",),  # Top-level custom metric
-        ...     ("learner_results", "default_policy", "loss")  # Nested loss metric
+        ...     ("learner_results", "default_policy", "loss"),  # Nested loss metric
         ... ]
         >>> filtered = filter_metrics(results, extra_keys_to_keep=extra_keys)
-        
+
         Type-safe filtering::
-        
+
         >>> from ray_utilities.typing import LogMetricsDict
         >>> typed_metrics = filter_metrics(results, cast_to=LogMetricsDict)
 

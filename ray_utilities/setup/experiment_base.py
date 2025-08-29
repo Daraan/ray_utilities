@@ -135,7 +135,7 @@ class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, Algor
 
     param_space: dict[str, Any] | TypedDict[{"__params_not_created__": Literal[True]}]
     """Parameter space for hyperparameter tuning.
-    
+
     Result of :meth:`~ExperimentSetupBase.create_param_space`. If the method was never
     called, this contains a single key ``__params_not_created__`` set to ``True``.
     """
@@ -148,7 +148,7 @@ class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, Algor
 
     __init_config__: bool
     """Initialization flag for configuration.
-    
+
     When ``True``, the config should be initialized from the args and the stored
     ``config`` field should be ignored and remain unset.
     """

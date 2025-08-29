@@ -8,7 +8,7 @@ Example:
     Basic usage for setting up a colored logger::
 
         from ray_utilities.nice_logger import nice_logger
-        
+
         logger = nice_logger(__name__, level="DEBUG")
         logger.info("This will be colored and nicely formatted")
         logger.warning("Warnings stand out with colors")
@@ -39,7 +39,7 @@ def nice_logger(logger: logging.Logger | str, level: int | str | None = None) ->
 
     Returns:
         A configured :class:`logging.Logger` with colored formatting that includes:
-        
+
         - Color-coded log levels for easy identification
         - File name, line number, and function name for debugging
         - Consistent formatting across all log messages
@@ -49,27 +49,27 @@ def nice_logger(logger: logging.Logger | str, level: int | str | None = None) ->
         to remove them first to avoid duplicate log messages.
 
     Example:
-        >>> logger = nice_logger("my_experiment", level="DEBUG") 
+        >>> logger = nice_logger("my_experiment", level="DEBUG")
         >>> logger.info("Starting Ray Tune experiment")
         [INFO][ my_file.py:42, main_function] : Starting Ray Tune experiment
-        
+
         Using with an existing logger::
-        
+
         >>> import logging
         >>> existing_logger = logging.getLogger("ray.rllib")
         >>> enhanced_logger = nice_logger(existing_logger, level="WARNING")
 
     Note:
         The colored formatter includes the following information:
-        
+
         - **Log level** (colored based on severity)
         - **Filename and line number** where the log was called
-        - **Function name** where the log was called  
+        - **Function name** where the log was called
         - **Log message** content
 
         Colors help distinguish between different log levels:
         - DEBUG: Cyan
-        - INFO: Green  
+        - INFO: Green
         - WARNING: Yellow
         - ERROR: Red
         - CRITICAL: Bold red

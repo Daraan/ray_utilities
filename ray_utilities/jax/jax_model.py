@@ -16,6 +16,7 @@ Type Variables:
     ConfigType: Configuration type bound to GeneralParams
     ModelType: Model type bound to Flax Module
 """
+
 from __future__ import annotations
 
 import abc

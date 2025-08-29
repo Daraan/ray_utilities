@@ -19,6 +19,7 @@ Constants:
     - ``MIN_DYNAMIC_BATCH_SIZE``: Minimum allowed dynamic batch size (16)
     - ``MAX_DYNAMIC_BATCH_SIZE``: Maximum allowed dynamic batch size (16384)
 """
+
 from __future__ import annotations
 
 import logging
@@ -72,7 +73,7 @@ def calculate_stepwise_exp_increase(
         >>> # At 25% progress with 8 factors, factor is 2
         >>> calculate_stepwise_exp_increase(total_steps=1000, global_step=250)
         2
-        >>> # At 75% progress with 8 factors, factor is 16  
+        >>> # At 75% progress with 8 factors, factor is 16
         >>> calculate_stepwise_exp_increase(total_steps=1000, global_step=750)
         16
 

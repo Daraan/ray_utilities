@@ -14,6 +14,7 @@ Example:
     >>> # Combine multiple learner features
     >>> CustomLearner = mix_learners([DebugLearner, FilterLearner, BaseLearner])
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Sequence
@@ -25,11 +26,11 @@ if TYPE_CHECKING:
 
 class _MixedLearnerMeta(ABCMeta):
     """Metaclass for mixed learner classes that enables proper comparison and hashing.
-    
+
     This metaclass allows mixed learner classes to be compared based on their
     base classes rather than their identity, which is important for serialization
     and class equivalence checking in Ray distributed environment.
-    
+
     The metaclass ensures that two mixed learner classes with the same base
     classes are considered equivalent regardless of creation order or location.
     """
@@ -67,23 +68,16 @@ def mix_learners(learners: Sequence[type[Learner | Any]]):
 
     Example:
         Combine debugging with a specific algorithm learner::
-        
+
         >>> from ray_utilities.learners import mix_learners
         >>> from ray_utilities.learners.leaner_with_debug_connector import LearnerWithDebugConnectors
         >>> from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import PPOTorchLearner
-        >>> 
-        >>> DebugPPOLearner = mix_learners([
-        ...     LearnerWithDebugConnectors,
-        ...     PPOTorchLearner
-        ... ])
-        
+        >>>
+        >>> DebugPPOLearner = mix_learners([LearnerWithDebugConnectors, PPOTorchLearner])
+
         Complex composition with multiple features::
-        
-        >>> CustomLearner = mix_learners([
-        ...     LearnerWithDebugConnectors,
-        ...     RemoveMaskedSamplesLearner,
-        ...     PPOTorchLearner
-        ... ])
+
+        >>> CustomLearner = mix_learners([LearnerWithDebugConnectors, RemoveMaskedSamplesLearner, PPOTorchLearner])
 
     Note:
         - The order of learners matters for method resolution order (MRO)

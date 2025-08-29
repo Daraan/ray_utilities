@@ -110,7 +110,7 @@ during evaluation. Each tuple represents a path through the nested result dictio
 Note:
     The video data might be a dictionary containing both ``"video"`` and ``"reward"`` keys
     rather than just the raw video array.
-    
+
 See Also:
     :data:`DEFAULT_VIDEO_DICT_KEYS_FLATTENED`: String versions of these keys
 """
@@ -178,7 +178,7 @@ RAY_UTILITIES_INITIALIZATION_TIMESTAMP = time.time()
 Useful for tracking package initialization time and calculating elapsed time since import.
 """
 
-# CLI and Reporting Configuration  
+# CLI and Reporting Configuration
 CLI_REPORTER_PARAMETER_COLUMNS = ["algo", "module", "model_config"]
 """list[str]: Default parameter columns to display in CLI progress reports.
 
@@ -194,7 +194,7 @@ including better modularity and performance. This flag enables conditional
 code paths for new vs. legacy API usage.
 
 See Also:
-    `Ray RLlib New API Stack Migration Guide 
+    `Ray RLlib New API Stack Migration Guide
     <https://docs.ray.io/en/latest/rllib/new-api-stack-migration-guide.html>`_
 """
 

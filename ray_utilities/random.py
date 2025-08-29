@@ -13,10 +13,10 @@ Example:
 
         import gymnasium as gym
         from ray_utilities.random import seed_everything
-        
+
         env = gym.make("CartPole-v1")
         remaining_seed = seed_everything(env, seed=42)
-        
+
         # Now all frameworks use properly split seeds derived from 42
         # Use remaining_seed for further seeding if needed
 
@@ -26,7 +26,7 @@ Functions:
 
 See Also:
     :mod:`random`: Python's built-in random number generation
-    :mod:`numpy.random`: NumPy random number generation  
+    :mod:`numpy.random`: NumPy random number generation
     :mod:`torch`: PyTorch random number generation
     :mod:`tensorflow`: TensorFlow random number generation
     :mod:`gymnasium`: Environment action space seeding
@@ -83,10 +83,10 @@ def split_seed(seed: _IntOrNone, n=2) -> tuple[_IntOrNone, ...]:
         >>> seed1, seed2, seed3 = split_seed(42, n=3)
         >>> len({seed1, seed2, seed3})  # All seeds are unique
         3
-        
+
         With None input::
-        
-        >>> seeds = split_seed(None, n=3) 
+
+        >>> seeds = split_seed(None, n=3)
         >>> seeds
         (None, None, None)
 
@@ -115,8 +115,8 @@ def seed_everything(
             The environment's action space will be seeded if provided.
         seed: The master seed to use for generating all framework-specific seeds.
             If ``None``, frameworks will use their default random initialization.
-        torch_manual: If ``True``, will call :func:`torch.manual_seed` and 
-            :func:`torch.cuda.manual_seed_all`. **Warning**: In some cases setting 
+        torch_manual: If ``True``, will call :func:`torch.manual_seed` and
+            :func:`torch.cuda.manual_seed_all`. **Warning**: In some cases setting
             this can cause poor model performance, so it defaults to ``False``.
         torch_deterministic: If provided, will set :func:`torch.use_deterministic_algorithms`
             to this value. Useful for fully deterministic PyTorch operations, though
@@ -128,25 +128,25 @@ def seed_everything(
 
     Example:
         Basic seeding for reproducible experiments::
-        
+
         >>> import gymnasium as gym
         >>> env = gym.make("CartPole-v1")
         >>> remaining_seed = seed_everything(env, seed=42)
         >>> # All frameworks now use independent seeds derived from 42
-        
+
         For fully deterministic PyTorch (may impact performance)::
-        
+
         >>> seed_everything(None, seed=123, torch_manual=True, torch_deterministic=True)
 
     Note:
         The function seeds frameworks in this order:
-        
+
         1. **Python random**: Using :func:`random.seed`
-        2. **NumPy**: Using :func:`numpy.random.seed`  
+        2. **NumPy**: Using :func:`numpy.random.seed`
         3. **PyTorch**: Using :func:`torch.seed` and optionally manual seeding
         4. **TensorFlow**: Using :func:`tf.random.set_seed` and :func:`keras.utils.set_random_seed`
         5. **Gymnasium environment**: Using environment and action space seeding
-        
+
         Each framework receives an independent seed generated via :func:`split_seed`
         to prevent correlation between random number generators.
 

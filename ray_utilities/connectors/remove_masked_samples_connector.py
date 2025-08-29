@@ -36,39 +36,39 @@ _logger = logging.getLogger(__name__)
 
 class RemoveMaskedSamplesConnector(ConnectorV2):
     """Connector for removing masked samples from learner batches in Ray RLlib.
-    
+
     This connector removes samples that are added by the AddOneTsToEpisodesAndTruncate
     connector but are masked out and not needed for loss calculation. It's designed
     to be placed at the end of a learner connector pipeline, after GAE computation.
-    
+
     When combined with exact sampling callbacks, this connector ensures that batches
     contain precisely the intended number of samples by removing masked timesteps
     that would otherwise inflate batch sizes unnecessarily.
-    
+
     The connector processes the loss mask to identify and remove masked samples from
     all relevant batch keys, while maintaining proper metrics tracking for the
     actual number of environment steps passed to learners.
-    
+
     Features:
         - Removes masked samples using loss mask information
         - Updates episode data to maintain consistency
         - Tracks environment step metrics for monitoring
         - Provides warnings when loss masks are missing
-        
+
     Warning:
         Since custom learner_connector arguments to AlgorithmConfig only prepend
         connectors, this connector needs to be added differently, such as by using
         the RemoveMaskedSamplesLearner wrapper.
-        
+
     Example:
         >>> # Used typically through RemoveMaskedSamplesLearner
         >>> config.training(learner_class=RemoveMaskedSamplesLearner)
-        
+
     Note:
         This connector modifies episodes using mean values for consistency and should
         not be used to track the exact number of episodes passed, as the batch is
         the primary data structure used after processing.
-        
+
     See Also:
         :class:`ray.rllib.connectors.connector_v2.ConnectorV2`: Base connector class
         :class:`ray_utilities.learners.remove_masked_samples_learner.RemoveMaskedSamplesLearner`: Learner wrapper

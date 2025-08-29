@@ -15,7 +15,7 @@ Functions:
 See Also:
     :class:`ray_utilities.callbacks.algorithm.discrete_eval_callback.DiscreteEvalCallback`:
         Callback that integrates discrete evaluation into training
-    :data:`ray_utilities.constants.DISC_EVAL_METRIC_RETURN_MEAN`: 
+    :data:`ray_utilities.constants.DISC_EVAL_METRIC_RETURN_MEAN`:
         Metric key for discrete evaluation results
     :mod:`ray.rllib.evaluation.metrics`: Ray RLlib evaluation utilities
 """
@@ -57,10 +57,10 @@ def discrete_evaluate_on_local_env_runner(
 
     Returns:
         A tuple containing:
-        
+
         - **env_runner_results**: Evaluation results dictionary (or ``None`` for new API)
         - **env_steps**: Number of environment steps taken during evaluation
-        - **agent_steps**: Number of agent steps taken during evaluation  
+        - **agent_steps**: Number of agent steps taken during evaluation
         - **all_batches**: List of sample batches from evaluation episodes
 
     Raises:
@@ -69,18 +69,16 @@ def discrete_evaluate_on_local_env_runner(
 
     Example:
         This function is typically used within a callback rather than called directly::
-        
+
         >>> # In a custom callback
         >>> from ray_utilities.discrete_evaluation import discrete_evaluate_on_local_env_runner
-        >>> 
+        >>>
         >>> class MyCallback(DefaultCallbacks):
         ...     def on_algorithm_iteration_end(self, *, algorithm, result, **kwargs):
         ...         if should_run_discrete_eval():
         ...             env_runner = algorithm.env_runner
-        ...             metrics_logger = algorithm.metrics_logger  
-        ...             discrete_evaluate_on_local_env_runner(
-        ...                 algorithm, env_runner, metrics_logger
-        ...             )
+        ...             metrics_logger = algorithm.metrics_logger
+        ...             discrete_evaluate_on_local_env_runner(algorithm, env_runner, metrics_logger)
 
     Note:
         - This function respects the algorithm's evaluation configuration settings

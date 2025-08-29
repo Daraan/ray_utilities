@@ -4,6 +4,7 @@ Provides various utility functions for working with Ray Tune experiments,
 progress bars, and data structures. Includes functions for trial naming,
 trainable introspection, dictionary operations, and error handling.
 """
+
 from __future__ import annotations
 
 import datetime
@@ -98,7 +99,8 @@ def get_trainable_name(trainable: Callable) -> str:
 
     Example:
         >>> import functools
-        >>> def my_trainable(): pass
+        >>> def my_trainable():
+        ...     pass
         >>> wrapped = functools.partial(my_trainable, arg=1)
         >>> get_trainable_name(wrapped)
         'my_trainable'

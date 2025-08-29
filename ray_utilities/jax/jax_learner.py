@@ -13,6 +13,7 @@ Note:
     This is an experimental implementation with some methods marked as incomplete
     or having warnings about their implementation status.
 """
+
 from __future__ import annotations
 
 import logging
@@ -22,7 +23,6 @@ from typing import TYPE_CHECKING, Any, Optional, Sequence
 import jax
 import jax.numpy as jnp
 from ray.rllib.core.learner.learner import Learner
-from ray.rllib.core.learner.tf.tf_learner import TfLearner
 from ray.rllib.core.learner.torch.torch_learner import TorchLearner
 from ray.rllib.policy.sample_batch import MultiAgentBatch
 
@@ -66,12 +66,10 @@ class JaxLearner(Learner):
         about incomplete functionality or may not be fully implemented.
 
     Example:
-        >>> learner = JaxLearner(
-        ...     config=ppo_config,
-        ...     module_spec=module_spec
-        ... )
+        >>> learner = JaxLearner(config=ppo_config, module_spec=module_spec)
         >>> # Use with RLlib training pipeline
     """
+
     framework = "jax"
 
     def __init__(
@@ -198,6 +196,8 @@ class JaxLearner(Learner):
         # TODO: is kl_coeffs a variable that is learned?
         logger.warning("_get_tensor_variable called which is not fully implemented", stacklevel=2)
         if 0:
+            from ray.rllib.core.learner.tf.tf_learner import TfLearner  # removed somewhere around 2.48
+
             TorchLearner._get_tensor_variable(value, dtype, trainable)
             TfLearner._get_tensor_variable(value, dtype, trainable)
         v = jnp.array(value, dtype=dtype)

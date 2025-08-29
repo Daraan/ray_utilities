@@ -18,6 +18,7 @@ Key Components:
 These extensions integrate with Ray Tune's parameter spaces and RLlib callbacks
 to provide adaptive behavior during training and hyperparameter optimization.
 """
+
 from __future__ import annotations
 
 import logging
@@ -156,7 +157,7 @@ class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType_co, ConfigType_
         >>> class MySetup(SetupWithDynamicBatchSize, ExperimentSetupBase):
         ...     config_class = PPOConfig
         ...     algo_class = PPO
-        ...     
+        ...
         ...     def create_config(self, args):
         ...         config = super().create_config(args)
         ...         if args.dynamic_batch:
