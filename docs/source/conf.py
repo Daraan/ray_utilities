@@ -111,6 +111,11 @@ sys.modules["ray.tune"] = tune_mock
 
 sys.modules["ray.tune.trainable"].Trainable = Dummy
 sys.modules["ray.rllib.utils.checkpoints"].Checkpointable = Dummy2
+sys.modules["ray.rllib.core.rl_module"] = _MockModule("ray.rllib.core.rl_module")
+sys.modules["ray.rllib.core.rl_module"].RLModule = Dummy
+sys.modules["ray.rllib.core.models.catalog"] = _MockModule("ray.rllib.core.models.catalog")
+sys.modules["ray.rllib.core.models.catalog"].Catalog = Dummy
+sys.modules["ray.rllib.utils.metrics.stats"] = _MockModule("ray.rllib.utils.metrics.stats")
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
