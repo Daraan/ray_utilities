@@ -7,8 +7,8 @@ import os
 import sys
 from unittest.mock import MagicMock
 
-from sphinx_autodoc_typehints import mock as autodoc_mock  # pyright: ignore[reportPrivateImportUsage]
 from sphinx.ext.autodoc.mock import _MockModule
+from sphinx_autodoc_typehints import mock as autodoc_mock  # pyright: ignore[reportPrivateImportUsage]
 
 # Add the project root to Python path
 sys.path.insert(0, os.path.abspath("../.."))
@@ -43,6 +43,8 @@ MOCK_MODULES = [
     "optuna",
     "jax",
     "flax",
+    "distrax",
+    "optax",
     "cv2",
     "tree",
     "dotenv",
@@ -52,9 +54,13 @@ MOCK_MODULES = [
     # "tap",
     "ray",
     "torch",
+    "tensorflow",
+    "tensorflow_probability",
     "numpy",
+    "debugpy",
     "scipy",
     "pandas",
+    "ray_utilities.connectors.exact_samples_to_learner",
     "gymnasium",
     "gym",
     "pyarrow",
