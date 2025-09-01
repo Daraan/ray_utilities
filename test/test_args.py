@@ -299,12 +299,24 @@ class TestProcessing(unittest.TestCase):
 
     def test_class_patch_args(self):
         with patch_args():  # Highest priority
+            # Default values
             self.assertListEqual(sys.argv[1:], ["-a", "no_actor_provided_by_patch_args", "--log_level", "DEBUG"])
             with DefaultArgumentParser.patch_args():
                 self.assertListEqual(sys.argv[1:], ["-a", "no_actor_provided_by_patch_args", "--log_level", "DEBUG"])
                 args = DefaultArgumentParser().parse_args()
                 self.assertEqual(args.comet, False)
                 self.assertEqual(args.agent_type, "no_actor_provided_by_patch_args")
+                self.assertEqual(args.log_level, "DEBUG")
+
+        with patch_args(log_level=None):  # Highest priority
+            # Default values
+            self.assertListEqual(sys.argv[1:], ["-a", "no_actor_provided_by_patch_args"])
+            with DefaultArgumentParser.patch_args():
+                self.assertListEqual(sys.argv[1:], ["-a", "no_actor_provided_by_patch_args"])
+                args = DefaultArgumentParser().parse_args()
+                self.assertEqual(args.comet, False)
+                self.assertEqual(args.agent_type, "no_actor_provided_by_patch_args")
+                self.assertEqual(args.log_level, "INFO")  # Default value
 
         with patch_args("--comet"):  # Highest priority
             with DefaultArgumentParser.patch_args():

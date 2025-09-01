@@ -188,7 +188,7 @@ def iter_cases(cases: type[Cases] | mock.MagicMock | Iterator[Any] | Iterable[An
         raise
 
 
-def patch_args(*args: str | int, extend_argv: bool = False):
+def patch_args(*args: str | int, extend_argv: bool = False, log_level: str | None = "DEBUG"):
     old_args = sys.argv[1:]
     actor_args = (
         ("-a", "no_actor_provided_by_patch_args")
@@ -199,7 +199,9 @@ def patch_args(*args: str | int, extend_argv: bool = False):
         )
         else ()
     )
-    log_args = ("--log_level", "DEBUG") if "--log_level" not in args else ()
+    log_args = ()
+    if log_level and "--log_level" not in args:
+        log_args = ("--log_level", "DEBUG")
     patched_args = map(str, (*old_args, *args) if extend_argv else args)
     patch = [
         sys.argv[0] if sys.argv else "_imaginary_file_for_patch.py",

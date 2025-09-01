@@ -496,12 +496,12 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         with patch_args(
             "--batch_size", "1234",
             "--num_jobs", DefaultArgumentParser.num_jobs + 2,  # NeverRestore
-            "--log_level", "DEBUG",  # NeverRestore
+            "--log_level", "WARNING",  # NeverRestore
             "--env_type", "cart",  # AlwaysRestore
             "--actor_type", "mlp",
         ):  # fmt: skip
             setup = AlgorithmSetup()
-            self.assertEqual(setup.args.log_level, "DEBUG")
+            self.assertEqual(setup.args.log_level, "WARNING")
             Trainable = setup.create_trainable()
         assert isclass(Trainable)
         trainable = Trainable()
@@ -526,13 +526,14 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             with patch_args(
                 "--from_checkpoint", tmpdir,
                 "--minibatch_size", trainable.algorithm_config.minibatch_size * 2,
-                "--seed", (trainable._setup.config.seed or 1234) * 2
+                "--seed", (trainable._setup.config.seed or 1234) * 2,
+                log_level=None,  # do not add --log_level
             ):  # fmt: skip
                 setup2 = AlgorithmSetup()
                 # Not annotated value, restored
                 self.assertEqual(setup2.config.train_batch_size_per_learner, 1234)
                 # Never restored
-                self.assertNotEqual(setup2.args.log_level, "DEBUG")
+                self.assertNotEqual(setup2.args.log_level, "WARNING")
                 self.assertEqual(setup2.args.num_jobs, DefaultArgumentParser.num_jobs)
 
     @unittest.mock.patch.object(subprocess, "Popen", autospec=True)
