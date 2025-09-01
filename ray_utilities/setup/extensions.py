@@ -84,7 +84,7 @@ class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType_co, ConfigType_co,
     """
 
     rollout_size_sample_space: ClassVar[ParameterSpace[int]] = tune.grid_search(
-        [16, 32, 64, 128, 256, 512, 1024, 2048, 3072, 4096, 6144, 8192, 10240, 16384]
+        [32, 64, 128, 256, 512, 1024, 2048, 3072, 4096, 6144, 8192, 10240, 16384]
     )
 
     @classmethod
@@ -172,7 +172,7 @@ class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType_co, ConfigType_
     """
 
     batch_size_sample_space: ClassVar[ParameterSpace[int]] = tune.grid_search(
-        [16, 32, 64, 128, 256, 512, 1024, 2048, 3072, 4096, 6144, 8192, 10240, 16384]
+        [32, 64, 128, 256, 512, 1024, 2048, 3072, 4096, 6144, 8192, 10240, 16384]
     )
 
     @classmethod
