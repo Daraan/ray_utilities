@@ -13,7 +13,7 @@ from ray_utilities.jax.math import explained_variance
 if TYPE_CHECKING:
     import chex
     from ray.rllib.algorithms.ppo import PPOConfig
-    from ray.rllib.models.distributions import Distribution as RllibDistribution
+    from ray.rllib.core.distribution.distribution import Distribution as RllibDistribution
 
     from ray_utilities.jax.distributions.jax_distributions import RLlibToJaxDistribution
     from ray_utilities.jax.ppo.jax_ppo_module import JaxPPOModule

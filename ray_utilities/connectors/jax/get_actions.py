@@ -8,8 +8,8 @@ from ray.rllib.core.columns import Columns
 
 if TYPE_CHECKING:
     import chex
+    from ray.rllib.core.distribution.distribution import Distribution as RllibDistribution
     from ray.rllib.core.rl_module import RLModule
-    from ray.rllib.models.distributions import Distribution as RllibDistribution
 
     from ray_utilities.jax.distributions.jax_distributions import RLlibToJaxDistribution
 

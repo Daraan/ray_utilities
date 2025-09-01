@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 import tree
 from distrax import Distribution as DistraxDistribution
-from ray.rllib.models.distributions import Distribution as RllibDistribution
+from ray.rllib.core.distribution.distribution import Distribution as RllibDistribution
 from tensorflow_probability.substrates import jax as tfp
 from typing_extensions import Self
 
