@@ -160,6 +160,9 @@ exclude_patterns = [
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
 html_theme = "sphinx_rtd_theme"
+# Add any paths that contain custom static files (such as style sheets) here,
+# relative to this directory. They are placed after the default static files,
+# so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ["_static"]
 
 # Theme customization
@@ -253,7 +256,7 @@ myst_enable_extensions = [
     "colon_fence",  # Colon code fences
 ]
 
-# Todo extension configuration
+# Todo extension configuration  # noqa: FIX002
 todo_include_todos = True
 todo_emit_warnings = True
 
@@ -267,10 +270,6 @@ typehints_document_rtype = True
 typehints_use_signature = True
 typehints_use_signature_return = True
 
-# Add any paths that contain custom static files (such as style sheets) here,
-# relative to this directory. They are placed after the default static files,
-# so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = []
 
 # For ReadTheDocs compatibility
 master_doc = "index"
