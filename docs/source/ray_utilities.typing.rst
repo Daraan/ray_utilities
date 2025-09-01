@@ -67,5 +67,6 @@ Module contents
 .. automodule:: ray_utilities.typing
    :no-index:
    :members:
+   :exclude-members: FlatLogMetricsDict
    :undoc-members:
    :show-inheritance:

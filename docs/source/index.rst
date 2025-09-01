@@ -61,6 +61,7 @@ Contents
    :caption: Contents:
 
    api
+   ray_utilities
 
 .. toctree::
    :maxdepth: 1
