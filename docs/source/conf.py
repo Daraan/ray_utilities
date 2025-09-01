@@ -44,33 +44,35 @@ class Mock(MagicMock):
 
 
 MOCK_MODULES = [
-    "comet_ml",
-    "wandb",
-    "optuna",
-    "jax",
-    "flax",
-    "distrax",
-    "optax",
-    "cv2",
-    "tree",
-    "dotenv",
-    "tqdm",
+    "chex",
     "colorlog",
-    "tap",
-    "ray",
-    "torch",
-    "tensorflow",
-    "tensorflow_probability",
-    "numpy",
+    "comet_ml",
+    "cv2",
     "debugpy",
-    "scipy",
-    "pandas",
-    "ray_utilities.connectors.exact_samples_to_learner",
-    "gymnasium",
+    "distrax",
+    "dotenv",
+    "flax",
+    "git",
     "gym",
+    "gymnasium",
+    "interpretable_ddts",
+    "jax",
+    "numpy",
+    "optax",
+    "optuna",
+    "pandas",
     "pyarrow",
     "pyarrow.fs",
-    "git",
+    "ray",
+    "ray_utilities.connectors.exact_samples_to_learner",
+    "scipy",
+    "tap",
+    "tensorflow",
+    "tensorflow_probability",
+    "torch",
+    "tqdm",
+    "tree",
+    "wandb",
 ]
 
 
@@ -101,6 +103,7 @@ sys.modules["gym"] = _MockModule("gym")
 sys.modules["gymnasium"] = _MockModule("gymnasium")
 
 sys.modules["ray.rllib.utils.metrics"] = _ray_metrics
+sys.modules["ray.rllib.utils.metrics.metrics_logger"] = _MockModule("ray.rllib.utils.metrics.metrics_logger")
 sys.modules["ray"].__version__ = "2.48.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
 sys.modules["gym"].__version__ = "0.26.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
 sys.modules["gymnasium"].__version__ = "1.0.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
