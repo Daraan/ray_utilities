@@ -97,11 +97,12 @@ def set_project_log_level(pkg_logger: logging.Logger | str, level: int | str, pk
     # Set level on root package logger
     if isinstance(pkg_logger, str):
         pkg_logger = logging.getLogger(pkg_logger)
-    pkg_logger.info(
-        "Changing log level of %s logger and all subloggers to %s",
-        pkg_logger.name,
-        logging.getLevelName(level) if isinstance(level, int) else level,
-    )
+    if pkg_logger.getEffectiveLevel() not in (level, logging.getLevelName(level)):  # pyright: ignore[reportDeprecated]
+        pkg_logger.info(
+            "Changing log level of %s logger and all subloggers to %s",
+            pkg_logger.name,
+            logging.getLevelName(level) if isinstance(level, int) else level,
+        )
     pkg_logger.setLevel(level)
     for h in pkg_logger.handlers:
         h.setLevel(level)

@@ -299,9 +299,9 @@ class TestProcessing(unittest.TestCase):
 
     def test_class_patch_args(self):
         with patch_args():  # Highest priority
-            self.assertListEqual(sys.argv[1:], ["-a", "no_actor_provided_by_patch_args"])
+            self.assertListEqual(sys.argv[1:], ["-a", "no_actor_provided_by_patch_args", "--log_level", "DEBUG"])
             with DefaultArgumentParser.patch_args():
-                self.assertListEqual(sys.argv[1:], ["-a", "no_actor_provided_by_patch_args"])
+                self.assertListEqual(sys.argv[1:], ["-a", "no_actor_provided_by_patch_args", "--log_level", "DEBUG"])
                 args = DefaultArgumentParser().parse_args()
                 self.assertEqual(args.comet, False)
                 self.assertEqual(args.agent_type, "no_actor_provided_by_patch_args")
@@ -357,7 +357,7 @@ class TestProcessing(unittest.TestCase):
             args = DefaultArgumentParser().parse_args()
             self.assertTrue(args.total_steps, 100)
 
-        with patch_args("--comet", "--no_exact_sampling", "-n", 4):
+        with patch_args("--comet", "--no_exact_sampling", "-n", 4, "--log_level", "DEBUG"):
             with DefaultArgumentParser.patch_args(
                 # main args for this experiment
                 "--tune", "batch_size",
@@ -383,7 +383,7 @@ class TestProcessing(unittest.TestCase):
                 self.assertEqual(args.env_seeding_strategy, "same")
                 self.assertEqual(args.seed, 42)
                 self.assertEqual(args.wandb, "offline+upload")
-                self.assertEqual(args.log_level, "INFO")
+                self.assertEqual(args.log_level, "DEBUG")
                 self.assertIs(args.use_exact_total_steps, True)
                 # superseeded by sys.argv
                 self.assertEqual(args.num_samples, 4)
