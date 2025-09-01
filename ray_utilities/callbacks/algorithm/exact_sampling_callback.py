@@ -81,7 +81,6 @@ def _remove_or_trim_samples(samples: list[EpisodeType], total_samples: int, exac
         if not sample.is_done and len(sample) == 1:
             assert len(samples.pop(len_samples - i)) == 1
             logger.debug("Removed a sample with length 1: %s", sample)
-            len_samples -= 1
             trimmed += 1
             if trimmed >= diff:
                 return
