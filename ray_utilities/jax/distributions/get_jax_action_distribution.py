@@ -24,8 +24,8 @@ from ray_utilities.jax.distributions.jax_distributions import (
 )
 
 if TYPE_CHECKING:
+    from ray.rllib.core.distribution.distribution import Distribution
     from ray.rllib.core.models.catalog import Catalog
-    from ray.rllib.models.distributions import Distribution
 
 __all__ = ["get_jax_dist_cls_from_action_space"]
 

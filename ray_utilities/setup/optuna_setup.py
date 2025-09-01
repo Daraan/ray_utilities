@@ -204,6 +204,8 @@ def create_search_algo(
         print("Best hyperparameters found were: ", results.get_best_result().config)
 
     Args:
+        hparams: Config to use for hyperparameter tuning. Can contain search spaces and dicts with
+            "grid_search" keys.
         max_concurrent: Maximum number of trials at the same time.
         initial_params: Initial parameters to start the search with.
         pruner: If True, uses a MedianPruner, if a pruner is passed, it will be used.

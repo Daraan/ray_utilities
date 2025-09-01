@@ -1,4 +1,7 @@
-![test workflow badge](https://github.com/Daraan/ray_utilities/actions/workflows/run_tests.yml/badge.svg) [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff) [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/format.json)](https://github.com/astral-sh/ruff)
+[![test workflow badge](https://github.com/Daraan/ray_utilities/actions/workflows/run_tests.yml/badge.svg)](https://github.com/Daraan/ray_utilities/actions)
+[![ReadtheDocs Badge](https://app.readthedocs.org/projects/ray-utilities/badge/?version=latest&style=flat)](https://app.readthedocs.org/projects/ray-utilities/)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/format.json)](https://github.com/astral-sh/ruff)
 
 # Ray Utilities
 

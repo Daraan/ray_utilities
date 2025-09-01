@@ -5,41 +5,146 @@
 
 import os
 import sys
+from dataclasses import dataclass
 from unittest.mock import MagicMock
 
+from sphinx.ext.autodoc.mock import _MockModule, _MockObject
+from sphinx_autodoc_typehints import mock as autodoc_mock  # pyright: ignore[reportPrivateImportUsage]
+
 # Add the project root to Python path
-sys.path.insert(0, os.path.abspath(".."))
+ROOT = os.path.abspath("../../")
+print("cwd:", os.getcwd())
+print("root path:", ROOT)
+print("ROOT contents:", os.listdir(ROOT))
+print("doc contents:", os.listdir(os.path.join(ROOT, "docs")))
+sys.path.insert(0, ROOT)
+sys.path.insert(1, os.path.abspath("./"))
+import _ray_metrics  # noqa: E402
+
+os.environ["SPHINX_BUILD"] = "1"
+
+# -- Project information -----------------------------------------------------
+# https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
+
+project = "ray_utilities"
+copyright = "2025, Daniel Sperber"
+author = "Daniel Sperber"
 
 
 # Mock problematic dependencies that might not be available during doc building
 class Mock(MagicMock):
     @classmethod
-    def __getattr__(cls, name):
+    def __getattr__(cls, name):  # pyright: ignore[reportIncompatibleMethodOverride]
         return MagicMock()
+
+    @classmethod
+    def __ror__(cls, other):
+        return object.__ror__(other)
+
+    @classmethod
+    def __or__(cls, other):
+        return object.__ror__(other)
 
 
 MOCK_MODULES = [
-    "comet_ml",
-    "wandb",
-    "optuna",
-    "jax",
-    "flax",
-    "cv2",
-    "dotenv",
-    "tqdm",
+    "chex",
     "colorlog",
-    "typed_argument_parser",
-    "tap",
-    "ray",
-    "torch",
-    "numpy",
-    "scipy",
-    "pandas",
-    "gymnasium",
+    "comet_ml",
+    "cv2",
+    "debugpy",
+    "distrax",
+    "dotenv",
+    "flax",
+    "git",
     "gym",
+    "gymnasium",
+    "interpretable_ddts",
+    "jax",
+    "jaxlib",
+    "numpy",
+    "optax",
+    "optuna",
+    "pandas",
+    "pyarrow",
+    "pyarrow.fs",
+    "ray",
+    "scipy",
+    "tap",
+    "tensorflow",
+    "tensorflow_probability",
+    "torch",
+    "tqdm",
+    "tree",
+    "wandb",
 ]
-for mod_name in MOCK_MODULES:
-    sys.modules[mod_name] = Mock()
+
+
+# Use two dummy classes to not have multiple base classes
+class Dummy:
+    def __init__(self, *args, **kwargs):
+        pass
+
+
+class Dummy2:
+    def __init__(self, *args, **kwargs):
+        pass
+
+
+# mock has a bug that one cannot subclass MockObjects together with typing.Generic, add non mock classes for that:
+class TuneMock(_MockModule):
+    Trainable = Dummy
+
+
+tune_mock = TuneMock("ray.tune")
+
+
+class RayMock(_MockModule):
+    tune = tune_mock
+
+
+autodoc_mock(["ray", "gym", "gymnasium"])
+sys.modules["ray"] = RayMock("ray")
+sys.modules["gym"] = _MockModule("gym")
+sys.modules["gymnasium"] = _MockModule("gymnasium")
+
+sys.modules["ray.rllib.utils.metrics"] = _ray_metrics
+sys.modules["ray.rllib.utils.metrics.metrics_logger"] = _MockModule("ray.rllib.utils.metrics.metrics_logger")
+sys.modules["ray"].__version__ = "2.48.0+mocked"  # type: ignore[attr-defined]
+sys.modules["gym"].__version__ = "0.26.0+mocked"  # type: ignore[attr-defined]
+sys.modules["gymnasium"].__version__ = "1.0.0+mocked"  # type: ignore[attr-defined]
+sys.modules["ray.rllib.utils.checkpoints"] = _MockModule("ray.rllib.utils.checkpoints")
+sys.modules["ray.tune"] = _MockModule("ray.tune")
+sys.modules["ray.tune.trainable"] = _MockModule("ray.tune.trainable")
+
+
+sys.modules["ray.tune"] = tune_mock
+sys.modules["ray.tune.trainable"].Trainable = Dummy  # type: ignore[attr-defined]
+sys.modules["ray.rllib.utils.checkpoints"].Checkpointable = Dummy2  # type: ignore[attr-defined]
+sys.modules["ray.rllib.core.rl_module"] = _MockModule("ray.rllib.core.rl_module")
+sys.modules["ray.rllib.core.rl_module"].RLModule = Dummy  # type: ignore[attr-defined]
+sys.modules["ray.rllib.core.models.catalog"] = _MockModule("ray.rllib.core.models.catalog")
+sys.modules["ray.rllib.core.models.catalog"].Catalog = Dummy  # type: ignore[attr-defined]
+sys.modules["ray.rllib.utils.metrics.stats"] = _MockModule("ray.rllib.utils.metrics.stats")
+sys.modules["ray.rllib.utils.annotations"] = _MockModule("ray.rllib.utils.annotations")
+sys.modules["ray.rllib.utils.annotations"].override = lambda _: lambda x: x  # type: ignore[attr-defined]
+sys.modules["chex"] = _MockModule("chex")
+sys.modules["chex"].dataclass = dataclass  # type: ignore[attr-defined]
+
+import _ray_default_model_config  # noqa: E402 # import after mocked
+
+sys.modules["ray.rllib.core.rl_module.default_model_config"] = _ray_default_model_config
+
+
+# mock colorlog colorlog.StreamHandler.level
+class ColorlogMockedStreamHandler(_MockObject):
+    level = -9999
+
+
+class ColorlogMocked(_MockModule):
+    StreamHandler = ColorlogMockedStreamHandler
+
+
+sys.modules["colorlog"] = ColorlogMocked("colorlog")
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
@@ -59,7 +164,7 @@ extensions = [
     "sphinx.ext.viewcode",  # Add source code links
     "sphinx.ext.napoleon",  # Google/NumPy style docstrings
     "sphinx.ext.intersphinx",  # Cross-reference other projects
-    "sphinx.ext.todo",  # TODO directives
+    "sphinx.ext.todo",  # todo-directives  # noqa: FIX002
     "sphinx.ext.coverage",  # Documentation coverage reports
     "sphinx.ext.imgmath",  # Math equations as images
     "sphinx.ext.githubpages",  # GitHub Pages deployment support
@@ -75,23 +180,26 @@ exclude_patterns = [
     "Thumbs.db",
     ".DS_Store",
     "testing_utils.py",
-    "ray_utilities/connectors/exact_samples_to_learner.pyray_utilities/jax/*",  # Exclude JAX modules as requested
-    "experiments/*",  # Exclude experiment folder as requested
-    "testing_utils.py",  # Exclude testing utilities as requested
+    "ray_utilities/connectors/exact_samples_to_learner.py",
+    "test/*",
+    "setup.py",
 ]
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
 html_theme = "sphinx_rtd_theme"
+# Add any paths that contain custom static files (such as style sheets) here,
+# relative to this directory. They are placed after the default static files,
+# so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ["_static"]
 
 # Theme customization
 html_theme_options = {
     "analytics_id": "",  # Add Google Analytics tracking ID if needed
-    "analytics_anonymize_ip": False,
+    "analytics_anonymize_ip": True,
     "logo_only": False,
-    "display_version": True,
+    # "display_version": True,
     "prev_next_buttons_location": "bottom",
     "style_external_links": False,
     "vcs_pageview_mode": "",
@@ -150,9 +258,7 @@ autodoc_default_options = {
 }
 
 # Exclude experimental modules from autodoc
-autodoc_mock_imports = [
-    "ray_utilities.connectors.exact_samples_to_learner",
-]
+autodoc_mock_imports = MOCK_MODULES
 
 autosummary_generate = True
 
@@ -161,8 +267,8 @@ intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "ray": ("https://docs.ray.io/en/latest/", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
-    "torch": ("https://pytorch.org/docs/stable/", None),
-    "jax": ("https://jax.readthedocs.io/en/latest/", None),
+    "torch": ("https://docs.pytorch.org/docs/stable/", None),
+    "jax": ("https://docs.jax.dev/en/latest/", None),
     "gymnasium": ("https://gymnasium.farama.org/", None),
     "scipy": ("https://docs.scipy.org/doc/scipy/", None),
     "pandas": ("https://pandas.pydata.org/docs/", None),
@@ -179,7 +285,7 @@ myst_enable_extensions = [
     "colon_fence",  # Colon code fences
 ]
 
-# Todo extension configuration
+# Todo-extension configuration  # noqa: FIX002
 todo_include_todos = True
 todo_emit_warnings = True
 
@@ -193,10 +299,6 @@ typehints_document_rtype = True
 typehints_use_signature = True
 typehints_use_signature_return = True
 
-# Add any paths that contain custom static files (such as style sheets) here,
-# relative to this directory. They are placed after the default static files,
-# so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = []
 
 # For ReadTheDocs compatibility
 master_doc = "index"

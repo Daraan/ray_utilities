@@ -1,6 +1,11 @@
 Ray Utilities Documentation
 ============================
 
+.. warning::
+
+   **This documentation is a work in progress.** Some sections may be incomplete or subject to change.
+   Due to AI generated content it might be inaccurate. Please report any issues on the `GitHub repository <https://github.com/Daraan/ray_utilities/issues>`.
+
 **Ray Utilities** is a comprehensive Python library providing utilities, setup frameworks, and extensions for Ray RLlib reinforcement learning experiments. It streamlines the process of configuring, running, and managing RL experiments with Ray Tune's hyperparameter optimization capabilities.
 
 Key Features
@@ -32,11 +37,12 @@ Quick Start
    from ray_utilities.setup import PPOSetup
    from ray_utilities.runfiles import run_tune
 
-with PPOSetup() as setup:
-   setup.config.env = "CartPole-v1"
-   setup.config.lr = 0.001
-# Now the config is frozen
-   
+   with PPOSetup() as setup:  
+      # Inside the with block modify your configuration
+      setup.config.env = "CartPole-v1"
+      setup.config.lr = 0.001
+   # Now the config is frozen and the setup.trainable is build
+      
    # Run hyperparameter optimization
    results = run_tune(setup)
 
@@ -55,14 +61,12 @@ Contents
    :caption: Contents:
 
    api
+   ray_utilities
 
 .. toctree::
    :maxdepth: 1
    :caption: Examples:
    
-   examples/basic_usage
-   examples/hyperparameter_tuning
-   examples/custom_environments
 
 Indices and tables
 ==================

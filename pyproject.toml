@@ -178,8 +178,12 @@ extend-generics = [
 "rllib_port".msg = "Import from downstream packages; missing refactoring."
 
 [tool.ruff.lint.per-file-ignores]
-"test/**/*.py" = ["ARG"]
+"test/**/*.py" = ["ARG", "D"]
+"ray_utilities/testing_utils.py" = ["D"]
 "ray_utilities/callbacks/**/*.py" = ["ARG"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.isort]
 split_on_trailing_comma = true

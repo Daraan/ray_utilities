@@ -240,6 +240,7 @@ def calculate_iterations(
 ) -> int:
     """
     Calculate the number of iterations based on the budget of total steps and the batch size.
+
     Args:
         dynamic_buffer: If True, the budget will be split into smaller chunks.
         batch_size: The batch size to use for the calculation of the iterations if dynamic_buffer is False.
@@ -249,8 +250,8 @@ def calculate_iterations(
         max_size: The maximum size of the step sizes.
             Default is MAX_DYNAMIC_BATCH_SIZE.
         assure_even: If True, the total_steps will be adjusted to be evenly divisible by the number of increases
-            from min_size to max_size.
-            If False, the total_steps will not be adjusted, which may lead to uneven distribution of steps.
+            from min_size to max_size. If False, the total_steps will not be adjusted,
+            which may lead to uneven distribution of steps.
 
     See Also:
         split_timestep_budget: For more information on how the budget is split.

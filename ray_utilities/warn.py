@@ -43,6 +43,11 @@ def warn_about_larger_minibatch_size(
     *, minibatch_size: int | None, train_batch_size_per_learner: int, note_adjustment: bool = True
 ) -> bool:
     """
+    Checks for valid minibatch_size and train_batch_size_per_learner combination.
+
+    Warns if minibatch_size is greater than train_batch_size_per_learner
+    or when the train_batch_size_per_learner is not divisible by minibatch_size.
+
     Args:
         minibatch_size: The size of the mini-batch.
         train_batch_size_per_learner: The training batch size per learner.

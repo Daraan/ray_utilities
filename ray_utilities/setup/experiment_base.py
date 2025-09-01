@@ -282,12 +282,13 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             init_config : Whether to initialize the configuration. Defaults to True.
             init_param_space : Whether to initialize the parameter space. Defaults to True.
             init_trainable : Whether to initialize the trainable component. Defaults to True.
-                Note:
-                    When the setup creates a trainable that is a class, the config is frozen to
-                    prevent potentially unforwarded changes between setup.config the config of the
-                    trainable. Use `init_trainable=False` or `unset_trainable()`, edit the config
-                    and restore the trainable class with a call to `create_trainable()`.
             parse_args : Whether to parse the provided arguments. Defaults to True.
+
+        Note:
+            When the setup creates a trainable that is a class, the config is frozen to
+            prevent potentially unforwarded changes between setup.config the config of the
+            trainable. Use `init_trainable=False` or `unset_trainable()`, edit the config
+            and restore the trainable class with a call to `create_trainable()`.
 
         Attributes:
             parser (Parser[ParserType_co]): The argument parser instance.
@@ -748,7 +749,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             Do not overwrite this method. Overwrite _create_config / config_from_args instead.
 
         Args:
-            config: Optional config to update based on args, instead of creating a new one.
+            base: Optional config to update based on args, instead of creating a new one.
         """
         self.config = self._create_config(base=base)
         overrides = self.config_overrides()
@@ -1163,6 +1164,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         Args:
             results: The ResultGrid containing the results of the experiment.
             wait: If True, waits for the upload to finish before returning.
+            parallel_uploads: Number of parallel uploads to by executing :class:`subprocess.Popen`
         """
         # Get the wandb offline directory
         logger.info("Uploading wandb offline experiments...")

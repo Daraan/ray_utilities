@@ -13,8 +13,8 @@ class DiscreteModelABC(ABC):
     """
     Model that implements `create_discrete_copy` for discrete evaluation
 
-    TODO:
-        Otherwise implement a switch_mode; but might not work that well with logging.
+    As an alternative use :class:`DiscreteModuleBase`, that implements :meth:`~DiscreteModuleBase.switch_mode`
+    but requires a different logging approach.
     """
 
     @abstractmethod

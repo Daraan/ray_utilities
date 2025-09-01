@@ -5,14 +5,18 @@ learning capabilities, including experimental features like gradient accumulatio
 debugging connectors, and sample filtering.
 
 Key Components:
-    - :func:`mix_learners`: Combine multiple learner classes
-    - Debugging and filtering learner mixins
-    - Experimental gradient accumulation support
+    - mix_learners: Combine multiple learner classes.
+    - Debugging and filtering learner mixins (see DebugLearner, FilterLearner).
+    - Experimental gradient accumulation support.
 
 Example:
-    >>> from ray_utilities.learners import mix_learners
-    >>> # Combine multiple learner features
-    >>> CustomLearner = mix_learners([DebugLearner, FilterLearner, BaseLearner])
+
+.. code-block:: python
+
+    from ray_utilities.learners import mix_learners
+
+    # Combine multiple learner features
+    CustomLearner = mix_learners([DebugLearner, FilterLearner, BaseLearner])
 """
 
 from __future__ import annotations
@@ -49,35 +53,37 @@ class _MixedLearnerMeta(ABCMeta):
 
 
 def mix_learners(learners: Sequence[type[Learner | Any]]):
-    """Combine multiple learner classes into a single learner class.
+    """Combine multiple learner classes into one ``Learner`` class.
 
-    This function creates a new learner class that inherits from all provided
-    learner classes, allowing you to compose different learner capabilities.
-    It is particularly useful when you want to combine debugging, sample filtering,
-    and algorithm-specific features.
+    The returned class inherits from all provided learner classes in the
+    specified order. Duplicate classes are removed and already-mixed learner
+    classes are flattened to their base classes.
 
     Args:
-        learners: A sequence of learner classes to combine. The classes will be
-            used as base classes for the new mixed learner in the order provided.
-            If a class is already a mixed learner, its base classes will be
-            extracted and used instead to avoid deep inheritance hierarchies.
+        learners: Sequence of learner classes to combine.
 
     Returns:
         A new learner class that inherits from all provided learner classes.
         If only one learner is provided, returns that learner unchanged.
 
-    Example:
-        Combine debugging with a specific algorithm learner::
+    Examples:
 
-        >>> from ray_utilities.learners import mix_learners
-        >>> from ray_utilities.learners.leaner_with_debug_connector import LearnerWithDebugConnectors
-        >>> from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import PPOTorchLearner
-        >>>
-        >>> DebugPPOLearner = mix_learners([LearnerWithDebugConnectors, PPOTorchLearner])
+    .. code-block:: python
 
-        Complex composition with multiple features::
+        # Combine debugging and complex composition examples
+        from ray_utilities.learners import mix_learners
+        from ray_utilities.learners.leaner_with_debug_connector import LearnerWithDebugConnectors
+        from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import PPOTorchLearner
 
-        >>> CustomLearner = mix_learners([LearnerWithDebugConnectors, RemoveMaskedSamplesLearner, PPOTorchLearner])
+        DebugPPOLearner = mix_learners([LearnerWithDebugConnectors, PPOTorchLearner])
+
+        CustomLearner = mix_learners(
+            [
+                LearnerWithDebugConnectors,
+                RemoveMaskedSamplesLearner,
+                PPOTorchLearner,
+            ]
+        )
 
     Note:
         - The order of learners matters for method resolution order (MRO)
@@ -89,8 +95,8 @@ def mix_learners(learners: Sequence[type[Learner | Any]]):
 
     See Also:
         :class:`_MixedLearnerMeta`: Metaclass used for mixed learner classes
-        :class:`ray_utilities.learners.leaner_with_debug_connector.LearnerWithDebugConnectors`:
-            Example debugging learner mixin
+        :class:`ray_utilities.learners.leaner_with_debug_connector.LearnerWithDebugConnectors`: Example debugging learner mixin
+
     """
     assert learners, "At least one learner class must be provided."
     if len(learners) == 1:

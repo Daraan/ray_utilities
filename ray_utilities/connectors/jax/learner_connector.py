@@ -2,17 +2,23 @@
 # https://docs.ray.io/en/latest/rllib/rllib-offline.html#connector-level
 
 """
-The default Learner connector pipeline is:
-[
-    [0 or more user defined ConnectorV2 pieces],
-    AddObservationsFromEpisodesToBatch,
-    AddColumnsFromEpisodesToTrainBatch,
-    AddTimeDimToBatchAndZeroPad,
-    AddStatesFromEpisodesToBatch,
-    AgentToModuleMapping,  # only in multi-agent setups!
-    BatchIndividualItems,
-    NumpyToTensor,
-]
+Default Learner connector pipeline for JAX RLlib integration.
+
+This module defines the default connector pipeline for learner processing in Ray RLlib with JAX.
+The pipeline is used to preprocess and batch data for RLlib algorithms.
+
+Default learner connector pipeline::
+
+    [
+        # 0 or more user defined ConnectorV2 pieces
+        AddObservationsFromEpisodesToBatch,
+        AddColumnsFromEpisodesToTrainBatch,
+        AddTimeDimToBatchAndZeroPad,
+        AddStatesFromEpisodesToBatch,
+        AgentToModuleMapping,  # only in multi-agent setups!
+        BatchIndividualItems,
+        NumpyToTensor,
+    ]
 """
 
 from __future__ import annotations

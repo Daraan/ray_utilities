@@ -25,10 +25,10 @@ Note:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Optional, deprecated
+from typing import TYPE_CHECKING, Any, Optional
 
 from ray.rllib.connectors.connector_v2 import ConnectorV2
-from typing_extensions import Self
+from typing_extensions import Self, deprecated
 
 if TYPE_CHECKING:
     from ray.rllib.core.rl_module.multi_rl_module import MultiRLModule

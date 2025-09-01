@@ -94,7 +94,7 @@ def create_algorithm_config(
 
     Args:
         args: Parsed command-line arguments containing experiment configuration.
-            Can be a dictionary or a :class:`~ray_utilities.config.DefaultArgumentParser` instance.
+            Can be a dictionary or a :class:`DefaultArgumentParser` instance.
         env_type: Environment identifier or Gymnasium environment instance.
             If not provided, will be extracted from args.
         env_seed: Environment seed for reproducibility. Deprecated in favor of
@@ -140,7 +140,7 @@ def create_algorithm_config(
         ensure the environment supports the required interface.
 
     See Also:
-        :class:`~ray_utilities.config.DefaultArgumentParser`: Argument parsing
+        :class:`DefaultArgumentParser`: Argument parsing
         :class:`~ray_utilities.callbacks.algorithm.seeded_env_callback.SeedEnvsCallback`: Environment seeding
         :class:`~ray_utilities.callbacks.algorithm.discrete_eval_callback.DiscreteEvalCallback`: Discrete evaluation
     """

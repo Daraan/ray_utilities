@@ -172,6 +172,7 @@ def get_args_and_config(
         setup: An instance of `DefaultExperimentSetup` that contains the configuration and arguments.
         setup_class: A class of `DefaultExperimentSetup` that can be used to create the configuration
             and arguments. Ignored if `setup` is provided.
+        model_config: Optional dictionary of model configuration overrides to apply.
 
     Returns:
         A tuple containing the parsed args (as a dict) and an AlgorithmConfig.
@@ -285,15 +286,19 @@ def setup_trainable(
             and arguments. Ignored if `setup` is provided.
         create_algo: Will build or load from checkpoint when True (default). Pass False to skip this
             step, e.g. when the algorithm is created in a Trainable (and the one here is discarded).
+        config_overrides: Optional dictionary of configuration overrides to apply.
+        model_config: Optional dictionary of model configuration overrides to apply.
 
     Returns:
         A tuple containing the parsed args (as a dict), an AlgorithmConfig, and an Algorithm.
 
-        Note:
-            - The returned config of algorithm.config, to prevent unexpected behavior this config
-              object is frozen.
-            - The type of the Algorithm is determined by the `algo_class` attribute of the config.
-              This is not entirely type-safe.
+    Note:
+        - The returned config of algorithm.config is frozen to prevent unexpected behavior this config.
+        - The type of the Algorithm is determined by the `algo_class` attribute of the config.
+            This is not entirely type-safe.
+
+    See Also:
+        :func:`get_args_and_config`: Helper function build the AlgorithmConfig.
     """
     args, config = get_args_and_config(
         hparams,

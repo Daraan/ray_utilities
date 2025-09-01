@@ -1,27 +1,30 @@
 """
-env_to_module_connector: ((EnvType) -> (ConnectorV2 | List[ConnectorV2])) | None = NotProvided,
+env_to_module_connector: ((:class:`EnvType`) -> (:class:`ConnectorV2` | List[:class:`ConnectorV2`])) | None = NotProvided
 
+The default env-to-module connector pipeline is::
 
-The default env-to-module connector pipeline is:
     [
-        [0 or more user defined ConnectorV2 pieces],
-        AddObservationsFromEpisodesToBatch,
-        AddTimeDimToBatchAndZeroPad,
-        AddStatesFromEpisodesToBatch,
-        AgentToModuleMapping,  # only in multi-agent setups!
-        BatchIndividualItems,
-        NumpyToTensor,
+        [0 or more user defined :class:`ConnectorV2` pieces],
+        :class:`AddObservationsFromEpisodesToBatch`,
+        :class:`AddTimeDimToBatchAndZeroPad`,
+        :class:`AddStatesFromEpisodesToBatch`,
+        :class:`AgentToModuleMapping`,  # only in multi-agent setups!
+        :class:`BatchIndividualItems`,
+        :class:`NumpyToTensor`,
     ]
-    The default Learner connector pipeline is:
+
+
+The default Learner connector pipeline is::
+
     [
-        [0 or more user defined ConnectorV2 pieces],
-        AddObservationsFromEpisodesToBatch,
-        AddColumnsFromEpisodesToTrainBatch,
-        AddTimeDimToBatchAndZeroPad,
-        AddStatesFromEpisodesToBatch,
-        AgentToModuleMapping,  # only in multi-agent setups!
-        BatchIndividualItems,
-        NumpyToTensor,
+        [0 or more user defined :class:`ConnectorV2` pieces],
+        :class:`AddObservationsFromEpisodesToBatch`,
+        :class:`AddColumnsFromEpisodesToTrainBatch`,
+        :class:`AddTimeDimToBatchAndZeroPad`,
+        :class:`AddStatesFromEpisodesToBatch`,
+        :class:`AgentToModuleMapping`,  # only in multi-agent setups!
+        :class:`BatchIndividualItems`,
+        :class:`NumpyToTensor`,
     ]
 
 """
@@ -74,7 +77,6 @@ def _default_env_to_module_without_numpy(
         NumpyToTensor, # XX removed
     ]
     """
-
     pipeline = []
     if debug:
         pipeline.append(DebugConnector(name="EnvToModuleStart"))

@@ -104,7 +104,8 @@ def get_comet_api() -> comet_ml.API:
 
 
 def get_default_workspace() -> str:
-    """Get the default Comet workspace name from environment or API.
+    """
+    Get the default Comet workspace name from environment or API.
 
     This function retrieves the default workspace name by first checking the
     ``COMET_DEFAULT_WORKSPACE`` environment variable, and if not set, using
@@ -118,16 +119,17 @@ def get_default_workspace() -> str:
             are found in the user's Comet ML account.
 
     Example:
+
         >>> workspace = get_default_workspace()
         >>> print(f"Using workspace: {workspace}")
         Using workspace: my-default-workspace
 
         Setting via environment variable::
 
-        >>> import os
-        >>> os.environ["COMET_DEFAULT_WORKSPACE"] = "my-custom-workspace"
-        >>> get_default_workspace()
-        'my-custom-workspace'
+            >>> import os
+            >>> os.environ["COMET_DEFAULT_WORKSPACE"] = "my-custom-workspace"
+            >>> get_default_workspace()
+            'my-custom-workspace'
 
     Note:
         It's recommended to set the ``COMET_DEFAULT_WORKSPACE`` environment variable
