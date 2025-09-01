@@ -219,29 +219,32 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     - Experiment setup management with typed argument parsing
     - Reward tracking and running averages
 
-    Type Parameters:
-        _ParserType: Type of the argument parser (extends Tap)
-        _ConfigType: Type of the algorithm configuration
-        _AlgorithmType: Type of the RL algorithm
+    Type Parameters::
 
-    Class Attributes:
+        ``_ParserType``: Type of the argument parser (extends Tap)
+        ``_ConfigType``: Type of the algorithm configuration
+        ``_AlgorithmType``: Type of the RL algorithm
+
+    Attributes:
         setup_class: The experiment setup class to use for this trainable.
             Must be set via the :meth:`define` class method.
         discrete_eval: Whether to use discrete evaluation episodes.
         use_pbar: Whether to show progress bars during training.
 
-    Checkpoint and Restoration Flow:
+    Checkpoint and Restoration Flow::
+
         1. **Saving**: :meth:`save_to_path` → :meth:`get_state` → :meth:`get_metadata`
         2. **Loading**: :meth:`from_checkpoint` → :meth:`restore_from_path` → :meth:`set_state`
 
-    Key Methods:
-        **Checkpointable Interface:**
+    Key Methods::
+
+        - **Checkpointable Interface:**
             - :meth:`get_state`: Returns complete state dictionary
             - :meth:`set_state`: Restores state from dictionary
             - :meth:`get_metadata`: Returns experiment metadata with git info
             - :meth:`get_ctor_args_and_kwargs`: Returns constructor arguments
 
-        **Trainable Interface:**
+        - **Trainable Interface:**
             - :meth:`setup`: Initialize the algorithm and experiment
             - :meth:`step`: Perform one training step (abstract)
             - :meth:`save_checkpoint`: Save state to checkpoint
@@ -293,6 +296,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             setup_cls: The experiment setup class that defines how to create
                 and configure the RL algorithm. Must be a subclass of the
                 experiment setup base class.
+            model_config: Optional dictionary of model configuration overrides to apply
+                for this trainable class.
             discrete_eval: Whether to use discrete evaluation episodes instead
                 of continuous evaluation. Defaults to False.
             use_pbar: Whether to display progress bars during training.
@@ -301,6 +306,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 When True, the current command-line arguments are saved and used
                 for initialization in remote contexts where the original argv
                 is not available. Defaults to False.
+
 
         Returns:
             A new trainable class with the setup class bound and git metadata
@@ -362,7 +368,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         return DefinedTrainable  # type: ignore[return-value]
 
     # region Trainable setup
-
     @override(tune.Trainable)
     def __init__(
         self,
@@ -374,13 +379,24 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     ):
         """
         Args:
-            config: The configuration dictionary for the trainable.
-                Special Behavior:
-                    - keys that have the same name as the attribute of the Trainable's setup parsed
-                    arguments namespace (default: `DefaultArgumentParser`) override these attributes.
-                    - A special key is `model_config` that "extends" the model_config of the created
-                      Algorithm.
-            kwargs: passed to __init__ of superclasses, e.g. storage for tune.Trainable
+            config: Configuration dictionary for the trainable.
+
+                Special behavior:
+
+                - Keys that match attributes on the setup class' parsed
+                  arguments namespace (e.g., :class:`DefaultArgumentParser`) override those
+                  attributes.
+                - The special key "model_config" extends the model_config of
+                  the created Algorithm.
+
+            algorithm_overrides: Overrides applied to the
+                algorithm configuration before building it.
+
+            model_config: Model
+                configuration to extend the algorithm's model configuration.
+
+            **kwargs: Forwarded to superclass constructors (e.g., storage for
+                tune.Trainable).
         """
         self._algorithm_overrides = algorithm_overrides
         self._model_config = model_config if model_config is not None else self.cls_model_config
@@ -556,6 +572,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     def algorithm_config(self) -> _ConfigType:
         """
         Config of the algorithm used.
+
         Note:
             This is a copy of the setup's config which might has been further modified.
         """
@@ -1101,15 +1118,18 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         `self.save_to_path()` for the user's convenience.
 
         Returns:
-            A JSON-encodable dict of metadata information.
+            dict: JSON-encodable metadata information.
 
-            By default:
+            Default contents::
+
                 {
                     "class_and_ctor_args_file": self.CLASS_AND_CTOR_ARGS_FILE_NAME,
                     "state_file": self.STATE_FILE_NAME,
                     "ray_version": ray.__version__,
                     "ray_commit": ray.__commit__,
+                    "repo_sha": self._git_repo_sha,
                 }
+
         """
         metadata = super().get_metadata()
         metadata["ray_utilities_version"] = importlib.metadata.version("ray_utilities")

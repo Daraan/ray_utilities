@@ -33,10 +33,10 @@ class BudgetMixin(Generic[T]):
             The dictionary contains keys: 'min_dynamic_buffer_size', 'max_dynamic_buffer_size', and 'total_steps'.
 
     Methods:
-        _set_budget_on__init__(learner_config_dict: dict[Any, Any] | None = None, **kwargs: Any) -> None
-        _set_budget_on_algorithm_init(algorithm: Algorithm, **kwargs: Any) -> None
+        ``_set_budget_on__init__(learner_config_dict: dict[Any, Any] | None = None, **kwargs: Any) -> None``
+        ``_set_budget_on_algorithm_init(algorithm: Algorithm, **kwargs: Any) -> None``
             Initializes the budget based on the learner_config_dict from the algorithm's config.
-        _set_budget_on_checkpoint_loaded(algorithm: Algorithm, **kwargs: Any) -> None
+        ``_set_budget_on_checkpoint_loaded(algorithm: Algorithm, **kwargs: Any) -> None``
     """
 
     def _set_budget_on__init__(self, learner_config_dict: dict[Any, Any] | T = None):

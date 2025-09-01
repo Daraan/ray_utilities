@@ -17,7 +17,8 @@ See Also:
         Callback that integrates discrete evaluation into training
     :data:`ray_utilities.constants.DISC_EVAL_METRIC_RETURN_MEAN`:
         Metric key for discrete evaluation results
-    :mod:`ray.rllib.evaluation.metrics`: Ray RLlib evaluation utilities
+    :mod:`ray.rllib.evaluation.metrics`:
+        Ray RLlib evaluation utilities
 """
 
 from __future__ import annotations
@@ -50,10 +51,10 @@ def discrete_evaluate_on_local_env_runner(
 
     Args:
         self: The Ray RLlib :class:`~ray.rllib.algorithms.Algorithm` instance.
-        env_runner: The :class:`~ray.rllib.env.single_agent_env_runner.SingleAgentEnvRunner`
-            to use for evaluation.
-        metrics_logger: The :class:`~ray.rllib.utils.metrics.metrics_logger.MetricsLogger`
-            for recording evaluation metrics.
+        env_runner: The :class:`~ray.rllib.env.single_agent_env_runner.SingleAgentEnvRunner` to use for evaluation.
+        metrics_logger: The
+            :class:`~ray.rllib.utils.metrics.metrics_logger.MetricsLogger` for
+            recording evaluation metrics.
 
     Returns:
         A tuple containing:
@@ -68,17 +69,23 @@ def discrete_evaluate_on_local_env_runner(
             or if parallel evaluation is enabled (not supported for discrete evaluation).
 
     Example:
-        This function is typically used within a callback rather than called directly::
+        This function is typically used within a callback rather than called
+        directly.
 
-        >>> # In a custom callback
-        >>> from ray_utilities.discrete_evaluation import discrete_evaluate_on_local_env_runner
-        >>>
-        >>> class MyCallback(DefaultCallbacks):
-        ...     def on_algorithm_iteration_end(self, *, algorithm, result, **kwargs):
-        ...         if should_run_discrete_eval():
-        ...             env_runner = algorithm.env_runner
-        ...             metrics_logger = algorithm.metrics_logger
-        ...             discrete_evaluate_on_local_env_runner(algorithm, env_runner, metrics_logger)
+        .. code-block:: python
+
+            # In a custom callback
+            from ray_utilities.discrete_evaluation import (
+                discrete_evaluate_on_local_env_runner,
+            )
+
+
+            class MyCallback(DefaultCallbacks):
+                def on_algorithm_iteration_end(self, *, algorithm, result, **kwargs):
+                    if should_run_discrete_eval():
+                        env_runner = algorithm.env_runner
+                        metrics_logger = algorithm.metrics_logger
+                        discrete_evaluate_on_local_env_runner(algorithm, env_runner, metrics_logger)
 
     Note:
         - This function respects the algorithm's evaluation configuration settings

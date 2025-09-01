@@ -111,6 +111,7 @@ class JaxPPOModule(DefaultPPORLModule, JaxModule):
                 that computes an embedding). For example, the caller of thie method
                 should provide `embeddings` - if available - to avoid duplicate passes
                 through a shared encoder.
+            parameters: Parameters of the model.
 
         Returns:
             A tensor of shape (B,) or (B, T) (in case the input `batch` has a

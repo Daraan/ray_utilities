@@ -281,22 +281,22 @@ def filter_metrics(
     Example:
         Basic filtering with defaults only::
 
-        >>> results = algorithm.train()  # Large nested dict
-        >>> clean_metrics = filter_metrics(results)
-        >>> # Contains only essential metrics like episode returns, step counts
+            >>> results = algorithm.train()  # Large nested dict
+            >>> clean_metrics = filter_metrics(results)
+            >>> # Contains only essential metrics like episode returns, step counts
 
         Adding custom metrics::
 
-        >>> extra_keys = [
-        ...     ("custom_metric",),  # Top-level custom metric
-        ...     ("learner_results", "default_policy", "loss"),  # Nested loss metric
-        ... ]
-        >>> filtered = filter_metrics(results, extra_keys_to_keep=extra_keys)
+            >>> extra_keys = [
+            ...     ("custom_metric",),  # Top-level custom metric
+            ...     ("learner_results", "default_policy", "loss"),  # Nested loss metric
+            ... ]
+            >>> filtered = filter_metrics(results, extra_keys_to_keep=extra_keys)
 
         Type-safe filtering::
 
-        >>> from ray_utilities.typing import LogMetricsDict
-        >>> typed_metrics = filter_metrics(results, cast_to=LogMetricsDict)
+            >>> from ray_utilities.typing import LogMetricsDict
+            >>> typed_metrics = filter_metrics(results, cast_to=LogMetricsDict)
 
     Raises:
         ValueError: If a key path already exists in the result structure with
@@ -479,7 +479,7 @@ def create_log_metrics(
         save_video: If True the video will be saved to a temporary directory
             A new key "video_path" will be added to the video dict, or if the video is a numpy array
             the array will be replaced by the path.
-        log_metrics: Define how much the metrics should be reduced.
+        log_stats: Define how much the metrics should be reduced. See :obj:`LogStatsChoices`.
     """
     # NOTE: The csv logger will only log keys that are present in the first result,
     #       i.e. the videos will not be logged if they are added later; but overtwise everytime!

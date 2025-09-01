@@ -152,7 +152,8 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 )
 
     def test_checkpoint_force_by_trial_callback(self):
-        """Test that cloud syncing is forced if one of the trials has made more
+        """
+        Test that cloud syncing is forced if one of the trials has made more
         than num_to_keep checkpoints since last sync.
         Legacy test: test_trial_runner_3.py::TrialRunnerTest::
             testCloudCheckpointForceWithNumToKeep

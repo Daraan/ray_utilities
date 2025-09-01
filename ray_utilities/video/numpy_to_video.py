@@ -163,15 +163,15 @@ def create_temp_video(
     Example:
         Create temporary video for logging::
 
-        >>> import numpy as np
-        >>> frames = np.random.randint(0, 255, (50, 64, 64, 3), dtype=np.uint8)
-        >>> video_path = create_temp_video(frames, frame_rate=30)
-        >>> print(video_path)
-        '/tmp/ray_utilities/a1b2c3d4e5f6.mp4'
+            >>> import numpy as np
+            >>> frames = np.random.randint(0, 255, (50, 64, 64, 3), dtype=np.uint8)
+            >>> video_path = create_temp_video(frames, frame_rate=30)
+            >>> print(video_path)
+            '/tmp/ray_utilities/a1b2c3d4e5f6.mp4'
 
         Custom directory and frame rate::
 
-        >>> video_path = create_temp_video(frames, dir="/my/videos", frame_rate=60)
+            >>> video_path = create_temp_video(frames, dir="/my/videos", frame_rate=60)
 
     Note:
         - The filename is generated using :func:`uuid.uuid4` for uniqueness

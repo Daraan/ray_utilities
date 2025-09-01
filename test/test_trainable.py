@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
 class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints, num_cpus=4):
     def test_1_subclass_check(self):
-        """This test should run first as it has side-effects concerning ABCMeta"""
+        """This test should run first as it has side-effects concerning ABCMeta."""
         TrainableClass = DefaultTrainable.define(PPOSetup.typed())
         TrainableClass2 = DefaultTrainable.define(PPOSetup.typed())
         self.assertTrue(issubclass(TrainableClass, TrainableClass2))
@@ -257,7 +257,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
             trainable_perturbed.stop()
 
             class PerturbedInt(int):
-                """Class to check if the final chosen value is the int from the perturbed subdict"""
+                """Class to check if the final chosen value is the int from the perturbed subdict."""
 
             trainable2 = setup.trainable_class(
                 # NOTE: Normally should be the same but check that perturbed is used after load_checkpoint

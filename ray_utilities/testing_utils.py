@@ -529,6 +529,7 @@ class TestHelpers(unittest.TestCase):
             strict: If True, all keys must match exactly, otherwise only common keys are compared.
                 For restored metrics the min/max/mean keys might be different
             compare_results: If False, some keys are ignored in the comparison.
+            compare_steps_sampled: If num_episodes and steps sampled should be compared.
         """
         key_difference = set(metrics_0.keys()).symmetric_difference(metrics_1.keys())
         # print("Key differences for metrics:", sorted(key_difference))
@@ -587,6 +588,8 @@ class TestHelpers(unittest.TestCase):
             self.assertTrue(
                 seq0 <= seq1 or seq0 >= seq1, f"One seed sequences should be a subset of the other: {seq0} vs {seq1}"
             )
+        if len(all_keys) == 0:
+            logger.warning("No keys to compare.")
 
         self.assertDictEqual(
             {k: v for k in all_keys if not (isinstance(v := metrics_0[k], float) and math.isnan(v))},
@@ -980,6 +983,8 @@ class TestHelpers(unittest.TestCase):
     ):
         """
         Args:
+            state1: First state to compare.
+            state2: Second state to compare.
             ignore_env_runner_state: If True, do not compare the env_runner state.
                 This might need to be chosen when using num_env_runners > 0 as the original
                 local env_runner (that is contained in get_state) is not in sync with the remote
@@ -1098,6 +1103,7 @@ class TestHelpers(unittest.TestCase):
                 set to False to avoid this False positive in that case. For more see compare_trainable_state.
             iteration_after_step: The expected iteration after the step.
             minibatch_size: The expected minibatch size.
+            subtest_kwargs: passed to the subtest context.
 
         Attention:
             Does perform a step on each trainable
@@ -1316,18 +1322,24 @@ def format_result_errors(errors):
 
 def remote_breakpoint(port=5678):
     """
-    A breakpoint implementation that works on remote workers
+    A breakpoint implementation that works on remote workers.
 
-    Use VSCode debug Configuration:
-    {
-        "name": "Remote Debug Port 5678",
-        "type": "debugpy",
-        "request": "attach",
-        "connect": {
-            "host": "localhost",
-            "port": 5678
-        },
-    }
+    Use VSCode debug Configuration::
+
+        .. code-block:: json
+
+            {
+                "name": "Remote Debug Port 5678",
+                "type": "debugpy",
+                "request": "attach",
+                "connect": {
+                    "host": "localhost",
+                    "port": 5678
+                }
+            }
+
+    Note:
+        Make sure to start the debug server before connecting.
     """
     error = None
     if not debugpy.is_client_connected():

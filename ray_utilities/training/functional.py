@@ -194,6 +194,9 @@ def create_default_trainable(
     which is the hyperparameters selected for the trial from the search space from ray tune.
 
     Args:
+        setup: A setup instance for the experiment.
+        setup_class: Alternatively to an instance pass a setup class for the experiment.
+        disable_report: Do not log results.
         verify_return: Whether to verify the return of the trainable function.
     """
     assert setup or setup_class, "Either setup or setup_class must be provided."
