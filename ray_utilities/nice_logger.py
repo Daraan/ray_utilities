@@ -93,18 +93,14 @@ def nice_logger(logger: logging.Logger | str, level: int | str | None = None) ->
     return logger
 
 
-def change_log_level(pkg_logger: logging.Logger | str, level: int | str, pkg_name: str | None = None) -> None:
-    # Ensure a numeric level value
-    level_val = level
-    if isinstance(level, int):
-        level_val = logging.getLevelName(level)
-    level = level_val if isinstance(level_val, int) else logging.INFO
-
+def set_project_log_level(pkg_logger: logging.Logger | str, level: int | str, pkg_name: str | None = None) -> None:
     # Set level on root package logger
     if isinstance(pkg_logger, str):
         pkg_logger = logging.getLogger(pkg_logger)
     pkg_logger.info(
-        "Changing log level of %s logger and all subloggers to %s", pkg_logger.name, logging.getLevelName(level)
+        "Changing log level of %s logger and all subloggers to %s",
+        pkg_logger.name,
+        logging.getLevelName(level) if isinstance(level, int) else level,
     )
     pkg_logger.setLevel(level)
     for h in pkg_logger.handlers:

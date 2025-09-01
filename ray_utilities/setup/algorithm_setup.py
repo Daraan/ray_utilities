@@ -109,7 +109,11 @@ class AlgorithmSetup(
         Returns:
             A callable that returns a dictionary with training data.
         """
-        return DefaultTrainable.define(self)
+        return DefaultTrainable.define(
+            self,
+            model_config=None,  # TODO: allow porting, but check that it works
+            log_level=self.args.log_level,
+        )
 
     @classmethod
     def _model_config_from_args(cls, args: NamespaceType[ParserType_co]) -> dict[str, Any] | None:  # noqa: ARG003

@@ -199,10 +199,12 @@ def patch_args(*args: str | int, extend_argv: bool = False):
         )
         else ()
     )
+    log_args = ("--log_level DEBUG") if "--log_level" not in args else ()
     patched_args = map(str, (*old_args, *args) if extend_argv else args)
     patch = [
         sys.argv[0] if sys.argv else "_imaginary_file_for_patch.py",
         *actor_args,
+        *log_args,
         *patched_args,
     ]
     return mock.patch.object(

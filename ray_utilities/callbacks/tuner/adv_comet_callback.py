@@ -157,6 +157,7 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         ]
         """Contains /video and /reward keys"""
 
+        self._to_exclude.append("log_level")
         self._to_exclude.extend(
             [*exclude_metrics, *self._flat_video_keys] if exclude_metrics else self._flat_video_keys
         )

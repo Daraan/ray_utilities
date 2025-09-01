@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Collection, Generic, Optional, 
 import git
 import pyarrow.fs
 import ray
-from ray import tune
+from ray import get_runtime_context, tune
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core import (
     COMPONENT_ENV_RUNNER,
@@ -45,6 +45,7 @@ from ray_utilities.callbacks.tuner.metric_checkpointer import TUNE_RESULT_IS_A_C
 from ray_utilities.config.typed_argument_parser import LOG_STATS, LogStatsChoices
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, PERTURBED_HPARAMS
 from ray_utilities.misc import is_pbar
+from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.training.functional import training_step
 from ray_utilities.training.helpers import (
     create_running_reward_updater,
@@ -69,6 +70,7 @@ if TYPE_CHECKING:
     from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
     from ray.rllib.env.env_runner import EnvRunner
     from ray.rllib.utils.typing import StateDict
+    from ray.runtime_context import RuntimeContext
     from tqdm import tqdm
     from typing_extensions import NotRequired
 
@@ -274,6 +276,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     _git_repo_sha: str = _UNKNOWN_GIT_SHA
     """SHA hash of the current git commit, set during class definition for reproducibility."""
 
+    _log_level: str | int | None = None
+
     cls_model_config: ClassVar[Optional[dict[str, Any] | DefaultModelConfig]] = None
 
     @classmethod
@@ -285,6 +289,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         use_pbar: bool = True,
         fix_argv: bool = False,
         model_config: Optional[dict[str, Any] | DefaultModelConfig] = None,
+        log_level: Optional[int | str] = None,
     ) -> type[DefaultTrainable[_ParserTypeInner, _ConfigTypeInner, _AlgorithmTypeInner]]:
         """Create a trainable subclass with the specified experiment setup.
 
@@ -359,6 +364,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             discrete_eval = discrete_eval_
             use_pbar = use_pbar_
             cls_model_config = model_config
+            _log_level = log_level
 
         DefinedTrainable.__name__ = "Defined" + cls.__name__
 
@@ -398,6 +404,19 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             **kwargs: Forwarded to superclass constructors (e.g., storage for
                 tune.Trainable).
         """
+        # Change log level:
+        # When remote set log level or project here
+
+        run_context: RuntimeContext = get_runtime_context()
+        if run_context.get_actor_name() is not None:  # we are remote
+            log_level = (
+                config.get("log_level", config.get("cli_args", {}).get("log_level", self._log_level))
+                if config
+                else self._log_level
+            )
+            if log_level is not None:
+                set_project_log_level(logging.getLogger(__name__.split(".")[0]), log_level)
+
         self._algorithm_overrides = algorithm_overrides
         self._model_config = model_config if model_config is not None else self.cls_model_config
         if self._algorithm_overrides and self.setup_class._fixed_argv:

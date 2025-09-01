@@ -21,7 +21,7 @@ from typing_extensions import Annotated, Literal, Sentinel, get_args, get_origin
 
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, split_timestep_budget
 from ray_utilities.misc import AutoInt
-from ray_utilities.nice_logger import change_log_level
+from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.warn import (
     warn_about_larger_minibatch_size,
     warn_if_batch_size_not_divisible,
@@ -649,7 +649,7 @@ class DefaultLoggingArgParser(Tap):
 
     def process_args(self) -> None:
         super().process_args()
-        change_log_level(logging.getLogger("ray_utilities"), self.log_level)
+        set_project_log_level(logging.getLogger("ray_utilities"), self.log_level)
 
 
 class DefaultExtraArgs(Tap):

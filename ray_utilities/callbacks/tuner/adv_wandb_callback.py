@@ -38,6 +38,7 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
         config = trial.config.copy()
 
         config.pop("callbacks", None)  # Remove callbacks
+        config.pop("log_level", None)
 
         exclude_results = self._exclude_results.copy()
 
