@@ -6,7 +6,8 @@ import logging
 import math
 import sys
 import tempfile
-from typing import TYPE_CHECKING, ClassVar, Iterable, List, Optional, cast
+import time
+from typing import TYPE_CHECKING, ClassVar, Iterable, List, Literal, Optional, cast
 
 from ray.air.integrations.comet import CometLoggerCallback
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
@@ -181,6 +182,42 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         self._log_pip_packages = log_pip_packages and not experiment_kwargs.get("log_env_details", False)  # noqa: RUF056
         """If log_env_details is True pip packages are already logged."""
 
+    def _check_workspaces(self, trial: Trial) -> Literal[0, 1, 2]:
+        """
+        Return:
+            0: If workspace is present
+            1: If no workspace were found due to an exception, e.g. no internet connection.
+            2: If workspace is not found in the accound
+        """
+        from comet_ml import API
+        from comet_ml.exceptions import CometRestApiException
+        from comet_ml.experiment import LOGGER as COMET_LOGGER
+
+        try:
+            api = API()
+            workspaces = api.get_workspaces()
+        except CometRestApiException as e:
+            # Maybe offline?
+            _LOGGER.warning(
+                "Failed to retrieve workspaces from Comet API. Cannot check if selected workspace is valid: %s", e
+            )
+            return 1
+        if (workspace := self.experiment_kwargs.get("workspace", None)) is not None and (
+            workspace not in workspaces and workspace.lower() not in workspaces
+        ):
+            COMET_LOGGER.error(
+                "======================================== \n"
+                "Comet Workspace '%s' not found in available workspaces: %s. "
+                "You need to create it first! Waiting 5s for a possible abort then using default workspace\n"
+                "========================================",
+                workspace,
+                workspaces,
+            )
+            time.sleep(5)
+            self.experiment_kwargs["workspace"] = None
+            return 2
+        return 0
+
     def log_trial_start(self, trial: "Trial"):
         """
         Initialize an Experiment (or OfflineExperiment if self.online=False)
@@ -197,6 +234,9 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
 
         if trial not in self._trial_experiments:
             experiment_cls = Experiment if self.online else OfflineExperiment
+            experiment_kwargs = self.experiment_kwargs.copy()
+            experiment_kwargs.setdefault("experiment_key", trial.trial_id)
+            self._check_workspaces(trial)
             experiment = experiment_cls(**self.experiment_kwargs)
             if self._log_pip_packages:
                 try:
