@@ -1,6 +1,11 @@
 Ray Utilities Documentation
 ============================
 
+.. warning::
+
+   **This documentation is a work in progress.** Some sections may be incomplete or subject to change.
+   Due to AI generated content it might be inaccurate. Please report any issues on the `GitHub repository <https://github.com/Daraan/ray_utilities/issues>`.
+
 **Ray Utilities** is a comprehensive Python library providing utilities, setup frameworks, and extensions for Ray RLlib reinforcement learning experiments. It streamlines the process of configuring, running, and managing RL experiments with Ray Tune's hyperparameter optimization capabilities.
 
 Key Features
