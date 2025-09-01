@@ -32,11 +32,12 @@ Quick Start
    from ray_utilities.setup import PPOSetup
    from ray_utilities.runfiles import run_tune
 
-with PPOSetup() as setup:
-   setup.config.env = "CartPole-v1"
-   setup.config.lr = 0.001
-# Now the config is frozen
-   
+   with PPOSetup() as setup:  
+      # Inside the with block modify your configuration
+      setup.config.env = "CartPole-v1"
+      setup.config.lr = 0.001
+   # Now the config is frozen and the setup.trainable is build
+      
    # Run hyperparameter optimization
    results = run_tune(setup)
 
