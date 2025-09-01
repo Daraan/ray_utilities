@@ -11,7 +11,7 @@ from sphinx.ext.autodoc.mock import _MockModule
 from sphinx_autodoc_typehints import mock as autodoc_mock  # pyright: ignore[reportPrivateImportUsage]
 
 # Add the project root to Python path
-sys.path.insert(0, os.path.abspath("../.."))
+sys.path.insert(0, os.path.abspath("../"))
 from docs.source import _ray_metrics
 
 # -- Project information -----------------------------------------------------
