@@ -66,9 +66,6 @@ Contents
    :maxdepth: 1
    :caption: Examples:
    
-   examples/basic_usage
-   examples/hyperparameter_tuning
-   examples/custom_environments
 
 Indices and tables
 ==================

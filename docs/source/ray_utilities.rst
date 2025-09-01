@@ -68,6 +68,7 @@ ray\_utilities.nice\_logger module
 ----------------------------------
 
 .. automodule:: ray_utilities.nice_logger
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -116,6 +117,7 @@ Module contents
 ---------------
 
 .. automodule:: ray_utilities
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:

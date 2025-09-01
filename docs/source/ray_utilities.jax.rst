@@ -18,6 +18,7 @@ ray\_utilities.jax.jax\_learner module
 --------------------------------------
 
 .. automodule:: ray_utilities.jax.jax_learner
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:

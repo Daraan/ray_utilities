@@ -8,6 +8,7 @@ ray\_utilities.setup.algorithm\_setup module
 --------------------------------------------
 
 .. automodule:: ray_utilities.setup.algorithm_setup
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -16,6 +17,7 @@ ray\_utilities.setup.experiment\_base module
 --------------------------------------------
 
 .. automodule:: ray_utilities.setup.experiment_base
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -48,6 +50,7 @@ ray\_utilities.setup.tuner\_setup module
 ----------------------------------------
 
 .. automodule:: ray_utilities.setup.tuner_setup
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -56,6 +59,7 @@ Module contents
 ---------------
 
 .. automodule:: ray_utilities.setup
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:

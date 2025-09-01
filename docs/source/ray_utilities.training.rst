@@ -8,6 +8,7 @@ ray\_utilities.training.default\_class module
 ---------------------------------------------
 
 .. automodule:: ray_utilities.training.default_class
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -16,6 +17,7 @@ ray\_utilities.training.functional module
 -----------------------------------------
 
 .. automodule:: ray_utilities.training.functional
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:

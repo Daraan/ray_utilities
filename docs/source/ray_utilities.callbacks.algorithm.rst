@@ -19,6 +19,7 @@ ray\_utilities.callbacks.algorithm.callback\_mixins module
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
 ray\_utilities.callbacks.algorithm.discrete\_eval\_callback module
 ------------------------------------------------------------------
@@ -83,6 +84,7 @@ ray\_utilities.callbacks.algorithm.seeded\_env\_callback module
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
 Module contents
 ---------------
@@ -91,3 +93,4 @@ Module contents
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:

@@ -5,5 +5,3 @@ ray_utilities
    :maxdepth: 4
 
    ray_utilities
-   setup
-   test

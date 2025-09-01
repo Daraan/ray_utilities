@@ -13,6 +13,7 @@ Core Module
 ~~~~~~~~~~~
 
 .. automodule:: ray_utilities
+   :no-index:
    :members:
    :undoc-members:
 
@@ -20,6 +21,7 @@ Setup Framework
 ~~~~~~~~~~~~~~~
 
 .. automodule:: ray_utilities.setup
+   :no-index:
    :members: 
    :undoc-members:
 
@@ -27,10 +29,12 @@ Connectors
 ~~~~~~~~~~
 
 .. automodule:: ray_utilities.connectors.dummy_connector
+   :no-index:
    :members:
    :undoc-members:
 
 .. automodule:: ray_utilities.connectors.debug_connector
+   :no-index:
    :members:
    :undoc-members:
 
