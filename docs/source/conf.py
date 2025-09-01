@@ -7,7 +7,7 @@ import os
 import sys
 from unittest.mock import MagicMock
 
-from sphinx.ext.autodoc.mock import _MockModule
+from sphinx.ext.autodoc.mock import _MockModule, _MockObject
 from sphinx_autodoc_typehints import mock as autodoc_mock  # pyright: ignore[reportPrivateImportUsage]
 
 # Add the project root to Python path
@@ -55,9 +55,8 @@ MOCK_MODULES = [
     "tree",
     "dotenv",
     "tqdm",
-    # "colorlog",
-    # "typed_argument_parser",
-    # "tap",
+    "colorlog",
+    "typed_argument_parser",
     "ray",
     "torch",
     "tensorflow",
@@ -73,21 +72,18 @@ MOCK_MODULES = [
     "pyarrow.fs",
     "git",
 ]
-if False:
-    # mock it myself
-    for mod_name in MOCK_MODULES[:0]:
-        sys.modules[mod_name] = Mock()
-
-    sys.modules["ray.rllib.utils.annotations"] = Mock()
-    sys.modules["ray.rllib.utils.annotations"].override = lambda _: lambda x: x
 
 
-class Dummy: ...  # fmt: skip
+# Use two dummy classes to not have multiple base classes
+class Dummy:
+    pass
 
 
-class Dummy2: ...  # fmt: skip
+class Dummy2:
+    pass
 
 
+# mock has a bug that one cannot subclass MockObjects together with typing.Generic, add non mock classes for that:
 class TuneMock(_MockModule):
     Trainable = Dummy
 
@@ -114,14 +110,25 @@ sys.modules["ray.tune.trainable"] = _MockModule("ray.tune.trainable")
 
 
 sys.modules["ray.tune"] = tune_mock
-
-sys.modules["ray.tune.trainable"].Trainable = Dummy
-sys.modules["ray.rllib.utils.checkpoints"].Checkpointable = Dummy2
+sys.modules["ray.tune.trainable"].Trainable = Dummy  # pyright: ignore[reportAttributeAccessIssue]
+sys.modules["ray.rllib.utils.checkpoints"].Checkpointable = Dummy2  # pyright: ignore[reportAttributeAccessIssue]
 sys.modules["ray.rllib.core.rl_module"] = _MockModule("ray.rllib.core.rl_module")
-sys.modules["ray.rllib.core.rl_module"].RLModule = Dummy
+sys.modules["ray.rllib.core.rl_module"].RLModule = Dummy  # pyright: ignore[reportAttributeAccessIssue]
 sys.modules["ray.rllib.core.models.catalog"] = _MockModule("ray.rllib.core.models.catalog")
-sys.modules["ray.rllib.core.models.catalog"].Catalog = Dummy
+sys.modules["ray.rllib.core.models.catalog"].Catalog = Dummy  # pyright: ignore[reportAttributeAccessIssue]
 sys.modules["ray.rllib.utils.metrics.stats"] = _MockModule("ray.rllib.utils.metrics.stats")
+
+
+# mock colorlog colorlog.StreamHandler.level
+class ColorlogMockedStreamHandler(_MockObject):
+    level = -9999
+
+
+class ColorlogMocked(_MockModule):
+    StreamHandler = ColorlogMockedStreamHandler
+
+
+sys.modules["colorlog"] = ColorlogMocked("colorlog")
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
@@ -262,7 +269,7 @@ myst_enable_extensions = [
     "colon_fence",  # Colon code fences
 ]
 
-# Todo extension configuration  # noqa: FIX002
+# Todo-extension configuration  # noqa: FIX002
 todo_include_todos = True
 todo_emit_warnings = True
 
