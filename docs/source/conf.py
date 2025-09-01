@@ -56,7 +56,7 @@ MOCK_MODULES = [
     "dotenv",
     "tqdm",
     "colorlog",
-    "typed_argument_parser",
+    "tap",
     "ray",
     "torch",
     "tensorflow",
