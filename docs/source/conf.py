@@ -13,7 +13,9 @@ from sphinx_autodoc_typehints import mock as autodoc_mock  # pyright: ignore[rep
 # Add the project root to Python path
 ROOT = os.path.abspath("../../")
 print("cwd:", os.getcwd())
-print(os.listdir(ROOT))
+print("root path:", ROOT)
+print("ROOT contents:", os.listdir(ROOT))
+print("doc contents:", os.listdir(os.path.join(ROOT, "docs")))
 sys.path.insert(0, ROOT)
 sys.path.insert(1, os.path.abspath("./"))
 import _ray_metrics
