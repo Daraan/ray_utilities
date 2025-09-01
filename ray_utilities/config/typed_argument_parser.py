@@ -21,6 +21,7 @@ from typing_extensions import Annotated, Literal, Sentinel, get_args, get_origin
 
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, split_timestep_budget
 from ray_utilities.misc import AutoInt
+from ray_utilities.nice_logger import change_log_level
 from ray_utilities.warn import (
     warn_about_larger_minibatch_size,
     warn_if_batch_size_not_divisible,
@@ -95,6 +96,15 @@ See Also:
     :data:`LOG_IGNORE_ARGS`: Configuration for logging exclusions.
 """
 
+AcceptsBoolAsString = Annotated[_T, "AcceptsBoolAsString"]
+"""
+Notes that an option can handle: --option True/False as string inputs.
+This suppresses a warning when using :class:`PatchArgsMixin`.
+
+See Also:
+    :class:`PatchArgsMixin`
+"""
+
 
 class SupportsMetaAnnotations(Tap):
     """Mixin class for argument parsers that support meta annotations for checkpoint handling.
@@ -153,6 +163,7 @@ class SupportsMetaAnnotations(Tap):
         self._non_cli_args: set[str] = {
             k for k, v in complete_annotations.items() if get_origin(v) is Annotated and non_a_hp in get_args(v)
         }
+        # Accepts bool as string is not handled by this class (needs class level)
 
     def get_to_restore_values(self) -> set[str]:
         """Get the set of argument names that should always be restored from checkpoints.
@@ -304,6 +315,10 @@ class PatchArgsMixin(Tap):
             action: merged_args[action.dest] for action in patch_parser._actions if action.dest in merged_args
         }
 
+        complete_annotations = cls._get_from_self_and_super(
+            extract_func=lambda super_class: dict(get_type_hints(super_class, include_extras=True))
+        )
+
         new_args = []
         for action, value in used_actions.items():
             option = None
@@ -333,7 +348,26 @@ class PatchArgsMixin(Tap):
                 else:
                     # cannot pass bool as str
                     # possible has some type conversion we cannot guess
-                    logger.warning("Cannot safely convert boolean value to string for option '%s'", option)
+                    ok = (
+                        option.lstrip("-") in complete_annotations
+                        and get_origin(complete_annotations[option.lstrip("-")]) is Annotated
+                        and "AcceptsBoolAsString" in get_args(complete_annotations[option.lstrip("-")])
+                    )
+                    if ok:
+                        logger.debug(
+                            "%s is annotated as AcceptsBoolAsString. '%s %s' will be passed as argument.",
+                            option,
+                            option,
+                            str(value),
+                        )
+                    else:
+                        logger.warning(
+                            "Cannot safely convert boolean value to string for option '%s'. "
+                            "Make sure that the parser can handle '%s %s' and annotate it with AcceptsBoolAsString",
+                            option,
+                            option,
+                            str(value),
+                        )
                     new_args.extend((option, str(value)))
                 continue
 
@@ -551,12 +585,23 @@ LOG_STATS = "log_stats"
 
 class DefaultLoggingArgParser(Tap):
     log_level: NeverRestore[Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]] = "INFO"
-    wandb: NeverRestore[NotAModelParameter[OnlineLoggingOption]] = False
-    comet: NeverRestore[NotAModelParameter[OnlineLoggingOption]] = False
+    wandb: NeverRestore[NotAModelParameter[AcceptsBoolAsString[OnlineLoggingOption]]] = False
+    comet: NeverRestore[NotAModelParameter[AcceptsBoolAsString[OnlineLoggingOption]]] = False
     comment: Optional[str] = None
     tags: NotAModelParameter[list[str]] = []  # noqa: RUF012
     log_stats: LogStatsChoices = "minimal"
     """Log all metrics and do not reduce them to the most important ones"""
+
+    @classmethod
+    def _get_safe_str_patches(cls):
+        try:
+            oks = super()._get_safe_str_patches()  # pyright: ignore[reportAttributeAccessIssue]
+        except AttributeError as e:
+            if "has no attribute '_get_safe_str_patches'" not in str(e):
+                raise
+            oks = {}
+        oks["--wandb"] = ["--wandb False", "--wandb True"]
+        return oks
 
     @property
     def use_comet_offline(self) -> bool:
@@ -604,7 +649,7 @@ class DefaultLoggingArgParser(Tap):
 
     def process_args(self) -> None:
         super().process_args()
-        logging.getLogger("ray_utilities").setLevel(self.log_level)
+        change_log_level(logging.getLogger("ray_utilities"), self.log_level)
 
 
 class DefaultExtraArgs(Tap):

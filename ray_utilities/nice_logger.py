@@ -91,3 +91,40 @@ def nice_logger(logger: logging.Logger | str, level: int | str | None = None) ->
     utilities_handler.setFormatter(formatter)
     logger.addHandler(utilities_handler)
     return logger
+
+
+def change_log_level(pkg_logger: logging.Logger | str, level: int | str, pkg_name: str | None = None) -> None:
+    # Ensure a numeric level value
+    level_val = level
+    if isinstance(level, int):
+        level_val = logging.getLevelName(level)
+    level = level_val if isinstance(level_val, int) else logging.INFO
+
+    # Set level on root package logger
+    if isinstance(pkg_logger, str):
+        pkg_logger = logging.getLogger(pkg_logger)
+    pkg_logger.info(
+        "Changing log level of %s logger and all subloggers to %s", pkg_logger.name, logging.getLevelName(level)
+    )
+    pkg_logger.setLevel(level)
+    for h in pkg_logger.handlers:
+        h.setLevel(level)
+
+    if pkg_name is None:
+        pkg_name = pkg_logger.name.split(".")[0]
+
+    # Also set level for any already-configured child loggers (skip placeholders)
+    for name, lg in logging.Logger.manager.loggerDict.items():
+        if not isinstance(lg, logging.Logger):
+            continue
+        if lg is pkg_logger:
+            continue
+        if name == pkg_name or name.startswith(pkg_name + "."):
+            try:
+                lg.setLevel(level)
+                for h in lg.handlers:
+                    h.setLevel(level)
+            except Exception:  # noqa: BLE001
+                lg.exception("Failed to set level with this logger")
+                # be conservative: ignore any logger that can't be adjusted
+                continue
