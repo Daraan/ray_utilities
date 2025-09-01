@@ -5,6 +5,7 @@
 
 import os
 import sys
+from dataclasses import dataclass
 from unittest.mock import MagicMock
 
 from sphinx.ext.autodoc.mock import _MockModule, _MockObject
@@ -18,7 +19,9 @@ print("ROOT contents:", os.listdir(ROOT))
 print("doc contents:", os.listdir(os.path.join(ROOT, "docs")))
 sys.path.insert(0, ROOT)
 sys.path.insert(1, os.path.abspath("./"))
-import _ray_metrics
+import _ray_metrics  # noqa: E402
+
+os.environ["SPHINX_BUILD"] = "1"
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
@@ -57,6 +60,7 @@ MOCK_MODULES = [
     "gymnasium",
     "interpretable_ddts",
     "jax",
+    "jaxlib",
     "numpy",
     "optax",
     "optuna",
@@ -64,7 +68,6 @@ MOCK_MODULES = [
     "pyarrow",
     "pyarrow.fs",
     "ray",
-    "ray_utilities.connectors.exact_samples_to_learner",
     "scipy",
     "tap",
     "tensorflow",
@@ -78,11 +81,13 @@ MOCK_MODULES = [
 
 # Use two dummy classes to not have multiple base classes
 class Dummy:
-    pass
+    def __init__(self, *args, **kwargs):
+        pass
 
 
 class Dummy2:
-    pass
+    def __init__(self, *args, **kwargs):
+        pass
 
 
 # mock has a bug that one cannot subclass MockObjects together with typing.Generic, add non mock classes for that:
@@ -104,22 +109,30 @@ sys.modules["gymnasium"] = _MockModule("gymnasium")
 
 sys.modules["ray.rllib.utils.metrics"] = _ray_metrics
 sys.modules["ray.rllib.utils.metrics.metrics_logger"] = _MockModule("ray.rllib.utils.metrics.metrics_logger")
-sys.modules["ray"].__version__ = "2.48.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
-sys.modules["gym"].__version__ = "0.26.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
-sys.modules["gymnasium"].__version__ = "1.0.0+mocked"  # pyright: ignore[reportAttributeAccessIssue]
+sys.modules["ray"].__version__ = "2.48.0+mocked"  # type: ignore[attr-defined]
+sys.modules["gym"].__version__ = "0.26.0+mocked"  # type: ignore[attr-defined]
+sys.modules["gymnasium"].__version__ = "1.0.0+mocked"  # type: ignore[attr-defined]
 sys.modules["ray.rllib.utils.checkpoints"] = _MockModule("ray.rllib.utils.checkpoints")
 sys.modules["ray.tune"] = _MockModule("ray.tune")
 sys.modules["ray.tune.trainable"] = _MockModule("ray.tune.trainable")
 
 
 sys.modules["ray.tune"] = tune_mock
-sys.modules["ray.tune.trainable"].Trainable = Dummy  # pyright: ignore[reportAttributeAccessIssue]
-sys.modules["ray.rllib.utils.checkpoints"].Checkpointable = Dummy2  # pyright: ignore[reportAttributeAccessIssue]
+sys.modules["ray.tune.trainable"].Trainable = Dummy  # type: ignore[attr-defined]
+sys.modules["ray.rllib.utils.checkpoints"].Checkpointable = Dummy2  # type: ignore[attr-defined]
 sys.modules["ray.rllib.core.rl_module"] = _MockModule("ray.rllib.core.rl_module")
-sys.modules["ray.rllib.core.rl_module"].RLModule = Dummy  # pyright: ignore[reportAttributeAccessIssue]
+sys.modules["ray.rllib.core.rl_module"].RLModule = Dummy  # type: ignore[attr-defined]
 sys.modules["ray.rllib.core.models.catalog"] = _MockModule("ray.rllib.core.models.catalog")
-sys.modules["ray.rllib.core.models.catalog"].Catalog = Dummy  # pyright: ignore[reportAttributeAccessIssue]
+sys.modules["ray.rllib.core.models.catalog"].Catalog = Dummy  # type: ignore[attr-defined]
 sys.modules["ray.rllib.utils.metrics.stats"] = _MockModule("ray.rllib.utils.metrics.stats")
+sys.modules["ray.rllib.utils.annotations"] = _MockModule("ray.rllib.utils.annotations")
+sys.modules["ray.rllib.utils.annotations"].override = lambda _: lambda x: x  # type: ignore[attr-defined]
+sys.modules["chex"] = _MockModule("chex")
+sys.modules["chex"].dataclass = dataclass  # type: ignore[attr-defined]
+
+import _ray_default_model_config  # noqa: E402 # import after mocked
+
+sys.modules["ray.rllib.core.rl_module.default_model_config"] = _ray_default_model_config
 
 
 # mock colorlog colorlog.StreamHandler.level
@@ -151,7 +164,7 @@ extensions = [
     "sphinx.ext.viewcode",  # Add source code links
     "sphinx.ext.napoleon",  # Google/NumPy style docstrings
     "sphinx.ext.intersphinx",  # Cross-reference other projects
-    "sphinx.ext.todo",  # TODO directives
+    "sphinx.ext.todo",  # todo-directives  # noqa: FIX002
     "sphinx.ext.coverage",  # Documentation coverage reports
     "sphinx.ext.imgmath",  # Math equations as images
     "sphinx.ext.githubpages",  # GitHub Pages deployment support
@@ -184,9 +197,9 @@ html_static_path = ["_static"]
 # Theme customization
 html_theme_options = {
     "analytics_id": "",  # Add Google Analytics tracking ID if needed
-    "analytics_anonymize_ip": False,
+    "analytics_anonymize_ip": True,
     "logo_only": False,
-    "display_version": True,
+    # "display_version": True,
     "prev_next_buttons_location": "bottom",
     "style_external_links": False,
     "vcs_pageview_mode": "",

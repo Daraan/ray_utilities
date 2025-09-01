@@ -39,9 +39,9 @@ if TYPE_CHECKING:
     from flax.typing import FrozenVariableDict, PRNGKey, RNGSequences, VariableDict
     from ray.rllib.utils.typing import TensorType
 
-    from config_types.params_types import GeneralParams
+    from ray_utilities.jax.utils import Indices
+    from ray_utilities.typing.jax import GeneralParams
     from ray_utilities.typing.model_return import Batch
-    from sympol import Indices
 
 logger = logging.getLogger(__name__)
 

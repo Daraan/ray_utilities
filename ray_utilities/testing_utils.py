@@ -45,7 +45,6 @@ from typing import (
     Iterable,
     Optional,
     Protocol,
-    TypeAlias,
     TypeVar,
     final,
 )
@@ -87,7 +86,7 @@ from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateI
 from ray.tune.schedulers import TrialScheduler
 from ray.tune.search.sample import Categorical, Domain, Float, Integer
 from ray.tune.trainable.metadata import _TrainingRunMetadata
-from typing_extensions import Final, NotRequired, Required, Sentinel, get_origin, get_type_hints
+from typing_extensions import Final, NotRequired, Required, Sentinel, TypeAliasType, get_origin, get_type_hints
 
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import logger as dynamic_buffer_logger
@@ -117,7 +116,7 @@ if TYPE_CHECKING:
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
     from ray_utilities.typing.metrics import LogMetricsDict
 
-    LeafType: TypeAlias = pytree.SequenceKey | pytree.DictKey | pytree.GetAttrKey
+    LeafType = TypeAliasType("LeafType", "pytree.SequenceKey | pytree.DictKey | pytree.GetAttrKey")
 
 if "--fast" in sys.argv:
     TWO_ENV_RUNNER_CASES: list[tuple[int, int]] = [(0, 1)]
@@ -232,7 +231,7 @@ def get_optional_keys(cls):
 _NOT_FOUND = object()
 
 
-def get_leafpath_value(leaf: LeafType):
+def get_leafpath_value(leaf: "LeafType"):
     """Returns the path value of a leaf, could be index (list), key (dict), or name (attribute)."""
     return getattr(leaf, "name", getattr(leaf, "key", getattr(leaf, "idx", _NOT_FOUND)))
 
