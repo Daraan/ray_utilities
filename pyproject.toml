@@ -56,6 +56,8 @@ optuna = [
 jax = [
   "jax",
   "flax",
+  "optax",
+  "chex",
 ]
 
 [tool.black]

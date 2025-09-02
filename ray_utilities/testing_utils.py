@@ -353,17 +353,20 @@ def patch_args(
     if log_level and "--log_level" not in args:
         log_args = ("--log_level", "DEBUG")
     patched_args = map(str, (*old_args, *args) if extend_argv else args)
+    patched_args = [
+        sys.argv[0] if sys.argv else "_imaginary_file_for_patch.py",
+        *actor_args,
+        *log_args,
+        *patched_args,
+    ]
+    if "--test" in patched_args and "COMET_API_KEY" not in os.environ:
+        logger.warning("Using --test in tests will enable Comet/Wandb on GitHub Actions but API might be missing.")
     patch_obj = mock.patch.object(
         sys,
         "argv",
-        [
-            sys.argv[0] if sys.argv else "_imaginary_file_for_patch.py",
-            *actor_args,
-            *log_args,
-            *patched_args,
-        ],
+        patched_args,
     )
-    if True or not check_for_errors:
+    if not check_for_errors:
         return patch_obj
 
     # Otherwise return a decorator/contextmanager that applies check_args then the patch.
