@@ -126,7 +126,7 @@ class DefaultModelConfig:
     #: List containing the sizes (number of nodes) of a fully connected (MLP) head (ex.
     #: policy-, value-, or Q-head). Note that in order to configure the encoder
     #: architecture, use `fcnet_hiddens`, instead.
-    head_fcnet_hiddens: List[int] = field(default_factory=lambda: [])
+    head_fcnet_hiddens: List[int] = field(default_factory=list)
     #: Activation function descriptor for the stack configured by `head_fcnet_hiddens`.
     #: Supported values are: 'tanh', 'relu', 'swish' (or 'silu', which is the same),
     #: and 'linear' (or None).

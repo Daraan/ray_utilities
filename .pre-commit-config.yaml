@@ -8,7 +8,7 @@ repos:
       name: ruff clean whitespace
       args: [
               "--fix",
-              "--select", "W,F821,TC004"
+              "--select", "C4,FA102,F821,ISC,PIE794,PIE796,PIE8,TC004,W,YTT"
             ]
     - id: ruff-check
       args: [

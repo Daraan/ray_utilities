@@ -82,53 +82,44 @@ line-length = 120
 #preview=true
 select = [
   "ARG",
-  "RUF",
-  "E",
-  "F",
-  "W",
-  "N",
-  "PIE",
-  "D20",
-  "BLE",
-  "FBT",
   "B",
-  "COM818",
+  "BLE",
   "C4",
-  "T100",
+  "COM818",
+  "D20",
+  "E",
   "FA102",
-  "ISC",  # Implicit String Concat
-  "ICN",  # Import Conventions
-  "LOG",  # logging
-  "G",    # Log formatting
-  "Q003", "Q004",
-  "RET",
-  # SLF   # Private member access
-  "SLOT", # Reduce memory when using __slots__
-  "TID",  # relative | slow imports
-  "TC",
-
-  "PERF",
-  "FURB",
-
-  "PYI",
-  #"PTH",  # Pathlib
+  "FBT",
+  "F",
   "FIX",  # todo, xxx, fixme
-
-  #"ERA",  # commented out code
-
-  "PD",  # Pandas
+  "FURB",
+  "G",    # Log formatting
+  "ICN",  # Import Conventions
+  "ISC",  # Implicit String Concat
+  "LOG",  # logging
+  "N",
   "NPY",  # numpy
-  # -- Pylint --
-  "PLW", 
-  "PLE",
+  "PD",  # Pandas
+  "PERF",
+  "PIE",
   "PLC",
+  "PLE",
   "PLR",
   "PLR0402", # import A.B as B; from A import B
-  "PLR2044",  # empty comment
-
-  "TRY",
-
+  "PLR2044", # empty comment
+  "PLW", 
+  "PYI",
+  "Q003", "Q004",
+  "RET",
+  "RUF",
+  "SLOT", # Reduce memory when using __slots__
+  "TC",
+  "T100",
+  "TID",  # relative | slow imports
   "TID251", # banned API, options see below, avoid import from downstream packages
+  "TRY",
+  "W",
+  "YTT",  # sys.version_info comparison
 ]
 ignore = [
   "D203", "D205",
@@ -181,9 +172,13 @@ extend-generics = [
 "test/**/*.py" = ["ARG", "D"]
 "ray_utilities/testing_utils.py" = ["D"]
 "ray_utilities/callbacks/**/*.py" = ["ARG"]
+"ray_utilities/jax/ppo/jax_ppo_learner.py" = ["B018"]  # blank expression for IDE references for now
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.ruff.lint.flake8-builtins]
+ignorelist = ["copyright"]
 
 [tool.isort]
 split_on_trailing_comma = true
