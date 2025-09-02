@@ -73,7 +73,7 @@ def _remove_or_trim_samples(samples: list[EpisodeType], total_samples: int, exac
             assert max_trim > 0
             # if it has length < 2; and diff >=2 could also remove episode.
             samples[-i] = sample[:-max_trim]
-            logger.debug("Trimmed a not done episode: %s by %d", sample, max_trim)
+            logger.debug("Trimmed a not done episode: %s by %d. Need to trim %d/%d", sample, max_trim, trimmed, diff)
             trimmed += max_trim
             if trimmed >= diff:
                 return

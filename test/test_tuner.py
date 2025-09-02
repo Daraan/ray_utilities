@@ -71,7 +71,7 @@ MINIBATCH_SIZE = 32
 
 @pytest.mark.tuner
 class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
-    def test_tuner_setup(self):
+    def test_optuna_search_added(self):
         with patch_args("--optimize_config", "--num_samples", "1"):
             optuna_setup = AlgorithmSetup()
             self.assertTrue(optuna_setup.args.optimize_config)
@@ -87,6 +87,21 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             tuner2 = setup2.create_tuner()
             assert tuner2._local_tuner and tuner2._local_tuner._tune_config
             self.assertNotIsInstance(tuner2._local_tuner._tune_config.search_alg, OptunaSearch)
+
+    @pytest.mark.basic
+    def test_max_iteration_stopper_added(self):
+        # Check max iteration stopper added
+        with patch_args("-it", "10"):
+            setup = AlgorithmSetup()
+            self.assertFalse(setup.args.optimize_config)
+            tuner = setup.create_tuner()
+            assert tuner._local_tuner and tuner._local_tuner._tune_config
+
+            def check_stopper(stopper: MaximumIterationStopper | Any, _):
+                self.assertEqual(stopper._max_iter, 10)
+                return True
+
+            self.check_stopper_added(tuner, MaximumIterationStopper, check=check_stopper)
 
     def test_run_tune_function(self):
         batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
@@ -432,28 +447,13 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     checkpoint_frequency=1,
                 )
                 assert tuner2._local_tuner
+
                 # assert that the stopper stops not too early, e.g. because parser.args.iterations was not updated.
-                stoppers = tuner2._local_tuner.get_run_config().stop
-                if isinstance(stoppers, (dict, Mapping)):
-                    self.assertEqual(stoppers.get("training_iteration"), NUM_ITERS_2 + 1)
-                elif stoppers is None:
-                    pass
-                else:  # find MaximumIterationStopper
-                    if not isinstance(stoppers, list):
-                        if isinstance(stoppers, Iterable):
-                            stoppers = list(stoppers)
-                        else:
-                            stoppers = [stoppers]
-                    while stoppers:
-                        stopper = stoppers.pop()
-                        if isinstance(stopper, MaximumIterationStopper):
-                            self.assertEqual(stopper._max_iter, NUM_ITERS_2 + 1)
-                            break
-                        if isinstance(stopper, CombinedStopper):
-                            for s in stopper._stoppers:
-                                if isinstance(s, MaximumIterationStopper):
-                                    self.assertEqual(s._max_iter, NUM_ITERS_2 + 1)
-                                    break
+                def check_stopper(stopper: MaximumIterationStopper | Any, _):
+                    self.assertEqual(stopper._max_iter, NUM_ITERS_2 + 1)
+                    return True
+
+                self.check_stopper_added(tuner2, MaximumIterationStopper, check=check_stopper)
                 results2 = tuner2.fit()
 
                 self.assertEqual(results2.num_errors, 0, "Encountered errors: " + format_result_errors(results2.errors))  # pyright: ignore[reportAttributeAccessIssue,reportOptionalSubscript]

@@ -23,7 +23,7 @@ See Also:
 
 import importlib.metadata
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Iterable, Literal
+from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping
 
 import typing_extensions
 from packaging.version import Version
@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from gymnasium.envs.registration import EnvSpec as _EnvSpec
     from gymnax.environments import environment as environment_gymnax
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
+    import ray.tune
 
 _PEP_728_AVAILABLE = getattr(typing_extensions, "_PEP_728_IMPLEMENTED", False) or Version(
     importlib.metadata.version("typing-extensions")
@@ -100,3 +101,5 @@ ParameterSpace = TypeAliasType(
     type_params=(_AnyT, _Domain),
 )
 """Describes a tune.Domain or grid_search for a parameter sampling by tune"""
+
+StopperType = TypeAliasType("StopperType", "Mapping | ray.tune.Stopper | Callable[[str, Mapping], bool] | None")

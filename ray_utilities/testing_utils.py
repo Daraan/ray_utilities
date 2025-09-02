@@ -31,7 +31,7 @@ import sys
 import unittest
 import unittest.util
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from functools import partial
@@ -85,6 +85,7 @@ from ray.tune.experiment.trial import Trial, _TemporaryTrialState
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.schedulers import TrialScheduler
 from ray.tune.search.sample import Categorical, Domain, Float, Integer
+from ray.tune.stopper import CombinedStopper
 from ray.tune.trainable.metadata import _TrainingRunMetadata
 from typing_extensions import Final, NotRequired, Required, Sentinel, TypeAliasType, get_origin, get_type_hints
 
@@ -101,7 +102,7 @@ from ray_utilities.training.functional import training_step
 from ray_utilities.training.helpers import make_divisible, nan_to_zero_hist_leaves
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable
 
     import chex
     from flax.training.train_state import TrainState
@@ -113,6 +114,7 @@ if TYPE_CHECKING:
     from ray.tune import Result
 
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co
+    from ray_utilities.typing import StopperType
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
     from ray_utilities.typing.metrics import LogMetricsDict
 
@@ -1151,7 +1153,7 @@ class TestHelpers(unittest.TestCase):
             param_space2 = setup_data2["param_space"]
             keys.remove("param_space")
             self.assertEqual(len(keys), 0, f"Unchecked keys: {keys}")  # checked all params
-            self.compare_param_space(param_space1, param_space2)
+            self.compare_param_space(param_space1, param_space2)  # pyright: ignore[reportArgumentType]
 
             # Compare attrs
             self.assertIsNot(trainable2._reward_updaters, trainable._reward_updaters)
@@ -1249,6 +1251,55 @@ class TestHelpers(unittest.TestCase):
             or (isinstance(config.callbacks_class, type) and issubclass(config.callbacks_class, callback_class))
             or (isinstance(config.callbacks_class, (list, tuple)) and callback_class in config.callbacks_class)
         )
+
+    def check_stopper_added(
+        self,
+        tuner: tune.Tuner,
+        stopper_type: Mapping | type[tune.Stopper] | None,
+        *,
+        check: Callable[[StopperType, Mapping | type[tune.Stopper] | Any | None], bool] = lambda a, b: False,  # noqa: ARG005
+        need_match: bool = True,
+    ) -> StopperType:
+        stoppers: StopperType = tuner._local_tuner.get_run_config().stop
+        if stopper_type is None:
+            self.assertIsNone(stoppers)
+            return None
+        if isinstance(stoppers, (dict, Mapping)) or isinstance(stopper_type, (dict, Mapping)):
+            self.assertTrue(
+                isinstance(stoppers, Mapping) and isinstance(stopper_type, Mapping),
+                f"Both types should be a Mapping: {type(stoppers)} !~= {type(stopper_type)}",
+            )
+            # Fails with TypeError if wrong.
+            self.assertEqual(
+                stopper_type,
+                stopper_type | stoppers,  # pyright: ignore[reportOperatorIssue]
+            )
+            check(stoppers, stopper_type)
+            return stoppers
+        if stoppers is None:
+            self.assertEqual(stoppers, stopper_type)  # likely fails
+            return None
+        if not isinstance(stoppers, list):  # here Callable | Stopper
+            if isinstance(stoppers, Iterable):
+                stopper_list = list(stoppers)
+            else:
+                stopper_list = [stoppers]
+        else:
+            stopper_list = stoppers
+        while stopper_list:
+            stopper = stopper_list.pop()
+            if isinstance(stopper, stopper_type):
+                check(stopper, stopper_type)
+                return stopper
+            if isinstance(stopper, CombinedStopper):
+                for s in stopper._stoppers:
+                    if isinstance(s, stopper_type):
+                        check(s, stopper_type)
+                        return s
+        assert not TYPE_CHECKING or not isinstance(stoppers, Iterable)
+        if need_match and check(stoppers, stopper_type) is not True:
+            self.fail(f"Did not find stopper of type {stopper_type} in {stoppers}. Check failed")
+        return stoppers
 
     # endregion
 

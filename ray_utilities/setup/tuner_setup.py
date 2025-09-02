@@ -236,9 +236,10 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
                 pass  # a string
             else:
                 tune_keys = set(self._setup.args.tune or [])
-                if self.add_iteration_stopper or (
-                    self._setup.args.tune
-                    and not {"iterations", "train_batch_size_per_learner", "batch_size"} & tune_keys
+                if (
+                    self.add_iteration_stopper
+                    or not self._setup.args.tune
+                    or not {"iterations", "train_batch_size_per_learner", "batch_size"} & tune_keys
                 ):
                     logger.info("Adding MaximumResultIterationStopper with %s iterations", iterations)
                     # Do NOT add this stopper if iterations is adjusted, e.g. by scheduler or the trainable itself
