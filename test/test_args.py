@@ -278,10 +278,8 @@ class TestProcessing(unittest.TestCase):
         with patch_args(
             "--total_steps", "2048",
             "--batch_size", 2048,
-            "--min_step_size",
-            min_step_size,
-            "--max_step_size",
-            max_step_size,
+            "--min_step_size", min_step_size,
+            "--max_step_size", max_step_size,
         ):  # fmt: skip
             args = DefaultArgumentParser().parse_args()
             self.assertEqual(args.total_steps, 4096)  # 4096

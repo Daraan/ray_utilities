@@ -1,4 +1,6 @@
 import random
+import re
+import sys
 from unittest import TestCase
 
 import pytest
@@ -7,8 +9,11 @@ from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
 from ray_utilities.misc import RE_GET_TRIAL_ID
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
-from ray_utilities.testing_utils import Cases, DisableLoggers, iter_cases
+from ray_utilities.testing_utils import Cases, DisableLoggers, check_args, iter_cases, patch_args
 from ray_utilities.training.helpers import make_divisible
+
+if sys.version_info < (3, 11):
+    from exceptiongroup import ExceptionGroup
 
 
 @pytest.mark.basic
@@ -75,3 +80,104 @@ class TestMisc(TestCase):
         a_div = make_divisible(a, b)
         self.assertEqual(a_div % b, 0)
         self.assertGreaterEqual(a_div, a)
+
+    def test_check_valid_args_decorator(self):
+        with self.assertRaisesRegex(ValueError, re.escape("Unexpected unrecognized args: ['--it', '10']")):
+
+            @check_args
+            @patch_args("--it", 10, check_for_errors=False)
+            def f():
+                AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
+
+            f()
+
+        with self.assertRaisesRegex(ExceptionGroup, "Unexpected unrecognized args"):
+
+            @check_args
+            @patch_args("--it", 10, check_for_errors=False)
+            def f2():
+                AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
+                raise ValueError("Some other error")
+
+            f2()
+
+        # Test exception
+
+        @check_args(exceptions=["--it", "10"])
+        @patch_args("--it", 10, check_for_errors=False)
+        def h():
+            AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
+
+        h()
+
+        # Exception order matters
+        with self.assertRaisesRegex(ValueError, re.escape("Unexpected unrecognized args: ['--it', '10']")):
+
+            @check_args(exceptions=["10", "--it"])
+            @patch_args("--it", 10, check_for_errors=False)
+            def g():
+                AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
+
+            g()
+
+        # Exception order matters
+        with self.assertRaisesRegex(
+            ValueError, re.escape("Unexpected unrecognized args: ['--foo', '10', '--it', '10', '--bar', '10']")
+        ):
+
+            @check_args(exceptions=["--it", "10"])
+            @patch_args("--foo", "10", "--it", "10", "--bar", "10", check_for_errors=False)
+            def g():
+                AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
+
+            g()
+
+    def test_parse_args_with_check(self):
+        with self.assertRaisesRegex(ValueError, re.escape("Unexpected unrecognized args: ['--it', '10']")):
+
+            @patch_args("--it", 10)
+            def f():
+                AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
+
+            f()
+
+        with self.assertRaisesRegex(ExceptionGroup, "Unexpected unrecognized args"):
+
+            @patch_args("--it", 10)
+            def f2():
+                AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
+                raise ValueError("Some other error")
+
+            f2()
+
+        # Test exception
+        @patch_args("--it", 10, except_parser_errors=["--it", "10"])
+        def h():
+            AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
+
+        h()
+
+        # Exception order matters
+        with self.assertRaisesRegex(ValueError, re.escape("Unexpected unrecognized args: ['--it', '10']")):
+
+            @patch_args("--it", 10, except_parser_errors=["10", "--it"])
+            def g():
+                AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
+
+            g()
+
+        # Exception order matters
+        with self.assertRaisesRegex(
+            ValueError, re.escape("Unexpected unrecognized args: ['--foo', '10', '--it', '10', '--bar', '10']")
+        ):
+
+            @patch_args("--foo", "10", "--it", "10", "--bar", "10", except_parser_errors=["10", "--it"])
+            def g():
+                AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
+
+            g()
+
+        with patch_args("--it", 10):
+
+            def g():
+                AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)

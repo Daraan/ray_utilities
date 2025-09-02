@@ -42,6 +42,7 @@ test = [
   "pytest-timeout",
   "pytest-subtests",
   "debugpy",
+  "testfixtures",
 ]
 wandb = [
   "wandb",

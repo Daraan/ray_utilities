@@ -32,9 +32,9 @@ import unittest
 import unittest.util
 from collections import deque
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager, nullcontext
+from contextlib import ContextDecorator, contextmanager, nullcontext
 from copy import deepcopy
-from functools import partial
+from functools import partial, wraps
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -43,10 +43,12 @@ from typing import (
     ClassVar,
     Collection,
     Iterable,
+    Literal,
     Optional,
     Protocol,
     TypeVar,
     final,
+    overload,
 )
 from unittest import mock
 
@@ -87,6 +89,7 @@ from ray.tune.schedulers import TrialScheduler
 from ray.tune.search.sample import Categorical, Domain, Float, Integer
 from ray.tune.stopper import CombinedStopper
 from ray.tune.trainable.metadata import _TrainingRunMetadata
+from testfixtures import LogCapture
 from typing_extensions import Final, NotRequired, Required, Sentinel, TypeAliasType, get_origin, get_type_hints
 
 from ray_utilities.config import DefaultArgumentParser
@@ -100,6 +103,10 @@ from ray_utilities.setup.tuner_setup import logger as tuner_setup_logger
 from ray_utilities.training.default_class import DefaultTrainable, TrainableBase, TrainableStateDict
 from ray_utilities.training.functional import training_step
 from ray_utilities.training.helpers import make_divisible, nan_to_zero_hist_leaves
+
+if sys.version_info < (3, 11):
+    from exceptiongroup import ExceptionGroup
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -141,7 +148,8 @@ args_train_no_tuner = mock.patch.object(
 clean_args = mock.patch.object(sys, "argv", ["file.py", "-a", "NA"])
 """Use when comparing to CLIArgs"""
 
-_C = TypeVar("_C", bound="Callable[[Any, mock.MagicMock], Any]")
+_CMock = TypeVar("_CMock", bound="Callable[[Any, mock.MagicMock], Any]")
+_C = TypeVar("_C", bound="Callable[..., Any]")
 
 _NOT_PROVIDED = Sentinel(
     "_NOT_PROVIDED",
@@ -157,7 +165,7 @@ class Cases:
         self._args = args
         self._kwargs = kwargs
 
-    def __call__(self, func: _C) -> _C:
+    def __call__(self, func: _CMock) -> _CMock:
         """Allows to use TestCases as a decorator."""
         return self.cases(self._cases, *self._args, **self._kwargs)(func)  # pyright: ignore[reportReturnType]
 
@@ -190,7 +198,147 @@ def iter_cases(cases: type[Cases] | mock.MagicMock | Iterator[Any] | Iterable[An
         raise
 
 
-def patch_args(*args: str | int, extend_argv: bool = False, log_level: str | None = "DEBUG"):
+@overload
+def check_args(func: None = None, *, exceptions: Optional[list[str]] = None, expected=None) -> Callable[[_C], _C]: ...
+
+
+@overload
+def check_args(func: _C, *, exceptions: Optional[list[str]] = None, expected=None) -> _C: ...
+
+
+def check_args(
+    func: _C | None = None, *, exceptions: Optional[list[str]] = None, expected=None
+) -> _C | Callable[[_C], _C]:
+    """
+    Attention:
+        This function must be wrapped by patch_args
+    """
+    if func is None:
+        if exceptions is None and expected is None:
+            raise ValueError("Either exceptions or expected must be provided")
+        return partial(check_args, exceptions=exceptions, expected=expected)
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        error = None
+        with LogCapture(
+            "ray_utilities.setup.experiment_base",
+            level=logging.WARNING,
+            attributes=["getMessage", "args", "levelname", "name"],
+        ) as capture:
+            try:
+                result = func(*args, **kwargs)
+            except Exception as e:  # noqa: BLE001
+                error = e
+        record_errors = []
+        for record in capture.records:
+            if "The following arguments were not recognized by the parser" in record.message:
+                assert record.args
+                if isinstance(record.args, (list, tuple)):
+                    if not isinstance(record.args[0], list):
+                        logger.error("Expected a list as the first element of args but got: %s", record.args[0])
+                        continue
+                    unknown_args: list[str] = record.args[0].copy()  # expect a list here
+                else:
+                    logger.error("Expected a list or tuple as args passed to the logger but got: %s", record.args)
+                    continue
+                assert isinstance(unknown_args, list), (
+                    f"Expected a list of arguments passed to parser.parse_args, got: {unknown_args}"
+                )
+                assert len(unknown_args) > 0
+                if os.path.exists(unknown_args[0]):
+                    unknown_args.pop(0)
+                # Compare with patch_args input
+                if exceptions:
+                    # We might not have access to patched args
+                    # Find all matching sub-sequences of arexceptionsgs in unknown_args
+                    matches = []
+                    args_seq = tuple(unknown_args)
+                    argv_seq = tuple(exceptions)
+                    for i in range(len(argv_seq) - len(args_seq) + 1):
+                        if argv_seq[i : i + len(args_seq)] == args_seq:
+                            matches.append(i)
+                    # Remove subsequences from unknown_args:
+                    for match in matches:
+                        unknown_args = unknown_args[:match] + unknown_args[match + len(args_seq) :]
+                if unknown_args:
+                    args_error = ValueError(f"Unexpected unrecognized args: {unknown_args}")
+                    record_errors.append(args_error)
+        if record_errors:
+            if error:
+                record_errors.insert(0, error)
+            if len(record_errors) == 1:
+                raise record_errors[0]
+            raise ExceptionGroup("Unexpected unrecognized args and further errors encountered.", record_errors)
+        if error is not None:
+            raise error
+        return result  # pyright: ignore[reportPossiblyUnboundVariable]
+
+    return wrapper
+
+
+class PatchArgsDecorator(ContextDecorator):
+    def __init__(self, patch_obj: mock._patch, exceptions):
+        self._patch_obj = patch_obj
+        self._exceptions = exceptions
+        self._patch_cm = None
+
+    def __enter__(self):
+        self._patch_cm = self._patch_obj.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self._patch_cm = None
+        return self._patch_obj.__exit__(exc_type, exc_value, traceback)
+
+    def __call__(self, func: _C) -> _C:
+        checked = check_args(func, exceptions=self._exceptions)
+
+        # patch_obj is a contextmanager, so we need to wrap the function so that patch is active during call
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            with self._patch_obj:
+                return checked(*args, **kwargs)
+
+        return wrapper  # pyright: ignore[reportReturnType]
+
+
+@overload
+def patch_args(
+    *args: str | int,
+    extend_argv: bool = False,
+    log_level: str | None = "DEBUG",
+    check_for_errors: Literal[False],
+    except_parser_errors: Optional[list[str]] = None,
+) -> mock._patch: ...
+
+
+@overload
+def patch_args(
+    *args: str | int,
+    extend_argv: bool = False,
+    log_level: str | None = "DEBUG",
+    check_for_errors: Literal[True] = True,
+    except_parser_errors: Optional[list[str]] = None,
+) -> PatchArgsDecorator: ...
+
+
+def patch_args(
+    *args: str | int,
+    extend_argv: bool = False,
+    log_level: str | None = "DEBUG",
+    check_for_errors: bool = True,
+    except_parser_errors: Optional[list[str]] = None,
+) -> mock._patch[list[str]] | PatchArgsDecorator:
+    """Patch sys.argv. Optionally compose with check_args.
+
+    If neither check_exceptions nor check_expected are provided this function
+    behaves like before and returns the unittest.mock._patch object so it can
+    be used directly as a decorator or context manager. When either of the
+    check_args parameters is provided, a decorator is returned that first
+    applies the check_args wrapper to the target function and then applies
+    the argv patch (so both effects are combined).
+    """
     old_args = sys.argv[1:]
     actor_args = (
         ("-a", "no_actor_provided_by_patch_args")
@@ -205,17 +353,22 @@ def patch_args(*args: str | int, extend_argv: bool = False, log_level: str | Non
     if log_level and "--log_level" not in args:
         log_args = ("--log_level", "DEBUG")
     patched_args = map(str, (*old_args, *args) if extend_argv else args)
-    patch = [
-        sys.argv[0] if sys.argv else "_imaginary_file_for_patch.py",
-        *actor_args,
-        *log_args,
-        *patched_args,
-    ]
-    return mock.patch.object(
+    patch_obj = mock.patch.object(
         sys,
         "argv",
-        patch,
+        [
+            sys.argv[0] if sys.argv else "_imaginary_file_for_patch.py",
+            *actor_args,
+            *log_args,
+            *patched_args,
+        ],
     )
+    if not check_for_errors:
+        return patch_obj
+
+    # Otherwise return a decorator/contextmanager that applies check_args then the patch.
+
+    return PatchArgsDecorator(patch_obj, except_parser_errors)
 
 
 def get_explicit_required_keys(cls):
