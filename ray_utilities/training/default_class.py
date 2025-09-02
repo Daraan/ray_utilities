@@ -1339,8 +1339,10 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
         )
         self._current_step = get_current_step(result)
         if (
-            self._current_step
-            > self.config["cli_args"]["total_steps"] + self.algorithm_config.train_batch_size_per_learner
+            "cli_args" in self.config
+            and self._current_step
+            > self.config["cli_args"].get("total_steps", float("inf"))
+            + self.algorithm_config.train_batch_size_per_learner
         ):
             _logger.info(
                 "Current step %s exceeds total steps. Expecting the trainable to have stopped.", self._current_step
