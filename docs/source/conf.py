@@ -8,6 +8,7 @@ import sys
 from dataclasses import dataclass
 from unittest.mock import MagicMock
 
+import toml
 from sphinx.ext.autodoc.mock import _MockModule, _MockObject
 from sphinx_autodoc_typehints import mock as autodoc_mock  # pyright: ignore[reportPrivateImportUsage]
 
@@ -29,6 +30,10 @@ os.environ["SPHINX_BUILD"] = "1"
 project = "ray_utilities"
 copyright = "2025, Daniel Sperber"
 author = "Daniel Sperber"
+pyproject_path = os.path.join(ROOT, "pyproject.toml")
+with open(pyproject_path, "r") as f:
+    pyproject = toml.load(f)
+version = pyproject["project"]["version"]
 
 
 # Mock problematic dependencies that might not be available during doc building
@@ -146,13 +151,6 @@ class ColorlogMocked(_MockModule):
 
 sys.modules["colorlog"] = ColorlogMocked("colorlog")
 
-# -- Project information -----------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
-
-project = "Ray Utilities"
-copyright = "2024, Ray Utilities"
-author = "Ray Utilities"
-release = "0.1.0"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
