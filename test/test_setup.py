@@ -794,7 +794,6 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
         "--env_seeding_strategy", "same",
         "--test",
     )  # fmt: skip
-    @unittest.mock.patch.dict("os.environ", RAY_DEDUP="0")
     @unittest.mock.patch.dict(
         AlgorithmSetup.batch_size_sample_space,
         {"grid_search": [_MIN_STEP_SIZE, 512, _MAX_STEP_SIZE]},

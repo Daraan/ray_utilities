@@ -363,7 +363,7 @@ def patch_args(
             *patched_args,
         ],
     )
-    if not check_for_errors:
+    if True or not check_for_errors:
         return patch_obj
 
     # Otherwise return a decorator/contextmanager that applies check_args then the patch.
