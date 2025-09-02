@@ -24,6 +24,14 @@ Furthermore smaller features:
 
 ## Installation
 
+### Install from PyPI
+
+```bash
+pip install ray_utilities
+```
+
+### Install latest version
+
 Clone the repository and install the package using pip:
 
 ```bash
@@ -31,6 +39,10 @@ git clone https://github.com/Daraan/ray_utilities.git
 cd ray_utilities
 pip install .
 ```
+
+## Documentation (Work in Progress)
+
+Hosted on Read the Docs: https://ray-utilities.readthedocs.io/
 
 ## Run Experiments via CLI
 
