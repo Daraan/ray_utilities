@@ -12,7 +12,9 @@ import pytest
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import NUM_ENV_RUNNERS_0_1_EQUAL
 from ray_utilities.config.model_config_parsers import MLPConfigParser
+from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
 from ray_utilities.misc import raise_tune_errors
+from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.runfiles import run_tune
 from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 from ray_utilities.training.helpers import make_divisible
@@ -658,7 +660,7 @@ class TestPPOMLPSetup(InitRay, num_cpus=4):
 ENV_STEPS_PER_ITERATION = 20 * max(1, DefaultArgumentParser.num_envs_per_env_runner)
 
 
-class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpus=4):
+class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
     def setUp(self):
         super().setUp()
 
@@ -772,6 +774,125 @@ class TestAlgorithm(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpus=4):
             assert result_grid[0].metrics
             self.assertEqual(result_grid[0].metrics["training_iteration"], 4)
             self.assertEqual(result_grid[0].metrics["evaluation/env_runners/episode_return_mean"], 512 // 128 - 1)
+
+    _MAX_STEP_SIZE = 4096
+    _MIN_STEP_SIZE = 128
+
+    @patch_args(
+        "--tune", "batch_size",
+        "--num_samples", 3,
+        "--num_jobs", 3,
+        "--min_step_size", _MIN_STEP_SIZE,
+        "--max_step_size", _MAX_STEP_SIZE,
+        "--env_seeding_strategy", "same",
+        "--test",
+    )  # fmt: skip
+    @unittest.mock.patch.dict("os.environ", RAY_DEDUP="0")
+    @unittest.mock.patch.dict(
+        AlgorithmSetup.batch_size_sample_space,
+        {"grid_search": [_MIN_STEP_SIZE, 512, _MAX_STEP_SIZE]},
+        clear=True,
+    )
+    @pytest.mark.tuner
+    @pytest.mark.length(speed="medium")
+    def test_no_max_iteration_stopper_when_tuning(self):
+        with AlgorithmSetup(init_trainable=False) as setup:
+            AlgorithmSetup.batch_size_sample_space["grid_search"] = [  # pyright: ignore[reportIndexIssue]
+                setup.args.min_step_size,
+                512,
+                setup.args.max_step_size,
+            ]
+        self.assertDictEqual(
+            setup.param_space["train_batch_size_per_learner"],
+            AlgorithmSetup.batch_size_sample_space,  # pyright: ignore[reportArgumentType]
+        )
+
+        def fake_trainable(params):
+            i = -1
+            from ray_utilities.callbacks.tuner.metric_checkpointer import _logger  # noqa: PLC0415
+
+            set_project_log_level(_logger, "WARN", pkg_name=None)
+            for i in range(1, 1_400_000):  # No stopper Triggered here
+                if i % 100 == 0:
+                    print("Iteration", i)
+                tune.report(
+                    {
+                        "current_step": i * params["train_batch_size_per_learner"],
+                        ENV_RUNNER_RESULTS: {
+                            NUM_ENV_STEPS_SAMPLED_LIFETIME: i,
+                        },
+                        "evaluation/env_runners/episode_return_mean": i,
+                    }
+                )
+            return {
+                "done": True,
+                "current_step": i * params["train_batch_size_per_learner"],
+                "env_runners/episode_return_mean": i,
+                "evaluation/env_runners/episode_return_mean": i,
+                "train_batch_size_per_learner": params["train_batch_size_per_learner"],
+            }
+
+        from ray_utilities.callbacks.tuner.metric_checkpointer import _logger  # noqa: PLC0415
+
+        set_project_log_level(_logger, "WARN", pkg_name=None)
+
+        class FakeTrainable(DefaultTrainable):
+            def step(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+                i = self.iteration + 1
+                if i < 2:
+                    from ray_utilities.callbacks.tuner.metric_checkpointer import _logger  # noqa: PLC0415
+
+                    set_project_log_level(_logger, "WARN", pkg_name=None)
+                    assert (
+                        self.config["train_batch_size_per_learner"]
+                        == self.algorithm_config.train_batch_size_per_learner
+                    )
+                return {
+                    "should_checkpoint": False,
+                    "current_step": i * self.algorithm_config.train_batch_size_per_learner,
+                    "env_runners/episode_return_mean": i,
+                    "evaluation/env_runners/episode_return_mean": i,
+                    "train_batch_size_per_learner": self.algorithm_config.train_batch_size_per_learner,
+                }
+
+            def save_checkpoint(self, checkpoint_dir: str) -> dict[str, Any]:
+                return {}
+
+        for trainable in (fake_trainable, FakeTrainable.define(setup, use_pbar=False)):
+            with self.subTest(function=trainable is fake_trainable, is_class=isclass(trainable)):
+                setup.trainable = trainable
+                tuner = setup.create_tuner()
+                self.assertTrue(
+                    tuner._local_tuner.trainable is trainable
+                    or (isclass(trainable) and issubclass(trainable, FakeTrainable))
+                )
+                result = tuner.fit()
+                raise_tune_errors(result)
+                self.assertEqual(
+                    {r.config["train_batch_size_per_learner"] for r in result},  # pyright: ignore[reportOptionalSubscript]
+                    {setup.args.min_step_size, 512, setup.args.max_step_size},
+                )
+                # Check that iterations are not equal and matching
+                for r in result:
+                    assert r.metrics and r.config
+                    self.assertEqual(
+                        r.metrics["training_iteration"] * r.config["train_batch_size_per_learner"],
+                        r.metrics["current_step"],
+                    )
+                iterations = {r.metrics["training_iteration"] for r in result}  # pyright: ignore[reportOptionalSubscript]
+                total_steps = {r.metrics["current_step"] for r in result}  # pyright: ignore[reportOptionalSubscript]
+                for it in iterations:
+                    self.assertNotAlmostEqual(1_400_000, it, delta=100)  # did not reach max steps
+                budget = split_timestep_budget(
+                    total_steps=setup.args.total_steps,
+                    min_size=128,
+                    max_size=4096,
+                    assure_even=True,
+                )
+                self.assertEqual(budget["total_steps"], setup.args.total_steps)
+                self.assertEqual(len(total_steps), 1, total_steps)  # all should have the same step count at end
+                self.assertEqual(budget["total_steps"], next(iter(total_steps)))
+                self.assertEqual(len(iterations), 3, iterations)
 
 
 class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpus=4):

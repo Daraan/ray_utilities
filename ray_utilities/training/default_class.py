@@ -1338,6 +1338,13 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
             log_stats=self.log_stats,
         )
         self._current_step = get_current_step(result)
+        if (
+            self._current_step
+            > self.config["cli_args"]["total_steps"] + self.algorithm_config.train_batch_size_per_learner
+        ):
+            _logger.info(
+                "Current step %s exceeds total steps. Expecting the trainable to have stopped.", self._current_step
+            )
         # HACK: as long as tune does not allow custom result checkpointing use this
         # see for example: https://github.com/ray-project/ray/pull/55527
         if (

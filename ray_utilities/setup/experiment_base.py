@@ -1104,6 +1104,30 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     # region Tuner
 
+    def _tuner_add_iteration_stopper(self) -> bool | None:
+        """
+        Determine whether the Tuner should add a maximum iteration stopper.
+
+        For example, when tuning the batch_size or if other factors are implemented that
+        cause the max iterations to be dynamic for different trainables, the Tuner should
+        not add an Iteration stopper.
+
+        Return:
+            False: Tell the tuner to not add an iteration stopper.
+            True: If the Tuner should add it, if appropriate
+            None: Decide in Tuner.
+
+        See Also:
+            :class:`MaximumResultIterationStopper`
+
+        The default variant of this version checks if
+        `iterations` or `train_batch_size_per_learner` is in :attr:`args` otherwise returns None
+        """
+        if not self.args.tune:
+            return None
+        tune_keys = set(self.args.tune or [])
+        return False if len({"iterations", "batch_size", "train_batch_size_per_learner"} & tune_keys) > 0 else None
+
     def create_tuner(self: ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]) -> tune.Tuner:
         """Create a Ray Tune tuner for hyperparameter optimization.
 
@@ -1125,7 +1149,12 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             :class:`TunerSetup`: Advanced tuner configuration options
             :class:`ray.tune.Tuner`: Underlying Ray Tune tuner class
         """
-        return TunerSetup(setup=self, eval_metric=EVAL_METRIC_RETURN_MEAN, eval_metric_order="max").create_tuner()
+        return TunerSetup(
+            setup=self,
+            eval_metric=EVAL_METRIC_RETURN_MEAN,
+            eval_metric_order="max",
+            add_iteration_stopper=self._tuner_add_iteration_stopper(),
+        ).create_tuner()
 
     # endregion
 

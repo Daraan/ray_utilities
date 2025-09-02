@@ -326,6 +326,7 @@ def setup_trainable(
             num_envs_per_env_runner=config_overrides.get("num_envs_per_env_runner", config.num_envs_per_env_runner),
         )
         config = cast("ConfigType_co", config.update_from_dict(config_overrides))
+
     if "train_batch_size_per_learner" in hparams or (
         config_overrides and "train_batch_size_per_learner" in config_overrides
     ):

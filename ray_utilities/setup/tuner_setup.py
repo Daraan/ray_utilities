@@ -110,6 +110,11 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
         eval_metric_order: Whether to maximize (``"max"``) or minimize (``"min"``) the metric
         setup: The experiment setup instance to optimize
         extra_tags: Additional tags for experiment organization
+        add_iteration_stopper: Whether to add a maximum iteration stopper based on
+            :attr:`setup.args.iterations<DefaultArgumentParser.iterations>`.
+            - True for always (if `setup.args.iterations` is an integer),
+            - False for never (Trainable or other stoppers need to determine end.).
+            - None
 
     Attributes:
         eval_metric: The metric being optimized
@@ -138,10 +143,12 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
         *,
         setup: ExperimentSetupBase[ParserTypeT, ConfigTypeT, _AlgorithmType_co],
         extra_tags: Optional[list[str]] = None,
+        add_iteration_stopper: bool | None = None,
     ):
         self.eval_metric: str = eval_metric
         self.eval_metric_order: Literal["max", "min"] = eval_metric_order
         self._setup = setup
+        self.add_iteration_stopper = add_iteration_stopper
         super().__init__(setup=setup, extra_tags=extra_tags)
         self._stopper: Optional[OptunaSearchWithPruner | Stopper | Literal["not_set"]] = "not_set"
 
@@ -180,29 +187,69 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             :func:`~ray_utilities.training.helpers.get_current_step`: Helper for extracting step counts
         """
         stoppers = []
-        if isinstance(self._setup.args.total_steps, (int, float)):
-            logger.debug(
+
+        # Total Steps Stopper
+        added_total_steps_stopper = False
+        try:
+            # can be int, float, numpy, ...
+            total_steps = int(self._setup.args.total_steps)
+        except ValueError:
+            pass  # e.g, "auto"
+        else:
+            if total_steps != self._setup.args.total_steps and not isinstance(self._setup.args.total_steps, str):
+                logger.warning(
+                    "args.total_steps is castable to int but did not match after cast %d != %s (type: %s)",
+                    total_steps,
+                    self._setup.args.total_steps,
+                    type(self._setup.args.total_steps),
+                )
+            logger.info(
                 "Adding FunctionStopper for total steps (tied to setup.args.total_steps) %s",
-                self._setup.args.total_steps,
+                total_steps,
             )
 
             def total_steps_stopper(trial_id: str, results: dict[str, Any] | StrictAlgorithmReturnData) -> bool:  # noqa: ARG001
                 current_step = get_current_step(results)  # pyright: ignore[reportArgumentType]
-                stop = current_step >= self._setup.args.total_steps  # <-- this allows late modification
+                stop = current_step >= total_steps
                 # however will self._setup and trainable._setup still be aligned after a restore?
                 if stop:
                     logger.info(
                         "Stopping trial %s at step %s >= total_steps %s",
                         trial_id,
                         current_step,
-                        self._setup.args.total_steps,
+                        total_steps,
                     )
                 return stop
 
             stoppers.append(FunctionStopper(total_steps_stopper))
-        if isinstance(self._setup.args.iterations, (int, float)):
-            logger.debug("Adding MaximumResultIterationStopper with %s iterations", self._setup.args.iterations)
-            stoppers.append(MaximumResultIterationStopper(int(self._setup.args.iterations)))
+            added_total_steps_stopper = True
+        if not added_total_steps_stopper:
+            logger.debug("Not adding FunctionStopper for total steps %s", self._setup.args.total_steps)
+
+        # Maximum Iteration Stopper
+        added_iteration_stopper = False
+        if self.add_iteration_stopper is not False:
+            try:
+                # can be int, float, numpy, ...
+                iterations = int(self._setup.args.iterations)
+            except ValueError:
+                pass  # a string
+            else:
+                tune_keys = set(self._setup.args.tune or [])
+                if self.add_iteration_stopper or (
+                    self._setup.args.tune
+                    and not {"iterations", "train_batch_size_per_learner", "batch_size"} & tune_keys
+                ):
+                    logger.info("Adding MaximumResultIterationStopper with %s iterations", iterations)
+                    # Do NOT add this stopper if iterations is adjusted, e.g. by scheduler or the trainable itself
+                    stoppers.append(MaximumResultIterationStopper(iterations))
+                    added_iteration_stopper = True
+        if not added_iteration_stopper:
+            logger.debug(
+                "Not adding MaximumResultIterationStopper for %s, Tuner.add_iteration_stopper=%s",
+                self._setup.args.iterations,
+                self.add_iteration_stopper,
+            )
         return stoppers
 
     def create_tune_config(self) -> tune.TuneConfig:

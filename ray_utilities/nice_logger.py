@@ -19,8 +19,14 @@ See Also:
 """
 
 from __future__ import annotations
+
 import logging
+
 import colorlog
+from typing_extensions import Sentinel
+
+# pyright: enableExperimentalFeatures=true
+_NO_PACKAGE = Sentinel("_NO_PACKAGE")
 
 
 def nice_logger(logger: logging.Logger | str, level: int | str | None = None) -> logging.Logger:
@@ -93,7 +99,30 @@ def nice_logger(logger: logging.Logger | str, level: int | str | None = None) ->
     return logger
 
 
-def set_project_log_level(pkg_logger: logging.Logger | str, level: int | str, pkg_name: str | None = None) -> None:
+def set_project_log_level(
+    pkg_logger: logging.Logger | str, level: int | str, pkg_name: str | None | _NO_PACKAGE = _NO_PACKAGE
+) -> None:
+    """
+    Sets the logging level for a package logger and all its subloggers.
+
+    Args:
+        pkg_logger (logging.Logger | str): The package logger instance or its name as a string.
+        level (int | str): The logging level to set (e.g., logging.INFO or "INFO").
+        pkg_name (str | None | _NO_PACKAGE, optional): The package name. If None, only the given logger is affected.
+            If _NO_PACKAGE, the package name is inferred from the logger's name.
+
+    Returns:
+        None
+
+    Side Effects:
+        - Changes the log level of the specified logger and all its handlers.
+        - Recursively sets the log level for all child loggers belonging to the package.
+        - Logs an info message when the log level is changed.
+        - Logs an exception if a child logger's level cannot be set.
+
+    Raises:
+        None
+    """
     # Set level on root package logger
     if isinstance(pkg_logger, str):
         pkg_logger = logging.getLogger(pkg_logger)
@@ -106,8 +135,10 @@ def set_project_log_level(pkg_logger: logging.Logger | str, level: int | str, pk
     pkg_logger.setLevel(level)
     for h in pkg_logger.handlers:
         h.setLevel(level)
-
     if pkg_name is None:
+        return
+
+    if pkg_name is _NO_PACKAGE:
         pkg_name = pkg_logger.name.split(".")[0]
 
     # Also set level for any already-configured child loggers (skip placeholders)

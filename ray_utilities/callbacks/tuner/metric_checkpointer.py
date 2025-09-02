@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
-TUNE_RESULT_IS_A_COPY = True
+TUNE_RESULT_IS_A_COPY = True  # NOTE: This is not a dynamic or checked value.
 """
 Tuner does not allow to modify the result dict as it is a copy. As long as this is True
 use the callback on an Algorithm. Or the HACK in the DefaultTrainable class to trigger
@@ -69,12 +69,17 @@ class MetricCheckpointer(Callback):
             self._last_checkpoint_step = current_step
             result[SHOULD_CHECKPOINT] = True  # XXX # NOTE: That this is a copy and does NOT WORK
             _logger.info(
-                "Checkpointing trial %s at iteration %s, step %d with: metric '%s' = %s",
+                "Checkpointing trial %s at iteration %s, step %d with: metric '%s' = %s%s",
                 trial.trial_id if trial else "",
                 iteration,
                 current_step,
                 self.metric_name,
                 self._last_checkpoint_value,
+                (
+                    ". NOTE: This is only a logging message and does not confirm the checkpoint creation"
+                    if TUNE_RESULT_IS_A_COPY
+                    else ""
+                ),
             )
         # else:
         #    _logger.debug(
