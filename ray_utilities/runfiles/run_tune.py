@@ -133,7 +133,8 @@ def run_tune(
 
     Note:
         - Test mode is activated when ``args.test=True`` and ``args.not_parallel=True``
-        - Offline experiment tracking uploads are handled automatically after completion. When ``args.comet`` or ``args.wandb`` are set to ``offline+upload``.
+        - Offline experiment tracking uploads are handled automatically after completion.
+          When ``args.comet`` or ``args.wandb`` are set to ``offline+upload``.
         - Seeds are automatically configured across Ray, torch, and numpy when specified
 
     See Also:

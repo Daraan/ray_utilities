@@ -291,26 +291,56 @@ class CometArchiveTracker:
             archives = self.archives
         if not archives:
             _LOGGER.info("No archives to upload")
-            return
+            return [], []
         archives_str = [str(p) for p in self.archives]
         _LOGGER.info("Uploading Archives: %s", archives_str)
+        from comet_ml.offline import LOGGER
+        import io
+        import re
+
+        log_stream = io.StringIO()
+        handler = logging.StreamHandler(log_stream)
+        LOGGER.addHandler(handler)
+
         comet_ml.offline.main_upload(archives_str, force_upload=False)
 
+        LOGGER.removeHandler(handler)
+        log_contents = log_stream.getvalue()
+
+        failed_uploads = re.findall(r"Upload failed for '([^']+\.zip)'", log_contents)
+        successful_uploads = re.findall(
+            r"The offline experiment has been uploaded on comet\.com https://www\.comet\.com/([^/]+/[^/]+/([^ \n]+))",
+            log_contents,
+        )
+
+        if failed_uploads:
+            _LOGGER.warning("Comet offline upload failed for: %s", failed_uploads)
+        if successful_uploads:
+            _LOGGER.info("Comet offline upload succeeded for: %s", successful_uploads)
+        if not failed_uploads and not successful_uploads:
+            _LOGGER.warning("Comet offline upload may have failed. Log output:\n%s", log_contents)
+        return failed_uploads, successful_uploads
+
     def upload_and_move(self):
-        self._upload()
-        self.move_archives()
+        _failed, succeeded = self._upload()
+        self.move_archives(succeeded)
 
     def make_uploaded_dir(self):
         new_dir = self.path / "uploaded"
         new_dir.mkdir(exist_ok=True)
         return new_dir
 
-    def move_archives(self):
+    def move_archives(self, succeeded: list[tuple[str, str]] | None = None):
         if not self._called_upload:
             _LOGGER.warning("Called move_archives without calling upload first.")
         new_dir = self.make_uploaded_dir()
+        zip_names = [name + ".zip" if not name.endswith(".zip") else name for _, name in (succeeded or [])]
         for path in self.archives:
-            path.rename(new_dir / path.name)
+            if succeeded is None or path.name in zip_names:
+                _LOGGER.info("Moving uploaded archive %s to %s", path, new_dir)
+                path.rename(new_dir / path.name)
+            else:
+                _LOGGER.info("Skipping archive %s, not uploaded as not reported as upload succeeded", path)
 
 
 _default_comet_archive_tracker = CometArchiveTracker()
