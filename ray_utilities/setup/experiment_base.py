@@ -57,7 +57,7 @@ from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.typed_argument_parser import SupportsMetaAnnotations
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.environment import create_env
-from ray_utilities.misc import get_trainable_name
+from ray_utilities.misc import AutoInt, get_trainable_name
 from ray_utilities.setup.tuner_setup import TunerSetup
 from ray_utilities.training.default_class import TrainableBase
 from ray_utilities.warn import (
@@ -1126,6 +1126,9 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         if not self.args.tune:
             return None
         tune_keys = set(self.args.tune or [])
+        if isinstance(self.args.iterations, int) and not isinstance(self.args.iterations, AutoInt):
+            logger.info("args.iterations is a non AutoInt integer, telling the Tuner to add a stopper.")
+            return True  # If the iteration is set manually do add a stopper
         return False if len({"iterations", "batch_size", "train_batch_size_per_learner"} & tune_keys) > 0 else None
 
     def create_tuner(self: ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]) -> tune.Tuner:

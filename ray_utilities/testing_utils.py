@@ -1416,6 +1416,7 @@ class TestHelpers(unittest.TestCase):
         stoppers: StopperType = tuner._local_tuner.get_run_config().stop
         if stopper_type is None:
             self.assertIsNone(stoppers)
+            check(stoppers, stopper_type)
             return None
         if isinstance(stoppers, (dict, Mapping)) or isinstance(stopper_type, (dict, Mapping)):
             self.assertTrue(
@@ -1431,6 +1432,7 @@ class TestHelpers(unittest.TestCase):
             return stoppers
         if stoppers is None:
             self.assertEqual(stoppers, stopper_type)  # likely fails
+            check(stoppers, stopper_type)
             return None
         if not isinstance(stoppers, list):  # here Callable | Stopper
             if isinstance(stoppers, Iterable):

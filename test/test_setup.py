@@ -18,6 +18,7 @@ from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.runfiles import run_tune
 from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 from ray_utilities.training.helpers import make_divisible
+from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultIterationStopper
 
 if "RAY_DEBUG" not in os.environ:
     os.environ["RAY_DEBUG"] = "legacy"
@@ -250,8 +251,8 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             with (
                 patch_args(
                     "--tune", param,
-                    "--num_jobs", "3",
                     "-it", "2",
+                    "--num_jobs", "3",
                     "--num_samples", "3",
                     "--use_exact_total_steps",
                     "--env_seeding_strategy", "same"
@@ -313,6 +314,12 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 else:
                     grid = []
                 tuner = setup.create_tuner()
+
+                def check_stopper(stopper: MaximumResultIterationStopper | Any, _):
+                    self.assertEqual(stopper._max_iter, 2)
+                    return True
+
+                self.check_stopper_added(tuner, MaximumResultIterationStopper, check=check_stopper)
                 tuner._local_tuner.get_run_config().checkpoint_config.checkpoint_at_end = False  # pyright: ignore[reportOptionalMemberAccess]
                 results = tuner.fit()
                 raise_tune_errors(results)

@@ -34,6 +34,7 @@ from ray_utilities.constants import (
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
 )
+from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations
 from ray_utilities.misc import raise_tune_errors
 from ray_utilities.runfiles import run_tune
 from ray_utilities.setup import optuna_setup
@@ -101,7 +102,59 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 self.assertEqual(stopper._max_iter, 10)
                 return True
 
-            self.check_stopper_added(tuner, MaximumIterationStopper, check=check_stopper)
+            self.assertIsInstance(
+                self.check_stopper_added(tuner, MaximumIterationStopper, check=check_stopper), MaximumIterationStopper
+            )
+
+        # Check default behavior
+        with patch_args():
+            setup = AlgorithmSetup()
+            tuner = setup.create_tuner()
+            self.assertFalse(setup.args.optimize_config)
+            assert tuner._local_tuner and tuner._local_tuner._tune_config
+
+            def check_stopper(stopper: MaximumIterationStopper | Any, _):
+                self.assertEqual(
+                    stopper._max_iter,
+                    second=calculate_iterations(
+                        dynamic_buffer=False, batch_size=setup.config.train_batch_size_per_learner
+                    ),
+                )
+                return True
+
+            self.assertIsInstance(
+                self.check_stopper_added(tuner, MaximumIterationStopper, check=check_stopper), MaximumIterationStopper
+            )
+
+        # Check Stopper not added when batch_size / iterations is adjusted dynamically after start
+        with patch_args("--tune", "batch_size"):
+            setup = AlgorithmSetup()
+            tuner = setup.create_tuner()
+            self.assertTrue(setup.args.optimize_config)
+            assert tuner._local_tuner and tuner._local_tuner._tune_config
+
+            def check_stopper(stopper: MaximumIterationStopper | Any, _):
+                self.assertNotIsInstance(stopper, MaximumIterationStopper)
+                return True
+
+            self.assertNotIsInstance(
+                self.check_stopper_added(tuner, MaximumIterationStopper, check=check_stopper), MaximumIterationStopper
+            )
+
+        # But added when manually adding iterations
+        with patch_args("--tune", "batch_size", "-it", 3):
+            setup = AlgorithmSetup()
+            tuner = setup.create_tuner()
+            self.assertTrue(setup.args.optimize_config)
+            assert tuner._local_tuner and tuner._local_tuner._tune_config
+
+            def check_stopper(stopper: MaximumIterationStopper | Any, _):
+                self.assertEqual(stopper._max_iter, 3)
+                return True
+
+            self.assertIsInstance(
+                self.check_stopper_added(tuner, MaximumIterationStopper, check=check_stopper), MaximumIterationStopper
+            )
 
     def test_run_tune_function(self):
         batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
