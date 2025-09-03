@@ -36,51 +36,43 @@ class PPOTorchLearnerWithGradientAccumulation(PPOTorchLearner):
     @override(PPOTorchLearner)
     def compute_gradients(self, loss_per_module: dict[ModuleID, TensorType], **kwargs) -> ParamDict:  # noqa: ARG002
         self._step_count += 1
-        if (
-            update_gradients_this_step := self._step_count
-            % (accumulate_gradients_every := self.config.learner_config_dict["accumulate_gradients_every"])
-            == 0
-        ):
-            self._gradient_updates += 1
-            self._last_gradient_update_step = self._step_count
-            _logger.debug("Updating gradients for step %s", self._step_count)
+        accumulate_gradients_every = self.config.learner_config_dict["accumulate_gradients_every"]
+        update_gradients_this_step = self._step_count % accumulate_gradients_every == 0
+
+        if (self._step_count - 1) % accumulate_gradients_every == 0:
             for optim in self._optimizer_parameters:
                 # `set_to_none=True` is a faster way to zero out the gradients.
                 optim.zero_grad(set_to_none=True)
-        else:
-            _logger.debug(
-                "Skipping gradient update for step %s, accumulating gradients",
-                self._step_count,
-            )
 
         if self._grad_scalers is not None:
             total_loss = sum(self._grad_scalers[mid].scale(loss) for mid, loss in loss_per_module.items())
         else:
             total_loss = sum(loss_per_module.values())  # pyright: ignore
 
-        # If we don't have any loss computations, `sum` returns 0.
+        # If we don't have any loss computations, `sum` returns 0. Type will not be a pure int in this case
         if isinstance(total_loss, int):
             assert total_loss == 0
             return {}
 
         total_loss.backward()
         if update_gradients_this_step:
-            # PPO loss is a mean, should divide by the number of accumulated batches.
-            # TODO: When changing accumulate_gradients_every dynamically to 1 and accumulation did not happen yet,
-            #      then not dividing by the amount of accumulated batches is not correct.
+            self._gradient_updates += 1
+            self._last_gradient_update_step = self._step_count
+            _logger.debug("Updating gradients for step %s", self._step_count)
             if accumulate_gradients_every != 1:
                 grads = {
                     pid: p.grad / accumulate_gradients_every if p.grad is not None else p.grad
                     for pid, p in self._params.items()
                 }
-            else:
+            else:  # No accumulation
                 grads = {pid: p.grad for pid, p in self._params.items()}
-        else:
-            return {}
+            return grads  # pyright: ignore[reportReturnType]  # contains None
+        _logger.debug(
+            "Skipping gradient update for step %s, accumulating gradients",
+            self._step_count,
+        )
+        return {}
 
-        return grads  # pyright: ignore[reportReturnType]  # contains None
-
-    # @override(TorchLearner)
     def apply_gradients(self, gradients_dict: ParamDict) -> None:
         if self._step_count % self.config.learner_config_dict["accumulate_gradients_every"] == 0:
             # Calls optimizer.step(), scaler.step() and update if applicable
