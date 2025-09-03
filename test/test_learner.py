@@ -8,13 +8,21 @@ import torch
 
 from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradientAccumulation
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+from ray_utilities.learners import mix_learners
 from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import PPOTorchLearnerWithGradientAccumulation
+from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import DisableLoggers, InitRay, TestHelpers, patch_args
 from ray_utilities.training.helpers import make_divisible
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms.ppo.torch.default_ppo_torch_rl_module import DefaultPPOTorchRLModule
+
+
+class _ApplyCall(NamedTuple):
+    step_count: int
+    applied_gradients: bool
+    gradients: dict | None = None
 
 
 class TestLearners(InitRay, TestHelpers, DisableLoggers):
@@ -36,13 +44,9 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
         assert algorithm.config
         self.assertTrue(issubclass(algorithm.config.learner_class, PPOTorchLearnerWithGradientAccumulation))
 
-        class ApplyCall(NamedTuple):
-            step_count: int
-            applied_gradients: bool
-
         def mock_apply_gradients(gradients_dict):
             apply_calls.append(
-                ApplyCall(
+                _ApplyCall(
                     step_count=learner._step_count,
                     applied_gradients=len(gradients_dict) > 0,
                 )
@@ -51,7 +55,7 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
 
         for algo in (algorithm, setup.trainable_class().algorithm_config.build_algo()):
             with self.subTest("setup.config" if algo is algorithm else "trainable.algorithm_config"):
-                apply_calls: list[ApplyCall] = []
+                apply_calls: list[_ApplyCall] = []
                 learner: PPOTorchLearnerWithGradientAccumulation = algo.learner_group._learner  # pyright: ignore[reportAssignmentType, reportOptionalMemberAccess]
                 # Track gradient application calls
                 original_apply_gradients = learner.apply_gradients
@@ -175,15 +179,11 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
         # Track gradient application calls
         original_apply_gradients = learner.apply_gradients
 
-        class ApplyCall(NamedTuple):
-            step_count: int
-            applied_gradients: bool
-
-        apply_calls: list[ApplyCall] = []
+        apply_calls: list[_ApplyCall] = []
 
         def mock_apply_gradients(gradients_dict):
             apply_calls.append(
-                ApplyCall(
+                _ApplyCall(
                     step_count=learner._step_count,
                     applied_gradients=len(gradients_dict) > 0,
                 )
@@ -274,14 +274,12 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
             When apply_gradients is called. The .grad attribute is replaced by grad / accumulate_gradients_every
             and further proccess by post
         """
-        batch_size = make_divisible(32, DefaultArgumentParser.num_envs_per_env_runner)
+        batch_size = 32
         accumulate_every = 2
 
         with patch_args(
-            "-a",
-            "mlp",
             "--accumulate_gradients_every",
-            str(accumulate_every),
+            accumulate_every,
             "--batch_size",
             batch_size,
             "--minibatch_size",
@@ -290,6 +288,10 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
             setup = AlgorithmSetup(init_trainable=False)
 
         setup.config.training(num_epochs=1)
+        if accumulate_every == 1:  # pyright: ignore[reportUnnecessaryComparison]
+            setup.config.training(
+                learner_class=mix_learners([PPOTorchLearnerWithGradientAccumulation, RemoveMaskedSamplesLearner])
+            )
         algorithm = setup.config.build_algo()
         learner: PPOTorchLearnerWithGradientAccumulation = (
             algorithm.learner_group._learner  # pyright: ignore[reportAssignmentType, reportOptionalMemberAccess]
@@ -322,7 +324,7 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
             # unaccumulated and raw_gradients (accumulated) should never match, except when set to None one step later
             with (
                 self.assertRaises(AssertionError, msg=f"Gradients matched at step {learner._step_count}")
-                if learner._step_count % accumulate_every != 1
+                if accumulate_every != 1 and learner._step_count % accumulate_every != 1  # pyright: ignore[reportUnnecessaryComparison]
                 else nullcontext()
             ):
                 torch.testing.assert_close(
@@ -337,16 +339,11 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
         # Track gradient application calls
         original_apply_gradients = learner.apply_gradients
 
-        class ApplyCall(NamedTuple):
-            step_count: int
-            applied_gradients: bool
-            gradients: dict
-
-        apply_calls: list[ApplyCall] = []
+        apply_calls: list[_ApplyCall] = []
 
         def mock_apply_gradients(gradients_dict):
             apply_calls.append(
-                ApplyCall(
+                _ApplyCall(
                     step_count=learner._step_count,
                     applied_gradients=len(gradients_dict) > 0,
                     gradients={param_ref: gradients_dict[param_ref].clone()} if len(gradients_dict) > 0 else {},
