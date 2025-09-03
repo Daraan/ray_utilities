@@ -39,7 +39,7 @@ class PPOTorchLearnerWithGradientAccumulation(PPOTorchLearner):
         accumulate_gradients_every = self.config.learner_config_dict["accumulate_gradients_every"]
         update_gradients_this_step = self._step_count % accumulate_gradients_every == 0
 
-        if self._step_count % accumulate_gradients_every == 1:
+        if (self._step_count - 1) % accumulate_gradients_every == 0:
             for optim in self._optimizer_parameters:
                 # `set_to_none=True` is a faster way to zero out the gradients.
                 optim.zero_grad(set_to_none=True)
