@@ -119,3 +119,189 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
         self.assertEqual(counter["accumulate_every=1"], 4)  # 4x32
         self.assertEqual(counter["accumulate_every=2"], 4)  # 2x64 = 4x32
         self.assertEqual(counter["accumulate_every=4"], 4)  # 1x128 = 4x32
+
+    def test_gradient_accumulation_behavior(self):
+        """Test that gradients are accumulated correctly and applied only when expected."""
+        batch_size = make_divisible(32, DefaultArgumentParser.num_envs_per_env_runner)
+        accumulate_every = 3
+
+        with patch_args(
+            "-a", "mlp",
+            "--accumulate_gradients_every", accumulate_every,
+            "--batch_size", batch_size,
+            "--minibatch_size", batch_size,
+        ):  # fmt: skip
+            setup = AlgorithmSetup(init_trainable=False)
+
+        setup.config.training(num_epochs=1)
+        algorithm = setup.config.build_algo()
+        learner: PPOTorchLearnerWithGradientAccumulation = (
+            algorithm.learner_group._learner  # pyright: ignore[reportAssignmentType, reportOptionalMemberAccess]
+        )
+
+        # Track gradient application calls
+        original_apply_gradients = learner.apply_gradients
+        apply_calls = []
+
+        def mock_apply_gradients(gradients_dict):
+            apply_calls.append((learner._step_count, len(gradients_dict) > 0))
+            return original_apply_gradients(gradients_dict)
+
+        learner.apply_gradients = mock_apply_gradients
+
+        # Track parameter changes
+        module = learner.module["default_policy"]
+        initial_state = module.get_state()
+
+        # Step 1: First step should zero gradients and accumulate, but not apply
+        algorithm.step()
+        self.assertEqual(learner._step_count, 1)
+        self.assertEqual(learner._gradient_updates, 0)
+        self.assertIsNone(learner._last_gradient_update_step)
+        self.assertEqual(len(apply_calls), 1)
+        self.assertFalse(apply_calls[0][1], "First step should not apply gradients")
+
+        # Parameters should not have changed
+        state_after_step1 = module.get_state()
+        self.util_test_tree_equivalence(initial_state, state_after_step1)
+
+        # Step 2: Second step should accumulate, but not apply
+        algorithm.step()
+        self.assertEqual(learner._step_count, 2)
+        self.assertEqual(learner._gradient_updates, 0)
+        self.assertIsNone(learner._last_gradient_update_step)
+        self.assertEqual(len(apply_calls), 2)
+        self.assertFalse(apply_calls[1][1], "Second step should not apply gradients")
+
+        # Parameters should still not have changed
+        state_after_step2 = module.get_state()
+        self.util_test_tree_equivalence(initial_state, state_after_step2)
+
+        # Step 3: Third step should accumulate and apply gradients
+        algorithm.step()
+        self.assertEqual(learner._step_count, 3)
+        self.assertEqual(learner._gradient_updates, 1)
+        self.assertEqual(learner._last_gradient_update_step, 3)
+        self.assertEqual(len(apply_calls), 3)
+        self.assertTrue(apply_calls[2][1], "Third step should apply gradients")
+
+        # Parameters should have changed now
+        state_after_step3 = module.get_state()
+        with self.assertRaisesRegex(AssertionError, "(weight|bias).* not equal"):
+            self.util_test_tree_equivalence(initial_state, state_after_step3, use_subtests=False)
+
+        # Step 4: Fourth step should start new accumulation cycle
+        algorithm.step()
+        self.assertEqual(learner._step_count, 4)
+        self.assertEqual(learner._gradient_updates, 1)  # Should still be 1
+        self.assertEqual(learner._last_gradient_update_step, 3)  # Should still be 3
+        self.assertEqual(len(apply_calls), 4)
+        self.assertFalse(apply_calls[3][1], "Fourth step should not apply gradients (new cycle)")
+
+        # Parameters should not have changed from after the previous update
+        state_after_step4 = module.get_state()
+        self.util_test_tree_equivalence(state_after_step3, state_after_step4)
+
+        # Step 5: Fifth step should accumulate
+        algorithm.step()
+        self.assertEqual(learner._step_count, 5)
+        self.assertEqual(learner._gradient_updates, 1)
+
+        # Step 6: Sixth step should apply gradients again
+        algorithm.step()
+        self.assertEqual(learner._step_count, 6)
+        self.assertEqual(learner._gradient_updates, 2)
+        self.assertEqual(learner._last_gradient_update_step, 6)
+        self.assertTrue(apply_calls[5][1], "Sixth step should apply gradients")
+
+        # Test that the pattern continues correctly
+        expected_apply_steps = {3, 6, 9, 12}
+        for i in range(7, 13):
+            algorithm.step()
+            expected_applies = len([s for s in expected_apply_steps if s <= i])
+            self.assertEqual(learner._gradient_updates, expected_applies, f"Wrong gradient updates at step {i}")
+            if i in expected_apply_steps:
+                self.assertEqual(learner._last_gradient_update_step, i, f"Wrong last update step at step {i}")
+
+    def test_gradient_accumulation_no_accumulation(self):
+        """Test that when accumulate_gradients_every=1, gradients are applied every step."""
+        batch_size = make_divisible(32, DefaultArgumentParser.num_envs_per_env_runner)
+
+        with patch_args(
+            "-a", "mlp", "--accumulate_gradients_every", "1", "--batch_size", batch_size, "--minibatch_size", batch_size
+        ):
+            setup = AlgorithmSetup(init_trainable=False)
+
+        setup.config.training(num_epochs=1)
+        algorithm = setup.config.build_algo()
+        learner: PPOTorchLearnerWithGradientAccumulation = (
+            algorithm.learner_group._learner  # pyright: ignore[reportAssignmentType, reportOptionalMemberAccess]
+        )
+
+        # Track gradient application calls
+        original_apply_gradients = learner.apply_gradients
+        apply_calls = []
+
+        def mock_apply_gradients(gradients_dict):
+            apply_calls.append((learner._step_count, len(gradients_dict) > 0))
+            return original_apply_gradients(gradients_dict)
+
+        learner.apply_gradients = mock_apply_gradients
+
+        # Test several steps
+        for step in range(1, 6):
+            algorithm.step()
+            self.assertEqual(learner._step_count, step)
+            self.assertEqual(learner._gradient_updates, step)
+            self.assertEqual(learner._last_gradient_update_step, step)
+            self.assertEqual(len(apply_calls), step)
+            self.assertTrue(apply_calls[step - 1][1], f"Step {step} should apply gradients when no accumulation")
+
+    def test_gradient_scaling_with_accumulation(self):
+        """Test that gradients are properly returned when using accumulation."""
+        batch_size = make_divisible(32, DefaultArgumentParser.num_envs_per_env_runner)
+        accumulate_every = 2
+
+        with patch_args(
+            "--accumulate_gradients_every", accumulate_every,
+            "--batch_size", batch_size,
+            "--minibatch_size", batch_size,
+        ):  # fmt: skip
+            setup = AlgorithmSetup(init_trainable=False)
+
+        setup.config.training(num_epochs=1)
+        algorithm = setup.config.build_algo()
+        learner: PPOTorchLearnerWithGradientAccumulation = (
+            algorithm.learner_group._learner  # pyright: ignore[reportAssignmentType, reportOptionalMemberAccess]
+        )
+
+        # Capture gradients when they are computed
+        gradient_returns = []
+        original_compute_gradients = learner.compute_gradients
+
+        def mock_compute_gradients(*args, **kwargs):
+            result = original_compute_gradients(*args, **kwargs)
+            gradient_returns.append((learner._step_count, len(result) > 0 if result else False))
+            return result
+
+        learner.compute_gradients = mock_compute_gradients
+
+        # First step: accumulate only
+        algorithm.step()
+        self.assertEqual(len(gradient_returns), 1)
+        self.assertFalse(gradient_returns[0][1], "No gradients should be returned on first step")
+
+        # Second step: should return gradients
+        algorithm.step()
+        self.assertEqual(len(gradient_returns), 2)
+        self.assertTrue(gradient_returns[1][1], "Gradients should be returned on second step")
+
+        # Third step: accumulate only again
+        algorithm.step()
+        self.assertEqual(len(gradient_returns), 3)
+        self.assertFalse(gradient_returns[2][1], "No gradients should be returned on third step")
+
+        # Fourth step: should return gradients again
+        algorithm.step()
+        self.assertEqual(len(gradient_returns), 4)
+        self.assertTrue(gradient_returns[3][1], "Gradients should be returned on fourth step")
