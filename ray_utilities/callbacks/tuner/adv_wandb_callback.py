@@ -80,7 +80,7 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
         config = {key: value for key, value in config.items() if key not in self.excludes}
         config["run_id"] = run_id
         config.setdefault("experiment_id", run_id)
-        config["experiment_key"] = f"{run_id:0<20}xXx{trial.trial_id}xXx{self._trials_created:0>4}"
+        config["experiment_key"] = f"{run_id:0<20}xXx{trial.trial_id}xXx{self._trials_created:0>4}".replace("_", "xXx")
         # --- New Code --- : Remove nested keys
         for nested_key in filter(lambda x: "/" in x, self.excludes):
             key, sub_key = nested_key.split("/")

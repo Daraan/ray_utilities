@@ -202,19 +202,31 @@ def update_pbar(
     try:
         if train_results:
             # Remember float("nan") != float("nan")
+            train_results = train_results.copy()
             train_mean = train_results.get("mean", float("nan"))
             train_max = train_results.get("max", float("nan"))
 
+            # combine mean and roll
+            if train_results.get("roll", None) is not None:
+                mean_roll_value = f"{train_mean:.1f} (roll: {train_results.pop('roll'):.1f})"  # pyright: ignore[reportTypedDictNotRequiredAccess]
+                train_results["mean"] = mean_roll_value  # pyright: ignore[reportGeneralTypeIssues]
             if train_mean == train_max or (math.isnan(train_mean) and math.isnan(train_max)):
-                train_results = train_results.copy()
                 train_results.pop("max")
-            lines = [
-                f"Train {key}: {value:>5.1f}" if key != "max" else f"Train {key}: {value:>4.0f}"
-                for key, value in train_results.items()
-            ]
+            train_results_str = {
+                k: v if isinstance(v, str) else f"{v:>5.1f}" if k != "max" else f"{v:>4.0f}"
+                for k, v in train_results.items()
+            }
+            lines = [f"Train {key}: {value}" for key, value in train_results_str.items()]
         else:
             lines = []
-        lines += [f"Eval {key}: {value:>5.1f}" for key, value in eval_results.items()]
+        if eval_results.get("mean") is not None and eval_results.get("roll") is not None:
+            eval_results = eval_results.copy()
+            mean_roll_value = f"{eval_results['mean']:.1f} (roll: {eval_results.pop('roll'):.1f})"  # pyright: ignore[reportTypedDictNotRequiredAccess]
+            eval_results["mean"] = mean_roll_value  # pyright: ignore[reportGeneralTypeIssues]
+        lines += [
+            f"Eval {key}: {value:>5.1f}" if not isinstance(value, str) else f"Eval {key}: {value}"
+            for key, value in eval_results.items()
+        ]
         if discrete_eval_results:
             lines += [f"Disc Eval {key}: {value:>5.1f}" for key, value in discrete_eval_results.items()]
         if current_step is not None:

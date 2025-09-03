@@ -244,14 +244,14 @@ Note:
 # Constant for one execution
 
 entry_point_id = hashlib.blake2b(
-    os.path.basename(sys.argv[0]).encode(), digest_size=6, usedforsecurity=False
+    os.path.basename(sys.argv[0]).encode(), digest_size=3, usedforsecurity=False
 ).hexdigest()
 """Hash of the entry point script's filename, i.e. sys.argv[0]'s basename"""
 
 run_id = (
     entry_point_id
     + "xXXXXx"
-    + hashlib.blake2b(os.urandom(8) + entry_point_id.encode(), digest_size=6, usedforsecurity=False).hexdigest()
+    + hashlib.blake2b(os.urandom(8) + entry_point_id.encode(), digest_size=3, usedforsecurity=False).hexdigest()
 )
 """
 A short randomly created UUID for the current execution.

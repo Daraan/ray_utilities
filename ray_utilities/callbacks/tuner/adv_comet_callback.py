@@ -114,6 +114,7 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         "evaluation/env_runners/environments/seeds",
         "experiment_name",
         "experiment_group",
+        "experiment_key",
     ]
 
     def __init__(
@@ -245,8 +246,11 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         if trial not in self._trial_experiments:
             experiment_cls = Experiment if self.online else OfflineExperiment
             experiment_kwargs = self.experiment_kwargs.copy()
-            # Key needs to be at least 32
-            experiment_kwargs["experiment_key"] = f"{run_id:0<20}xXx{trial.trial_id}xXx{self._trials_created:0>4}"
+            # Key needs to be at least 32 but not more than 50
+            experiment_kwargs["experiment_key"] = (
+                f"{run_id:0<18}xXx{trial.trial_id}xXx{self._trials_created:0>4}".replace("_", "xXx")
+            )
+            assert 32 <= len(experiment_kwargs["experiment_key"]) <= 50, len(experiment_kwargs["experiment_key"])
             self._check_workspaces(trial)
             experiment = experiment_cls(**experiment_kwargs)
             if self._log_pip_packages:
