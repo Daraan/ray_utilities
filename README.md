@@ -54,7 +54,12 @@ from ray_utilities import run_tune
 from ray_utilities.setup import PPOSetup
 
 if __name__ == "__main__":
-    setup = PPOSetup()  # Replace with your own setup class
+    with PPOSetup() as setup:  # Replace with your own setup class
+        # The setup takes care of many settings passed in via the CLI
+        # but the config (an rllib.AlgorithmConfig) can be adjusted
+        # inside the code as well.
+        # Changes made in this with block are tracked for checkpoint reloads
+        setup.config.training(num_epochs=10)
     results = run_tune(setup)
 ```
 

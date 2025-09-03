@@ -297,7 +297,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
         # NOTE: RunConfig V2 is coming up in the future, which will disallow some callbacks
         if TYPE_CHECKING:  # Currently type-checker treats RunConfig as the new version, which is wrong
             callbacks = cast("list[tune.Callback]", callbacks)
-        logger.info("Creating run config with %s callbacks", len(callbacks))
+        logger.debug("Creating run config with %s callbacks %s", len(callbacks), callbacks or "")
         try:
             RunConfig = tune.RunConfig
             FailureConfig = tune.FailureConfig
