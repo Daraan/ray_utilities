@@ -7,7 +7,7 @@ import pytest
 import ray.tune.logger
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
-from ray_utilities.misc import RE_GET_TRIAL_ID
+from ray_utilities.misc import RE_TRIAL_ID_FROM_CHECKPOINT
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import Cases, DisableLoggers, check_args, iter_cases, patch_args
 from ray_utilities.training.helpers import make_divisible
@@ -68,12 +68,12 @@ class TestNoLoggers(DisableLoggers):
 @pytest.mark.basic
 class TestMisc(TestCase):
     def test_re_find_id(self):
-        match = RE_GET_TRIAL_ID.search("sdf_sdgsg_12:12:id=sd353_00002_sdfgf")
+        match = RE_TRIAL_ID_FROM_CHECKPOINT.search("sdf_sdgsg_12:12:id=sd353_00002_sdfgf")
         assert match is not None
         self.assertEqual(match.group(), "id=sd353_00002")
-        self.assertEqual(match.group(1), "sd353_00002")
-        self.assertEqual(match.groups(), ("sd353_00002",))
-        self.assertEqual(match.groupdict(), {"trial_id": "sd353_00002"})
+        self.assertEqual(match.group(1), "sd353")
+        self.assertEqual(match.groups(), ("sd353", "00002"))
+        self.assertEqual(match.groupdict(), {"trial_id": "sd353", "checkpoint": "00002"})
 
     def test_make_divisible(self):
         a, b = random.randint(1, 1000), random.randint(1, 1000)

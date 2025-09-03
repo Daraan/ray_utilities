@@ -29,16 +29,16 @@ if TYPE_CHECKING:
 
 _T = TypeVar("_T")
 
-RE_GET_TRIAL_ID = re.compile("id=(?P<trial_id>[a-zA-Z0-9]+_[0-9]+)")
+RE_TRIAL_ID_FROM_CHECKPOINT = re.compile("id=(?P<trial_id>[a-zA-Z0-9]+)_(?P<checkpoint>[0-9]+)")
 """Regex pattern to extract the trial ID from checkpoint paths.
 
-This pattern assumes the trial ID is in the format 'id=<part1>_<sample_number>'.
+This pattern assumes the trial ID is in the format 'id=<part1>_<checkpoint_number>'.
 The length of each block is not validated.
 
 Example:
-    >>> match = RE_GET_TRIAL_ID.search("path/to/checkpoint/id=abc123_456")
+    >>> match = RE_TRIAL_ID_FROM_CHECKPOINT.search("path/to/checkpoint/id=abc123_000001")
     >>> match.group("trial_id") if match else None
-    'abc123_456'
+    'abc123'
 """
 
 
@@ -77,7 +77,7 @@ def trial_name_creator(trial: Trial) -> str:
         "id=" + trial.trial_id,
     ]
     if "cli_args" in trial.config and trial.config["cli_args"]["from_checkpoint"]:
-        match = RE_GET_TRIAL_ID.match(trial.config["cli_args"]["from_checkpoint"])
+        match = RE_TRIAL_ID_FROM_CHECKPOINT.match(trial.config["cli_args"]["from_checkpoint"])
         if match:
             fields.append("from_checkpoint=" + match.group("trial_id"))
     setup_cls = trial.config.get("setup_cls", None)

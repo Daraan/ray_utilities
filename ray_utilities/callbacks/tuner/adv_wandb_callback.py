@@ -9,8 +9,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from ray.air.integrations.wandb import WandbLoggerCallback, _clean_log, _QueueItem
 
+from ray_utilities import run_id
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS
-from ray_utilities.misc import RE_GET_TRIAL_ID
+from ray_utilities.misc import RE_TRIAL_ID_FROM_CHECKPOINT
 
 from ._save_video_callback import SaveVideoFirstCallback
 
@@ -32,7 +33,22 @@ _logger = logging.getLogger(__name__)
 
 
 class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
-    AUTO_CONFIG_KEYS: ClassVar[list[str]] = list({*WandbLoggerCallback.AUTO_CONFIG_KEYS, "trainable_name"})
+    AUTO_CONFIG_KEYS: ClassVar[list[str]] = list(
+        {
+            *WandbLoggerCallback.AUTO_CONFIG_KEYS,
+            "trainable_name",
+            "experiment_group",
+            "experiment_name",
+            "run_id",
+            "experiment_key",
+        }
+    )
+
+    if not TYPE_CHECKING:
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._trials_created = 0
 
     def log_trial_start(self, trial: "Trial"):
         config = trial.config.copy()
@@ -62,6 +78,9 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
         # remove unpickleable items!
         config: dict[str, Any] = _clean_log(config)  # pyright: ignore[reportAssignmentType]
         config = {key: value for key, value in config.items() if key not in self.excludes}
+        config["run_id"] = run_id
+        config.setdefault("experiment_id", run_id)
+        config["experiment_key"] = f"{run_id:0<20}xXx{trial.trial_id}xXx{self._trials_created:0>4}"
         # --- New Code --- : Remove nested keys
         for nested_key in filter(lambda x: "/" in x, self.excludes):
             key, sub_key = nested_key.split("/")
@@ -71,7 +90,7 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
         assert "test" not in config["cli_args"]
         fork_from = None  # new run
         if trial.config["cli_args"].get("from_checkpoint"):
-            match = RE_GET_TRIAL_ID.search(trial.config["cli_args"]["from_checkpoint"])
+            match = RE_TRIAL_ID_FROM_CHECKPOINT.search(trial.config["cli_args"]["from_checkpoint"])
             # get id of run
             if match is None:
                 # Deprecated:
@@ -155,6 +174,7 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
     ):
         """Called each time a trial reports a result."""
         if trial not in self._trial_logging_actors:
+            self._trials_created += 1
             self.log_trial_start(trial)
 
         result_clean = _clean_log(self.preprocess_videos(result))

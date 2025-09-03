@@ -14,6 +14,7 @@ from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
 from ray.tune.experiment import Trial
 from ray.tune.utils import flatten_dict
 
+from ray_utilities import run_id
 from ray_utilities.callbacks.tuner._save_video_callback import SaveVideoFirstCallback
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, EPISODE_VIDEO_PREFIX
 from ray_utilities.video.numpy_to_video import numpy_to_video
@@ -104,6 +105,17 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
     ]
     """Metrics that are not logged"""
 
+    _other_results: ClassVar[list[str]] = [
+        *CometLoggerCallback._other_results,
+        "comment",
+        "cli_args/comment",
+        "run_id",
+        "env_runners/environments/seeds",
+        "evaluation/env_runners/environments/seeds",
+        "experiment_name",
+        "experiment_group",
+    ]
+
     def __init__(
         self,
         *,
@@ -113,12 +125,7 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         # Note: maybe want to log these in an algorithm debugger
         exclude_metrics: Optional[Iterable[str]] = None,
         # NOTE: maintain/sync in _tuner_callbacks_setup.py
-        log_to_other: Optional[Iterable[str]] = (
-            "comment",
-            "cli_args/comment",
-            "evaluation/env_runners/environments/seeds",
-            "env_runners/environments/seeds",
-        ),
+        log_to_other: Optional[Iterable[str]] = (),
         log_cli_args: bool = True,
         video_keys: Iterable[tuple[str, ...]] = DEFAULT_VIDEO_DICT_KEYS,  # NOTE: stored as string not list of keys
         log_pip_packages: bool = False,
@@ -183,6 +190,8 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         self._log_pip_packages = log_pip_packages and not experiment_kwargs.get("log_env_details", False)  # noqa: RUF056
         """If log_env_details is True pip packages are already logged."""
 
+        self._trials_created = 0
+
     def _check_workspaces(self, trial: Trial) -> Literal[0, 1, 2]:
         """
         Return:
@@ -236,9 +245,10 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         if trial not in self._trial_experiments:
             experiment_cls = Experiment if self.online else OfflineExperiment
             experiment_kwargs = self.experiment_kwargs.copy()
-            experiment_kwargs.setdefault("experiment_key", trial.trial_id)
+            # Key needs to be at least 32
+            experiment_kwargs["experiment_key"] = f"{run_id:0<20}xXx{trial.trial_id}xXx{self._trials_created:0>4}"
             self._check_workspaces(trial)
-            experiment = experiment_cls(**self.experiment_kwargs)
+            experiment = experiment_cls(**experiment_kwargs)
             if self._log_pip_packages:
                 try:
                     experiment.set_pip_packages()
@@ -251,6 +261,7 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
             self._trial_experiments[trial] = experiment
             # Set global experiment to None to allow for multiple experiments.
             set_global_experiment(None)
+            self._trials_created += 1
         else:
             experiment = self._trial_experiments[trial]
 

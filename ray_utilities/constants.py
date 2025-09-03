@@ -18,13 +18,16 @@ Example:
     ...     pass
 """
 
+import hashlib
 import os
-from pathlib import Path
+import sys
 import time
+from pathlib import Path
 
 import gymnasium as gym
-from packaging.version import Version, parse as parse_version
 import ray
+from packaging.version import Version
+from packaging.version import parse as parse_version
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
     EPISODE_RETURN_MEAN,
@@ -236,4 +239,24 @@ and not during trainable initialization.
 Note:
     This is used internally by the checkpoint/restore system and typically should
     not be set manually in experiment configurations.
+"""
+
+# Constant for one execution
+
+entry_point_id = hashlib.blake2b(
+    os.path.basename(sys.argv[0]).encode(), digest_size=6, usedforsecurity=False
+).hexdigest()
+"""Hash of the entry point script's filename, i.e. sys.argv[0]'s basename"""
+
+run_id = (
+    entry_point_id
+    + "xXXXXx"
+    + hashlib.blake2b(os.urandom(8) + entry_point_id.encode(), digest_size=6, usedforsecurity=False).hexdigest()
+)
+"""
+A short randomly created UUID for the current execution.
+It is build as: entry_point_id + "xXXXXx" + random and is 3 * 6 = 18 characters long.
+
+It can be used to easier identify trials that have the same entry point and were run
+during the same execution
 """

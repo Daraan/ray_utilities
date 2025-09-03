@@ -22,16 +22,19 @@ Example:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 # fmt: off
 try:
     # Import comet early for its monkey patch
-    import comet_ml  # noqa: F401
+    import comet_ml
 except ImportError:
     pass
+else:
+    del comet_ml
 # fmt: on
 
+from ray_utilities.constants import entry_point_id, run_id
 from ray_utilities.misc import get_trainable_name, is_pbar, trial_name_creator
 from ray_utilities.nice_logger import nice_logger
 from ray_utilities.random import seed_everything
@@ -41,25 +44,26 @@ from ray_utilities.training.functional import create_default_trainable, default_
 from ray_utilities.training.helpers import episode_iterator
 from ray_utilities.typing.algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
 
-logger = nice_logger(__name__, level="DEBUG")
-logger.info("Ray utilities imported")
-logger.debug("Ray utilities logger debug level set")
-
-
 __all__ = [
     "AlgorithmReturnData",
     "DefaultTrainable",
     "StrictAlgorithmReturnData",
     "create_default_trainable",
     "default_trainable",
+    "entry_point_id",
     "episode_iterator",
     "get_trainable_name",
     "is_pbar",
     "nice_logger",
+    "run_id",
     "run_tune",
     "seed_everything",
     "trial_name_creator",
 ]
+
+logger = nice_logger(__name__, level="DEBUG")
+logger.info("Ray utilities imported")
+logger.debug("Ray utilities logger debug level set")
 
 
 def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, Any]]:
@@ -104,3 +108,7 @@ def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, An
         if key_orig != k:
             del nested_metrics[key_orig]
     return nested_metrics
+
+
+if TYPE_CHECKING:
+    del Any, TYPE_CHECKING
