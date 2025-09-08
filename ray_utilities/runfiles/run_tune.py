@@ -22,6 +22,8 @@ after setting up algorithms, hyperparameters, and training configurations.
 from __future__ import annotations
 
 import logging
+import sys
+import time
 from inspect import isclass
 from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar
 
@@ -32,6 +34,9 @@ from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.misc import raise_tune_errors
 from ray_utilities.random import seed_everything
 from ray_utilities.training.default_class import TrainableBase
+
+if sys.version_info < (3, 11):
+    from exceptiongroup import BaseExceptionGroup
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
@@ -160,13 +165,43 @@ def run_tune(
         return _run_without_tuner(setup=setup, trainable=trainable, test_mode_func=test_mode_func)
     # Use tune.with_parameters to pass large objects to the trainable
 
+    results = None
+    fit_error = None
+    fallback_error = None
     tuner = setup.create_tuner()
-    results = tuner.fit()
-    if len(results) == 0:
+    try:
+        results = tuner.fit()
+    except (KeyboardInterrupt, Exception) as e:
+        if isinstance(e, KeyboardInterrupt):
+            # In case we do not want to upload results
+            logger.info(
+                "Tuning interrupted. Will try to upload gathered results now. "
+                "Waiting 2 sec before continuing... "
+                "Press Ctrl + C again to exit immediatly."
+            )
+            time.sleep(2)
+        fit_error = e
+        logger.error("Error occurred during tuning: %s", fit_error)
+        try:
+            results = tuner.get_results()
+        except (RuntimeError, Exception) as e2:
+            logger.error("Error occurred while getting results: %s", e)
+            fallback_error = e2
+    if not results:
         logger.warning("No results returned from the tuner.")
-    setup.upload_offline_experiments(results)
-    if raise_errors:
+    setup.upload_offline_experiments(results, tuner)
+    if raise_errors and results is not None:
         raise_tune_errors(results)
+    if fallback_error and fit_error:
+        # Use Base in case of KeyboardInterrupt
+        raise BaseExceptionGroup(
+            f"Encountered an error {fit_error} and could not call get_results {fallback_error!r}",
+            [fit_error, fallback_error],
+        )
+    if fit_error:
+        raise fit_error
+    assert results is not None
+
     return results
 
 
