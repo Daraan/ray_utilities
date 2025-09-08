@@ -20,7 +20,7 @@ def save_model_config_and_architecture(*, algorithm: "Algorithm", **kwargs) -> N
     module = _get_module(algorithm)
     config = _get_module_config(module)
     for k, v in config.items():
-        config[k] = repr(v).replace(r"\n", "\n")
+        config[k] = repr(v).replace("\\n", "\n")
     arch = _get_model_architecture(module)
     output = {
         "config": config,

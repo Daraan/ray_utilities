@@ -177,7 +177,7 @@ def run_tune(
             logger.info(
                 "Tuning interrupted. Will try to upload gathered results now. "
                 "Waiting 2 sec before continuing... "
-                "Press Ctrl + C again to exit immediatly."
+                "Press Ctrl + C again to exit immediately."
             )
             time.sleep(2)
         fit_error = e

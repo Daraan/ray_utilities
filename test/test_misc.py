@@ -73,6 +73,7 @@ class TestMisc(TestCase):
         self.assertEqual(match.groups(), ("52e65_00002", "52e65", "00002"))
         self.assertEqual(match.group(), "id=52e65_00002")
         self.assertEqual(match.group(1), "52e65_00002")
+        self.assertEqual(match.group("trial_id"), "52e65_00002")
         self.assertEqual(
             match.groupdict(), {"trial_id": "52e65_00002", "trial_id_part1": "52e65", "trial_number": "00002"}
         )
@@ -82,6 +83,7 @@ class TestMisc(TestCase):
         self.assertEqual(match.groups(), ("52e65", "52e65", None))
         self.assertEqual(match.group(), "id=52e65")
         self.assertEqual(match.group(1), "52e65")
+        self.assertEqual(match.group("trial_id"), "52e65")
         self.assertEqual(match.groupdict(), {"trial_id": "52e65", "trial_id_part1": "52e65", "trial_number": None})
 
     def test_make_divisible(self):

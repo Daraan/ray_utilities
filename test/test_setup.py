@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import os
 import subprocess
 from ast import literal_eval
@@ -16,7 +17,7 @@ from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_bu
 from ray_utilities.misc import raise_tune_errors
 from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.runfiles import run_tune
-from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
+from ray_utilities.setup.ppo_mlp_setup import MLPSetup, PPOMLPSetup
 from ray_utilities.training.helpers import make_divisible
 from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultIterationStopper
 
@@ -899,6 +900,31 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
                 self.assertEqual(len(total_steps), 1, total_steps)  # all should have the same step count at end
                 self.assertEqual(budget["total_steps"], next(iter(total_steps)))
                 self.assertEqual(len(iterations), 3, iterations)
+
+    def test_model_config_saver_callback_creates_json(self):
+        # Use AlgorithmSetup to build a real Algorithm
+        with (
+            patch_args(
+                "--fcnet_hiddens", "[11, 12, 13]", "-it", 1, "-J", 1, "--wandb", "offline", "--comet", "offline"
+            ),
+            MLPSetup() as setup,
+        ):
+            setup.config.env_runners(num_env_runners=0)
+        # Test with tuner
+        tuner = setup.create_tuner()
+        tuner._local_tuner.get_run_config().checkpoint_config.checkpoint_at_end = False  # pyright: ignore[reportOptionalMemberAccess]
+        results = tuner.fit()
+        out_path = os.path.join(results[0].path, "model_architecture.json")
+        self.assertTrue(os.path.exists(out_path))
+        with open(out_path, "r") as f:
+            data = json.load(f)
+        self.assertIn("config", data)
+        self.assertIn("architecture", data)
+        self.assertIsInstance(data["architecture"].get("layers"), list)
+        self.assertIn("in_features=11, out_features=12", data["architecture"]["summary"])
+        self.assertIn("in_features=12, out_features=13", data["architecture"]["summary"])
+        # Value Function:
+        self.assertIn("in_features=13, out_features=1", data["architecture"]["summary"])
 
 
 class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpus=4):

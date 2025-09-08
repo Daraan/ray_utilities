@@ -1236,7 +1236,11 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             non_existing_results = [res for res in results if not (Path(res.path) / "wandb").exists()]
             # How to get the trial id?
             if non_existing_results:
-                not_synced_trial_ids = {RE_GET_TRIAL_ID.search(res.path) for res in non_existing_results}
+                not_synced_trial_ids = {
+                    match.group("trial_id")
+                    for res in non_existing_results
+                    if (match := RE_GET_TRIAL_ID.search(res.path))
+                }
                 non_synced_trials = [trial for trial in trials if trial.trial_id in not_synced_trial_ids]
                 result_paths.extend(Path(trial.local_path) / "wandb" for trial in non_synced_trials)  # pyright: ignore[reportArgumentType]
                 result_paths = list(filter(lambda p: p.exists(), result_paths))
