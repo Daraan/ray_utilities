@@ -53,12 +53,13 @@ from typing_extensions import Self, TypedDict, TypeVar, deprecated
 from ray_utilities import run_id
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
+from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 from ray_utilities.comet import CometArchiveTracker
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.typed_argument_parser import SupportsMetaAnnotations
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.environment import create_env
-from ray_utilities.misc import AutoInt, get_trainable_name
+from ray_utilities.misc import RE_GET_TRIAL_ID, AutoInt, get_trainable_name
 from ray_utilities.setup.tuner_setup import TunerSetup
 from ray_utilities.training.default_class import TrainableBase
 from ray_utilities.warn import (
@@ -1193,8 +1194,62 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 stderr.decode("utf-8"),
             )
 
+    def _get_wandb_paths(self, results: Optional[ResultGrid] = None, tuner: Optional[tune.Tuner] = None) -> list[Path]:
+        if results is None:
+            if tuner is None:
+                logger.warning("No results or tuner provided to get wandb paths, cannot get paths.")
+                return []
+            try:
+                results = tuner.get_results()  # if this works below works if we have a local tuner
+                trials = tuner._local_tuner.get_results()._experiment_analysis.trials  # pyright: ignore[reportOptionalMemberAccess]
+            except RuntimeError as e:
+                if not tuner._local_tuner or tuner._local_tuner.get_run_config().callbacks:  # assume there is a logger
+                    raise RuntimeError("Cannot get trials") from e
+                wandb_cb = next(
+                    cb
+                    for cb in tuner._local_tuner.get_run_config().callbacks  # pyright: ignore[reportOptionalIterable]
+                    if isinstance(cb, AdvWandbLoggerCallback)
+                )  # pyright: ignore[reportOptionalIterable]
+                trials = wandb_cb._trials
+            trial_paths = [Path(trial.local_path) / "wandb" for trial in trials if trial.local_path]
+            if len(trial_paths) != len(trials):
+                logger.error("Did not get all wandb paths %d of %d", len(trial_paths), len(trials))
+            return trial_paths
+        result_paths = [Path(result.path) / "wandb" for result in results]  # these are in the non-temp dir
+        try:
+            # compare paths for completeness
+            trials = tuner._local_tuner.get_results()._experiment_analysis.trials  # pyright: ignore[reportOptionalMemberAccess]
+            trial_paths = [Path(trial.local_path) / "wandb" for trial in trials if trial.local_path]
+        except Exception as e:
+            logger.exception("Could not get trials or their paths")
+        else:
+            existing_in_result = sum(p.exists() for p in result_paths)
+            existing_in_trial = sum(p.exists() for p in trial_paths)
+            if existing_in_result != existing_in_trial:
+                logger.error(
+                    "Count of existing trials paths did not match %d vs %d: \nResult Paths:\n%s\nTrial Paths:\n%s",
+                    existing_in_result,
+                    existing_in_trial,
+                    result_paths,
+                    trial_paths,
+                )
+            non_existing_results = [res for res in results if not (Path(res.path) / "wandb").exists()]
+            # How to get the trial id?
+            if non_existing_results:
+                not_synced_trial_ids = {RE_GET_TRIAL_ID.search(res.path) for res in non_existing_results}
+                non_synced_trials = [trial for trial in trials if trial.trial_id in not_synced_trial_ids]
+                result_paths.extend(Path(trial.local_path) / "wandb" for trial in non_synced_trials)  # pyright: ignore[reportArgumentType]
+                result_paths = list(filter(lambda p: p.exists(), result_paths))
+                logger.info("Added trial.paths to results, now having %d paths", len(result_paths))
+        return result_paths
+
     def wandb_upload_offline_experiments(
-        self, results: ResultGrid, *, wait: bool = True, parallel_uploads: int = 5
+        self,
+        results: Optional[ResultGrid],
+        tuner: Optional[tune.Tuner] = None,
+        *,
+        wait: bool = True,
+        parallel_uploads: int = 5,
     ) -> list[subprocess.Popen] | None:
         """
         Upload wandb's offline folder of the session to wandb, similar to the `wandb sync` shell command
@@ -1209,15 +1264,14 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         num_uploaded = 0
         uploads: list[subprocess.Popen[bytes]] = []
         finished_uploads: set[subprocess.Popen[bytes]] = set()
-        for result in results:
+        wandb_paths: list[Path] = self._get_wandb_paths(results, tuner)
+        global_wandb_dir = os.environ.get(
+            "WANDB_DIR", None
+        )  # FIXME: If this is set it might upload the same directory multiple times
+        if global_wandb_dir and (global_wandb_dir := Path(global_wandb_dir)).exists():
+            wandb_paths.append(global_wandb_dir)
+        for wandb_dir in wandb_paths:
             # Find offline run directories
-            wandb_dir = os.environ.get(
-                "WANDB_DIR", None
-            )  # FIXME: If this is set it might upload the same directory multiple times
-            if wandb_dir is None:
-                wandb_dir = Path(result.path) / "wandb"
-            else:
-                wandb_dir = Path(wandb_dir)
             offline_runs = list(wandb_dir.glob("offline-run-*"))
             if len(offline_runs) > 1:
                 logger.warning("Multiple wandb offline directories found in %s: %s", wandb_dir, offline_runs)
@@ -1253,7 +1307,11 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 self._report_wandb_upload(process)
                 finished_uploads.add(process)
             uploads = []
-            logger.info("Uploaded all %d wandb offline runs from %s.", num_uploaded, results.experiment_path)
+            logger.info(
+                "Uploaded all %d wandb offline runs from %s.",
+                num_uploaded,
+                results.experiment_path if results else f"local wandb fallback paths: {wandb_paths}",
+            )
             return None
         unfinished_uploads = uploads.copy()
         for process in uploads:
@@ -1273,16 +1331,15 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         # There are still processes running
         return unfinished_uploads
 
-    def upload_offline_experiments(self, results: Optional[ResultGrid] = None):
+    def upload_offline_experiments(self, results: Optional[ResultGrid] = None, tuner: Optional[tune.Tuner] = None):
         unfinished_wandb_uploads = None
         if self.args.wandb and "upload" in self.args.wandb:
             if results is None:
                 logger.error(
                     "Wandb upload requested, but no results provided. This will not upload any offline experiments."
                 )
-                return
-            try:
-                unfinished_wandb_uploads = self.wandb_upload_offline_experiments(results)
+            try:  # if no results (due to a failure) get them in a more hacky way
+                unfinished_wandb_uploads = self.wandb_upload_offline_experiments(results, tuner)
             except Exception:
                 logger.exception("Error while uploading offline experiments to WandB: %s")
         if self.args.comet and "upload" in self.args.comet:
