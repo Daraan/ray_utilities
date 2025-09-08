@@ -266,6 +266,7 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
             # log model config
         if trial not in self._logged_architectures and "model_architecture.json" in os.listdir(trial.path):
             if trial.path is not None:
+                result = result.copy()
                 file_path = os.path.abspath(os.path.join(trial.path, "model_architecture.json"))
                 artifact = FutureFile(file_path, Path(file_path).parent, policy="live")
                 result["model_architecture"] = artifact  # pyright: ignore[reportGeneralTypeIssues]
