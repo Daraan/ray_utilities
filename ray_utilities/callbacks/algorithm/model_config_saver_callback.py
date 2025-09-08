@@ -26,7 +26,7 @@ def save_model_config_and_architecture(*, algorithm: "Algorithm", **kwargs) -> N
         "config": config,
         "architecture": arch,
     }
-    out_path = os.path.join("./model_architecture.json")
+    out_path = "./model_architecture.json"
     try:
         with open(out_path, "w") as f:
             json.dump(output, f, indent=2)
