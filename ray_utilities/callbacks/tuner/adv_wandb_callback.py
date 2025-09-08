@@ -1,22 +1,28 @@
 from __future__ import annotations
 
+import abc
 import logging
 import os
 import pickle
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
+from urllib.error import HTTPError
 
-from ray.air.integrations.wandb import WandbLoggerCallback, _clean_log, _QueueItem
+from ray.air.integrations.wandb import WandbLoggerCallback, _clean_log, _QueueItem, _WandbLoggingActor
+from ray.tune.utils import flatten_dict
 
 from ray_utilities import run_id
+from ray_utilities.comet import _LOGGER
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS
-from ray_utilities.misc import RE_TRIAL_ID_FROM_CHECKPOINT
+from ray_utilities.misc import RE_GET_TRIAL_ID
 
 from ._save_video_callback import SaveVideoFirstCallback
 
 if TYPE_CHECKING:
     from ray.tune.experiment import Trial
+    from wandb.sdk.interface.interface import PolicyName
 
     from ray_utilities.typing.metrics import (
         AutoExtendedLogMetricsDict,
@@ -25,11 +31,73 @@ if TYPE_CHECKING:
     )
 
 try:
-    from wandb import Video
+    from wandb import Artifact, Image, Video
 except ImportError:
     pass  # wandb not installed
+else:
+    from numbers import Number
+
+    import numpy as np
+    from wandb.sdk.data_types.base_types.wb_value import WBValue
+
+    def _is_allowed_type_patch(obj):
+        """Return True if type is allowed for logging to wandb"""
+        if isinstance(obj, np.ndarray) and obj.size == 1:
+            return isinstance(obj.item(), Number)
+        if isinstance(obj, Sequence) and len(obj) > 0:
+            return isinstance(obj[0], (Image, Video, WBValue))
+        return isinstance(obj, (Number, WBValue, FutureFile, FutureArtifact))
+
+    from ray.air.integrations import wandb as ray_wandb
+
+    ray_wandb._is_allowed_type = _is_allowed_type_patch
 
 _logger = logging.getLogger(__name__)
+
+
+class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
+    def _handle_result(self, result: dict) -> tuple[dict, dict]:
+        config_update = result.get("config", {}).copy()
+        log = {}
+        flat_result = flatten_dict(result, delimiter="/")
+
+        for k, v in flat_result.items():
+            if any(k.startswith(item + "/") or k == item for item in self._exclude):
+                continue
+            if any(k.startswith(item + "/") or k == item for item in self._to_config):
+                config_update[k] = v
+            if isinstance(v, FutureFile):
+                try:
+                    self._wandb.save(v.global_str, base_path=v.base_path)
+                except (HTTPError, Exception) as e:
+                    _logger.error("Failed to log artifact: %s", e)
+            elif isinstance(v, FutureArtifact):
+                # not serializable
+                artifact = Artifact(  # pyright: ignore[reportPossiblyUnboundVariable]
+                    name=v.name,
+                    type=v.type,
+                    description=v.description,
+                    metadata=v.metadata,
+                    incremental=v.incremental,
+                    **v.kwargs,
+                )
+                for file_dict in v._added_files:
+                    artifact.add_file(**file_dict)
+                for dir_dict in v._added_dirs:
+                    artifact.add_dir(**dir_dict)
+                for ref_dict in v._added_references:
+                    artifact.add_reference(**ref_dict)
+                try:
+                    self._wandb.log_artifact(artifact)
+                except (HTTPError, Exception) as e:
+                    _logger.error("Failed to log artifact: %s", e)
+            elif not _is_allowed_type_patch(v):
+                continue
+            else:
+                log[k] = v
+
+        config_update.pop("callbacks", None)  # Remove callbacks
+        return log, config_update
 
 
 class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
@@ -44,11 +112,21 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
         }
     )
 
-    if not TYPE_CHECKING:
+    _logger_actor_cls = _WandbLoggingActorWithArtifactSupport
+
+    _logged_architectures: set[Trial]
+    if not TYPE_CHECKING:  # keep signature of parent
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self._trials_created = 0
+            self._logged_architectures = set()
+
+    def on_trial_start(self, iteration: int, trials: list["Trial"], trial: "Trial", **info):
+        super().on_trial_start(iteration, trials, trial, **info)
+        if self._trials_created != len(trials):
+            _logger.warning("Number of created trials does not match the number of active trials.")
+        self._trials = trials  # keep them in case of a failure to access paths.
 
     def log_trial_start(self, trial: "Trial"):
         config = trial.config.copy()
@@ -80,7 +158,16 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
         config = {key: value for key, value in config.items() if key not in self.excludes}
         config["run_id"] = run_id
         config.setdefault("experiment_id", run_id)
-        config["experiment_key"] = f"{run_id:0<20}xXx{trial.trial_id}xXx{self._trials_created:0>4}".replace("_", "xXx")
+        # replace potential _ in trial_id
+        if "_" in trial.trial_id:
+            trial_number = int(trial.trial_id.split("_")[-1])
+            if trial_number != self._trials_created:
+                _logger.warning(
+                    "Trial number does not match the number of created trials: id=%s != %d",
+                    trial.trial_id,
+                    self._trials_created,
+                )
+        config["experiment_key"] = f"{run_id:0<20}xXx{trial.trial_id}xXx{self._trials_created:0>4}".replace("_", "x00x")
         # --- New Code --- : Remove nested keys
         for nested_key in filter(lambda x: "/" in x, self.excludes):
             key, sub_key = nested_key.split("/")
@@ -90,7 +177,7 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
         assert "test" not in config["cli_args"]
         fork_from = None  # new run
         if trial.config["cli_args"].get("from_checkpoint"):
-            match = RE_TRIAL_ID_FROM_CHECKPOINT.search(trial.config["cli_args"]["from_checkpoint"])
+            match = RE_GET_TRIAL_ID.search(trial.config["cli_args"]["from_checkpoint"])
             # get id of run
             if match is None:
                 # Deprecated:
@@ -138,6 +225,7 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
         wandb_init_kwargs.update(self.kwargs)
 
         self._start_logging_actor(trial, exclude_results, **wandb_init_kwargs)
+        self._trials_created += 1
 
     @staticmethod
     def preprocess_videos(metrics: dict[Any, Any] | AutoExtendedLogMetricsDict) -> dict[Any, Any]:
@@ -174,11 +262,128 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
     ):
         """Called each time a trial reports a result."""
         if trial not in self._trial_logging_actors:
-            self._trials_created += 1
             self.log_trial_start(trial)
+            # log model config
+        if trial not in self._logged_architectures and "model_architecture.json" in os.listdir(trial.path):
+            if trial.path is not None:
+                file_path = os.path.abspath(os.path.join(trial.path, "model_architecture.json"))
+                artifact = FutureFile(file_path, Path(file_path).parent, policy="live")
+                result["model_architecture"] = artifact  # pyright: ignore[reportGeneralTypeIssues]
+                self._logged_architectures.add(trial)
+                _LOGGER.debug("Storing future Artifact %s", artifact.to_dict())
+            else:
+                _LOGGER.error("Cannot save model_architecture as trial.path is None")
 
         result_clean = _clean_log(self.preprocess_videos(result))
         if not self.log_config:
             # Config will be logged once log_trial_start
             result_clean.pop("config", None)  # type: ignore
         self._trial_queues[trial].put((_QueueItem.RESULT, result_clean))
+
+
+class _WandbFuture(abc.ABC):
+    @abc.abstractmethod
+    def json_encode(self) -> dict[str, Any]: ...
+
+    def to_dict(self):
+        return self.json_encode()
+
+
+class FutureFile(_WandbFuture):
+    """A file to be logged to WandB for this run, has to be compatible with :meth:`wandb.save`."""
+
+    def __init__(
+        self,
+        glob_str: str | os.PathLike,
+        base_path: str | os.PathLike | None = None,
+        policy: PolicyName = "live",
+    ) -> None:
+        self.global_str = glob_str
+        self.base_path = base_path
+        self.policy = policy
+
+    def json_encode(self) -> dict[str, Any]:
+        return {
+            "glob_str": self.global_str,
+            "base_path": self.base_path,
+            "policy": self.policy,
+        }
+
+
+class FutureArtifact(_WandbFuture):
+    def __init__(
+        self,
+        name: str,
+        type: str,
+        description: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        *,
+        incremental: bool = False,
+        **kwargs,
+    ):
+        if not re.match(r"^[a-zA-Z0-9_\-.]+$", name):
+            raise ValueError(
+                f"Artifact name may only contain alphanumeric characters, dashes, "
+                f"underscores, and dots. Invalid name: {name}"
+            )
+        self.name = name
+        self.type = type
+        self.description = description
+        self.metadata = metadata
+        self.incremental = incremental
+        self.kwargs = kwargs
+        self._added_dirs = []
+        self._added_files = []
+        self._added_references = []
+
+    def add_reference(self, uri: Any | str, name: str | None = None, **kwargs) -> None:
+        self._added_references.append({"uri": uri, "name": name, **kwargs})
+
+    def add_file(
+        self,
+        local_path: str,
+        name: str | None = None,
+        *,
+        is_tmp: bool | None = False,
+        overwrite: bool = False,
+        **kwargs,
+    ) -> None:
+        self._added_files.append(
+            {
+                "local_path": local_path,
+                "name": name,
+                "is_tmp": is_tmp,
+                "overwrite": overwrite,
+                **kwargs,
+            }
+        )
+
+    def add_dir(
+        self,
+        local_path: str,
+        name: str | None = None,
+        **kwargs,
+    ) -> None:
+        self._added_dirs.append(
+            {
+                "local_path": local_path,
+                "name": name,
+                **kwargs,
+            }
+        )
+
+    def json_encode(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "type": self.type,
+            "description": self.description,
+            "metadata": self.metadata,
+            "incremental": self.incremental,
+            "kwargs": self.kwargs,
+            "added_dirs": self._added_dirs,
+            "added_files": self._added_files,
+            "added_references": self._added_references,
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.json_encode()

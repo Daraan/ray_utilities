@@ -27,6 +27,7 @@ import logging
 import sys
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, cast
 
+from ray_utilities.callbacks.algorithm.model_config_saver_callback import save_model_config_and_architecture
 from ray_utilities.warn import (
     warn_about_larger_minibatch_size,
     warn_if_batch_size_not_divisible,
@@ -335,7 +336,8 @@ def create_algorithm_config(
     # Stateless callbacks
     if not args["no_exact_sampling"]:
         add_callbacks_to_config(config, on_sample_end=exact_sampling_callback)
-    # Statefull callbacks
+    add_callbacks_to_config(config, on_algorithm_init=save_model_config_and_architecture)
+    # Stateful callbacks
     callbacks: list[type[DefaultCallbacks]] = []
     if discrete_eval:
         callbacks.append(DiscreteEvalCallback)

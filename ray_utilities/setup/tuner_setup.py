@@ -354,7 +354,11 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
                 # checkpoint_at_end=True,  # will raise error if used with function
             ),
             stop=stopper,
+            sync_config=self.create_sync_config(),
         )
+
+    def create_sync_config(self):
+        return tune.SyncConfig(sync_artifacts=True)
 
     @staticmethod
     def _grid_search_to_normal_search_space(
