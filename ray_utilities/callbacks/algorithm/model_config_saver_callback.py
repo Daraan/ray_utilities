@@ -95,7 +95,13 @@ def save_model_config_and_architecture(*, algorithm: "Algorithm", **kwargs) -> N
     module = _get_module(algorithm)
     config = _get_module_config(module)
     for k, v in config.items():
-        config[k] = re.sub(r"inf ", "inf,", re.sub(r"\ {2,}", ", ", repr(v).replace("\\n", "\n")))
+        # Step 1: Convert value to string and replace escaped newlines
+        value_str = repr(v).replace("\\n", "\n")
+        # Step 2: Replace multiple spaces with ', '
+        value_with_commas = re.sub(r"\ {2,}", ", ", value_str)
+        # Step 3: Replace 'inf ' with 'inf,'
+        cleaned_value = re.sub(r"inf ", "inf,", value_with_commas)
+        config[k] = cleaned_value
 
     arch = _get_model_architecture(module)
     output = {

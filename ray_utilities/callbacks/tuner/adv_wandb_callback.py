@@ -31,25 +31,19 @@ if TYPE_CHECKING:
     )
 
 try:
-    from wandb import Artifact, Image, Video
+    from wandb import Artifact, Video
 except ImportError:
     pass  # wandb not installed
 else:
-    from numbers import Number
-
-    import numpy as np
-    from wandb.sdk.data_types.base_types.wb_value import WBValue
+    from ray.air.integrations import wandb as ray_wandb
 
     def _is_allowed_type_patch(obj):
         """Return True if type is allowed for logging to wandb"""
-        if isinstance(obj, np.ndarray) and obj.size == 1:
-            return isinstance(obj.item(), Number)
-        if isinstance(obj, Sequence) and len(obj) > 0:
-            return isinstance(obj[0], (Image, Video, WBValue))
-        return isinstance(obj, (Number, WBValue, FutureFile, FutureArtifact))
+        if _original_is_allowed_type(obj):
+            return True
+        return isinstance(obj, (FutureFile, FutureArtifact))
 
-    from ray.air.integrations import wandb as ray_wandb
-
+    _original_is_allowed_type = ray_wandb._is_allowed_type
     ray_wandb._is_allowed_type = _is_allowed_type_patch
 
 _logger = logging.getLogger(__name__)
