@@ -74,7 +74,8 @@ def _run_without_tuner(
     if isclass(trainable):
         # If trainable is a class, instantiate it with the sampled parameters
         trainable_instance = trainable(setup.sample_params())
-        logger.warning("[TESTING] Using a Trainable class, without a Tuner, performing only one step")
+        logger.warning("[TESTING] Using a Trainable clas, without a Tuner relying on a stopper or 'done' return value.")
+
         tuner = setup.create_tuner()
         assert tuner._local_tuner
         stopper = tuner._local_tuner.get_run_config().stop
@@ -89,7 +90,8 @@ def _run_without_tuner(
                 break
         from ray_utilities.postprocessing import create_log_metrics  # noqa: PLC0415, circular import
 
-        return create_log_metrics(result)
+        result["config"].setdefault("_train_batch_size_per_learner", setup.config.train_batch_size_per_learner)
+        return create_log_metrics(result, log_stats=setup.args)
     if test_mode_func:
         return test_mode_func(trainable, setup)
     return trainable(setup.sample_params())

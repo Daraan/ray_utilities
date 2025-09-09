@@ -224,7 +224,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
                 self.assertEqual(trainable2._iteration, 2)
                 # Do not trust restored setup; still original args
                 self.assertEqual(trainable2._setup.args.comment, "A")
-                self.assertEqual(trainable2.algorithm_config.lr, 0.001)  # default value
+                self.assertEqual(trainable2.algorithm_config.lr, DefaultArgumentParser.lr)  # default value
                 # left unchanged
                 # From manual adjustment
                 self.assertEqual(trainable2.algorithm_config.num_epochs, 5)
