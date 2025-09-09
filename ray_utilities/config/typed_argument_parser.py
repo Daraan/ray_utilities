@@ -492,7 +492,7 @@ class RLlibArgumentParser(_EnvRunnerParser):
     minibatch_size: int = 128
     """Minibatch size used for backpropagation/optimization"""
 
-    lr: float | list[tuple[int, float]] = 1e-3
+    lr: float | list[tuple[int, float]] = 1e-4
 
     def configure(self) -> None:
         super().configure()

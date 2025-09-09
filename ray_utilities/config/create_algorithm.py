@@ -309,8 +309,8 @@ def create_algorithm_config(
         config.rl_module(model_config=model_config)
     # https://docs.ray.io/en/latest/rllib/package_ref/doc/ray.rllib.algorithms.algorithm_config.AlgorithmConfig.evaluation.html
     config.evaluation(
-        evaluation_interval=10,  # Note can be adjusted dynamically by DynamicEvalCallback
-        evaluation_duration=20,
+        evaluation_interval=16,  # Note can be adjusted dynamically by DynamicEvalInterval
+        evaluation_duration=50,
         evaluation_duration_unit="episodes",
         evaluation_num_env_runners=(
             2 if args["parallel"] and args["evaluation_num_env_runners"] < 2 else args["evaluation_num_env_runners"]
