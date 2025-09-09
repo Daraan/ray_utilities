@@ -339,7 +339,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     def setup(
         self,
-        args: Optional[Sequence[str]] = None,
+        args: Optional[list[str]] = None,
         *,
         init_config: bool = True,
         init_param_space: bool = True,
@@ -462,7 +462,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         return self.parser.parse_args()
 
     @staticmethod
-    def _remove_testing_args_from_argv():
+    def _remove_testing_args_from_argv(args: list[str] | None = None):
         """
         When run under test some shorthand commands might infer with the argument parser.
         Clean those away.
@@ -470,20 +470,21 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         Returns:
             sys.argv with --udiscovery ... -- removed if present.
         """
-        if "--udiscovery" in sys.argv:
-            start = sys.argv.index("--udiscovery")
-            if "--" in sys.argv[start:]:
+        args = sys.argv if args is None else args
+        if "--udiscovery" in args:
+            start = args.index("--udiscovery")
+            if "--" in args[start:]:
                 # slice args away until --
-                end = start + sys.argv[start:].index("--")
+                end = start + args[start:].index("--")
             else:
-                end = len(sys.argv)
-            argv = sys.argv[:start] + sys.argv[end + 1 :]
-            logger.info("Removing testing argument %s from sys.argv.", sys.argv[start : end + 1])
+                end = len(args)
+            argv = args[:start] + args[end + 1 :]
+            logger.info("Removing testing argument %s from command line arguments.", args[start : end + 1])
             return argv
-        return sys.argv[1:]
+        return sys.argv[1:] if args is sys.argv else args
 
     def parse_args(
-        self, args: Sequence[str] | None = None, *, known_only: bool | None = None, checkpoint: Optional[str] = None
+        self, args: list[str] | None = None, *, known_only: bool | None = None, checkpoint: Optional[str] = None
     ) -> NamespaceType[ParserType_co]:
         """
         Raises:
@@ -496,9 +497,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         try:
             # If Tap parser or compatible
             self.parser = cast("ParserType_co", self.parser)
-            parsed = self.parser.parse_args(
-                self._remove_testing_args_from_argv() if args is None else args, known_only=known_only
-            )
+            parsed = self.parser.parse_args(self._remove_testing_args_from_argv(args), known_only=known_only)
             extra_args = self.parser.extra_args
         except TypeError as e:
             if "'known_only' is an invalid invalid keyword" not in str(e):

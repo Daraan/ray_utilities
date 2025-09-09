@@ -387,6 +387,8 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                 # TODO: add no warning test
                 self.assertIn(COMPONENT_ENV_RUNNER, state.get("algorithm", {}))
 
+                # NOTE: If too many env_runners are created args.parallel is likely set to true,
+                # due to parsing of test args.
                 trainable2 = self.TrainableClass()
                 trainable2.set_state(deepcopy(state))
                 # class is missing in config dict

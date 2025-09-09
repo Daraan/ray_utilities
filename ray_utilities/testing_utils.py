@@ -558,6 +558,8 @@ class TestHelpers(unittest.TestCase):
         "--seed", "42",
         "--min_step_size", "16",  # try not to adjust total_steps
         "--max_step_size", "16",  # try not to adjust total_steps
+        "--num_envs_per_env_runner", "1",
+        "--fcnet_hiddens", "[4]"
     )  # fmt: skip
     def get_trainable(
         self,
@@ -1481,9 +1483,10 @@ class SetupDefaults(TestHelpers, DisableLoggers):
             change_log_level(dynamic_buffer_logger, logging.ERROR),
         ):
             self._DEFAULT_SETUP = AlgorithmSetup(init_trainable=False)
-            self._DEFAULT_SETUP_LOW_RES = AlgorithmSetup(init_trainable=False)
+            with patch_args("--fcnet_hiddens", "[8]"):
+                self._DEFAULT_SETUP_LOW_RES = AlgorithmSetup(init_trainable=False)
             self._DEFAULT_SETUP_LOW_RES.config.training(
-                train_batch_size_per_learner=128, minibatch_size=64, num_epochs=2
+                train_batch_size_per_learner=64, minibatch_size=32, num_epochs=2
             ).env_runners(num_env_runners=0, num_envs_per_env_runner=1, num_cpus_per_env_runner=0).learners(
                 num_learners=0, num_cpus_per_learner=0
             )

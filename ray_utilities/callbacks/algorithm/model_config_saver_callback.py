@@ -141,7 +141,7 @@ def _get_model_architecture(module: TorchRLModule) -> dict:
     arch = {}
     torch_model = getattr(module, "model", module)
     arch["summary_str"] = str(torch_model)
-    arch["sumamry_json"] = _jsonify_summary(arch["summary_str"])
+    arch["summary_json"] = _jsonify_summary(arch["summary_str"])
     arch["layers"] = _extract_layers(torch_model)
     return arch
 

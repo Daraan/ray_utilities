@@ -65,6 +65,7 @@ from ray_utilities.testing_utils import (
     InitRay,
     SetupDefaults,
     SetupWithCheck,
+    TestHelpers,
     TrainableWithChecks,
     iter_cases,
     patch_args,
@@ -937,7 +938,20 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
         # Use AlgorithmSetup to build a real Algorithm
         with (
             patch_args(
-                "--fcnet_hiddens", "[11, 12, 13]", "-it", 1, "-J", 1, "--wandb", "offline", "--comet", "offline"
+                "--fcnet_hiddens",
+                "[11, 12, 13]",
+                "-it",
+                1,
+                "-J",
+                1,
+                "--wandb",
+                "offline",
+                "--comet",
+                "offline",
+                "--batch_size",
+                32,
+                "--num_envs_per_env_runner",
+                1,
             ),
             MLPSetup() as setup,
         ):
@@ -953,13 +967,13 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
         self.assertIn("config", data)
         self.assertIn("architecture", data)
         self.assertIsInstance(data["architecture"].get("layers"), list)
-        self.assertIn("in_features=11, out_features=12", data["architecture"]["summary"])
-        self.assertIn("in_features=12, out_features=13", data["architecture"]["summary"])
+        self.assertIn("in_features=11, out_features=12", data["architecture"]["summary_str"])
+        self.assertIn("in_features=12, out_features=13", data["architecture"]["summary_str"])
         # Value Function:
-        self.assertIn("in_features=13, out_features=1", data["architecture"]["summary"])
+        self.assertIn("in_features=13, out_features=1", data["architecture"]["summary_str"])
 
 
-class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpus=4):
+class TestMetricsRestored(InitRay, DisableGUIBreakpoints, TestHelpers, num_cpus=4):
     def _test_checkpoint_values(self, result1: dict[str, Any], result2: dict[str, Any], msg: Optional[str] = None):
         """Test NUM_ENV_STEPS_SAMPLED and NUM_ENV_STEPS_PASSED_TO_LEARNER values of two training results."""
         env_runner1 = result1
@@ -1046,6 +1060,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
             "--minibatch_size", expected_minibatch_size,
             "--iterations", str(frequency * num_checkpoints),
             "--seed", str(cli_seed),
+            "--fcnet_hiddens", "[4]",
+            "--num_envs_per_env_runner", 1,
         ):  # fmt: skip
             assert OTHER_MINI_BATCH_SIZE != ENV_STEPS_PER_ITERATION
 
