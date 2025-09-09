@@ -22,6 +22,7 @@ Example:
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 
 # fmt: off
@@ -61,7 +62,8 @@ __all__ = [
     "trial_name_creator",
 ]
 
-logger = nice_logger(__name__, level="DEBUG")
+
+logger = nice_logger(__name__, level=os.environ.get("RAY_UTILITIES_LOG_LEVEL", "DEBUG"))
 logger.info("Ray utilities imported")
 logger.debug("Ray utilities logger debug level set")
 
@@ -110,5 +112,6 @@ def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, An
     return nested_metrics
 
 
-if TYPE_CHECKING:
-    del Any, TYPE_CHECKING
+if not TYPE_CHECKING:
+    del Any
+del os, TYPE_CHECKING

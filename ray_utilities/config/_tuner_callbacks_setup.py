@@ -201,6 +201,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
     def _set_comet_api_key() -> bool:
         if "COMET_API_KEY" in os.environ:
             return True
+        logger.debug("COMET_API_KEY not in environment variables, trying to load from ~/.comet_api_key.env")
         return load_dotenv(Path("~/.comet_api_key.env").expanduser())
 
     def create_callbacks(self) -> list[Callback]:
