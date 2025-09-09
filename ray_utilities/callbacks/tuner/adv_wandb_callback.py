@@ -162,6 +162,7 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
         if "_" in trial.trial_id:
             trial_number = int(trial.trial_id.split("_")[-1])
             if trial_number != self._trials_created:
+                # NOTE: might be out of order 00001 before 00000
                 _logger.warning(
                     "Trial number does not match the number of created trials: id=%s != %d",
                     trial.trial_id,

@@ -20,8 +20,8 @@ ParserType_co = TypeVar("ParserType_co", covariant=True, bound="MLPArgumentParse
 class MLPSetup(AlgorithmSetup[ParserType_co, ConfigType_co, AlgorithmType_co]):
     """Setup for MLP-based algorithms."""
 
-    def create_parser(self):
-        self.parser = MLPArgumentParser(allow_abbrev=False)
+    def create_parser(self, config_files=None):
+        self.parser = MLPArgumentParser(config_files=config_files, allow_abbrev=False)
         return self.parser
 
     @classmethod

@@ -623,6 +623,13 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                         logged_seeds[i], logged_seeds[j], f"Deque at index {i} is equal to deque at index {j}"
                     )
 
+    def test_cfg_loading(self):
+        with patch_args("-cfg", "./experiments/models/tiny.cfg"):
+            setup = MLPSetup(init_param_space=False)
+            self.assertEqual(setup.args.fcnet_hiddens, [8, 8])
+            module = str(setup.config.rl_module_spec.build())
+            self.assertIn("in_features=8, out_features=8", module)
+
 
 class TestPPOMLPSetup(InitRay, num_cpus=4):
     def test_basic(self):

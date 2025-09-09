@@ -300,9 +300,13 @@ class PatchArgsMixin(Tap):
 
         # Parse original CLI args (excluding script name)
         argv_ns, orig_unknown = parser_argv.parse_known_args(original_argv[1:])
+        if orig_unknown:
+            logger.warning("Passed unknown args for this parser via sys.argv: %s", orig_unknown, stacklevel=2)
 
         # Parse patch args
         patch_ns, patch_unknown = patch_parser.parse_known_args(list(map(str, args)))
+        if patch_unknown:
+            logger.warning("Patching with unknown args: %s", patch_unknown, stacklevel=2)
 
         # Remove NO_VALUE entries to keep those that were actually passed:
         passed_argv = {dest: v for dest, v in vars(argv_ns).items() if v is not NO_VALUE}
@@ -382,7 +386,7 @@ class PatchArgsMixin(Tap):
             else:
                 logger.warning("Unexpected nargs value for option '%s': %s", option, action.nargs)
                 new_args.extend([option] + (value if value is not None else []))
-        patched_argv = [original_argv[0], *map(str, new_args)]
+        patched_argv = [original_argv[0], *map(str, new_args), *orig_unknown]
         sys.argv = patched_argv
 
         try:
@@ -779,6 +783,19 @@ class OptunaArgumentParser(Tap):
             return
         if self.tune:
             self.optimize_config = True
+
+
+class ConfigFilePreParser(Tap):
+    config_files: list[str] = []  # noqa: RUF012
+    """
+    Files with additional commands that should be added to the commands passed
+    with a lower priority.
+    """
+
+    def configure(self) -> None:
+        self.allow_abbrev = False
+        super().configure()
+        self.add_argument("--config_files", "-cfg", nargs="+", default=[])
 
 
 class DefaultArgumentParser(

@@ -56,7 +56,7 @@ from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallba
 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 from ray_utilities.comet import CometArchiveTracker
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.config.typed_argument_parser import SupportsMetaAnnotations
+from ray_utilities.config.typed_argument_parser import ConfigFilePreParser, SupportsMetaAnnotations
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.environment import create_env
 from ray_utilities.misc import RE_GET_TRIAL_ID, AutoInt, get_trainable_name
@@ -271,6 +271,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         self,
         args: Optional[Sequence[str]] = None,
         *,
+        config_files: Optional[list[str | os.PathLike]] = None,
+        load_args: Optional[str | os.PathLike] = None,
         init_config: bool = True,
         init_param_space: bool = True,
         init_trainable: bool = True,
@@ -281,6 +283,12 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
         Args:
             args : Command-line arguments to parse. If None, defaults to sys.argv.
+            config_files: Additional files with command line arguments that are
+                loaded during argument parsing. Arguments have a lower priority than
+                those provided by the command line or :meth:`patch_args`.
+                See: https://github.com/swansonk14/typed-argument-parser?tab=readme-ov-file#saving-and-loading-arguments
+            load_args: A json file to load command line arguments from.
+                See: https://github.com/swansonk14/typed-argument-parser?tab=readme-ov-file#saving-and-loading-arguments
             init_config : Whether to initialize the configuration. Defaults to True.
             init_param_space : Whether to initialize the parameter space. Defaults to True.
             init_trainable : Whether to initialize the trainable component. Defaults to True.
@@ -299,11 +307,30 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             - self.create_parser(): Creates and assigns the argument parser.
             - self.setup(): Performs further setup based on initialization flags.
         """
+        cfg_file_parser = ConfigFilePreParser()
+        cfgs_from_cli = cfg_file_parser.parse_args(args, known_only=True)
+        if config_files:
+            logger.info("Adding config files %s to those found in args: %s", config_files, cfgs_from_cli)
+            config_files = config_files.copy()
+            config_files.extend(cfgs_from_cli.config_files)
+        else:
+            config_files = cfgs_from_cli.config_files  # pyright: ignore[reportAssignmentType]
+        pre_parsed_args = cfg_file_parser.extra_args
         self._config_overrides: Optional[dict[str, Any]] = None
+        self._config_files = config_files
+        self._load_args = load_args
         self.parser: Parser[ParserType_co]
-        self.parser = self.create_parser()
+        self.parser = self.create_parser(config_files)
+        if load_args:
+            if not hasattr(self.parser, "load"):
+                raise AttributeError(f"Parser {self.parser} has no attribute 'load' to support load_args")
+            # possibly add skip_unsettable=True
+            self.parser.load(load_args)  # pyright: ignore[reportAttributeAccessIssue]
+            if isinstance(self.parser, Tap):
+                logger.info("When using parse_args with a loaded config, argument parsing will be skipped.")
+                parse_args = False  # cannot parse again
         self.setup(
-            args,
+            pre_parsed_args,
             init_config=init_config,
             init_param_space=init_param_space,
             init_trainable=init_trainable,
@@ -371,8 +398,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     # region Argument Parsing
 
-    def create_parser(self) -> Parser[ParserType_co]:
-        self.parser = DefaultArgumentParser(allow_abbrev=False)
+    def create_parser(self, config_files: Optional[list[str | os.PathLike]] = None) -> Parser[ParserType_co]:
+        self.parser = DefaultArgumentParser(allow_abbrev=False, config_files=config_files)
         return self.parser
 
     def postprocess_args(self, args: NamespaceType[ParserType_co]) -> NamespaceType[ParserType_co]:
@@ -453,7 +480,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             argv = sys.argv[:start] + sys.argv[end + 1 :]
             logger.info("Removing testing argument %s from sys.argv.", sys.argv[start : end + 1])
             return argv
-        return sys.argv
+        return sys.argv[1:]
 
     def parse_args(
         self, args: Sequence[str] | None = None, *, known_only: bool | None = None, checkpoint: Optional[str] = None
@@ -1329,7 +1356,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         logger.info(
             "Uploaded %d wandb offline runs from %s, %d still in progress.",
             num_uploaded,
-            results.experiment_path,
+            results.experiment_path if results else f"local wandb fallback paths: {wandb_paths}",
             len(unfinished_uploads),
         )
         # There are still processes running
