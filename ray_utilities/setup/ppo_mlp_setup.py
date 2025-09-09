@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
-from ray_utilities.config.model_config_parsers import MLPConfigParser
-from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+from typing_extensions import TypeVar
+
+from ray_utilities.config.mlp_argument_parser import MLPArgumentParser
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co
 
@@ -13,11 +14,7 @@ if TYPE_CHECKING:
     from ray.rllib.algorithms.ppo import PPO, PPOConfig
 
 
-class MLPArgumentParser(MLPConfigParser, DefaultArgumentParser):
-    pass
-
-
-ParserType_co = TypeVar("ParserType_co", covariant=True, bound=MLPArgumentParser)
+ParserType_co = TypeVar("ParserType_co", covariant=True, bound="MLPArgumentParser", default="MLPArgumentParser")
 
 
 class MLPSetup(AlgorithmSetup[ParserType_co, ConfigType_co, AlgorithmType_co]):
@@ -31,9 +28,9 @@ class MLPSetup(AlgorithmSetup[ParserType_co, ConfigType_co, AlgorithmType_co]):
     def _model_config_from_args(cls, args: Namespace | ParserType_co) -> dict[str, Any] | None:
         base = super()._model_config_from_args(args) or {}
         return base | {
-            # Use Attributes from MLPConfigParser for the choice
+            # Use Attributes from MLPArgumentParser for the choice
             k: getattr(args, k)
-            for k in MLPConfigParser().parse_args([]).as_dict().keys()
+            for k in MLPArgumentParser().parse_args([]).as_dict().keys()
             if not k.startswith("_") and hasattr(args, k)
         }
 

@@ -2,17 +2,17 @@
 from ray_utilities import run_tune
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
-from ray_utilities.setup import PPOSetup
+from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 
 if __name__ == "__main__":
-    PPOSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
-    PPOSetup.group_name = "tune-batch_size"  # pyright: ignore
+    PPOMLPSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
+    PPOMLPSetup.group_name = "tune-batch_size"  # pyright: ignore
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
         "--tune", "batch_size",
         # Meta / less influential arguments for the experiment.
-        "--num_samples", len(PPOSetup.batch_size_sample_space["grid_search"]), # pyright: ignore
-        "--max_step_size", max(MAX_DYNAMIC_BATCH_SIZE, *PPOSetup.batch_size_sample_space["grid_search"]), # pyright: ignore
+        "--num_samples", len(PPOMLPSetup.batch_size_sample_space["grid_search"]), # pyright: ignore
+        "--max_step_size", max(MAX_DYNAMIC_BATCH_SIZE, *PPOMLPSetup.batch_size_sample_space["grid_search"]), # pyright: ignore
         "--tags", "tune-batch_size", # per default includes "<env_type>", "<agent_type>",
         "--comment", "Default training run. Tune batch size",
         "--env_seeding_strategy", "same",
@@ -24,5 +24,5 @@ if __name__ == "__main__":
         "--log_level", "INFO",
         "--log_stats", "most",
     ):  # fmt: skip
-        setup = PPOSetup()  # Replace with your own setup class
+        setup = PPOMLPSetup()  # Replace with your own setup class
         results = run_tune(setup)

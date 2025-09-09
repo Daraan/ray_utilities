@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 from ast import literal_eval
 from typing import Optional
 
-import tree
 from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
 from tap import Tap
+import tree
+
+from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 
 try:
     from frozenlist import FrozenList  # pyright: ignore[reportAssignmentType]
@@ -37,10 +37,10 @@ else:
     _head_fcnet_hiddens_default = FrozenList([])
     _head_fcnet_hiddens_default.freeze()
 
-__all__ = ["MLPConfigParser"]
+__all__ = ["MLPArgumentParser"]
 
 
-class MLPConfigParser(Tap):
+class SimpleMLPParser(Tap):
     """Keys must align with RLlib's DefaultModelConfig"""
 
     # Documentation taken from ray's DefaultModelConfig
@@ -135,3 +135,7 @@ class MLPConfigParser(Tap):
         self.fcnet_hiddens = tree.flatten(self.fcnet_hiddens)
         self.head_fcnet_hiddens = tree.flatten(self.head_fcnet_hiddens)
         super().process_args()
+
+
+class MLPArgumentParser(SimpleMLPParser, DefaultArgumentParser):
+    pass

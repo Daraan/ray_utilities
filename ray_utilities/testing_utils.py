@@ -93,11 +93,12 @@ from testfixtures import LogCapture
 from typing_extensions import Final, NotRequired, Required, Sentinel, TypeAliasType, get_origin, get_type_hints
 
 from ray_utilities.config import DefaultArgumentParser
+from ray_utilities.config.mlp_argument_parser import MLPArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import logger as dynamic_buffer_logger
 from ray_utilities.misc import raise_tune_errors
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger as experiment_base_logger
-from ray_utilities.setup.ppo_mlp_setup import MLPArgumentParser, PPOMLPSetup
+from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 from ray_utilities.setup.tuner_setup import TunerSetup
 from ray_utilities.setup.tuner_setup import logger as tuner_setup_logger
 from ray_utilities.training.default_class import DefaultTrainable, TrainableBase, TrainableStateDict

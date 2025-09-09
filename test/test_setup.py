@@ -12,7 +12,7 @@ import pyarrow as pa
 import pytest
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import NUM_ENV_RUNNERS_0_1_EQUAL
-from ray_utilities.config.model_config_parsers import MLPConfigParser
+from ray_utilities.config.mlp_argument_parser import SimpleMLPParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
 from ray_utilities.misc import raise_tune_errors
 from ray_utilities.nice_logger import set_project_log_level
@@ -642,7 +642,7 @@ class TestPPOMLPSetup(InitRay, num_cpus=4):
             setup = PPOMLPSetup()
         model_config = setup._model_config_from_args(setup.args)
         assert model_config, f"Not truthy {model_config}"
-        for k, v in MLPConfigParser().parse_args([]).as_dict().items():
+        for k, v in SimpleMLPParser().parse_args([]).as_dict().items():
             self.assertIn(k, model_config)
             self.assertEqual(v, model_config[k])
 
@@ -657,7 +657,7 @@ class TestPPOMLPSetup(InitRay, num_cpus=4):
             module: DefaultPPOTorchRLModule = algo.get_module()  # pyright: ignore[reportAssignmentType]
             mlp_encoder: torch.nn.Sequential = module.encoder.encoder.net.mlp
             # Use default for empty args
-            expected_layers = MLPConfigParser.fcnet_hiddens if not args else literal_eval(args[-1])
+            expected_layers = SimpleMLPParser.fcnet_hiddens if not args else literal_eval(args[-1])
             self.assertEqual(len(mlp_encoder), 2 * len(expected_layers))
             size_iter = iter(expected_layers)
             for layer in mlp_encoder:

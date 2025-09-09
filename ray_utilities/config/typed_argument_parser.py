@@ -795,4 +795,5 @@ class DefaultArgumentParser(
     PatchArgsMixin,
 ):
     def configure(self) -> None:
+        self.allow_abbrev = False
         super().configure()
