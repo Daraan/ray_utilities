@@ -356,6 +356,8 @@ def setup_trainable(
                 algo = config.build_algo(use_copy=True)  # copy=True is default; maybe use False
             except AttributeError:
                 algo = config.build()
+            # FIXME too much info in model_config (most cli args)
+
         # Load from checkpoint
         elif checkpoint_loader := (
             setup or setup_class

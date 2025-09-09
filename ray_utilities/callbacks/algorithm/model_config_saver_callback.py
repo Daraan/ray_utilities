@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
+import re
 from typing import TYPE_CHECKING
 
 from ray.rllib.core.rl_module.multi_rl_module import MultiRLModule
@@ -14,13 +14,89 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_Node = dict[str, str | dict[str, "_Node"] | list["_Node"]]
+
+
+def _jsonify_summary(summary: str) -> dict:
+    lines = [line.rstrip() for line in summary.strip().splitlines() if line.strip()]
+    stack = []
+    root: _Node = {}
+    current: _Node = root
+    indent_stack = [-1]
+    name_stack = []
+
+    def add_child(parent, name, child):
+        if "children" not in parent:
+            parent["children"] = {}
+        parent["children"][name] = child
+
+    for line in lines:
+        indent = len(line) - len(line.lstrip())
+        content = line.strip()
+
+        # Match module start: e.g. (encoder): TorchActorCriticEncoder(
+        m = re.match(r"\(([^)]+)\): ([^(]+)\($", content)
+        if m:
+            key, module = m.groups()
+            node = {"type": module, "children": {}}
+            add_child(current, key, node)
+            stack.append(current)
+            current = node
+            indent_stack.append(indent)
+            name_stack.append(key)
+            continue
+
+        # Match top-level module: e.g. DefaultPPOTorchRLModule(
+        m = re.match(r"([^(]+)\($", content)
+        if m:
+            module = m.group(1)
+            node = {"type": module}  # "children": {}
+            root = node
+            current = node
+            stack = []
+            indent_stack = [-1]
+            name_stack = [module]
+            continue
+
+        # Match layer: e.g. (0): Linear(in_features=4, out_features=1, bias=True)
+        m = re.match(r"\(([^)]+)\): ([^(]+)\((.*)\)", content)
+        if m:
+            key, layer, params = m.groups()
+            if "layers" not in current:
+                current["layers"] = []
+            layer_info = {"name": key, "type": layer}
+            if params:
+                layer_info["params"] = params
+            current["layers"].append(layer_info)  # pyright: ignore[reportAttributeAccessIssue]
+            continue
+
+        # Match simple layer: e.g. (1): Tanh()
+        m = re.match(r"\(([^)]+)\): ([^(]+)\(\)", content)
+        if m:
+            key, layer = m.groups()
+            if "layers" not in current:
+                current["layers"] = []
+            current["layers"].append({"name": key, "type": layer})  # pyright: ignore[reportAttributeAccessIssue]
+            continue
+
+        # Match block end: )
+        if content == ")":
+            while indent_stack and indent_stack[-1] >= indent:
+                current = stack.pop()
+                indent_stack.pop()
+                name_stack.pop()
+            continue
+
+    return root
+
 
 def save_model_config_and_architecture(*, algorithm: "Algorithm", **kwargs) -> None:
     """on_algorithm_init callback that saves the model config and architecture as json dict."""
     module = _get_module(algorithm)
     config = _get_module_config(module)
     for k, v in config.items():
-        config[k] = repr(v).replace("\\n", "\n")
+        config[k] = re.sub(r"inf ", "inf,", re.sub(r"\ {2,}", ", ", repr(v).replace("\\n", "\n")))
+
     arch = _get_model_architecture(module)
     output = {
         "config": config,
@@ -64,7 +140,8 @@ def _get_module_config(module: TorchRLModule | RLModule) -> dict:
 def _get_model_architecture(module: TorchRLModule) -> dict:
     arch = {}
     torch_model = getattr(module, "model", module)
-    arch["summary"] = str(torch_model)
+    arch["summary_str"] = str(torch_model)
+    arch["sumamry_json"] = _jsonify_summary(arch["summary_str"])
     arch["layers"] = _extract_layers(torch_model)
     return arch
 
