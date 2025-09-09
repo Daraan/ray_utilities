@@ -770,6 +770,8 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
         config = setup.config
         setup.args.num_jobs = 1
         setup.args.num_samples = 1
+        self.assertEqual(self._DEFAULT_SETUP_LOW_RES.config.train_batch_size_per_learner, 64)
+        BATCH_SIZE = 64
 
         def fake_trainable(params):
             algo = config.build_algo()
@@ -797,7 +799,9 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
         # With stopper should only iterate 4 times:
         assert tuner._local_tuner
         # Define stopper
-        tuner._local_tuner._run_config.stop = {ENV_RUNNER_RESULTS + "/" + NUM_ENV_STEPS_SAMPLED_LIFETIME: 512}
+        tuner._local_tuner._run_config.stop = {
+            ENV_RUNNER_RESULTS + "/" + NUM_ENV_STEPS_SAMPLED_LIFETIME: 4 * BATCH_SIZE
+        }
         with tempfile.TemporaryDirectory(prefix=".ckpt_") as tempdir1:
             result_grid = tuner.fit()
             checkpoint = result_grid[0].checkpoint
@@ -809,12 +813,15 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
                 algo_restored.metrics.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)), 0
             )
             self.assertEqual(
-                algo_restored.metrics.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)), 512
+                algo_restored.metrics.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)),
+                4 * BATCH_SIZE,
             )
             self.assertEqual(algo_restored.iteration, 4)
             assert result_grid[0].metrics
             self.assertEqual(result_grid[0].metrics["training_iteration"], 4)
-            self.assertEqual(result_grid[0].metrics["evaluation/env_runners/episode_return_mean"], 512 // 128 - 1)
+            self.assertEqual(
+                result_grid[0].metrics["evaluation/env_runners/episode_return_mean"], (4 * BATCH_SIZE) // 64 - 1
+            )
 
     _MAX_STEP_SIZE = 4096
     _MIN_STEP_SIZE = 128

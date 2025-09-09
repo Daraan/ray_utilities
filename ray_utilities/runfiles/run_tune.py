@@ -87,7 +87,9 @@ def _run_without_tuner(
             # If stop is not a callable, check if it is reached
             elif result.get("done", False):
                 break
-        return result
+        from ray_utilities.postprocessing import create_log_metrics  # noqa: PLC0415, circular import
+
+        return create_log_metrics(result)
     if test_mode_func:
         return test_mode_func(trainable, setup)
     return trainable(setup.sample_params())
