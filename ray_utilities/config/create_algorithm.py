@@ -244,17 +244,7 @@ def create_algorithm_config(
         gamma=0.99,
         # with a growing number of Learners and to increase the learning rate as follows:
         # lr = [original_lr] * ([num_learners] ** 0.5)
-        lr=(
-            1e-3
-            if True
-            # Shedule LR
-            else [
-                [0, 8e-3],  # <- initial value at timestep 0
-                [100, 4e-3],
-                [400, 1e-3],
-                [800, 1e-4],
-            ]
-        ),
+        lr=args["lr"],
         # The total effective batch size is then
         # `num_learners` x `train_batch_size_per_learner` and you can
         # access it with the property `AlgorithmConfig.total_train_batch_size`.

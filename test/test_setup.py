@@ -630,6 +630,31 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             module = str(setup.config.rl_module_spec.build())
             self.assertIn("in_features=8, out_features=8", module)
 
+    def test_lr_loading(self):
+        with patch_args("--lr", "0.123"):
+            setup = MLPSetup(init_param_space=False, init_trainable=False)
+            self.assertEqual(setup.args.lr, 0.123)
+            self.assertEqual(setup.config.lr, 0.123)
+        with patch_args("--lr", "[[0, 0.111], [64, 0.333]]", "--fcnet_hiddens", "4", "--batch_size", 32):
+            with MLPSetup(init_param_space=False) as setup:
+                setup.config.training(num_epochs=5)
+            self.assertEqual(setup.args.lr, [[0, 0.111], [64, 0.333]])
+            self.assertEqual(setup.config.lr, [[0, 0.111], [64, 0.333]])
+            algo = setup.config.build_algo()
+            learner = algo.learner_group._learner
+            optimizer = learner.get_optimizer()
+            self.assertAlmostEqual(optimizer.param_groups[0]["lr"], 0.111)
+            self.assertEqual(learner.config.lr, [[0, 0.111], [64, 0.333]])
+            # TODO: learners are likely updated with NUM_ENV_STEPS_SAMPLED which is not exact
+            for i in range(1, 5):
+                if i == 1:
+                    self.assertAlmostEqual(optimizer.param_groups[0]["lr"], 0.111)
+                algo.step()
+                if i == 1:
+                    self.assertAlmostEqual(optimizer.param_groups[0]["lr"], 0.222)
+                if i >= 2:
+                    self.assertAlmostEqual(optimizer.param_groups[0]["lr"], 0.333)
+
 
 class TestPPOMLPSetup(InitRay, num_cpus=4):
     def test_basic(self):

@@ -11,6 +11,8 @@ functionality specific to machine learning experiments and checkpointing workflo
 from __future__ import annotations
 
 # pyright: enableExperimentalFeatures=true
+import argparse
+from ast import literal_eval
 import logging
 import sys
 from contextlib import contextmanager
@@ -464,12 +466,33 @@ class _EnvRunnerParser(Tap):
         )
 
 
+def _parse_lr(value: str) -> float | list[tuple[int, float]]:
+    try:
+        # Try to parse as a float
+        return float(value)
+    except ValueError:
+        # If it fails, try to parse as a list of tuples or lists
+        try:
+            result = literal_eval(value)
+        except (ValueError, SyntaxError) as e:
+            raise argparse.ArgumentTypeError(f"Invalid learning rate format: {value}") from e
+        else:
+            for item in result:
+                if not (isinstance(item, (list, tuple)) and all(isinstance(x, (float, int)) for x in item)):
+                    raise argparse.ArgumentTypeError(
+                        f"Invalid learning rate: Each item must be a list or tuple of floats or ints, got: {item}"
+                    )
+            return result
+
+
 class RLlibArgumentParser(_EnvRunnerParser):
     """Attributes of this class have to be attributes of the AlgorithmConfig."""
 
     train_batch_size_per_learner: int = 2048  # batch size that ray samples
     minibatch_size: int = 128
     """Minibatch size used for backpropagation/optimization"""
+
+    lr: float | list[tuple[int, float]] = 1e-3
 
     def configure(self) -> None:
         super().configure()
@@ -478,6 +501,11 @@ class RLlibArgumentParser(_EnvRunnerParser):
             dest="train_batch_size_per_learner",
             type=int,
             required=False,
+        )
+        self.add_argument(
+            "--lr",
+            "-lr",
+            type=_parse_lr,
         )
 
     def process_args(self):
