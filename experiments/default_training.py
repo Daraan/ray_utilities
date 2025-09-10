@@ -22,5 +22,6 @@ if __name__ == "__main__":
         "--comment", "Default training run",
         "--log_stats", "most",
     ):  # fmt: skip
-        setup: PPOSetup[DefaultArgumentParser] = PPOMLPSetup()  # Replace with your own setup class
+        # Replace with your own setup class
+        setup: PPOSetup[DefaultArgumentParser] = PPOMLPSetup(config_files=["experiments/default.cfg"])
         results = run_tune(setup)

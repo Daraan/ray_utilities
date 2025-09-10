@@ -284,7 +284,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         Args:
             args : Command-line arguments to parse. If None, defaults to sys.argv.
             config_files: Additional files with command line arguments that are
-                loaded during argument parsing. Arguments have a lower priority than
+                loaded during argument parsing. Arguments in the file have a lower priority than
                 those provided by the command line or :meth:`patch_args`.
                 See: https://github.com/swansonk14/typed-argument-parser?tab=readme-ov-file#saving-and-loading-arguments
             load_args: A json file to load command line arguments from.

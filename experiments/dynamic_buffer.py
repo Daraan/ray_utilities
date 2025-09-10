@@ -24,5 +24,5 @@ if __name__ == "__main__":
         "--log_level", "INFO",
         "--log_stats", "most",
     ):  # fmt: skip
-        setup = PPOMLPSetup()  # Replace with your own setup class
+        setup = PPOMLPSetup(config_files=["experiments/default.cfg"])  # Replace with your own setup class
         results = run_tune(setup)
