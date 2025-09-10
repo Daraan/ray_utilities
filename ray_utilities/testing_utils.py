@@ -451,6 +451,7 @@ class InitRay(unittest.TestCase):
 
 
 OVERRIDE_KEYS: Final[set[str]] = {"num_env_runners", "num_epochs", "minibatch_size", "train_batch_size_per_learner"}
+"""Keys that are overridden in set_trainable"""
 
 
 def _remove_values_on_tensor_stats(struct, path: tuple[str, ...] = (), parent: dict[str, Any] | None = None):
@@ -608,7 +609,10 @@ class TestHelpers(unittest.TestCase):
             )
         self._created_trainables.append(trainable)
         self.assertEqual(trainable._algorithm_overrides, overrides)
-        self.assertEqual(overrides.keys(), OVERRIDE_KEYS)
+        if eval_interval is None:
+            self.assertSetEqual(set(overrides.keys()), OVERRIDE_KEYS)
+        else:
+            self.assertSetEqual(set(overrides.keys()), OVERRIDE_KEYS | {"evaluation_interval"})
         self.assertEqual(trainable.algorithm_config.num_env_runners, num_env_runners)
         self.assertEqual(trainable.algorithm_config.minibatch_size, 32)
         self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 32)
