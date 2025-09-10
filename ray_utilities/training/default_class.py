@@ -20,6 +20,7 @@ from abc import ABCMeta
 from copy import copy
 from inspect import isclass
 from pathlib import Path
+from pprint import pformat
 from typing import TYPE_CHECKING, Any, ClassVar, Collection, Generic, Optional, TypedDict, TypeVar, cast, overload
 
 import git
@@ -516,14 +517,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             self._setup = self.setup_class
         # TODO: Possible unset setup._config to not confuse configs (or remove setup totally?)
         # use args = config["cli_args"] # XXX
-        import sys
-        from pprint import pformat
 
-        print("Sys argv during Trainable.setup()", sys.argv)
-        print(
-            "args",
+        _logger.debug("Sys argv during Trainable.setup(): %s", sys.argv)
+        _logger.info(
+            "args %s are:\n %s",
             "(in config)" if "cli_args" in config else "(on setup)",
-            "are:\n",
             pformat(config.get("cli_args", self._setup.args)),
         )
         # NOTE: args is a dict, self._setup.args a Namespace | Tap

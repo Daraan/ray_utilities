@@ -568,6 +568,7 @@ class TestHelpers(unittest.TestCase):
         env_seed: int | None | _NOT_PROVIDED = _NOT_PROVIDED,
         train: bool = True,
         fast_model=True,
+        eval_interval: Optional[int] = 1,
     ):
         # NOTE: In this test attributes are shared BY identity, this is just a weak test.
         if fast_model:
@@ -582,8 +583,13 @@ class TestHelpers(unittest.TestCase):
         # this initializes the algorithm; overwrite batch_size of 64 again.
         # This does not modify the state["setup"]["config"]
         overrides = AlgorithmConfig.overrides(
-            num_env_runners=num_env_runners, num_epochs=2, minibatch_size=32, train_batch_size_per_learner=32
+            num_env_runners=num_env_runners,
+            num_epochs=2,
+            minibatch_size=32,
+            train_batch_size_per_learner=32,
         )
+        if eval_interval is not None:
+            overrides["evaluation_interval"] = eval_interval
         if env_seed is _NOT_PROVIDED:
             # use a random but reproducible seed
             if not hasattr(self, "_env_seed_rng"):

@@ -46,7 +46,7 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
             return
         # Change evaluation interval
         assert metrics_logger
-        logger.debug(
+        logger.info(
             "Evaluation interval changed from %s to %s at iteration %s - step %s",
             algorithm.config.evaluation_interval,
             new_eval_interval,

@@ -140,7 +140,6 @@ class AlgorithmSetup(
             config_class=cls.config_class,
             base=base,
         )
-        config.evaluation(evaluation_interval=1)  # required to not fail on the cheap default trainable
         add_callbacks_to_config(config, cls.get_callbacks_from_args(args))
         return config
 

@@ -308,9 +308,10 @@ def create_algorithm_config(
     if model_config is not None:
         config.rl_module(model_config=model_config)
     # https://docs.ray.io/en/latest/rllib/package_ref/doc/ray.rllib.algorithms.algorithm_config.AlgorithmConfig.evaluation.html
+    evaluation_duration = 30
     config.evaluation(
         evaluation_interval=16,  # Note can be adjusted dynamically by DynamicEvalInterval
-        evaluation_duration=50,
+        evaluation_duration=evaluation_duration,
         evaluation_duration_unit="episodes",
         evaluation_num_env_runners=(
             2 if args["parallel"] and args["evaluation_num_env_runners"] < 2 else args["evaluation_num_env_runners"]
@@ -321,6 +322,7 @@ def create_algorithm_config(
         evaluation_config=PPOConfig.overrides(
             explore=False,
             num_envs_per_env_runner=min(5, args["num_envs_per_env_runner"]),
+            metrics_num_episodes_for_smoothing=evaluation_duration,  # take metrics over all eval episodes
         ),
     )
     # Stateless callbacks
@@ -361,9 +363,14 @@ def create_algorithm_config(
 
     config.reporting(
         keep_per_episode_custom_metrics=True,  # If True calculate max min mean
-        log_gradients=False,  # Default is True
+        log_gradients=args["test"],  # Default is True
         # Will smooth metrics in the reports, e.g. tensorboard
-        metrics_num_episodes_for_smoothing=1,  # Default is 100
+        # NOTE This value will smooth over num_episodes, which might be from the past iterations.
+        # But should be > 1 to smooth over episodes from the current iteration
+        # We use the reset_episode_metrics_each_iteration, so that no bleed over happens,
+        # but for all episodes to be considered we use a high value here
+        # Should use ~50-60 for a higher batch_size
+        metrics_num_episodes_for_smoothing=30,  # Default is 100
     )
     config.debugging(
         # https://docs.ray.io/en/latest/rllib/package_ref/doc/ray.rllib.algorithms.algorithm_config.AlgorithmConfig.debugging.html#ray-rllib-algorithms-algorithm-config-algorithmconfig-debugging

@@ -67,6 +67,24 @@ logger = nice_logger(__name__, level=os.environ.get("RAY_UTILITIES_LOG_LEVEL", "
 logger.info("Ray utilities imported")
 logger.debug("Ray utilities logger debug level set")
 
+# suppress a deprecation warning from ray, by creating a RLModuleConfig once
+try:
+    from ray.rllib.core.rl_module.rl_module import RLModuleConfig
+except ImportError:  # might not exist anymore in the future
+    pass
+else:
+    from ray.rllib.utils.deprecation import logger as __deprecation_logger
+    import logging
+
+    # This suppresses a deprecation warning from RLModuleConfig
+    __old_level = __deprecation_logger.getEffectiveLevel()
+    __deprecation_logger.setLevel(logging.ERROR)
+    RLModuleConfig()
+    __deprecation_logger.setLevel(__old_level)
+    del __deprecation_logger
+    del logging
+    del RLModuleConfig
+
 
 def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, Any]]:
     """Convert a flat dictionary with slash-separated keys to a nested dictionary structure.
