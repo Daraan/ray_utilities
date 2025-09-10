@@ -28,9 +28,16 @@ import gymnasium as gym
 import ray
 from packaging.version import Version
 from packaging.version import parse as parse_version
+from ray.rllib.core import DEFAULT_AGENT_ID, DEFAULT_MODULE_ID
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
+    EPISODE_DURATION_SEC_MEAN,
+    EPISODE_LEN_MAX,
+    EPISODE_LEN_MEAN,
+    EPISODE_LEN_MIN,
+    EPISODE_RETURN_MAX,
     EPISODE_RETURN_MEAN,
+    EPISODE_RETURN_MIN,
     EVALUATION_RESULTS,
 )
 
@@ -260,3 +267,15 @@ It is build as: entry_point_id + "xXXXXx" + random and is 3 * 6 = 18 characters 
 It can be used to easier identify trials that have the same entry point and were run
 during the same execution
 """
+EPISODE_METRICS_KEYS = (
+    EPISODE_DURATION_SEC_MEAN,
+    EPISODE_LEN_MAX,
+    EPISODE_LEN_MEAN,
+    EPISODE_LEN_MIN,
+    EPISODE_RETURN_MAX,
+    EPISODE_RETURN_MEAN,
+    EPISODE_RETURN_MIN,
+    ("module_episode_return_mean", DEFAULT_MODULE_ID),
+    ("agent_episode_return_mean", DEFAULT_AGENT_ID),
+)
+"""Keys that are by default logged with a window by RLlib. When using"""
