@@ -138,7 +138,7 @@ class AlgorithmSetup(
             learner_class=learner_class,
             framework="torch",
             config_class=cls.config_class,
-            base=base,
+            base_config=base,
         )
         add_callbacks_to_config(config, cls.get_callbacks_from_args(args))
         return config

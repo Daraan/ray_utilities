@@ -12,7 +12,7 @@ Main Components:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback, make_seeded_env_callback
 
@@ -30,6 +30,44 @@ __all__ = [
     "seed_environments_for_config",
 ]
 logger = logging.getLogger(__name__)
+
+
+def _note_removal(
+    present_callbacks,
+    added_callbacks: list,
+    final_callbacks,
+    remove_existing: Callable[[Any], bool],
+    event: str | None = None,
+):
+    removed = [cb for cb in present_callbacks if remove_existing(cb)]
+    duplicated = [cb for cb in present_callbacks if cb in added_callbacks]
+    msg = ""
+    args = []
+    if duplicated:
+        msg += "Removed duplicated callbacks %s "
+        args.append(duplicated)
+    if removed and duplicated:
+        msg += " and "
+    elif removed:
+        msg += "Removed "
+    if removed:
+        msg += "existing callbacks that match the filter %s "
+        args.append(removed)
+    if event:
+        msg += "for event %s. New callbacks: %s"
+        logger.debug(
+            msg,
+            *args,
+            event,
+            final_callbacks,
+        )
+    else:
+        msg += "from the existing callback_class list. New callbacks: %s"
+        logger.debug(
+            msg,
+            *args,
+            final_callbacks,
+        )
 
 
 def add_callbacks_to_config(
@@ -58,6 +96,7 @@ def add_callbacks_to_config(
     if isinstance(callbacks, dict):
         for event, callback in callbacks.items():
             assert event != "callbacks_class", "Pass types and not a dictionary."
+            present_callbacks: list[Callable[..., Any]] | Callable[..., Any]
             if present_callbacks := getattr(config, "callbacks_" + event):
                 # add  multiple or a single new one to existing one or multiple ones
                 if present_callbacks is callback:
@@ -76,29 +115,28 @@ def add_callbacks_to_config(
                             present_callbacks.__name__,
                             callback.__name__,
                         )
-                    if remove_existing(present_callbacks):
+                    if remove_existing(present_callbacks) or present_callbacks in callback_list:
                         logger.debug(
-                            "Replacing existing callback %s with new one %s for event %s",
+                            "Replacing existing callback %s with new one %s for event %s%s",
                             present_callbacks,
                             callback_list,
                             event,
+                            " as it is a duplicate" if present_callbacks in callback_list else "",
                         )
                         config.callbacks(**{event: callback})  # pyright: ignore[reportArgumentType]; cannot assign to callback_class
                     else:
-                        config.callbacks(**{event: [present_callbacks, *callback_list]})
+                        # Ignore type for callback_class argument != event
+                        config.callbacks(**{event: [cast("Any", present_callbacks), *callback_list]})
                 else:
                     num_old = len(present_callbacks)
                     num_new = len(callback_list)
-                    new_cb = [*(cb for cb in present_callbacks if not remove_existing(cb)), *callback_list]
+                    new_cb = [
+                        *(cb for cb in present_callbacks if not (remove_existing(cb) or cb in callback_list)),
+                        *callback_list,
+                    ]
                     if len(new_cb) < num_old + num_new:
-                        removed = [cb for cb in present_callbacks if remove_existing(cb)]
-                        logger.debug(
-                            "Removing existing callbacks that match the filter for event %s:\n- %s\n+ %s",
-                            event,
-                            removed,
-                            new_cb,
-                        )
-                    config.callbacks(**{event: new_cb})
+                        _note_removal(present_callbacks, callback_list, new_cb, remove_existing, event)
+                    config.callbacks(**{event: cast("Any", new_cb)})
             else:
                 config.callbacks(**{event: callback})  # pyright: ignore[reportArgumentType]
         return
@@ -109,14 +147,9 @@ def add_callbacks_to_config(
         present_callbacks = config.callbacks_class
         num_old = len(present_callbacks)
         num_new = len(callbacks)
-        new_cb = [*(cb for cb in present_callbacks if not remove_existing(cb)), *callbacks]
+        new_cb = [*(cb for cb in present_callbacks if not (remove_existing(cb) or cb in callbacks)), *callbacks]
         if len(new_cb) < num_old + num_new:
-            removed = [cb for cb in present_callbacks if remove_existing(cb)]
-            logger.debug(
-                "Replacing existing callback_class list with filtered new list:\n- %s\n+ %s",
-                removed,
-                new_cb,
-            )
+            _note_removal(present_callbacks, callbacks, new_cb, remove_existing, event=None)
         config.callbacks(callbacks_class=new_cb)
         return
     if getattr(config.callbacks_class, "IS_CALLBACK_CONTAINER", False):
@@ -130,7 +163,11 @@ def add_callbacks_to_config(
         )
         config.callbacks(callbacks_class=callbacks)
         return
-    config.callbacks(callbacks_class=[config.callbacks_class, *callbacks])
+    if config.callbacks_class in callbacks:
+        # do not duplicate
+        config.callbacks(callbacks_class=callbacks)
+    else:
+        config.callbacks(callbacks_class=[config.callbacks_class, *callbacks])
 
 
 if TYPE_CHECKING:

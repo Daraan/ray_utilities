@@ -27,6 +27,7 @@ import logging
 import sys
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, cast
 
+from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
 from ray_utilities.callbacks.algorithm.model_config_saver_callback import save_model_config_and_architecture
 from ray_utilities.warn import (
     warn_about_larger_minibatch_size,
@@ -78,9 +79,10 @@ def create_algorithm_config(
     learner_class: Optional[type["Learner"]] = None,
     model_config: dict[str, Any] | _ModelConfig,
     config_class: Optional[type[_ConfigType]] = PPOConfig,
-    framework: Literal["torch", "tf2"],
+    framework: Literal["torch", "tf2"] | Any,
+    base_config: Optional[_ConfigType] = None,
+    auto_eval_interval: bool = True,
     discrete_eval: bool = False,
-    base: Optional[_ConfigType] = None,
 ) -> tuple[_ConfigType, RLModuleSpec]:
     """Create a comprehensive Ray RLlib algorithm configuration from experiment parameters.
 
@@ -112,9 +114,11 @@ def create_algorithm_config(
         config_class: RLlib algorithm configuration class. Defaults to
             :class:`ray.rllib.algorithms.ppo.PPOConfig`.
         framework: Deep learning framework to use (``"torch"`` or ``"tf2"``).
+        base_config: Optional existing configuration instance to update instead of creating new.
+        auto_eval_interval: Adds a :class:`DynamicEvalInterval` callback to dynamically adjust
+            the evaluation interval based on the training batch size.
         discrete_eval: Whether to add discrete evaluation capabilities through
             :class:`~ray_utilities.callbacks.algorithm.discrete_eval_callback.DiscreteEvalCallback`.
-        base: Optional existing configuration instance to update instead of creating new.
 
     Returns:
         A tuple containing:
@@ -145,7 +149,7 @@ def create_algorithm_config(
         :class:`~ray_utilities.callbacks.algorithm.seeded_env_callback.SeedEnvsCallback`: Environment seeding
         :class:`~ray_utilities.callbacks.algorithm.discrete_eval_callback.DiscreteEvalCallback`: Discrete evaluation
     """
-    if not base and not isinstance(config_class, type):
+    if not base_config and not isinstance(config_class, type):
         raise ExceptionGroup(
             "base or config_class must be provided",
             [
@@ -163,13 +167,13 @@ def create_algorithm_config(
     env_spec: Final = env_type or args["env_type"]
     del env_type
     assert env_spec, "No environment specified"
-    if base:
-        config = base
-        if config_class and not issubclass(config_class, type(base)):
+    if base_config:
+        config = base_config
+        if config_class and not issubclass(config_class, type(base_config)):
             logger.warning(
                 "base config of type %s is not a subclass of config_class %s, "
                 "change config_class or set config_class to None to avoid this warning.",
-                type(base),
+                type(base_config),
                 config_class,
             )
     else:
@@ -329,7 +333,9 @@ def create_algorithm_config(
     if not args["no_exact_sampling"]:
         add_callbacks_to_config(config, on_sample_end=exact_sampling_callback)
     add_callbacks_to_config(config, on_algorithm_init=save_model_config_and_architecture)
-    # Stateful callbacks
+    # add_callbacks_to_config(config, on_sample_end=reset_episode_metrics_each_iteration)
+
+    # region Stateful callbacks
     callbacks: list[type[DefaultCallbacks]] = []
     if discrete_eval:
         callbacks.append(DiscreteEvalCallback)
@@ -346,7 +352,8 @@ def create_algorithm_config(
         make_seeded_env_callback(SeedEnvsCallback.env_seed)
     if args["render_mode"]:
         callbacks.append(make_render_callback())
-
+    if auto_eval_interval:
+        callbacks.append(DynamicEvalInterval)
     if callbacks:
         if len(callbacks) == 1:
             callback_class = callbacks[0]
@@ -360,6 +367,7 @@ def create_algorithm_config(
             config.callbacks(callbacks_class=multi_callback)
         else:
             config.callbacks(callbacks_class=callback_class)
+    # endregion
 
     config.reporting(
         keep_per_episode_custom_metrics=True,  # If True calculate max min mean

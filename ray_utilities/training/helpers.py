@@ -34,6 +34,7 @@ from ray_utilities.warn import (
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
+    from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
     from ray.rllib.env.env_runner import EnvRunner
 
@@ -578,3 +579,18 @@ def make_divisible(a: int, b: int | None) -> int:
     if b is not None and a % b != 0:
         a = (a // b + 1) * b
     return a
+
+
+def is_algorithm_callback_added(config: AlgorithmConfig, callback_class: type[RLlibCallback]) -> bool:
+    return (
+        config.callbacks_class is callback_class
+        or (
+            isinstance(callback_class, partial)
+            and (
+                config.callbacks_class is callback_class.func
+                or (isinstance(config.callbacks_class, partial) and config.callbacks_class.func is callback_class.func)
+            )
+        )
+        or (isinstance(config.callbacks_class, type) and issubclass(config.callbacks_class, callback_class))
+        or (isinstance(config.callbacks_class, (list, tuple)) and callback_class in config.callbacks_class)
+    )

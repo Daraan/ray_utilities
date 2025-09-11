@@ -188,7 +188,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             setup = AlgorithmSetup()
             # Workaround for NOT working StepCheckpointer as it works on a copy of the result dict.
             # AlgoStepCheckpointer is not added, hardcoded checkpointing!
-            # self.is_algorithm_callback_added(
+            # is_algorithm_callback_added(
             #    setup.config,
             #    AlgoStepCheckpointer.make_callback_class(checkpoint_frequency=setup.args.checkpoint_frequency),
             # )

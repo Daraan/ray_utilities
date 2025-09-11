@@ -98,7 +98,7 @@ from ray_utilities.dynamic_config.dynamic_buffer_update import logger as dynamic
 from ray_utilities.misc import raise_tune_errors
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger as experiment_base_logger
-from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
+from ray_utilities.setup.ppo_mlp_setup import MLPSetup, PPOMLPSetup
 from ray_utilities.setup.tuner_setup import TunerSetup
 from ray_utilities.setup.tuner_setup import logger as tuner_setup_logger
 from ray_utilities.training.default_class import DefaultTrainable, TrainableBase, TrainableStateDict
@@ -1404,23 +1404,6 @@ class TestHelpers(unittest.TestCase):
         result["evaluation"] = cls.clean_timer_logs(evaluation_dict)
         return result
 
-    def is_algorithm_callback_added(self, config: AlgorithmConfig, callback_class: type[RLlibCallback]) -> bool:
-        return (
-            config.callbacks_class is callback_class
-            or (
-                isinstance(callback_class, partial)
-                and (
-                    config.callbacks_class is callback_class.func
-                    or (
-                        isinstance(config.callbacks_class, partial)
-                        and config.callbacks_class.func is callback_class.func
-                    )
-                )
-            )
-            or (isinstance(config.callbacks_class, type) and issubclass(config.callbacks_class, callback_class))
-            or (isinstance(config.callbacks_class, (list, tuple)) and callback_class in config.callbacks_class)
-        )
-
     def check_stopper_added(
         self,
         tuner: tune.Tuner,
@@ -1475,14 +1458,51 @@ class TestHelpers(unittest.TestCase):
     # endregion
 
 
-class SetupDefaults(TestHelpers, DisableLoggers):
+class SetupWithEnv(TestHelpers):
+    def setUp(self):
+        self._env = gym.make("CartPole-v1")
+        self._OBSERVATION_SPACE = self._env.observation_space
+        self._ACTION_SPACE = self._env.action_space
+        super().setUp()
+
+
+class SetupLowRes(TestHelpers):
+    """
+    Attributes:
+        _DEFAULT_SETUP_LOW_RES: The default low resolution setup.
+    Methods:
+        _create_low_res_setup: Creates a setup with minimal resources.
+    """
+
+    def _create_low_res_setup(self, *args_for_patch, init_trainable=True, **kwargs):
+        with (
+            change_log_level(experiment_base_logger, logging.ERROR),
+            change_log_level(dynamic_buffer_logger, logging.ERROR),
+            patch_args(
+                "--fcnet_hiddens",
+                "[8]",
+                "--num_envs_per_env_runner",
+                "1",
+                *args_for_patch,
+            ),
+        ):
+            setup = MLPSetup(init_trainable=False, **kwargs)
+            setup.config.training(train_batch_size_per_learner=64, minibatch_size=32, num_epochs=2).env_runners(
+                num_env_runners=0, num_envs_per_env_runner=1, num_cpus_per_env_runner=0, gym_env_vectorize_mode="SYNC"
+            ).learners(num_learners=0, num_cpus_per_learner=0)
+            if init_trainable:
+                setup.create_trainable()
+        return setup
+
+    def setUp(self):
+        super().setUp()
+        self._DEFAULT_SETUP_LOW_RES = self._create_low_res_setup(init_trainable=True)
+
+
+class SetupDefaults(SetupLowRes, SetupWithEnv, TestHelpers, DisableLoggers):
     @clean_args
     def setUp(self):
         super().setUp()
-        env = gym.make("CartPole-v1")
-
-        self._OBSERVATION_SPACE = env.observation_space
-        self._ACTION_SPACE = env.action_space
 
         self._DEFAULT_CONFIG_DICT: MappingProxyType[str, Any] = MappingProxyType(
             DefaultArgumentParser().parse_args().as_dict()
@@ -1493,22 +1513,14 @@ class SetupDefaults(TestHelpers, DisableLoggers):
             change_log_level(dynamic_buffer_logger, logging.ERROR),
         ):
             self._DEFAULT_SETUP = AlgorithmSetup(init_trainable=False)
-            with patch_args("--fcnet_hiddens", "[8]"):
-                self._DEFAULT_SETUP_LOW_RES = AlgorithmSetup(init_trainable=False)
-            self._DEFAULT_SETUP_LOW_RES.config.training(
-                train_batch_size_per_learner=64, minibatch_size=32, num_epochs=2
-            ).env_runners(num_env_runners=0, num_envs_per_env_runner=1, num_cpus_per_env_runner=0).learners(
-                num_learners=0, num_cpus_per_learner=0
-            )
-            self._DEFAULT_SETUP_LOW_RES.create_trainable()
             self._DEFAULT_SETUP.create_trainable()
-        self._INPUT_LENGTH = env.observation_space.shape[0]  # pyright: ignore[reportOptionalSubscript]
+        self._INPUT_LENGTH = self._env.observation_space.shape[0]  # pyright: ignore[reportOptionalSubscript]
         self._DEFAULT_INPUT = jnp.arange(self._INPUT_LENGTH * 2).reshape((2, self._INPUT_LENGTH))
         self._DEFAULT_BATCH: dict[str, chex.Array] = MappingProxyType({"obs": self._DEFAULT_INPUT})  # pyright: ignore[reportAttributeAccessIssue]
         self._ENV_SAMPLE = jnp.arange(self._INPUT_LENGTH)
         model_key = jax.random.PRNGKey(self._DEFAULT_CONFIG_DICT["seed"] or 2)
         self._RANDOM_KEY, self._ACTOR_KEY, self._CRITIC_KEY = jax.random.split(model_key, 3)
-        self._ACTION_DIM: int = self._ACTION_SPACE.n  # type: ignore[attr-defined]
+        self._ACTION_DIM: int = self._ACTION_SPACE.n  # pyright: ignore[reportAttributeAccessIssue]
         self._OBS_DIM: int = self._OBSERVATION_SPACE.shape[0]  # pyright: ignore[reportOptionalSubscript]
 
 

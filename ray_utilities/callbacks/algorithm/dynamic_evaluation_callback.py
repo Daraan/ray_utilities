@@ -10,6 +10,7 @@ from ray_utilities.dynamic_config.dynamic_buffer_update import get_dynamic_evalu
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms.algorithm import Algorithm
+    from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 
 
@@ -143,3 +144,12 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         self._set_step_counter_on_checkpoint_loaded(algorithm=algorithm, metrics_logger=metrics_logger, **kwargs)
         self._updater(algorithm, None, global_step="???" or self._planned_current_step)
         # TODO: self._training_iterations = 0
+
+
+def add_dynamic_eval_callback_if_missing(callbacks: list[type[RLlibCallback]]):
+    """Adds a DynamicEvalInterval callback if it's not already present"""
+    if all(not issubclass(cb, DynamicEvalInterval) for cb in callbacks):
+        # if any(issubclass(cb, AutoEvalIntervalOnInit) for cb in callbacks):
+        #    logger.info("Removing a AutoEvalIntervalOnInit callback in favor of DynamicEvalInterval")
+        # callbacks = [cb for cb in callbacks if not issubclass(cb, AutoEvalIntervalOnInit)]
+        callbacks.append(DynamicEvalInterval)
