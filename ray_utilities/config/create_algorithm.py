@@ -242,8 +242,26 @@ def create_algorithm_config(
         learner_mix.insert(0, RemoveMaskedSamplesLearner)
     if False:  # NOTE: Must always be the first in the mix
         learner_mix.insert(0, LearnerWithDebugConnectors)
+    learner_config_dict = {
+        "dynamic_buffer": args["dynamic_buffer"],
+        "dynamic_batch": args["dynamic_batch"],
+        "total_steps": args["total_steps"],
+        "remove_masked_samples": not args["keep_masked_samples"],
+        "min_dynamic_buffer_size": args["min_step_size"],
+        "max_dynamic_buffer_size": args["max_step_size"],
+        "accumulate_gradients_every": args["accumulate_gradients_every"],
+    }
     if len(learner_mix) > 1:
-        config.training(learner_class=mix_learners(learner_mix))
+        mixed_learner_class = mix_learners(learner_mix)
+        try:  # new upcoming interface  # TODO: Check when this is changed ray 2.50+
+            config.learners(learner_class=mixed_learner_class)  # pyright: ignore[reportCallIssue]
+        except TypeError:  # old interface
+            config.training(learner_class=mixed_learner_class)
+    try:  # new upcoming interface
+        config.learners(learner_config_dict=learner_config_dict)  # pyright: ignore[reportCallIssue]
+    except TypeError:  # old interface
+        config.training(learner_config_dict=learner_config_dict)
+
     config.training(
         gamma=0.99,
         # with a growing number of Learners and to increase the learning rate as follows:
@@ -254,15 +272,6 @@ def create_algorithm_config(
         # access it with the property `AlgorithmConfig.total_train_batch_size`.
         train_batch_size_per_learner=args["train_batch_size_per_learner"],
         grad_clip=0.5,
-        learner_config_dict={
-            "dynamic_buffer": args["dynamic_buffer"],
-            "dynamic_batch": args["dynamic_batch"],
-            "total_steps": args["total_steps"],
-            "remove_masked_samples": not args["keep_masked_samples"],
-            "min_dynamic_buffer_size": args["min_step_size"],
-            "max_dynamic_buffer_size": args["max_step_size"],
-            "accumulate_gradients_every": args["accumulate_gradients_every"],
-        },
     )
     try:
         cast("PPOConfig", config).training(
