@@ -197,7 +197,7 @@ def create_algorithm_config(
     try:
         config.env_runners(
             # experimental
-            gym_env_vectorize_mode=VectorizeMode.ASYNC,  # pyright: ignore[reportArgumentType]
+            gym_env_vectorize_mode=(VectorizeMode.ASYNC if args["num_envs_per_env_runner"] > 1 else VectorizeMode.SYNC),  # pyright: ignore[reportArgumentType]
         )
     except TypeError:
         logger.error("Current ray version does not support AlgorithmConfig.env_runners(gym_env_vectorize_mode=...)")
