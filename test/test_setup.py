@@ -415,7 +415,8 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 "--comment", "A",
                 "--extra", "abc",  # nargs
                 "--env_seeding_strategy", "constant",
-                "--wandb", "offline",  # possibly do not restore
+                "--wandb", "offline",  # possibly do not restore"
+                "--num_env_runners", "1",  # NeverRestore
             ):  # fmt: skip
                 with AlgorithmSetup(init_trainable=False) as setup:
                     # These depend on args and CANNOT be restored!
@@ -436,6 +437,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 self.assertEqual(setup.args.extra, ["abc"])  # nargs
                 self.assertEqual(setup.args.env_seeding_strategy, "constant")
                 self.assertEqual(setup.args.wandb, "offline")
+                self.assertEqual(setup.args.num_env_runners, 1)
 
                 setup_state = setup.get_state()
                 # Check saved state
@@ -493,8 +495,9 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 self.assertEqual(setup2.config.num_epochs, 5)
                 # restored from 1st
                 self.assertEqual(setup2.args.extra, ["abc"])
-                # NeverRestore; wandb is the defaul value again
+                # NeverRestore; wandb is the default value again
                 self.assertEqual(setup2.args.wandb, DefaultArgumentParser.wandb)
+                self.assertEqual(setup2.args.num_env_runners, DefaultArgumentParser.num_env_runners)
                 # Changed manually
                 self.assertEqual(setup2.config.evaluation_sample_timeout_s, default_timeout)
 
