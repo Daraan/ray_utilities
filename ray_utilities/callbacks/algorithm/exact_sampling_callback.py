@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
 from typing_extensions import deprecated
@@ -10,7 +10,6 @@ from typing_extensions import deprecated
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 
 if TYPE_CHECKING:
-    from ray.rllib.env.env_runner import EnvRunner
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
     from ray.rllib.policy.sample_batch import SampleBatch  # noqa: F401
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger

@@ -36,10 +36,12 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         new_eval_interval = self._evaluation_intervals.get(env_steps, None)
         if new_eval_interval is None:
             logger.error(
-                "No evaluation interval for %s steps in %s. Expected a value in the dictionary. Steps: %s",
+                "No evaluation interval for current step %s in %s. "
+                "Expected a value in the dictionary for global step %s. Not changing it, stays: %d",
                 env_steps,
                 self._evaluation_intervals,
                 global_step,
+                algorithm.config.evaluation_interval,
             )
             # do not change it
             return
@@ -132,6 +134,7 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         # self._planned_current_step likely safer way to get correct step, instead of using metrics_logger
         self._updater(algorithm, metrics_logger, global_step=self._planned_current_step)
 
+    # Note this is not executed in the get_set_state tests
     def on_checkpoint_loaded(
         self,
         *,
@@ -139,11 +142,11 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         metrics_logger: Optional[MetricsLogger] = None,
         **kwargs,
     ) -> None:
-        self._set_budget_on_checkpoint_loaded(algorithm=algorithm, **kwargs)
         assert metrics_logger
-        self._set_step_counter_on_checkpoint_loaded(algorithm=algorithm, metrics_logger=metrics_logger, **kwargs)
-        self._updater(algorithm, None, global_step="???" or self._planned_current_step)
-        # TODO: self._training_iterations = 0
+        self._set_step_counter_on_checkpoint_loaded(algorithm=algorithm, metrics_logger=metrics_logger)
+        self._set_budget_on_checkpoint_loaded(algorithm=algorithm, **kwargs)
+        self._set_evaluation_intervals(algorithm=algorithm)
+        super().on_checkpoint_loaded(algorithm=algorithm, metrics_logger=metrics_logger, **kwargs)  # calls updater
 
 
 def add_dynamic_eval_callback_if_missing(callbacks: list[type[RLlibCallback]]):

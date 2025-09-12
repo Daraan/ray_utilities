@@ -42,7 +42,8 @@ class BudgetMixin(Generic[T]):
     def _set_budget_on__init__(self, learner_config_dict: dict[Any, Any] | T = None):
         self._budget: SplitBudgetReturnDict | T
         if learner_config_dict:
-            # NOTE: Current pyright error could be a bug T not correctly narrowed.
+            # NOTE: Currently pyright 1.1.402+ has a bug that does not narrow T on truthy.
+            assert learner_config_dict is not None
             if "total_steps" not in learner_config_dict:
                 _logger.warning(
                     "learner_config_dict must contain 'total_steps' key. Possibly the config is not set yet."
@@ -70,10 +71,22 @@ class BudgetMixin(Generic[T]):
         self,
         *,
         algorithm: Algorithm,
+        allow_budget_change: bool = False,
         **kwargs,  # noqa: ARG002
     ) -> None:
+        """on_load_checkpoint set allow_budget_change=True"""
         assert algorithm.config
         learner_config_dict = algorithm.config.learner_config_dict
+        if algorithm.config.train_batch_size_per_learner < learner_config_dict["min_dynamic_buffer_size"] or (
+            algorithm.config.train_batch_size_per_learner > learner_config_dict["max_dynamic_buffer_size"]
+        ):
+            _logger.warning(
+                "train_batch_size_per_learner (%d) is outside of the dynamic buffer size range [%d, %d]. "
+                "This might lead to unexpected behavior.",
+                algorithm.config.train_batch_size_per_learner,
+                learner_config_dict["min_dynamic_buffer_size"],
+                learner_config_dict["max_dynamic_buffer_size"],
+            )
         try:
             budget = split_timestep_budget(
                 total_steps=learner_config_dict["total_steps"],
@@ -84,14 +97,14 @@ class BudgetMixin(Generic[T]):
         except KeyError as e:
             _logger.error("Missing key in learner_config_dict: %s", e)
             raise
-        if self._budget is not None:
+        if not allow_budget_change and self._budget is not None:
             assert budget == self._budget, "Budget dict changed since initialization."
         self._budget = budget
 
     def _set_budget_on_checkpoint_loaded(self, *, algorithm: Algorithm, **kwargs) -> None:
         if self._budget is None:
             _logger.error("BudgetMixin._budget is None. Need to recreate.")
-        # FIXME
+        self._set_budget_on_algorithm_init(algorithm=algorithm, allow_budget_change=True)
 
 
 class GetGlobalStepMixin:
@@ -150,11 +163,10 @@ class StepCounterMixin(GetGlobalStepMixin):
         metrics_logger: Optional[MetricsLogger] = None,
     ) -> None:
         assert algorithm.config
-        self._planned_current_step = 0
-        self._training_iterations = 0
+        self._training_iterations: int = 0
         # training_iterations is most likely not yet logged - only after the learner, therefore increase attr manually
         self._training_iterations = metrics_logger.peek("training_iteration", default=0) if metrics_logger else 0
-        self._planned_current_step = (
+        self._planned_current_step: int = (
             self._get_global_step(metrics_logger) if metrics_logger and metrics_logger.stats else 0
         )
 
@@ -208,5 +220,5 @@ class StepCounterMixin(GetGlobalStepMixin):
         algorithm: Algorithm,
         metrics_logger: MetricsLogger,
     ) -> None:
-        # TODO
-        ...
+        # current_step is likely missing
+        self._planned_current_step = metrics_logger.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME))

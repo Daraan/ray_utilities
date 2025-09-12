@@ -156,4 +156,5 @@ class DynamicHyperparameterCallback(GetGlobalStepMixin, DefaultCallbacks, abc.AB
         # NOTE: Likely no metrics_logger here.
         assert metrics_logger
         gs = self._get_global_step(metrics_logger=metrics_logger)
-        self._updater(algorithm, None, global_step="???" or gs)
+        self._updater(algorithm, metrics_logger, global_step=gs)
+        super().on_checkpoint_loaded(algorithm=algorithm, metrics_logger=metrics_logger, **kwargs)
