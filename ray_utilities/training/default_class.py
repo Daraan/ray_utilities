@@ -420,6 +420,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             if log_level is not None:
                 set_project_log_level(logging.getLogger(__name__.split(".")[0]), log_level)
 
+        self._algorithm = None
         self._algorithm_overrides = algorithm_overrides
         self._model_config = model_config if model_config is not None else self.cls_model_config
         if self._algorithm_overrides and self.setup_class._fixed_argv:
@@ -434,6 +435,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         else:
             self._perturbed_config = None
         """When initialized with a perturbed config, this holds the original config."""
+
+        self._current_step: int = 0
+        """The current env steps sampled by the trainable, updated by step()."""
+
         super().__init__(config or {}, **kwargs)  # calls setup
         # TODO: do not create loggers, if any are created
         self.config: dict[str, Any]
@@ -448,11 +453,19 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             Config and args hold by this object might differ from the current setup.
         """
 
-        self._current_step: int = 0
-        """The current env steps sampled by the trainable, updated by step()."""
-        
         self._algo_config: _ConfigType
         """Config used during setup, available even when algorithm is None during checkpoint loading."""
+
+    @property
+    def algorithm(self) -> _AlgorithmType:
+        # self._algorithm should only be used inside setup and load_checkpoint
+        # to take care of a potential None algorithm
+        assert self._algorithm
+        return self._algorithm
+
+    @algorithm.setter
+    def algorithm(self, value: _AlgorithmType) -> None:
+        self._algorithm = value
 
     @override(tune.Trainable)
     def setup(self, config: dict[str, Any], *, algorithm_overrides: Optional[dict[str, Any]] = None) -> None:
@@ -527,12 +540,12 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         _logger.info(
             "args %s are:\n %s",
             "(in config)" if "cli_args" in config else "(on setup)",
-            pformat(config.get("cli_args", self._setup.args)),
+            pformat(config.get("cli_args", {k: v for k, v in vars(self._setup.args).items() if not callable(v)})),
         )
         # NOTE: args is a dict, self._setup.args a Namespace | Tap
         self._reward_updaters: RewardUpdaters
         load_algorithm = "cli_args" in config and config["cli_args"].get("from_checkpoint")
-        self.algorithm: _AlgorithmType
+        self._algorithm: _AlgorithmType | None
         args, _algo_config, algorithm, self._reward_updaters = setup_trainable(
             hparams=config,
             setup=self._setup,
@@ -556,9 +569,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             _logger.info("At end of setup(), loading from checkpoint: %s", config["cli_args"]["from_checkpoint"])
             # calls restore from path; from_checkpoint could also be a dict here
             # algorithm is None when create_algo=False, will be set in load_checkpoint
-            self.algorithm = algorithm  # This will be None initially
             self.load_checkpoint(config["cli_args"]["from_checkpoint"])
-            assert self.algorithm is not None
+            assert self._algorithm is not None
             if self.algorithm.metrics:
                 current_step = self.algorithm.metrics.peek(
                     (ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=None
@@ -573,7 +585,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     )
         else:
             assert algorithm is not None
-            self.algorithm = algorithm
+            self._algorithm = algorithm
         assert self.algorithm.config
 
         # Use the config from setup_trainable to calculate total steps, which handles both algorithm and non-algorithm cases
@@ -603,16 +615,16 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         Note:
             This is a copy of the setup's config which might has been further modified.
         """
-        if self.algorithm is not None:
-            return self.algorithm.config  # pyright: ignore[reportReturnType]
+        if self._algorithm is not None:
+            return self._algorithm.config  # pyright: ignore[reportReturnType]
         # During checkpoint loading, algorithm might be None, use stored config
         return self._algo_config  # pyright: ignore[reportReturnType]
 
     @algorithm_config.setter
     def algorithm_config(self, value: _ConfigType):
         # Does not update env_runners and learner !
-        if self.algorithm is not None:
-            self.algorithm.config = value
+        if self._algorithm is not None:
+            self._algorithm.config = value
         else:
             # During checkpoint loading, algorithm might be None, update stored config
             self._algo_config = value
@@ -638,8 +650,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     def cleanup(self):
         # call stop to fully free resources
         super().cleanup()
-        if self.algorithm is not None:
-            self.algorithm.cleanup()
+        if self._algorithm is not None:
+            self._algorithm.cleanup()
         if is_pbar(self._pbar):
             self._pbar.close()
 
@@ -816,15 +828,15 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # if checkpoint["algorithm_checkpoint_dir"] is a tempdir (e.g. from tune, this is wrong)
             # However, self.set_state should have take care of algorithm already even if checkpoint dir is missing
             if os.path.exists(checkpoint["algorithm_checkpoint_dir"]):
-                if self.algorithm is not None:
-                    self.algorithm.stop()  # free resources first
-                    algo_class = type(self.algorithm)
-                    delattr(self, "algorithm")
+                if self._algorithm is not None:
+                    self._algorithm.stop()  # free resources first
+                    algo_class = type(self._algorithm)
+                    delattr(self, "_algorithm")
                 else:
                     algo_class = self._algo_class
                     assert algo_class is not None
                 # Does not call on_checkpoint_loaded callback
-                self.algorithm = algo_class.from_checkpoint(
+                self._algorithm = algo_class.from_checkpoint(
                     Path(checkpoint["algorithm_checkpoint_dir"]).absolute().as_posix(), **algo_kwargs
                 )  # pyright: ignore[reportAttributeAccessIssue]
             elif "algorithm_state" in checkpoint:
@@ -832,7 +844,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     "Algorithm checkpoint directory %s does not exist, will restore from state",
                     checkpoint["algorithm_checkpoint_dir"],
                 )
-                if self.algorithm is None:
+                if self._algorithm is None:
                     _logger.critical(
                         "Cannot restore algorithm from state because algorithm was not created. "
                         "This should not happen when loading from checkpoint with create_algo=False."
@@ -895,16 +907,16 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # for component in components:
             #    self.restore_from_path(checkpoint, component=component, **algo_kwargs)
             # free resources first
-            if self.algorithm is not None:
-                self.algorithm.stop()  # free resources first
-            self.algorithm = cast(
+            if self._algorithm is not None:
+                self._algorithm.stop()  # free resources first
+            assert self._algorithm or self._algo_class
+            self._algorithm = cast(
                 "_AlgorithmType",
-                (self.algorithm or self._algo_class).from_checkpoint(
+                (self._algorithm or self._algo_class).from_checkpoint(  # pyright: ignore[reportOptionalMemberAccess]
                     (Path(checkpoint) / "algorithm").as_posix(),
                     **algo_kwargs,
                 ),
             )
-            # Sync is executed too early in restore_from_path, sync again.
             sync_env_runner_states_after_reload(self.algorithm)
         else:
             raise ValueError(f"Checkpoint must be a dict or a path. Not {type(checkpoint)}")
@@ -1163,7 +1175,9 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 num_envs_before,
                 num_envs_new,
             )
-        did_reset = self.algorithm.reset_config(algorithm_state_dict)  # likely does nothing
+        did_reset = self._algorithm is not None and self._algorithm.reset_config(
+            algorithm_state_dict
+        )  # likely does nothing
         if not did_reset:
             # NOTE: does not SYNC config if env_runners / learners not in components we do that below
             # NOTE: evaluation_config might also not be set!
@@ -1171,21 +1185,24 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
         # Update env_runners after restore
         # check if config has been restored correctly - TODO: Remove after more testing
-        from ray_utilities.testing_utils import TestHelpers
+        if self._algorithm:
+            from ray_utilities.testing_utils import TestHelpers
 
-        config1_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm_config.to_dict())
-        config2_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm.env_runner.config.to_dict())
-        if self.algorithm.env_runner and (config1_dict != config2_dict):
-            _logger.info(  # Sync below will make configs match
-                "Updating env_runner config after restore, did not match after set_state",
-            )
-            self.algorithm.env_runner.config = self.algorithm_config.copy(copy_frozen=True)
-            if self.algorithm.learner_group is not None and self.algorithm.learner_group.is_local:
-                self.algorithm.learner_group._learner.config = self.algorithm_config.copy(copy_frozen=True)  # pyright: ignore[reportOptionalMemberAccess]
-        self._rebuild_algorithm_if_necessary(new_algo_config)
-        sync_env_runner_states_after_reload(self.algorithm)  # NEW, Test, sync states here
-        if False and self.algorithm.env_runner_group:
-            # TODO: Passing config here likely has no effect at all; possibly sync metrics with custom function
+            config1_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm_config.to_dict())
+            config2_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm.env_runner.config.to_dict())
+            if self._algorithm.env_runner and (config1_dict != config2_dict):
+                _logger.info(  # Sync below will make configs match
+                    "Updating env_runner config after restore, did not match after set_state",
+                )
+                self._algorithm.env_runner.config = self.algorithm_config.copy(copy_frozen=True)
+                if self._algorithm.learner_group is not None and self._algorithm.learner_group.is_local:
+                    self._algorithm.learner_group._learner.config = self.algorithm_config.copy(copy_frozen=True)  # pyright: ignore[reportOptionalMemberAccess]
+        if self._algorithm is not None:  # Otherwise algorithm will be created later
+            self._rebuild_algorithm_if_necessary(new_algo_config)
+            sync_env_runner_states_after_reload(self.algorithm)  # NEW, Test, sync states here
+        if False and self._algorithm.env_runner_group:
+            # TODO: remove block
+            # Passing config here likely has no effect at all; possibly sync metrics with custom function
             # Does not sync config!, recreate env_runner_group or force sync. Best via reference
             self.algorithm.env_runner_group.sync_env_runner_states(config=self.algorithm_config)
             if recreate_envs and self.algorithm.env_runner and self.algorithm_config.num_env_runners == 0:
@@ -1241,7 +1258,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     @override(Checkpointable)
     def get_checkpointable_components(self) -> list[tuple[str, Checkpointable]]:
         components = super().get_checkpointable_components()
-        if self.algorithm is not None:  # pyright: ignore[reportUnnecessaryComparison]
+        if self._algorithm is not None:  # pyright: ignore[reportUnnecessaryComparison]
             components.append(("algorithm", self.algorithm))
         return components
 
