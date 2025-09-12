@@ -15,6 +15,7 @@ from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradient
 from ray_utilities.callbacks.algorithm.dynamic_buffer_callback import DynamicBufferUpdate
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
 from ray_utilities.callbacks.algorithm.exact_sampling_callback import exact_sampling_callback
+from ray_utilities.callbacks.algorithm.reset_episode_metrics import reset_episode_metrics_each_iteration
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser, LogStatsChoices
 from ray_utilities.connectors.remove_masked_samples_connector import RemoveMaskedSamplesConnector
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, split_timestep_budget
@@ -55,6 +56,27 @@ class TestExtensionsAdded(SetupWithEnv, SetupLowRes, DisableLoggers):
         self.assertTrue(
             setup.args.no_exact_sampling,
             "Expected no_exact_sampling to be False when --no_exact_sampling is not set.",
+        )
+
+    @patch_args()
+    @unittest.skip("Decide on default value on argument")
+    def test_episode_metrics_removed_callback_added(self):
+        setup = self._DEFAULT_SETUP_LOW_RES
+        # self.assertFalse(setup.args.limit_episode_metrics_to_iteration)
+        for config in (setup.config, setup.trainable_class().algorithm_config):
+            with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
+                assert config.callbacks_on_sample_end is not None
+                self.assertTrue(
+                    reset_episode_metrics_each_iteration is config.callbacks_on_sample_end
+                    or reset_episode_metrics_each_iteration in config.callbacks_on_sample_end,  # pyright: ignore
+                    "Expected reset_episode_metrics_each_iteration to be in callbacks_on_sample_end "
+                    "when --limit_episode_metrics_to_iteration is not set.",
+                )
+        return
+        setup = self._create_low_res_setup("--limit_episode_metrics_to_iteration", init_trainable=False)
+        self.assertTrue(
+            setup.args.limit_episode_metrics_to_iteration,
+            "Expected limit_episode_metrics_to_iteration to be True when --limit_episode_metrics_to_iteration is set.",
         )
 
     @patch_args()
