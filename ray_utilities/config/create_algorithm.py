@@ -47,8 +47,8 @@ from ray.tune import logger as tune_logger
 from ray_utilities.callbacks.algorithm.discrete_eval_callback import DiscreteEvalCallback
 from ray_utilities.callbacks.algorithm.env_render_callback import make_render_callback
 from ray_utilities.callbacks.algorithm.exact_sampling_callback import exact_sampling_callback
-from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback, make_seeded_env_callback
-from ray_utilities.config import add_callbacks_to_config
+from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
+from ray_utilities.config import add_callbacks_to_config, seed_environments_for_config
 from ray_utilities.learners import mix_learners
 from ray_utilities.learners.leaner_with_debug_connector import LearnerWithDebugConnectors
 
@@ -275,12 +275,12 @@ def create_algorithm_config(
     )
     try:
         cast("PPOConfig", config).training(
-            num_epochs=20,
+            # num_epochs=20, default is 30
             minibatch_size=args["minibatch_size"],
         )
     except TypeError:
         cast("PPOConfig", config).training(
-            num_sgd_iter=20,
+            # num_sgd_iter=20,
             sgd_minibatch_size=args["minibatch_size"],
         )
     if isinstance(config, PPOConfig):
@@ -346,6 +346,12 @@ def create_algorithm_config(
 
     # region Stateful callbacks
     callbacks: list[type[DefaultCallbacks]] = []
+    base_callbacks = None
+    if base_config is not None and base_config.callbacks_class:
+        if isinstance(base_config.callbacks_class, list):
+            base_callbacks = base_config.callbacks_class
+        else:
+            base_callbacks = [base_config.callbacks_class]
     if discrete_eval:
         callbacks.append(DiscreteEvalCallback)
     if args["env_seeding_strategy"] == "sequential":
@@ -356,13 +362,22 @@ def create_algorithm_config(
         )
     elif args["env_seeding_strategy"] == "same":
         # TODO: could use env_seed here, allows to sample a constant random seed != args["seed"]
-        make_seeded_env_callback(args["seed"])
+        seed_environments_for_config(config, args["seed"])
     elif args["env_seeding_strategy"] == "constant":
-        make_seeded_env_callback(SeedEnvsCallback.env_seed)
+        seed_environments_for_config(config, SeedEnvsCallback.env_seed)
     if args["render_mode"]:
         callbacks.append(make_render_callback())
     if auto_eval_interval:
         callbacks.append(DynamicEvalInterval)
+    if base_callbacks:
+        same = set(base_callbacks).intersection(set(callbacks))
+        only_in_base = set(base_callbacks).difference(set(callbacks))
+        only_in_new = set(callbacks).difference(set(base_callbacks))
+        if only_in_base or only_in_new:
+            logger.warning(
+                "Callbacks of base differs from callbacks in new config:\n%s vs\n%s", only_in_base, only_in_new
+            )
+        callbacks = [*(cb for cb in base_callbacks if cb not in same), *callbacks]
     if callbacks:
         if len(callbacks) == 1:
             callback_class = callbacks[0]
