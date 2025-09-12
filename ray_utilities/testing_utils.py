@@ -634,6 +634,19 @@ class TestHelpers(unittest.TestCase):
         )
         return trainable, result1
 
+    @staticmethod
+    def on_checkpoint_loaded_callbacks(trainable: TrainableBase[Any, Any, Algorithm | Any]):
+        """Executed the on_checkpoint_loaded callbacks of the algorithm if any."""
+        if trainable.algorithm.callbacks is not None:
+            if isinstance(trainable.algorithm.callbacks, Iterable):
+                cb: RLlibCallback
+                for cb in trainable.algorithm.callbacks:
+                    cb.on_checkpoint_loaded(algorithm=trainable.algorithm, metrics_logger=trainable.algorithm.metrics)
+            else:
+                trainable.algorithm.callbacks.on_checkpoint_loaded(
+                    algorithm=trainable.algorithm, metrics_logger=trainable.algorithm.metrics
+                )
+
     # endregion
 
     def check_tune_result(self, result: tune.ResultGrid):

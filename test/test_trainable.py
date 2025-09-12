@@ -400,16 +400,8 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 # due to parsing of test args.
                 trainable2 = self.TrainableClass({"num_env_runners": num_env_runners})
                 trainable2.set_state(deepcopy(state))
-                if trainable2.algorithm.callbacks is not None:
-                    if isinstance(trainable2.algorithm.callbacks, Iterable):
-                        for cb in trainable2.algorithm.callbacks:
-                            cb.on_checkpoint_loaded(
-                                algorithm=trainable2.algorithm, metrics_logger=trainable2.algorithm.metrics
-                            )
-                    else:
-                        trainable2.algorithm.callbacks.on_checkpoint_loaded(
-                            algorithm=trainable2.algorithm, metrics_logger=trainable2.algorithm.metrics
-                        )
+                self.on_checkpoint_loaded_callbacks(trainable2)
+
                 # class is missing in config dict
                 self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
             finally:
@@ -432,6 +424,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                         trainable2 = self.TrainableClass()
                         trainable2.restore_from_path(tmpdir)
                     # does not trigger on_checkpoint_load
+                self.on_checkpoint_loaded_callbacks(trainable2)
                 self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
             finally:
                 trainable.stop()  # pyright: ignore[reportPossiblyUnboundVariable]
