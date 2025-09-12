@@ -12,15 +12,14 @@ For the response, always follow these instructions:
 5. Finally, provide the fully rewritten file. You must output the complete file.
 Further context and instructions are given below:
 
-Follow this short guide to get short, high-value knowledge to be productive in the
-ray_utilities repository: architecture, project conventions, and notable integration points.
-
-ray_utilities uses `ray[tune,rllib]` as its core dependency.
+Follow this short guide to get short, high-value knowledge to be productive in the ray_utilities repository: architecture, project conventions, and notable integration points.
+The core dependency of ray_utilities is `ray[tune,rllib]`.
 
 General Instructions that always apply:
 - Follow Clean Code principles of Python
 - Avoid comments when the code is self-explanatory
 - Keep your response focused on the solution and include code suggestions when appropriate.
+- when defining functions or classes use appropriate type hints and annotations.
 
 Supported Versions and Environment
 - Python: 3.10+

@@ -88,10 +88,11 @@ class BudgetMixin(Generic[T]):
                 learner_config_dict["max_dynamic_buffer_size"],
             )
         try:
+            batch_size = algorithm.config.train_batch_size_per_learner
             budget = split_timestep_budget(
                 total_steps=learner_config_dict["total_steps"],
-                min_size=learner_config_dict["min_dynamic_buffer_size"],
-                max_size=learner_config_dict["max_dynamic_buffer_size"],
+                min_size=min(batch_size, learner_config_dict["min_dynamic_buffer_size"]),
+                max_size=max(batch_size, learner_config_dict["max_dynamic_buffer_size"]),
                 assure_even=True,
             )
         except KeyError as e:

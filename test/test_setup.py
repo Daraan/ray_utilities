@@ -656,6 +656,33 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 if i >= 2:
                     self.assertAlmostEqual(optimizer.param_groups[0]["lr"], 0.333)
 
+    def test_current_step_in_result(self):
+        trainable = self._DEFAULT_SETUP.trainable_class()
+        result = trainable.train()
+        self.assertEqual(result["current_step"], self._DEFAULT_SETUP.config.train_batch_size_per_learner)
+        trainable.stop()
+        with patch_args("--batch_size", "32", "--num_envs_per_env_runner", "4"):
+            setup = AlgorithmSetup()
+            trainable2 = setup.trainable_class()
+        result2 = trainable2.train()
+        trainable2.stop()
+        self.assertEqual(result2["current_step"], 32)
+        trainable3 = setup.trainable_class(setup.sample_params())
+        result3 = trainable3.train()
+        self.assertEqual(result3["current_step"], 32)
+        self.assertEqual(trainable3.algorithm_config.get_rollout_fragment_length(), 32 / 4)
+        self.assertEqual(
+            trainable3.algorithm.env_runner_group.foreach_env_runner(
+                lambda r: (
+                    r.num_envs,  # pyright: ignore[reportAttributeAccessIssue]
+                    r.config.train_batch_size_per_learner,
+                    r.config.get_rollout_fragment_length(),
+                )
+            ),
+            [(4, 32, 32 // 4)],
+        )
+        trainable3.stop()
+
 
 class TestPPOMLPSetup(InitRay, num_cpus=4):
     def test_basic(self):
@@ -1537,7 +1564,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, TestHelpers, num_cpus=
                 )
                 config.env_runners(num_env_runners=num_env_runners_a)
                 config.evaluation(
-                    evaluation_interval=1,
+                    evaluation_interval=1,  # <-- changed by DynamicEvalInterval
                     evaluation_duration=100,
                     evaluation_duration_unit="timesteps",
                     evaluation_num_env_runners=0,
@@ -1554,7 +1581,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, TestHelpers, num_cpus=
                 )
                 config.env_runners(num_env_runners=num_env_runners_b)
                 config.evaluation(
-                    evaluation_interval=1,
+                    evaluation_interval=1,  # <-- changed by DynamicEvalInterval
                     evaluation_duration=100,
                     evaluation_duration_unit="timesteps",
                     evaluation_num_env_runners=0,

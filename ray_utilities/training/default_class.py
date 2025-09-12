@@ -28,6 +28,7 @@ import pyarrow.fs
 import ray
 from ray import get_runtime_context, tune
 from ray.rllib.algorithms import AlgorithmConfig
+from ray.rllib.callbacks.utils import make_callback
 from ray.rllib.core import (
     COMPONENT_ENV_RUNNER,
     COMPONENT_EVAL_ENV_RUNNER,
@@ -726,6 +727,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 else:
                     algo_class = self._algo_class
                     assert algo_class is not None
+                # Does not call on_checkpoint_loaded callback
                 self.algorithm = algo_class.from_checkpoint(
                     Path(checkpoint["algorithm_checkpoint_dir"]).absolute().as_posix(), **algo_kwargs
                 )  # pyright: ignore[reportAttributeAccessIssue]
@@ -753,6 +755,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 _logger.debug("No algorithm state found in checkpoint.")
             self.set_state(checkpoint["state"])
             keys_to_process.remove("state")
+            # TODO: sync env runner states?
+            # FIXME: reloaded might not have same amount of env_runners if created with a different amount
 
             assert len(keys_to_process) == 0, f"Not all keys were processed during load_checkpoint: {keys_to_process}"
         elif checkpoint is not None:
@@ -797,6 +801,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     **algo_kwargs,
                 ),
             )
+            # Sync is executed too early in restore_from_path, sync again.
             sync_env_runner_states_after_reload(self.algorithm)
         else:
             raise ValueError(f"Checkpoint must be a dict or a path. Not {type(checkpoint)}")
@@ -814,6 +819,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         warn_if_minibatch_size_not_divisible(
             minibatch_size=self.algorithm_config.minibatch_size,
             num_envs_per_env_runner=self.algorithm_config.num_envs_per_env_runner,
+        )
+        # callbacks are not called by the above methods.
+        make_callback(
+            "on_checkpoint_loaded",
+            # ray has a wrong type signature here, accepting only list
+            callbacks_objects=self.algorithm.callbacks,  # pyright: ignore[reportArgumentType]
+            callbacks_functions=self.algorithm.config.callbacks_on_checkpoint_loaded,  # pyright: ignore[reportArgumentType,reportOptionalMemberAccess]
+            kwargs={"algorithm": self.algorithm, "metrics_logger": self.algorithm.metrics},
         )
 
     # endregion
@@ -1038,6 +1051,15 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 "Restored config class %s differs from expected class %s", type(new_algo_config), type(self.config)
             )
         new_algo_config = cast("_ConfigType", new_algo_config)
+        num_envs_before = self.algorithm_config.num_envs_per_env_runner
+        num_envs_new = new_algo_config.num_envs_per_env_runner
+        recreate_envs = num_envs_before != num_envs_new
+        if recreate_envs:
+            _logger.info(
+                "Amount of vectorized envs changed from %d to %d. Need to recreate envs, this is expensive.",
+                num_envs_before,
+                num_envs_new,
+            )
         did_reset = self.algorithm.reset_config(algorithm_state_dict)  # likely does nothing
         if not did_reset:
             # NOTE: does not SYNC config if env_runners / learners not in components we do that below
@@ -1057,17 +1079,24 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             self.algorithm.env_runner.config = self.algorithm_config.copy(copy_frozen=True)
             if self.algorithm.learner_group is not None and self.algorithm.learner_group.is_local:
                 self.algorithm.learner_group._learner.config = self.algorithm_config.copy(copy_frozen=True)  # pyright: ignore[reportOptionalMemberAccess]
-        if self.algorithm.env_runner_group:
+        sync_env_runner_states_after_reload(self.algorithm)  # NEW, Test, sync states here
+        if False and self.algorithm.env_runner_group:
             # TODO: Passing config here likely has no effect at all; possibly sync metrics with custom function
             # Does not sync config!, recreate env_runner_group or force sync. Best via reference
             self.algorithm.env_runner_group.sync_env_runner_states(config=self.algorithm_config)
+            if recreate_envs and self.algorithm.env_runner and self.algorithm_config.num_env_runners == 0:
+                self.algorithm.env_runner.make_env()
             if (self.algorithm_config.num_env_runners or 0) > 0:
                 remote_config_ref = ray.put(self.algorithm_config)
                 self.algorithm.env_runner_group._remote_config_obj_ref = remote_config_ref
                 self.algorithm.env_runner_group._remote_config = self.algorithm_config.copy(copy_frozen=True)
 
-                def set_env_runner_config(r: EnvRunner, remote_config_ref=remote_config_ref):
+                def set_env_runner_config(
+                    r: EnvRunner, remote_config_ref=remote_config_ref, recreate_envs=recreate_envs
+                ):
                     r.config = ray.get(remote_config_ref)
+                    if recreate_envs:
+                        r.make_env()
 
                 self.algorithm.env_runner_group.foreach_env_runner(set_env_runner_config, local_env_runner=False)
         keys_to_process.remove("algorithm_config")
@@ -1166,7 +1195,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # Update self._current_step in child class
         raise NotImplementedError("Subclasses must implement the `step` method.")
 
-    if TYPE_CHECKING:
+    if TYPE_CHECKING:  # update signature
 
         def train(self) -> AutoExtendedLogMetricsDict:  # pyright: ignore[reportIncompatibleMethodOverride]
             return super().train()  # pyright: ignore[reportReturnType]
@@ -1222,7 +1251,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         restored = super().from_checkpoint(path, filesystem=filesystem, **kwargs)
         restored = cast("Self", restored)
         # Restore algorithm metric states; see my PR https://github.com/ray-project/ray/pull/54148/
-        sync_env_runner_states_after_reload(restored.algorithm)
+        # sync_env_runner_states_after_reload(restored.algorithm)
         return restored
 
 
