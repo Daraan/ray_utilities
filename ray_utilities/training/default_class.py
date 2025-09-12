@@ -844,13 +844,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             num_envs_per_env_runner=self.algorithm_config.num_envs_per_env_runner,
         )
         # callbacks are not called by the above methods.
-        make_callback(
-            "on_checkpoint_loaded",
-            # ray has a wrong type signature here, accepting only list
-            callbacks_objects=self.algorithm.callbacks,  # pyright: ignore[reportArgumentType]
-            callbacks_functions=self.algorithm.config.callbacks_on_checkpoint_loaded,  # pyright: ignore[reportArgumentType,reportOptionalMemberAccess]
-            kwargs={"algorithm": self.algorithm, "metrics_logger": self.algorithm.metrics},
-        )
+        if self.algorithm is not None:
+            make_callback(
+                "on_checkpoint_loaded",
+                # ray has a wrong type signature here, accepting only list
+                callbacks_objects=self.algorithm.callbacks,  # pyright: ignore[reportArgumentType]
+                callbacks_functions=self.algorithm.config.callbacks_on_checkpoint_loaded,  # pyright: ignore[reportArgumentType,reportOptionalMemberAccess]
+                kwargs={"algorithm": self.algorithm, "metrics_logger": self.algorithm.metrics},
+            )
 
     # endregion
 
@@ -1015,7 +1016,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
         # Algorithm - steps are very likely skipped as it is a checkpointable component and was not pickled
         if "algorithm" in state:
-            if self.algorithm.metrics and COMPONENT_METRICS_LOGGER in state["algorithm"]:
+            if self.algorithm is not None and self.algorithm.metrics and COMPONENT_METRICS_LOGGER in state["algorithm"]:
                 self.algorithm.metrics.reset()
             for component in COMPONENT_ENV_RUNNER, COMPONENT_EVAL_ENV_RUNNER, COMPONENT_LEARNER_GROUP:
                 if component not in state["algorithm"]:
@@ -1024,7 +1025,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # NOTE: This sync env_runner -> eval_env_runner which causes wrong env_steps_sampled metric
         # TODO: # XXX as algorithm is not in state and restored via components, state might not be correct
         algo_state = state.get("algorithm")
-        if algo_state:
+        if algo_state and self.algorithm is not None:
             if COMPONENT_METRICS_LOGGER in algo_state:
                 assert self.algorithm.metrics
                 self.algorithm.metrics.reset()
@@ -1083,7 +1084,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 num_envs_before,
                 num_envs_new,
             )
-        did_reset = self.algorithm.reset_config(algorithm_state_dict)  # likely does nothing
+        did_reset = self.algorithm.reset_config(algorithm_state_dict) if self.algorithm is not None else False  # likely does nothing
         if not did_reset:
             # NOTE: does not SYNC config if env_runners / learners not in components we do that below
             # NOTE: evaluation_config might also not be set!
@@ -1094,15 +1095,16 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         from ray_utilities.testing_utils import TestHelpers
 
         config1_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm_config.to_dict())
-        config2_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm.env_runner.config.to_dict())
-        if self.algorithm.env_runner and (config1_dict != config2_dict):
-            _logger.info(  # Sync below will make configs match
-                "Updating env_runner config after restore, did not match after set_state",
-            )
-            self.algorithm.env_runner.config = self.algorithm_config.copy(copy_frozen=True)
-            if self.algorithm.learner_group is not None and self.algorithm.learner_group.is_local:
-                self.algorithm.learner_group._learner.config = self.algorithm_config.copy(copy_frozen=True)  # pyright: ignore[reportOptionalMemberAccess]
-        sync_env_runner_states_after_reload(self.algorithm)  # NEW, Test, sync states here
+        if self.algorithm is not None:
+            config2_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm.env_runner.config.to_dict())
+            if self.algorithm.env_runner and (config1_dict != config2_dict):
+                _logger.info(  # Sync below will make configs match
+                    "Updating env_runner config after restore, did not match after set_state",
+                )
+                self.algorithm.env_runner.config = self.algorithm_config.copy(copy_frozen=True)
+                if self.algorithm.learner_group is not None and self.algorithm.learner_group.is_local:
+                    self.algorithm.learner_group._learner.config = self.algorithm_config.copy(copy_frozen=True)  # pyright: ignore[reportOptionalMemberAccess]
+            sync_env_runner_states_after_reload(self.algorithm)  # NEW, Test, sync states here
         if False and self.algorithm.env_runner_group:
             # TODO: Passing config here likely has no effect at all; possibly sync metrics with custom function
             # Does not sync config!, recreate env_runner_group or force sync. Best via reference
