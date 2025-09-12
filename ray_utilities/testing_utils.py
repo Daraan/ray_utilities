@@ -1341,10 +1341,27 @@ class TestHelpers(unittest.TestCase):
                 trainable.algorithm_config.num_env_runners,
                 trainable.algorithm.env_runner_group.num_remote_env_runners(),
             )
-            #       self.assertEqual(
-            #           trainable2.algorithm_config.num_env_runners,
-            #           trainable2.algorithm.env_runner_group.num_remote_env_runners(),
-            #       )
+            self.assertEqual(
+                trainable2.algorithm_config.num_env_runners,
+                trainable2.algorithm.env_runner_group.num_remote_env_runners(),
+            )
+            if trainable2.algorithm_config.num_env_runners != trainable.algorithm_config.num_env_runners:
+                logger.warning("num_env_runners are different for the two trainables. Check if this is intended.")
+            trainable2_eval_config = trainable2.algorithm_config.get_evaluation_config_object()
+            trainable_eval_config = trainable.algorithm_config.get_evaluation_config_object()
+            self.assertIs(
+                type(trainable_eval_config),
+                type(trainable2_eval_config),
+                f"Evaluation config types do not match: {type(trainable_eval_config)} != {type(trainable2_eval_config)}",
+            )
+            if trainable2_eval_config:
+                self.assertEqual(
+                    trainable2_eval_config.num_env_runners,
+                    trainable2.algorithm.eval_env_runner_group.num_remote_env_runners(),
+                )
+                assert trainable_eval_config
+                if trainable2_eval_config.num_env_runners != trainable_eval_config.num_env_runners:
+                    logger.warning("num_env_runners are different for the two trainables. Check if this is intended.")
 
             keys.remove("config")
             self.assertDictEqual(setup_data1["config_overrides"], setup_data2["config_overrides"])
@@ -1389,32 +1406,26 @@ class TestHelpers(unittest.TestCase):
             self.assertTrue(trainable.algorithm.env_runner is not None)
             self.assertTrue(trainable2.algorithm.env_runner is not None)
             # NOTE: If num_env_runners is not explicitly set for trainable2 it will have 0 env runners the args default!
-            # TODO: Change this check for non-matching amount of env_runners.
-            self.assertListEqual(
+            # Therefore compare only last env_runner in list (might be the local one)
+            self.assertEqual(
                 trainable2.algorithm.env_runner_group.foreach_env_runner(
                     lambda r: (
                         r.config.get_rollout_fragment_length(),
                         r.config.total_train_batch_size,
                         r.config.train_batch_size_per_learner,
                         r.config.num_envs_per_env_runner == r.num_envs,  # This is False for the local env runner
+                        r.config.get_rollout_fragment_length() * r.num_envs,
                     )
-                ),
+                )[-1],
                 trainable.algorithm.env_runner_group.foreach_env_runner(
                     lambda r: (
                         r.config.get_rollout_fragment_length(),
                         r.config.total_train_batch_size,
                         r.config.train_batch_size_per_learner,
                         r.config.num_envs_per_env_runner == r.num_envs,
+                        r.config.get_rollout_fragment_length() * r.num_envs,
                     )
-                ),
-            )
-            self.assertListEqual(
-                trainable2.algorithm.env_runner_group.foreach_env_runner(
-                    lambda r: (r.config.get_rollout_fragment_length() * r.num_envs,)
-                ),
-                trainable.algorithm.env_runner_group.foreach_env_runner(
-                    lambda r: (r.config.get_rollout_fragment_length() * r.num_envs,)
-                ),
+                )[-1],
             )
             self.assertEqual(
                 trainable2.algorithm_config.total_train_batch_size,
