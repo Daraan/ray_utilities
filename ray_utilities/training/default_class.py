@@ -35,6 +35,7 @@ from ray.rllib.core import (
     COMPONENT_LEARNER_GROUP,
     COMPONENT_METRICS_LOGGER,
 )
+from ray.rllib.env.env_runner_group import EnvRunnerGroup
 from ray.rllib.utils import force_list
 from ray.rllib.utils.annotations import override
 from ray.rllib.utils.checkpoints import Checkpointable
@@ -630,6 +631,85 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
     # region checkpointing
 
+    def _rebuild_algorithm_if_necessary(self, new_algo_config: AlgorithmConfig) -> bool | None:
+        """Check if env runners need to be recreated based on state or algorithm changes.
+
+        Args:
+            new_algo_config: The new algorithm config being restored.
+
+        Todo:
+            Does not check if learners need to be recreated.
+            Assumes num_learners does not change.
+        """
+        if self.algorithm is None:
+            return None
+        call_setup_again = False
+        env_runners_need_update = (
+            self.algorithm.env_runner_group
+            and new_algo_config.num_env_runners != self.algorithm.env_runner_group.num_remote_env_runners()
+        )
+        eval_config = (
+            new_algo_config.get_evaluation_config_object() if not new_algo_config.in_evaluation else new_algo_config
+        )
+        eval_env_runners_need_update = (
+            eval_config
+            and self.algorithm._should_create_evaluation_env_runners(eval_config)  # if deactivated dont care
+            and self.algorithm.eval_env_runner_group
+            # if new_algo_config is evaluation config cannot get another evaluation config
+            and eval_config.num_env_runners != self.algorithm.eval_env_runner_group.num_remote_env_runners()
+        )
+        if env_runners_need_update:
+            if self.algorithm.env_runner_group:
+                # end old
+                self.algorithm.env_runner_group.stop()
+                delattr(self.algorithm, "env_runner_group")
+
+            self.algorithm.env_runner_group = EnvRunnerGroup(
+                env_creator=self.algorithm.env_creator,
+                validate_env=self.algorithm.validate_env,
+                default_policy_class=self.algorithm.get_default_policy_class(new_algo_config),
+                config=new_algo_config,
+                # New API stack: User decides whether to create local env runner.
+                # Old API stack: Always create local EnvRunner.
+                local_env_runner=(
+                    True
+                    if not new_algo_config.enable_env_runner_and_connector_v2
+                    else bool(new_algo_config.create_local_env_runner)
+                ),
+                logdir=self.algorithm.logdir,
+                tune_trial_id=self.algorithm.trial_id,
+            )
+            # FIXME: These are not equal if num_env_per_env_runner changes
+            # assert self.algorithm.spaces == self.algorithm.eval_env_runner_group.get_spaces()
+        if eval_env_runners_need_update:
+            assert eval_config is not None
+            _, env_creator = self.algorithm._get_env_id_and_creator(eval_config.env, eval_config)
+
+            # Create a separate evaluation worker set for evaluation.
+            # If evaluation_num_env_runners=0, use the evaluation set's local
+            # worker for evaluation, otherwise, use its remote workers
+            # (parallelized evaluation).
+            self.algorithm.eval_env_runner_group = EnvRunnerGroup(
+                env_creator=env_creator,
+                validate_env=None,
+                default_policy_class=self.algorithm.get_default_policy_class(eval_config),
+                config=eval_config,
+                logdir=self.algorithm.logdir,
+                tune_trial_id=self.algorithm.trial_id,
+                # New API stack: User decides whether to create local env runner.
+                # Old API stack: Always create local EnvRunner.
+                local_env_runner=(
+                    True
+                    if not eval_config.enable_env_runner_and_connector_v2
+                    else bool(eval_config.create_local_env_runner)
+                ),
+                # offset for the placement group
+                pg_offset=new_algo_config.num_env_runners or 0,
+            )
+            # FIXME
+            # assert self.algorithm.spaces == self.algorithm.eval_env_runner_group.get_spaces()
+        return False
+
     # region Trainable checkpoints
 
     @override(tune.Trainable)
@@ -1079,6 +1159,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             self.algorithm.env_runner.config = self.algorithm_config.copy(copy_frozen=True)
             if self.algorithm.learner_group is not None and self.algorithm.learner_group.is_local:
                 self.algorithm.learner_group._learner.config = self.algorithm_config.copy(copy_frozen=True)  # pyright: ignore[reportOptionalMemberAccess]
+        self._rebuild_algorithm_if_necessary(new_algo_config)
         sync_env_runner_states_after_reload(self.algorithm)  # NEW, Test, sync states here
         if False and self.algorithm.env_runner_group:
             # TODO: Passing config here likely has no effect at all; possibly sync metrics with custom function
