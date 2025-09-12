@@ -449,6 +449,9 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
         self._current_step: int = 0
         """The current env steps sampled by the trainable, updated by step()."""
+        
+        self._algo_config: _ConfigType
+        """Config used during setup, available even when algorithm is None during checkpoint loading."""
 
     @override(tune.Trainable)
     def setup(self, config: dict[str, Any], *, algorithm_overrides: Optional[dict[str, Any]] = None) -> None:
@@ -535,8 +538,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             setup_class=self.setup_class if isclass(self.setup_class) else None,
             config_overrides=self._algorithm_overrides,
             model_config=self._model_config,
-            create_algo=True,  # not load_algorithm,  # Not stable enough to init later.
+            create_algo=not load_algorithm,  # Avoid creating unnecessary intermediate algorithm
         )
+        # Store the config for access when algorithm might be None during checkpoint loading
+        self._algo_config = _algo_config
         self._param_overrides: dict[str, Any] = args.get("__overwritten_keys__", {})
         """Changed parameters via the hparams argument, e.g. passed by the tuner. See also: --tune"""
         self._pbar: tqdm | range | tqdm_ray.tqdm = episode_iterator(args, config, use_pbar=self.use_pbar)
@@ -549,7 +554,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             self._algo_class: type[_AlgorithmType] | None = _algo_config.algo_class
             _logger.info("At end of setup(), loading from checkpoint: %s", config["cli_args"]["from_checkpoint"])
             # calls restore from path; from_checkpoint could also be a dict here
-            self.algorithm = algorithm
+            # algorithm is None when create_algo=False, will be set in load_checkpoint
+            self.algorithm = algorithm  # This will be None initially
             self.load_checkpoint(config["cli_args"]["from_checkpoint"])
             assert self.algorithm is not None
             if self.algorithm.metrics:
@@ -569,14 +575,16 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             self.algorithm = algorithm
         assert self.algorithm.config
 
+        # Use the config from setup_trainable to calculate total steps, which handles both algorithm and non-algorithm cases
+        algo_config_for_calculation = self.algorithm.config if self.algorithm else _algo_config
         steps_to_new_goal = args["total_steps"] - current_step
         iterations_to_new_goal = (
-            steps_to_new_goal // self.algorithm_config.train_batch_size_per_learner + 1
-            if steps_to_new_goal % self.algorithm_config.train_batch_size_per_learner != 0
-            else steps_to_new_goal // self.algorithm_config.train_batch_size_per_learner
+            steps_to_new_goal // algo_config_for_calculation.train_batch_size_per_learner + 1
+            if steps_to_new_goal % algo_config_for_calculation.train_batch_size_per_learner != 0
+            else steps_to_new_goal // algo_config_for_calculation.train_batch_size_per_learner
         )
         args["iterations"] = iterations_to_new_goal
-        steps_with_current_batch_size = get_total_steps(args, self.algorithm.config)
+        steps_with_current_batch_size = get_total_steps(args, algo_config_for_calculation)
         if steps_with_current_batch_size is not None:
             total_steps = steps_with_current_batch_size + current_step
         else:
@@ -594,12 +602,19 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         Note:
             This is a copy of the setup's config which might has been further modified.
         """
-        return self.algorithm.config  # pyright: ignore[reportReturnType]
+        if self.algorithm is not None:
+            return self.algorithm.config  # pyright: ignore[reportReturnType]
+        # During checkpoint loading, algorithm might be None, use stored config
+        return self._algo_config  # pyright: ignore[reportReturnType]
 
     @algorithm_config.setter
     def algorithm_config(self, value: _ConfigType):
         # Does not update env_runners and learner !
-        self.algorithm.config = value
+        if self.algorithm is not None:
+            self.algorithm.config = value
+        else:
+            # During checkpoint loading, algorithm might be None, update stored config
+            self._algo_config = value
 
     @property
     def trainable_config(self) -> dict[str, Any]:
@@ -622,7 +637,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     def cleanup(self):
         # call stop to fully free resources
         super().cleanup()
-        self.algorithm.cleanup()
+        if self.algorithm is not None:
+            self.algorithm.cleanup()
         if is_pbar(self._pbar):
             self._pbar.close()
 
@@ -736,6 +752,12 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     "Algorithm checkpoint directory %s does not exist, will restore from state",
                     checkpoint["algorithm_checkpoint_dir"],
                 )
+                if self.algorithm is None:
+                    _logger.critical(
+                        "Cannot restore algorithm from state because algorithm was not created. "
+                        "This should not happen when loading from checkpoint with create_algo=False."
+                    )
+                    raise RuntimeError("Algorithm is None but trying to restore from algorithm_state")
                 if self._algorithm_overrides:
                     checkpoint["algorithm_state"]["config"] = checkpoint["algorithm_state"]["config"].update_from_dict(
                         self._algorithm_overrides
@@ -793,7 +815,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # for component in components:
             #    self.restore_from_path(checkpoint, component=component, **algo_kwargs)
             # free resources first
-            self.algorithm.stop()  # free resources first
+            if self.algorithm is not None:
+                self.algorithm.stop()  # free resources first
             self.algorithm = cast(
                 "_AlgorithmType",
                 (self.algorithm or self._algo_class).from_checkpoint(
