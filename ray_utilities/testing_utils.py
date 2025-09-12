@@ -94,6 +94,7 @@ from typing_extensions import Final, NotRequired, Required, Sentinel, TypeAliasT
 
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.mlp_argument_parser import MLPArgumentParser
+from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.dynamic_config.dynamic_buffer_update import logger as dynamic_buffer_logger
 from ray_utilities.misc import raise_tune_errors
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
@@ -554,11 +555,11 @@ class TestHelpers(unittest.TestCase):
     @patch_args(
         "--iterations", "5",
         "--total_steps", "320",
-        "--batch_size", "64",
+        "--batch_size", "64",  # overwritten with 32!
         "--comment", "created by TestHelpers.get_trainable",
         "--seed", "42",
-        "--min_step_size", "16",  # try not to adjust total_steps
-        "--max_step_size", "16",  # try not to adjust total_steps
+        "--min_step_size", "64",  # try not to adjust total_steps
+        "--max_step_size", "64",  # try not to adjust total_steps
         "--num_envs_per_env_runner", "1",
         "--fcnet_hiddens", "[4]"
     )  # fmt: skip
@@ -613,9 +614,10 @@ class TestHelpers(unittest.TestCase):
             self.assertSetEqual(set(overrides.keys()), OVERRIDE_KEYS)
         else:
             self.assertSetEqual(set(overrides.keys()), OVERRIDE_KEYS | {"evaluation_interval"})
+            self.assertEqual(trainable.algorithm_config.evaluation_interval, eval_interval)
         self.assertEqual(trainable.algorithm_config.num_env_runners, num_env_runners)
         self.assertEqual(trainable.algorithm_config.minibatch_size, 32)
-        self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 32)
+        self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 32)  # overwritten
         self.assertEqual(trainable.algorithm_config.num_epochs, 2)
         self.assertEqual(trainable._setup.args.iterations, 5)
         self.assertEqual(trainable._setup.args.total_steps, 320)
@@ -624,6 +626,12 @@ class TestHelpers(unittest.TestCase):
         if not train:
             return trainable, None
         result1 = trainable.train()
+        self.assertEqual(result1[TRAINING_ITERATION], 1)
+        self.assertEqual(result1["current_step"], 32)
+        self.assertFalse(trainable._setup.args.no_exact_sampling)
+        self.assertEqual(
+            trainable.algorithm.metrics.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)), 32
+        )
         return trainable, result1
 
     # endregion
@@ -1315,6 +1323,16 @@ class TestHelpers(unittest.TestCase):
             keys.remove("setup_class")
             assert setup_data1["config"] and setup_data2["config"]
             self.compare_configs(setup_data1["config"], setup_data2["config"])
+            # Check that num_env runners matches config
+            self.assertEqual(
+                trainable.algorithm_config.num_env_runners,
+                trainable.algorithm.env_runner_group.num_remote_env_runners(),
+            )
+            self.assertEqual(
+                trainable2.algorithm_config.num_env_runners,
+                trainable2.algorithm.env_runner_group.num_remote_env_runners(),
+            )
+
             keys.remove("config")
             self.assertDictEqual(setup_data1["config_overrides"], setup_data2["config_overrides"])
             keys.remove("config_overrides")
@@ -1351,8 +1369,58 @@ class TestHelpers(unittest.TestCase):
             # Step 2
             result2 = trainable.train()
             result2_restored = trainable2.train()
+            self.assertEqual(
+                trainable2.algorithm_config.get_rollout_fragment_length(),
+                trainable.algorithm_config.get_rollout_fragment_length(),
+            )
+            self.assertTrue(trainable.algorithm.env_runner is not None)
+            self.assertTrue(trainable2.algorithm.env_runner is not None)
+            # NOTE: If num_env_runners is not explicitly set for trainable2 it will have 0 env runners the args default!
+            # TODO: Change this check for non-matching amount of env_runners.
+            self.assertListEqual(
+                trainable2.algorithm.env_runner_group.foreach_env_runner(
+                    lambda r: (
+                        r.config.get_rollout_fragment_length(),
+                        r.config.total_train_batch_size,
+                        r.config.train_batch_size_per_learner,
+                        r.config.num_envs_per_env_runner == r.num_envs,  # This is False for the local env runner
+                    )
+                ),
+                trainable.algorithm.env_runner_group.foreach_env_runner(
+                    lambda r: (
+                        r.config.get_rollout_fragment_length(),
+                        r.config.total_train_batch_size,
+                        r.config.train_batch_size_per_learner,
+                        r.config.num_envs_per_env_runner == r.num_envs,
+                    )
+                ),
+            )
+            self.assertListEqual(
+                trainable2.algorithm.env_runner_group.foreach_env_runner(
+                    lambda r: (r.config.get_rollout_fragment_length() * r.num_envs,)
+                ),
+                trainable.algorithm.env_runner_group.foreach_env_runner(
+                    lambda r: (r.config.get_rollout_fragment_length() * r.num_envs,)
+                ),
+            )
+            self.assertEqual(
+                trainable2.algorithm_config.total_train_batch_size,
+                trainable.algorithm_config.total_train_batch_size,
+            )
+            self.assertEqual(
+                trainable2.algorithm_config.total_train_batch_size,
+                trainable.algorithm_config.total_train_batch_size,
+            )
             self.assertEqual(result2[TRAINING_ITERATION], result2_restored[TRAINING_ITERATION], msg)
             self.assertEqual(result2[TRAINING_ITERATION], iteration_after_step, msg)
+            self.assertEqual(result2["current_step"], result2_restored["current_step"])
+            self.compare_env_runner_results(
+                result2_restored[ENV_RUNNER_RESULTS],  # pyright: ignore[reportArgumentType]
+                result2[ENV_RUNNER_RESULTS],  # pyright: ignore[reportArgumentType]
+                "results after step 2",
+                compare_steps_sampled=True,
+                compare_results=False,
+            )
 
         # Compare env_runners
         self.maxDiff = None
@@ -1464,6 +1532,10 @@ class SetupWithEnv(TestHelpers):
         self._OBSERVATION_SPACE = self._env.observation_space
         self._ACTION_SPACE = self._env.action_space
         super().setUp()
+
+    def tearDown(self):
+        super().tearDown()
+        self._env.close()
 
 
 class SetupLowRes(TestHelpers):
