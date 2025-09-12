@@ -9,6 +9,7 @@ from functools import partial
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, Optional, TypeVar, cast, overload
 
+import ray
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core import COMPONENT_LEARNER, COMPONENT_METRICS_LOGGER, COMPONENT_RL_MODULE
@@ -37,6 +38,8 @@ if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
     from ray.rllib.env.env_runner import EnvRunner
+    from ray.rllib.env.multi_agent_env_runner import MultiAgentEnvRunner
+    from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
 
     from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
@@ -414,10 +417,28 @@ def get_total_steps(args: dict[str, Any], config: "AlgorithmConfig") -> int | No
     )
 
 
-def _set_env_runner_state(env_runner: EnvRunner, state: dict[str, Any]):
+def _set_env_runner_state(
+    env_runner: EnvRunner | SingleAgentEnvRunner | MultiAgentEnvRunner,
+    state_ref: ray.ObjectRef,
+    config_ref: ray.ObjectRef,
+):
+    # 7U14A1  Lifebook U7410
+    state: dict = ray.get(state_ref)
+    print("Received state for env runner:", type(state))
     if COMPONENT_METRICS_LOGGER not in state:
         raise KeyError(f"State dictionary missing required key '{COMPONENT_METRICS_LOGGER}'.")
+    config: AlgorithmConfig = ray.get(config_ref)
+    env_runner.config = config
     env_runner.metrics.set_state(state[COMPONENT_METRICS_LOGGER])
+    if hasattr(env_runner, "num_envs"):
+        if 0 != env_runner.num_envs != env_runner.config.num_envs_per_env_runner:  # pyright: ignore[reportAttributeAccessIssue]
+            # local env runner can have zero envs when we are remote
+            logger.error(
+                "EnvRunner has %d envs, but config.num_envs_per_env_runner is %d. Recreating envs.",
+                env_runner.num_envs,  # pyright: ignore[reportAttributeAccessIssue]
+                env_runner.config.num_envs_per_env_runner,
+            )
+            env_runner.make_env()
 
 
 def _clear_nan_stats(stat: dict[str, Any | list[list[float]]]):
@@ -543,9 +564,11 @@ def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
             # env_runner_metrics=env_runner_metrics,
         )
         # Sync metrics
+        state_ref = ray.put(env_runner_metrics_state)
+        config_ref = ray.put(algorithm.config)
 
         algorithm.env_runner_group.foreach_env_runner(
-            partial(_set_env_runner_state, state=env_runner_metrics_state),
+            partial(_set_env_runner_state, state_ref=state_ref, config_ref=config_ref),
             remote_worker_ids=None,  # pyright: ignore[reportArgumentType]
             local_env_runner=True,
             # kwargs is not save to use here, not used on all code paths
@@ -565,8 +588,10 @@ def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
             # env_runner_metrics=env_runner_metrics,
         )
         if eval_stats:
+            eval_state_ref = ray.put(eval_runner_metrics)
+            eval_config_ref = ray.put(algorithm.config.get_evaluation_config_object())
             algorithm.eval_env_runner_group.foreach_env_runner(
-                partial(_set_env_runner_state, state=eval_runner_metrics),
+                partial(_set_env_runner_state, state_ref=eval_state_ref, config_ref=eval_config_ref),
                 remote_worker_ids=None,  # pyright: ignore[reportArgumentType]
                 local_env_runner=False,
                 # kwargs is not save to use here, not used on all code paths
