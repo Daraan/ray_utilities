@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Protocol
 
-from ray.rllib.core.models.tf.base import TfModel
 from ray.rllib.core.models.torch.base import TorchModel  # noqa: F401  # type: ignore
 from typing_extensions import Self
 
@@ -24,7 +23,13 @@ class DiscreteModelABC(ABC):
 class _DiscreteTorchModelBase(DiscreteModelABC, TorchModel): ...
 
 
-class _DiscreteTFModelBase(DiscreteModelABC, TfModel): ...
+if TYPE_CHECKING:
+    from ray.rllib.core.models.tf.base import TfModel  # pyright: ignore[reportMissingImports] # ray has removed this somewhere around 2.40
+
+    from typing import type_check_only
+
+    @type_check_only
+    class _DiscreteTFModelBase(DiscreteModelABC, TfModel): ...
 
 
 class DiscreteModuleBase(Protocol):

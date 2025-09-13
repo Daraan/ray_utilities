@@ -219,7 +219,7 @@ def update_pbar(
             lines = [f"Train {key}: {value}" for key, value in train_results_str.items()]
         else:
             lines = []
-        if eval_results.get("mean") is not None and eval_results.get("roll") is not None:
+        if eval_results.get("mean") is not None and eval_results.get("roll") is not None:  # pyright: ignore[reportUnnecessaryComparison]
             eval_results = eval_results.copy()
             mean_roll_value = f"{eval_results['mean']:.1f} (roll: {eval_results.pop('roll'):.1f})"  # pyright: ignore[reportTypedDictNotRequiredAccess]
             eval_results["mean"] = mean_roll_value  # pyright: ignore[reportGeneralTypeIssues]

@@ -2,17 +2,18 @@
 """Experimental scheduler tests"""
 
 from ray.tune.tuner import Tuner
+
 from ray_utilities import run_tune
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
-from ray_utilities.setup import PPOSetup
+from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 from ray_utilities.setup.tuner_setup import ScheduledTunerSetup
 
 if __name__ == "__main__":
-    PPOSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
-    PPOSetup.group_name = "test-scheduler"  # pyright: ignore
+    PPOMLPSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
+    PPOMLPSetup.group_name = "test-scheduler"  # pyright: ignore
 
-    class SchedulerSetup(PPOSetup):
+    class SchedulerSetup(PPOMLPSetup):
         def create_tuner(self) -> Tuner:
             return ScheduledTunerSetup(
                 setup=self, eval_metric=EVAL_METRIC_RETURN_MEAN, eval_metric_order="max"
@@ -37,7 +38,7 @@ if __name__ == "__main__":
         "--test",
         "--total_steps", 20_000
     ):  # fmt: skip
-        setup = SchedulerSetup()  # Replace with your own setup class
+        setup = SchedulerSetup(config_files=["experiments/default.cfg"])  # Replace with your own setup class
         results = run_tune(setup)
 
         # TODO: Should not restore seed

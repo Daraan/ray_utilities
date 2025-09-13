@@ -57,6 +57,8 @@ jobs:
         # Split tests because of deadlock
         # Test all others execluded by tests below
         pytest -k "not test_trainable" -m "not basic and length(speed='fast')" -v -x --fast
+      env: 
+        COMET_API_KEY: ${{ secrets.COMET_API_KEY }}
   test-standard-medium-length:
     runs-on: ubuntu-latest
     steps:

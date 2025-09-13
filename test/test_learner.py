@@ -13,7 +13,7 @@ from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import 
 from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import DisableLoggers, InitRay, TestHelpers, patch_args
-from ray_utilities.training.helpers import make_divisible
+from ray_utilities.training.helpers import is_algorithm_callback_added, make_divisible
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms.ppo.torch.default_ppo_torch_rl_module import DefaultPPOTorchRLModule
@@ -118,7 +118,7 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
 
         self.assertEqual(setup.config.learner_config_dict["accumulate_gradients_every"], 1)
         trainable = setup.trainable_class()
-        self.assertTrue(self.is_algorithm_callback_added(trainable.algorithm_config, DynamicGradientAccumulation))
+        self.assertTrue(is_algorithm_callback_added(trainable.algorithm_config, DynamicGradientAccumulation))
         learner: PPOTorchLearnerWithGradientAccumulation = trainable.algorithm.learner_group._learner  # pyright: ignore[reportAssignmentType, reportOptionalMemberAccess]
         self.assertEqual(  # at start not accumulation, then 2, 4, ...
             learner.config.learner_config_dict["accumulate_gradients_every"],

@@ -53,12 +53,13 @@ from typing_extensions import Self, TypedDict, TypeVar, deprecated
 from ray_utilities import run_id
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
+from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 from ray_utilities.comet import CometArchiveTracker
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.config.typed_argument_parser import SupportsMetaAnnotations
+from ray_utilities.config.typed_argument_parser import ConfigFilePreParser, SupportsMetaAnnotations
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.environment import create_env
-from ray_utilities.misc import AutoInt, get_trainable_name
+from ray_utilities.misc import RE_GET_TRIAL_ID, AutoInt, get_trainable_name
 from ray_utilities.setup.tuner_setup import TunerSetup
 from ray_utilities.training.default_class import TrainableBase
 from ray_utilities.warn import (
@@ -270,6 +271,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         self,
         args: Optional[Sequence[str]] = None,
         *,
+        config_files: Optional[list[str | os.PathLike]] = None,
+        load_args: Optional[str | os.PathLike] = None,
         init_config: bool = True,
         init_param_space: bool = True,
         init_trainable: bool = True,
@@ -280,6 +283,12 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
         Args:
             args : Command-line arguments to parse. If None, defaults to sys.argv.
+            config_files: Additional files with command line arguments that are
+                loaded during argument parsing. Arguments in the file have a lower priority than
+                those provided by the command line or :meth:`patch_args`.
+                See: https://github.com/swansonk14/typed-argument-parser?tab=readme-ov-file#saving-and-loading-arguments
+            load_args: A json file to load command line arguments from.
+                See: https://github.com/swansonk14/typed-argument-parser?tab=readme-ov-file#saving-and-loading-arguments
             init_config : Whether to initialize the configuration. Defaults to True.
             init_param_space : Whether to initialize the parameter space. Defaults to True.
             init_trainable : Whether to initialize the trainable component. Defaults to True.
@@ -298,11 +307,30 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             - self.create_parser(): Creates and assigns the argument parser.
             - self.setup(): Performs further setup based on initialization flags.
         """
+        cfg_file_parser = ConfigFilePreParser()
+        cfgs_from_cli = cfg_file_parser.parse_args(args, known_only=True)
+        if config_files:
+            logger.info("Adding config files %s to those found in args: %s", config_files, cfgs_from_cli)
+            config_files = config_files.copy()
+            config_files.extend(cfgs_from_cli.config_files)
+        else:
+            config_files = cfgs_from_cli.config_files  # pyright: ignore[reportAssignmentType]
+        pre_parsed_args = cfg_file_parser.extra_args
         self._config_overrides: Optional[dict[str, Any]] = None
+        self._config_files = config_files
+        self._load_args = load_args
         self.parser: Parser[ParserType_co]
-        self.parser = self.create_parser()
+        self.parser = self.create_parser(config_files)
+        if load_args:
+            if not hasattr(self.parser, "load"):
+                raise AttributeError(f"Parser {self.parser} has no attribute 'load' to support load_args")
+            # possibly add skip_unsettable=True
+            self.parser.load(load_args)  # pyright: ignore[reportAttributeAccessIssue]
+            if isinstance(self.parser, Tap):
+                logger.info("When using parse_args with a loaded config, argument parsing will be skipped.")
+                parse_args = False  # cannot parse again
         self.setup(
-            args,
+            pre_parsed_args,
             init_config=init_config,
             init_param_space=init_param_space,
             init_trainable=init_trainable,
@@ -311,7 +339,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     def setup(
         self,
-        args: Optional[Sequence[str]] = None,
+        args: Optional[list[str]] = None,
         *,
         init_config: bool = True,
         init_param_space: bool = True,
@@ -370,8 +398,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     # region Argument Parsing
 
-    def create_parser(self) -> Parser[ParserType_co]:
-        self.parser = DefaultArgumentParser(allow_abbrev=False)
+    def create_parser(self, config_files: Optional[list[str | os.PathLike]] = None) -> Parser[ParserType_co]:
+        self.parser = DefaultArgumentParser(allow_abbrev=False, config_files=config_files)
         return self.parser
 
     def postprocess_args(self, args: NamespaceType[ParserType_co]) -> NamespaceType[ParserType_co]:
@@ -434,7 +462,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         return self.parser.parse_args()
 
     @staticmethod
-    def _remove_testing_args_from_argv():
+    def _remove_testing_args_from_argv(args: list[str] | None = None):
         """
         When run under test some shorthand commands might infer with the argument parser.
         Clean those away.
@@ -442,20 +470,21 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         Returns:
             sys.argv with --udiscovery ... -- removed if present.
         """
-        if "--udiscovery" in sys.argv:
-            start = sys.argv.index("--udiscovery")
-            if "--" in sys.argv[start:]:
+        args = sys.argv if args is None else args
+        if "--udiscovery" in args:
+            start = args.index("--udiscovery")
+            if "--" in args[start:]:
                 # slice args away until --
-                end = start + sys.argv[start:].index("--")
+                end = start + args[start:].index("--")
             else:
-                end = len(sys.argv)
-            argv = sys.argv[:start] + sys.argv[end + 1 :]
-            logger.info("Removing testing argument %s from sys.argv.", sys.argv[start : end + 1])
+                end = len(args)
+            argv = args[:start] + args[end + 1 :]
+            logger.info("Removing testing argument %s from command line arguments.", args[start : end + 1])
             return argv
-        return sys.argv
+        return sys.argv[1:] if args is sys.argv else args
 
     def parse_args(
-        self, args: Sequence[str] | None = None, *, known_only: bool | None = None, checkpoint: Optional[str] = None
+        self, args: list[str] | None = None, *, known_only: bool | None = None, checkpoint: Optional[str] = None
     ) -> NamespaceType[ParserType_co]:
         """
         Raises:
@@ -468,9 +497,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         try:
             # If Tap parser or compatible
             self.parser = cast("ParserType_co", self.parser)
-            parsed = self.parser.parse_args(
-                self._remove_testing_args_from_argv() if args is None else args, known_only=known_only
-            )
+            parsed = self.parser.parse_args(self._remove_testing_args_from_argv(args), known_only=known_only)
             extra_args = self.parser.extra_args
         except TypeError as e:
             if "'known_only' is an invalid invalid keyword" not in str(e):
@@ -706,9 +733,9 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             ValueError: If the config is already frozen. That is, after `create_trainable`
                 has already be called.
         """
-        if not kwargs or not hasattr(self, "config"):
+        if not kwargs:
             return self._config_overrides or {}
-        if self.config._is_frozen:
+        if hasattr(self, "config") and self.config._is_frozen:
             raise ValueError(
                 "Cannot override algorithm configuration as the config is already frozen. "
                 "Use this function in a `with setup` block or call `unset_trainable()` first."
@@ -1193,8 +1220,66 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 stderr.decode("utf-8"),
             )
 
+    def _get_wandb_paths(self, results: Optional[ResultGrid] = None, tuner: Optional[tune.Tuner] = None) -> list[Path]:
+        if results is None:
+            if tuner is None:
+                logger.warning("No results or tuner provided to get wandb paths, cannot get paths.")
+                return []
+            try:
+                results = tuner.get_results()  # if this works below works if we have a local tuner
+                trials = tuner._local_tuner.get_results()._experiment_analysis.trials  # pyright: ignore[reportOptionalMemberAccess]
+            except RuntimeError as e:
+                if not tuner._local_tuner or tuner._local_tuner.get_run_config().callbacks:  # assume there is a logger
+                    raise RuntimeError("Cannot get trials") from e
+                wandb_cb = next(
+                    cb
+                    for cb in tuner._local_tuner.get_run_config().callbacks  # pyright: ignore[reportOptionalIterable]
+                    if isinstance(cb, AdvWandbLoggerCallback)
+                )  # pyright: ignore[reportOptionalIterable]
+                trials = wandb_cb._trials
+            trial_paths = [Path(trial.local_path) / "wandb" for trial in trials if trial.local_path]
+            if len(trial_paths) != len(trials):
+                logger.error("Did not get all wandb paths %d of %d", len(trial_paths), len(trials))
+            return trial_paths
+        result_paths = [Path(result.path) / "wandb" for result in results]  # these are in the non-temp dir
+        try:
+            # compare paths for completeness
+            trials = tuner._local_tuner.get_results()._experiment_analysis.trials  # pyright: ignore[reportOptionalMemberAccess]
+            trial_paths = [Path(trial.local_path) / "wandb" for trial in trials if trial.local_path]
+        except Exception as e:
+            logger.exception("Could not get trials or their paths")
+        else:
+            existing_in_result = sum(p.exists() for p in result_paths)
+            existing_in_trial = sum(p.exists() for p in trial_paths)
+            if existing_in_result != existing_in_trial:
+                logger.error(
+                    "Count of existing trials paths did not match %d vs %d: \nResult Paths:\n%s\nTrial Paths:\n%s",
+                    existing_in_result,
+                    existing_in_trial,
+                    result_paths,
+                    trial_paths,
+                )
+            non_existing_results = [res for res in results if not (Path(res.path) / "wandb").exists()]
+            # How to get the trial id?
+            if non_existing_results:
+                not_synced_trial_ids = {
+                    match.group("trial_id")
+                    for res in non_existing_results
+                    if (match := RE_GET_TRIAL_ID.search(res.path))
+                }
+                non_synced_trials = [trial for trial in trials if trial.trial_id in not_synced_trial_ids]
+                result_paths.extend(Path(trial.local_path) / "wandb" for trial in non_synced_trials)  # pyright: ignore[reportArgumentType]
+                result_paths = list(filter(lambda p: p.exists(), result_paths))
+                logger.info("Added trial.paths to results, now having %d paths", len(result_paths))
+        return result_paths
+
     def wandb_upload_offline_experiments(
-        self, results: ResultGrid, *, wait: bool = True, parallel_uploads: int = 5
+        self,
+        results: Optional[ResultGrid],
+        tuner: Optional[tune.Tuner] = None,
+        *,
+        wait: bool = True,
+        parallel_uploads: int = 5,
     ) -> list[subprocess.Popen] | None:
         """
         Upload wandb's offline folder of the session to wandb, similar to the `wandb sync` shell command
@@ -1209,15 +1294,14 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         num_uploaded = 0
         uploads: list[subprocess.Popen[bytes]] = []
         finished_uploads: set[subprocess.Popen[bytes]] = set()
-        for result in results:
+        wandb_paths: list[Path] = self._get_wandb_paths(results, tuner)
+        global_wandb_dir = os.environ.get(
+            "WANDB_DIR", None
+        )  # FIXME: If this is set it might upload the same directory multiple times
+        if global_wandb_dir and (global_wandb_dir := Path(global_wandb_dir)).exists():
+            wandb_paths.append(global_wandb_dir)
+        for wandb_dir in wandb_paths:
             # Find offline run directories
-            wandb_dir = os.environ.get(
-                "WANDB_DIR", None
-            )  # FIXME: If this is set it might upload the same directory multiple times
-            if wandb_dir is None:
-                wandb_dir = Path(result.path) / "wandb"
-            else:
-                wandb_dir = Path(wandb_dir)
             offline_runs = list(wandb_dir.glob("offline-run-*"))
             if len(offline_runs) > 1:
                 logger.warning("Multiple wandb offline directories found in %s: %s", wandb_dir, offline_runs)
@@ -1253,7 +1337,11 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 self._report_wandb_upload(process)
                 finished_uploads.add(process)
             uploads = []
-            logger.info("Uploaded all %d wandb offline runs from %s.", num_uploaded, results.experiment_path)
+            logger.info(
+                "Uploaded all %d wandb offline runs from %s.",
+                num_uploaded,
+                results.experiment_path if results else f"local wandb fallback paths: {wandb_paths}",
+            )
             return None
         unfinished_uploads = uploads.copy()
         for process in uploads:
@@ -1267,22 +1355,21 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         logger.info(
             "Uploaded %d wandb offline runs from %s, %d still in progress.",
             num_uploaded,
-            results.experiment_path,
+            results.experiment_path if results else f"local wandb fallback paths: {wandb_paths}",
             len(unfinished_uploads),
         )
         # There are still processes running
         return unfinished_uploads
 
-    def upload_offline_experiments(self, results: Optional[ResultGrid] = None):
+    def upload_offline_experiments(self, results: Optional[ResultGrid] = None, tuner: Optional[tune.Tuner] = None):
         unfinished_wandb_uploads = None
         if self.args.wandb and "upload" in self.args.wandb:
             if results is None:
                 logger.error(
                     "Wandb upload requested, but no results provided. This will not upload any offline experiments."
                 )
-                return
-            try:
-                unfinished_wandb_uploads = self.wandb_upload_offline_experiments(results)
+            try:  # if no results (due to a failure) get them in a more hacky way
+                unfinished_wandb_uploads = self.wandb_upload_offline_experiments(results, tuner)
             except Exception:
                 logger.exception("Error while uploading offline experiments to WandB: %s")
         if self.args.comet and "upload" in self.args.comet:

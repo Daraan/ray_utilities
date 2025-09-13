@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import sys
 import tempfile
 import time
@@ -192,6 +193,7 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         """If log_env_details is True pip packages are already logged."""
 
         self._trials_created = 0
+        self._logged_architectures = set()
 
     def _check_workspaces(self, trial: Trial) -> Literal[0, 1, 2]:
         """
@@ -326,13 +328,14 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
                 for k, v in flat_result.items()
                 if not (k in self._log_only_once or k in self._flat_video_keys or k.startswith("config/"))
                 and (not isinstance(v, float) or not math.isnan(v))
-            }  # type: ignore[assignment]
+            }
         else:
             log_result = {
                 k: v
                 for k, v in flat_result.items()
                 if k not in self._flat_video_keys and (not isinstance(v, float) or not math.isnan(v))
-            }  # type: ignore[assignment]
+            }
+
         # These are only once a list of int, after reduce this list is empty:
         if not log_result.get("env_runners/environments/seeds", True):
             del log_result["env_runners/environments/seeds"]
@@ -341,7 +344,15 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         # Cannot remove this
         log_result["training_iteration"] = step
         # Log normal metrics and parameters
-        super().log_trial_result(iteration, trial, log_result)  # pyright: ignore[reportArgumentType]
+        super().log_trial_result(iteration, trial, log_result)
+        # Log model architecture
+        if trial not in self._logged_architectures and "model_architecture.json" in os.listdir(trial.path):
+            if trial.path is not None:
+                file_path = os.path.join(trial.path, "model_architecture.json")
+                self._trial_experiments[trial].log_model("model_architecture.json", file_path)
+                self._logged_architectures.add(trial)
+            else:
+                _LOGGER.error("Cannot save model_architecture as trial.path is None")
         if videos:
             experiment = self._trial_experiments[trial]
             for video_key in self._flat_video_lookup_keys:

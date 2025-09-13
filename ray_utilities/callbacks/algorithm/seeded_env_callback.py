@@ -147,7 +147,7 @@ class SeedEnvsCallback(DefaultCallbacks):
             # HACK: Set clear_on_reduce=True and remove window again when https://github.com/ray-project/ray/issues/54324 is solved  # noqa: E501
             metrics_logger.log_value(
                 ("environments", "seeds", "seed_sequence"),
-                log_seeds.tolist(),
+                list(map(int, log_seeds.tolist())),  # assure int and not numpy int
                 clear_on_reduce=False,
                 reduce=None,
                 # HACK 2: clear_on_reduce=True is forced when no window is provided

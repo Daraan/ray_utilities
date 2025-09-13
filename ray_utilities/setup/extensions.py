@@ -29,7 +29,7 @@ from ray import tune
 
 from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradientAccumulation
 from ray_utilities.callbacks.algorithm.dynamic_buffer_callback import DynamicBufferUpdate
-from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
+from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import add_dynamic_eval_callback_if_missing
 from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
 
 if TYPE_CHECKING:
@@ -93,8 +93,7 @@ class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType_co, ConfigType_co,
         callbacks = super()._get_callbacks_from_args(args)
         if args.dynamic_buffer:
             callbacks.append(DynamicBufferUpdate)
-            if all(not issubclass(cb, DynamicEvalInterval) for cb in callbacks):
-                callbacks.append(DynamicEvalInterval)
+            add_dynamic_eval_callback_if_missing(callbacks)
         return callbacks
 
     @classmethod
@@ -166,9 +165,11 @@ class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType_co, ConfigType_
         ...         return config
 
     See Also:
-        :class:`~ray_utilities.callbacks.algorithm.dynamic_batch_size.DynamicGradientAccumulation`: Gradient accumulation callback
+        :class:`~ray_utilities.callbacks.algorithm.dynamic_batch_size.DynamicGradientAccumulation`:
+            Gradient accumulation callback
         :class:`SetupWithDynamicBuffer`: Companion mixin for buffer size dynamics
-        :class:`~ray_utilities.callbacks.algorithm.dynamic_evaluation_callback.DynamicEvalInterval`: Evaluation callback
+        :class:`~ray_utilities.callbacks.algorithm.dynamic_evaluation_callback.DynamicEvalInterval`:
+            Evaluation callback
     """
 
     batch_size_sample_space: ClassVar[ParameterSpace[int]] = tune.grid_search(
@@ -181,8 +182,7 @@ class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType_co, ConfigType_
         callbacks = super()._get_callbacks_from_args(args)
         if args.dynamic_batch:
             callbacks.append(DynamicGradientAccumulation)
-            if all(not issubclass(cb, DynamicEvalInterval) for cb in callbacks):
-                callbacks.append(DynamicEvalInterval)
+            add_dynamic_eval_callback_if_missing(callbacks)
         return callbacks
 
     @classmethod

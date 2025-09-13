@@ -195,7 +195,7 @@ class DynamicBufferUpdate(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         self._set_budget_on_checkpoint_loaded(algorithm=algorithm, **kwargs)
         assert metrics_logger
         self._set_step_counter_on_checkpoint_loaded(algorithm=algorithm, metrics_logger=metrics_logger, **kwargs)
-        self._updater(algorithm, None, global_step="???" or self._planned_current_step)
+        super().on_checkpoint_loaded(algorithm=algorithm, metrics_logger=metrics_logger, **kwargs)  # calls update
         # TODO: self._training_iterations = 0
 
 
