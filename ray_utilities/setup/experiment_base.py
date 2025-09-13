@@ -733,9 +733,9 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             ValueError: If the config is already frozen. That is, after `create_trainable`
                 has already be called.
         """
-        if not kwargs or not hasattr(self, "config"):
+        if not kwargs:
             return self._config_overrides or {}
-        if self.config._is_frozen:
+        if hasattr(self, "config") and self.config._is_frozen:
             raise ValueError(
                 "Cannot override algorithm configuration as the config is already frozen. "
                 "Use this function in a `with setup` block or call `unset_trainable()` first."
