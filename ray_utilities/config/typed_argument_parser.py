@@ -435,10 +435,10 @@ class _DefaultSetupArgumentParser(Tap):
 
 
 class _EnvRunnerParser(Tap):
-    num_env_runners: int = 0
+    num_env_runners: NeverRestore[int] = 0
     """Number of CPU workers to use for training"""
 
-    evaluation_num_env_runners: int = 0
+    evaluation_num_env_runners: NeverRestore[int] = 0
     """Number of CPU workers to use for evaluation"""
 
     num_envs_per_env_runner: int = 8

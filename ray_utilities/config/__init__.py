@@ -99,31 +99,36 @@ def add_callbacks_to_config(
             present_callbacks: list[Callable[..., Any]] | Callable[..., Any]
             if present_callbacks := getattr(config, "callbacks_" + event):
                 # add  multiple or a single new one to existing one or multiple ones
-                if present_callbacks is callback:
+                if present_callbacks == callback:  # use __eq__ for meta comparison
                     logger.debug("Not adding present callback %s=%s twice", event, callback, stacklevel=2)
                     continue  # already present
                 callback_list = [callback] if callable(callback) else callback
                 if callable(present_callbacks):
-                    if (
-                        callable(callback)
-                        and callback.__name__.split(".")[-1] == present_callbacks.__name__.split(".")[-1]
-                    ):
-                        # NOTE: With cloudpickle an identical, but not by id, callback might be added
-                        logger.warning(
-                            "A callback with the same name as %s already exists. "
-                            "This might be a duplicate by cloudpickle. Still adding second callback %s",
-                            present_callbacks.__name__,
-                            callback.__name__,
-                        )
+                    present_name = present_callbacks.__name__.split(".")[-1]
+                    for cb in callback_list:
+                        if cb.__name__.split(".")[-1] == present_name:
+                            # NOTE: With cloudpickle an identical, but not by id, callback might be added
+                            if present_callbacks == callback_list:
+                                logger.debug(
+                                    "A equal callback with the same name as %s already exists. Ignoring.",
+                                    present_callbacks.__name__,
+                                )
+                            else:
+                                logger.warning(
+                                    "A non-equal callback with the same name as %s already exists. "
+                                    "This might be a duplicate by cloudpickle. Still adding second callback %s",
+                                    present_callbacks.__name__,
+                                    cb.__name__,
+                                )
                     if remove_existing(present_callbacks) or present_callbacks in callback_list:
                         logger.debug(
-                            "Replacing existing callback %s with new one %s for event %s%s",
+                            "Replacing existing callback %s with new one(s) %s for event %s%s",
                             present_callbacks,
                             callback_list,
                             event,
                             " as it is a duplicate" if present_callbacks in callback_list else "",
                         )
-                        config.callbacks(**{event: callback})  # pyright: ignore[reportArgumentType]; cannot assign to callback_class
+                        config.callbacks(**{event: callback_list if len(callback_list) > 1 else callback})  # pyright: ignore[reportArgumentType]; cannot assign to callback_class
                     else:
                         # Ignore type for callback_class argument != event
                         config.callbacks(**{event: [cast("Any", present_callbacks), *callback_list]})

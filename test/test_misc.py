@@ -161,7 +161,7 @@ class TestMisc(TestCase):
 
             f2()
 
-        # Test exception
+        # Test exception;  OK
         @patch_args("--it", 10, except_parser_errors=["--it", "10"])
         def h():
             AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
@@ -169,6 +169,7 @@ class TestMisc(TestCase):
         h()
 
         # Exception order matters
+
         with self.assertRaisesRegex(ValueError, re.escape("Unexpected unrecognized args: ['--it', '10']")):
 
             @patch_args("--it", 10, except_parser_errors=["10", "--it"])
@@ -179,16 +180,25 @@ class TestMisc(TestCase):
 
         # Exception order matters
         with self.assertRaisesRegex(
-            ValueError, re.escape("Unexpected unrecognized args: ['--foo', '10', '--it', '10', '--bar', '10']")
+            ValueError, re.escape("Unexpected unrecognized args: ['--foo', '12', '--bar', '13']")
         ):
 
-            @patch_args("--foo", "10", "--it", "10", "--bar", "10", except_parser_errors=["10", "--it"])
+            @patch_args("--foo", "10", "--it", "12", "--bar", "13", except_parser_errors=["10", "--it"])
             def g():
                 AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
 
             g()
 
-        with patch_args("--it", 10):
-
-            def g():
+    def test_parse_args_as_with(self):
+        with self.assertRaisesRegex(ValueError, re.escape("Unexpected unrecognized args: ['--it', '10']")):
+            with patch_args("--it", 10):
                 AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
+
+        with self.assertRaisesRegex(ExceptionGroup, "Unexpected unrecognized args"):
+            with patch_args("--it", 10):
+                AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
+                raise ValueError("Some other error")
+
+        # Test exception;  OK
+        with patch_args("--it", 10, except_parser_errors=["--it", "10"]):
+            AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
