@@ -1106,21 +1106,18 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         keys_to_process.remove("setup")
 
         # Algorithm - steps are very likely skipped as it is a checkpointable component and was not pickled
-        if "algorithm" in state:
-            if self.algorithm.metrics and COMPONENT_METRICS_LOGGER in state["algorithm"]:
-                self.algorithm.metrics.reset()
-            for component in COMPONENT_ENV_RUNNER, COMPONENT_EVAL_ENV_RUNNER, COMPONENT_LEARNER_GROUP:
-                if component not in state["algorithm"]:
-                    _logger.warning("Restoring algorithm without %s component in state.", component)
         # Get algorithm state; fallback to only config (which however might not do anything)
-        # NOTE: This sync env_runner -> eval_env_runner which causes wrong env_steps_sampled metric
-        # TODO: # XXX as algorithm is not in state and restored via components, state might not be correct
-        algo_state = state.get("algorithm")
-        if algo_state:
-            if COMPONENT_METRICS_LOGGER in algo_state:
-                assert self.algorithm.metrics
-                self.algorithm.metrics.reset()
-            self.algorithm.set_state(algo_state)  # if this is in config might not be respected
+        if "algorithm" in state:
+            if self._algorithm is None:
+                _logger.warning("Cannot set algorithm state as algorithm is None.")
+            else:
+                if self.algorithm.metrics and COMPONENT_METRICS_LOGGER in state["algorithm"]:
+                    assert self.algorithm.metrics
+                    self.algorithm.metrics.reset()
+                for component in COMPONENT_ENV_RUNNER, COMPONENT_EVAL_ENV_RUNNER, COMPONENT_LEARNER_GROUP:
+                    if component not in state["algorithm"]:
+                        _logger.warning("Restoring algorithm without %s component in state.", component)
+                self.algorithm.set_state(state["algorithm"])  # if this is in config might not be respected
         keys_to_process.discard("algorithm")
 
         # region Algorithm config
