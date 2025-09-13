@@ -280,27 +280,80 @@ def check_args(
 
 
 class PatchArgsDecorator(ContextDecorator):
+    def _extract_arg_errors(self, log_capture):
+        errors = []
+        for record in log_capture.records:
+            if "The following arguments were not recognized by the parser" in record.message:
+                unknown_args = record.args[0] if record.args and isinstance(record.args[0], list) else []
+                if unknown_args and self._exceptions:
+                    args_seq = tuple(unknown_args)
+                    argv_seq = tuple(self._exceptions)
+                    matches = [
+                        i
+                        for i in range(len(args_seq) - len(argv_seq) + 1)
+                        if args_seq[i : i + len(argv_seq)] == argv_seq
+                    ]
+                    for match in matches:
+                        unknown_args = list(args_seq[:match]) + list(args_seq[match + len(argv_seq) :])
+                        args_seq = tuple(unknown_args)
+                if unknown_args:
+                    errors.append(ValueError(f"Unexpected unrecognized args: {unknown_args}"))
+        return errors
+
     def __init__(self, patch_obj: mock._patch, exceptions):
         self._patch_obj = patch_obj
         self._exceptions = exceptions
         self._patch_cm = None
+        self._log_capture = None
 
     def __enter__(self):
         self._patch_cm = self._patch_obj.__enter__()
+        self._log_capture = LogCapture(
+            "ray_utilities.setup.experiment_base",
+            level=logging.WARNING,
+            attributes=["getMessage", "args", "levelname", "name"],
+        )
+        self._log_capture.__enter__()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         self._patch_cm = None
+        self._log_capture.__exit__(exc_type, exc_value, traceback)  # pyright: ignore[reportOptionalMemberAccess]
+        arg_errors = self._extract_arg_errors(self._log_capture)
+        if arg_errors:
+            if exc_value:
+                arg_errors.insert(0, exc_value)
+            if len(arg_errors) == 1:
+                raise arg_errors[0]
+            raise ExceptionGroup("Unexpected unrecognized args and further errors encountered.", arg_errors)
+        if exc_value is not None:
+            raise exc_value
         return self._patch_obj.__exit__(exc_type, exc_value, traceback)
 
     def __call__(self, func: _C) -> _C:
-        checked = check_args(func, exceptions=self._exceptions)
-
-        # patch_obj is a contextmanager, so we need to wrap the function so that patch is active during call
         @wraps(func)
         def wrapper(*args, **kwargs):
+            error = None
             with self._patch_obj:
-                return checked(*args, **kwargs)
+                with LogCapture(
+                    "ray_utilities.setup.experiment_base",
+                    level=logging.WARNING,
+                    attributes=["getMessage", "args", "levelname", "name"],
+                ) as capture:
+                    try:
+                        result = func(*args, **kwargs)
+                    except Exception as e:  # noqa: BLE001
+                        error = e
+                arg_errors = self._extract_arg_errors(capture)
+                if arg_errors:
+                    if error:
+                        arg_errors.insert(0, error)
+                    if len(arg_errors) == 1:
+                        raise arg_errors[0]
+                    raise ExceptionGroup("Unexpected unrecognized args and further errors encountered.", arg_errors)
+                if error is not None:
+                    raise error
+                return result  # pyright: ignore[reportPossiblyUnboundVariable]
 
         return wrapper  # pyright: ignore[reportReturnType]
 
