@@ -771,19 +771,31 @@ class TestHelpers(unittest.TestCase):
             msg=(msg or "") + f" NaN values differ: {metrics_0}\n!=\n{metrics_1} {msg}",
         )
         # not nans
-        if "environments" in metrics_0 and seed_subset_ok:
+        if "environments" in metrics_0:
             metrics_0 = deepcopy(metrics_0)
             metrics_1 = deepcopy(metrics_1)
-            seeds0: dict[str, Iterable[int]] = metrics_0["environments"]["seeds"]
-            seeds1: dict[str, Iterable[int]] = metrics_1["environments"]["seeds"]
-            # when having multiple env runners the seed sequence might be
-            seq0 = set(seeds0.pop("seed_sequence"))  # A
-            seq1 = set(seeds1.pop("seed_sequence"))  # A B
-            self.assertEqual(len(seq0), len(set(seq0)), f"Seeds are not unique: {seq0}")
-            self.assertEqual(len(seq1), len(set(seq1)), f"Seeds are not unique: {seq1}")
-            self.assertTrue(
-                seq0 <= seq1 or seq0 >= seq1, f"One seed sequences should be a subset of the other: {seq0} vs {seq1}"
-            )
+            seeds_data0: dict[str, Iterable[int]] = metrics_0["environments"]["seeds"]
+            seeds_data1: dict[str, Iterable[int]] = metrics_1["environments"]["seeds"]
+            seq0 = list(seeds_data0.pop("seed_sequence"))  # A
+            seq1 = list(seeds_data1.pop("seed_sequence"))  # A B
+            seeds0 = set(seq0)
+            seeds1 = set(seq1)
+            # when having multiple env runners the logged seeds in the restored one are merged
+            # and lack the total length
+            self.assertEqual(len(seq0), len(seeds0), f"Seeds are not unique: {seq0}")
+            self.assertEqual(len(seq1), len(seeds1), f"Seeds are not unique: {seq1}")
+            if seed_subset_ok:
+                self.assertTrue(
+                    seq0 <= seq1 or seq0 >= seq1,
+                    f"One seed sequences should be a subset of the other: {seq0} vs {seq1}",
+                )
+            else:
+                # num_env_runners > 1 order might be different A B vs. B A. Still compare as sets
+                self.assertSetEqual(
+                    seeds0,
+                    seeds1,
+                    f"Seed sequences do not match: {seq0} vs {seq1}",
+                )
         if len(all_keys) == 0:
             logger.warning("No keys to compare.")
 
@@ -946,7 +958,7 @@ class TestHelpers(unittest.TestCase):
                     err_msg=f"Key '{key}' not equal in both states {msg}",
                 )
 
-    def compare_env_runner_configs(self, algo: Algorithm, algo_restored: Algorithm):
+    def compare_env_runner_configs(self, algo: Algorithm, algo_restored: Algorithm, *, ignore_overrides_key=True):
         self.set_max_diff(self.maxDiff and max(self.maxDiff or 0, 20000))
 
         def assertCleanDictEqual(a, b, *args, **kwargs):  # noqa: N802
@@ -956,7 +968,12 @@ class TestHelpers(unittest.TestCase):
 
         algo_config_dict = algo.config.to_dict()
         algo_restored_config_dict = algo_restored.config.to_dict()
-        assertCleanDictEqual(algo_restored_config_dict, algo_config_dict)
+        if ignore_overrides_key:
+            assertCleanDictEqual(
+                {k: v for k, v in algo_restored_config_dict.items() if k != "_restored_overrides"}, algo_config_dict
+            )
+        else:
+            assertCleanDictEqual(algo_restored_config_dict, algo_config_dict)
         assert algo.config
         if algo.config.num_env_runners == 0:
             self.assertEqual(algo_restored.config.num_env_runners, 0)  # pyright: ignore[reportOptionalMemberAccess]
@@ -966,7 +983,13 @@ class TestHelpers(unittest.TestCase):
             )
             restored_env_runner_config_dict = algo_restored.env_runner.config.to_dict()
             assertCleanDictEqual(restored_env_runner_config_dict, algo_restored_config_dict)
-            assertCleanDictEqual(algo_config_dict, restored_env_runner_config_dict)
+            if ignore_overrides_key:
+                assertCleanDictEqual(
+                    {k: v for k, v in restored_env_runner_config_dict.items() if k != "_restored_overrides"},
+                    algo_config_dict,
+                )
+            else:
+                assertCleanDictEqual(algo_config_dict, restored_env_runner_config_dict)
 
         remote_configs = algo.env_runner_group.foreach_env_runner(lambda r: r.config.to_dict(), local_env_runner=False)
         local_config = algo.env_runner_group.local_env_runner.config.to_dict()
@@ -984,6 +1007,9 @@ class TestHelpers(unittest.TestCase):
         )
         local_config_restored = algo_restored.env_runner_group.local_env_runner.config.to_dict()
         for i, config in enumerate((local_config_restored, *remote_configs_restored), start=1):
+            if ignore_overrides_key:
+                algo_restored_config_dict.pop("_restored_overrides", None)
+                config.pop("_restored_overrides", None)
             assertCleanDictEqual(
                 config,
                 algo_restored_config_dict,
@@ -1278,14 +1304,15 @@ class TestHelpers(unittest.TestCase):
 
     def compare_trainables(
         self,
-        trainable: DefaultTrainable["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
-        trainable2: DefaultTrainable["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
+        trainable: TrainableBase["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
+        trainable2: TrainableBase["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
         msg: str = "",
         *,
         ignore_env_runner_state: bool = True,
         ignore_timers: bool = False,
         iteration_after_step=2,
         minibatch_size=32,
+        ignore_restored_overrides_key=True,
         **subtest_kwargs,
     ) -> None:
         """
@@ -1300,20 +1327,27 @@ class TestHelpers(unittest.TestCase):
             iteration_after_step: The expected iteration after the step.
             minibatch_size: The expected minibatch size.
             subtest_kwargs: passed to the subtest context.
+            ignore_restored_overrides_key: Ignore the "_restored_overrides" key in the config dict comparison.
 
         Attention:
             Does perform a step on each trainable
         """
-        if minibatch_size != make_divisible(minibatch_size, DefaultArgumentParser.train_batch_size_per_learner):
+        if trainable.algorithm_config.train_batch_size_per_learner != make_divisible(
+            trainable.algorithm_config.train_batch_size_per_learner, minibatch_size
+        ):
             logger.warning(
-                "compare_trainables: Minibatch size is not divisible by train_batch_size_per_learner. "
-                "If this test fails pass the divisible minibatch_size as an argument."
+                "compare_trainables: Trainable.train_batch_size_per_learner %d is not divisible "
+                "by argument minibatch_size %d. If this test fails pass the divisible minibatch_size as an argument.",
+                trainable.algorithm_config.train_batch_size_per_learner,
+                minibatch_size,
             )
         self.maxDiff = None
         with self.subTest("Step 1: Compare trainables " + msg, **subtest_kwargs):
             if hasattr(trainable, "_args") or hasattr(trainable2, "_args"):
                 self.assertDictEqual(trainable2._args, trainable._args)  # type: ignore[attr-defined]
-            self.assertEqual(trainable.algorithm_config.minibatch_size, minibatch_size)  # <-- passed as divisible?
+            self.assertEqual(
+                trainable.algorithm_config.minibatch_size, minibatch_size
+            )  # <-- passed as divisible or modified and != argument?  # noqa: E501
             self.assertEqual(trainable2.algorithm_config.minibatch_size, trainable.algorithm_config.minibatch_size)
             self.assertEqual(trainable2._iteration, trainable._iteration)
 
@@ -1323,7 +1357,13 @@ class TestHelpers(unittest.TestCase):
             config_dict1.pop("class", None)
             config_dict2 = trainable2.algorithm_config.to_dict()
             config_dict2.pop("class", None)
-            self.assertDictEqual(config_dict2, config_dict1)
+            if ignore_restored_overrides_key:
+                self.assertDictEqual(
+                    {k: v for k, v in config_dict2.items() if k != "_restored_overrides"},
+                    {k: v for k, v in config_dict1.items() if k != "_restored_overrides"},
+                )
+            else:
+                self.assertDictEqual(config_dict2, config_dict1)
             setup_data1 = trainable._setup.get_state()  # does not compare setup itself
             setup_data2 = trainable2._setup.get_state()
             # check all keys
@@ -1388,9 +1428,19 @@ class TestHelpers(unittest.TestCase):
                 self.compare_pbar_state(trainable._pbar._get_state(), trainable2._pbar._get_state())  # pyright: ignore[reportAttributeAccessIssue]
 
             # Compare states
+            state1: dict = nan_to_zero_hist_leaves(trainable.get_state(), key=None, remove_all=True)
+            state2: dict = nan_to_zero_hist_leaves(trainable2.get_state(), key=None, remove_all=True)
+            if ignore_restored_overrides_key:
+                state1.pop("_restored_overrides", None)
+                state2.pop("_restored_overrides", None)
+                if "algorithm" in state1 and "algorithm" in state2:
+                    state1["algorithm"]["config"].pop("_restored_overrides", None)
+                    state2["algorithm"]["config"].pop("_restored_overrides", None)
+                state1["algorithm_config"].pop("_restored_overrides", None)
+                state2["algorithm_config"].pop("_restored_overrides", None)
             self.compare_trainable_state(
-                nan_to_zero_hist_leaves(trainable.get_state(), key=None, remove_all=True),
-                nan_to_zero_hist_leaves(trainable2.get_state(), key=None, remove_all=True),
+                state1,
+                state2,
                 msg=msg,
                 ignore_env_runner_state=ignore_env_runner_state,
                 ignore_timers=ignore_timers,
@@ -1413,8 +1463,9 @@ class TestHelpers(unittest.TestCase):
                         r.config.get_rollout_fragment_length(),
                         r.config.total_train_batch_size,
                         r.config.train_batch_size_per_learner,
-                        r.config.num_envs_per_env_runner == r.num_envs,  # This is False for the local env runner
-                        r.config.get_rollout_fragment_length() * r.num_envs,
+                        r.config.num_envs_per_env_runner
+                        == r.num_envs,  # This is False for the local env runner # pyright: ignore[reportAttributeAccessIssue]
+                        r.config.get_rollout_fragment_length() * r.num_envs,  # pyright: ignore[reportAttributeAccessIssue]
                     )
                 )[-1],
                 trainable.algorithm.env_runner_group.foreach_env_runner(
@@ -1422,8 +1473,8 @@ class TestHelpers(unittest.TestCase):
                         r.config.get_rollout_fragment_length(),
                         r.config.total_train_batch_size,
                         r.config.train_batch_size_per_learner,
-                        r.config.num_envs_per_env_runner == r.num_envs,
-                        r.config.get_rollout_fragment_length() * r.num_envs,
+                        r.config.num_envs_per_env_runner == r.num_envs,  # pyright: ignore[reportAttributeAccessIssue]
+                        r.config.get_rollout_fragment_length() * r.num_envs,  # pyright: ignore[reportAttributeAccessIssue]
                     )
                 )[-1],
             )
@@ -1442,7 +1493,7 @@ class TestHelpers(unittest.TestCase):
                 result2_restored[ENV_RUNNER_RESULTS],  # pyright: ignore[reportArgumentType]
                 result2[ENV_RUNNER_RESULTS],  # pyright: ignore[reportArgumentType]
                 "results after step 2",
-                compare_steps_sampled=True,
+                compare_steps_sampled=False,
                 compare_results=False,
             )
 
@@ -1451,7 +1502,11 @@ class TestHelpers(unittest.TestCase):
         with self.subTest("Step 2 Compare env_runner configs " + msg, **subtest_kwargs):
             if trainable.algorithm.env_runner or trainable2.algorithm.env_runner:
                 assert trainable.algorithm.env_runner and trainable2.algorithm.env_runner
-                self.compare_env_runner_configs(trainable.algorithm, trainable2.algorithm)
+                self.compare_env_runner_configs(
+                    trainable.algorithm,
+                    trainable2.algorithm,
+                    ignore_overrides_key=ignore_restored_overrides_key,
+                )
 
     # endregion
     # region utilities

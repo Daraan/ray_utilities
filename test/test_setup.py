@@ -59,6 +59,7 @@ from ray_utilities.random import seed_everything
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger
 from ray_utilities.testing_utils import (
+    ENV_RUNNER_CASES,
     TWO_ENV_RUNNER_CASES,
     Cases,
     DisableGUIBreakpoints,
@@ -1010,7 +1011,7 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
         self.assertIn("in_features=13, out_features=1", data["architecture"]["summary_str"])
 
 
-class TestMetricsRestored(InitRay, DisableGUIBreakpoints, TestHelpers, num_cpus=4):
+class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
     def _test_checkpoint_values(self, result1: dict[str, Any], result2: dict[str, Any], msg: Optional[str] = None):
         """Test NUM_ENV_STEPS_SAMPLED and NUM_ENV_STEPS_PASSED_TO_LEARNER values of two training results."""
         env_runner1 = result1
@@ -1647,6 +1648,70 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, TestHelpers, num_cpus=
         # self.set_max_diff(40000)
 
         # self.assertDictEqual(results["env_runners"][0]["step_3"], results["env_runners"][1]["step_3"])
+
+    @Cases(ENV_RUNNER_CASES)
+    def test_restored_trainables(self, cases):
+        for num_env_runners in iter_cases(cases):
+            # Use multiple envs per env runner to speed up test
+            num_envs_per_env_runner = 4
+            with patch_args(
+                "--batch_size", make_divisible(ENV_STEPS_PER_ITERATION, num_envs_per_env_runner),
+                "--minibatch_size", (minibatch_size :=make_divisible(ENV_STEPS_PER_ITERATION // 2, num_envs_per_env_runner)),
+                "--log_stats",  "most",  # increase log stats to assure necessary keys are present
+                # Stuck when num_envs_per_env_runner is too high. Unclear why.
+                "--num_envs_per_env_runner", num_envs_per_env_runner,
+                "--env_seeding_strategy", "same",
+                "--seed", 11,
+                "--num_env_runners", num_env_runners,
+            ):  # fmt: skip
+                with AlgorithmSetup(init_trainable=False) as setup:
+                    config = setup.config
+                    config.training(
+                        num_epochs=2,
+                    )
+                    # These overrides are NOT enforced when restoring from checkpoint, as ambiguous with config_from_args
+                    # config.evaluation(
+                    #    evaluation_interval=2,
+                    #    evaluation_duration_unit="timesteps",
+                    #    evaluation_duration=100,
+                    # )
+                Trainable1 = setup.trainable_class
+            trainable1 = Trainable1(setup.sample_params())
+
+            # self.assertEqual(trainable0.algorithm_config.num_env_runners, num_env_runners)
+            self.assertEqual(trainable1.algorithm_config.minibatch_size, minibatch_size)
+            self.assertEqual(trainable1.algorithm_config.seed, 11)
+            self.assertEqual(trainable1.algorithm_config.num_epochs, 2)
+            self.assertEqual(trainable1.algorithm_config.num_env_runners, num_env_runners)
+
+            trainable1.train()
+            del setup
+
+            with tempfile.TemporaryDirectory(prefix=".ckpt_a0_") as checkpoint_0_step1:
+                trainable1.save_checkpoint(checkpoint_0_step1)
+                with patch_args(
+                    "--from_checkpoint", checkpoint_0_step1,
+                    "--num_env_runners", num_env_runners,
+                    "--env_seeding_strategy", "same",
+                    "--seed", 11, # Never restored, set to be same
+                    # TODO: Allow change of: "--num_envs_per_env_runner", 2,
+                ):  # fmt: skip
+                    with AlgorithmSetup() as setup2:
+                        setup2.config.training(num_epochs=2)
+                    self.assertEqual(setup2.config.num_epochs, 2)
+                Trainable2 = setup2.trainable_class
+                trainable2 = Trainable2(setup2.sample_params())
+                self.assertEqual(trainable2.algorithm_config.num_epochs, 2)
+                # This is from setup.state and not restored
+                self.assertEqual(trainable2._setup.config.num_epochs, 2)
+                self.assertEqual(trainable2._current_step, trainable1._current_step)
+                self.assertEqual(trainable2.algorithm_config.num_env_runners, num_env_runners)
+                self.assertEqual(trainable2.algorithm.env_runner_group.num_remote_env_runners(), num_env_runners)
+            self.compare_trainables(
+                trainable1, trainable2, minibatch_size=minibatch_size, num_env_runners=num_env_runners
+            )
+            trainable1.stop()
+            trainable2.stop()
 
 
 if __name__ == "__main__":

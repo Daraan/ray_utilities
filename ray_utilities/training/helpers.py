@@ -544,6 +544,8 @@ def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
             }
         }
     }
+    # Do not sync EnvRunner seeds here as they are already set (or will be reset)
+    env_runner_metrics_state[COMPONENT_METRICS_LOGGER]["stats"].pop("environments--seeds--seed_sequence", None)
     eval_stats = {
         k.removeprefix(EVALUATION_RESULTS + "--" + ENV_RUNNER_RESULTS + "--"): split_sum_stats_over_env_runners(
             nan_to_zero_hist_leaves(v), num_env_runners=algorithm.config.num_env_runners or 1
