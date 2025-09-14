@@ -755,6 +755,11 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
     The accumulated gradients will be averaged before backpropagation.
     """
 
+    no_dynamic_eval_interval: AlwaysRestore[bool] = False
+    """
+    Does not add the :class:`.DynamicEvalInterval` callback that is added per default
+    """
+
     def process_args(self) -> None:
         super().process_args()
         budget = split_timestep_budget(

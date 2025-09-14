@@ -614,7 +614,7 @@ class TestHelpers(unittest.TestCase):
         "--min_step_size", "64",  # try not to adjust total_steps
         "--max_step_size", "64",  # try not to adjust total_steps
         "--num_envs_per_env_runner", "1",
-        "--fcnet_hiddens", "[4]"
+        "--no_dynamic_eval_interval",
     )  # fmt: skip
     def get_trainable(
         self,

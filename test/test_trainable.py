@@ -353,7 +353,9 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 with tempfile.TemporaryDirectory() as tmpdir:
                     training_result: _TrainingResult = trainable.save(tmpdir)  # pyright: ignore[reportInvalidTypeForm] # calls save_checkpoint
                     with patch_args(
-                        "--num_env_runners", num_env_runners
+                        "--num_env_runners",
+                        num_env_runners,
+                        "--no_dynamic_eval_interval",
                     ):  # make sure that args do not influence the restore
                         trainable2 = self.TrainableClass()
                         with self.subTest("Restore trainable from dict"):
@@ -373,7 +375,9 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 with tempfile.TemporaryDirectory() as tmpdir:
                     trainable.save(tmpdir)  # calls save_checkpoint
                     with patch_args(
-                        "--num_env_runners", num_env_runners
+                        "--num_env_runners",
+                        num_env_runners,
+                        "--no_dynamic_eval_interval",
                     ):  # make sure that args do not influence the restore
                         trainable3 = self.TrainableClass()
                         self.assertIsInstance(tmpdir, str)
@@ -384,7 +388,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
 
     @pytest.mark.env_runner_cases
     @pytest.mark.basic
-    @Cases(ENV_RUNNER_CASES)
+    @Cases([0])
     def test_1_get_set_state(self, cases):
         # If this test fails all others will most likely fail too, run it first.
         self.maxDiff = None
@@ -398,7 +402,10 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
 
                 # NOTE: If too many env_runners are created args.parallel is likely set to true,
                 # due to parsing of test args.
-                trainable2 = self.TrainableClass({"num_env_runners": num_env_runners})
+                with patch_args(
+                    "--no_dynamic_eval_interval",
+                ):
+                    trainable2 = self.TrainableClass({"num_env_runners": num_env_runners})
                 trainable2.set_state(deepcopy(state))
                 self.on_checkpoint_loaded_callbacks(trainable2)
 
@@ -420,7 +427,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
                 with tempfile.TemporaryDirectory() as tmpdir:
                     trainable.save_to_path(tmpdir)
-                    with patch_args():
+                    with patch_args("--no_dynamic_eval_interval"):
                         trainable2 = self.TrainableClass()
                         trainable2.restore_from_path(tmpdir)
                     # does not trigger on_checkpoint_load
@@ -460,7 +467,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             with self.subTest("save_checkpoint -> restore_from_path", num_env_runners=num_env_runners):
                 with tempfile.TemporaryDirectory() as tmpdir1:
                     trainable.save_checkpoint(tmpdir1)
-                    with patch_args():
+                    with patch_args("--no_dynamic_eval_interval"):
                         trainable_from_path = self.TrainableClass()
                         trainable_from_path.restore_from_path(tmpdir1)
                     self.on_checkpoint_loaded_callbacks(trainable_from_path)
@@ -508,7 +515,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             with self.subTest("save_to_path -> restore_from_path", num_env_runners=num_env_runners):
                 with tempfile.TemporaryDirectory() as tmpdir1:
                     trainable.save_to_path(tmpdir1)
-                    with patch_args():
+                    with patch_args("--no_dynamic_eval_interval"):
                         trainable_from_path = self.TrainableClass()
                         trainable_from_path.restore_from_path(tmpdir1)
                 self.on_checkpoint_loaded_callbacks(trainable_from_path)

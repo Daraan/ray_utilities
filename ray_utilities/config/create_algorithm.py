@@ -81,7 +81,6 @@ def create_algorithm_config(
     config_class: Optional[type[_ConfigType]] = PPOConfig,
     framework: Literal["torch", "tf2"] | Any,
     base_config: Optional[_ConfigType] = None,
-    auto_eval_interval: bool = True,
     discrete_eval: bool = False,
 ) -> tuple[_ConfigType, RLModuleSpec]:
     """Create a comprehensive Ray RLlib algorithm configuration from experiment parameters.
@@ -115,8 +114,6 @@ def create_algorithm_config(
             :class:`ray.rllib.algorithms.ppo.PPOConfig`.
         framework: Deep learning framework to use (``"torch"`` or ``"tf2"``).
         base_config: Optional existing configuration instance to update instead of creating new.
-        auto_eval_interval: Adds a :class:`DynamicEvalInterval` callback to dynamically adjust
-            the evaluation interval based on the training batch size.
         discrete_eval: Whether to add discrete evaluation capabilities through
             :class:`~ray_utilities.callbacks.algorithm.discrete_eval_callback.DiscreteEvalCallback`.
 
@@ -365,7 +362,7 @@ def create_algorithm_config(
         seed_environments_for_config(config, SeedEnvsCallback.env_seed)
     if args["render_mode"]:
         callbacks.append(make_render_callback())
-    if auto_eval_interval:
+    if not args["no_dynamic_eval_interval"]:
         callbacks.append(DynamicEvalInterval)
     if base_callbacks:
         same = set(base_callbacks).intersection(set(callbacks))
