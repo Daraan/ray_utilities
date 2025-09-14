@@ -584,7 +584,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     trainable_restored2.stop()
                 trainable_restored.stop()
 
-    @Cases([0])
+    @Cases(ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
     @pytest.mark.tuner
     @pytest.mark.length(speed="medium")  # 2-3 min

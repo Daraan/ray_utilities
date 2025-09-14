@@ -86,12 +86,12 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
                 (
                     get_dynamic_evaluation_intervals(
                         self._budget["step_sizes"],
-                        eval_freq=algorithm.config.evaluation_interval,  # pyright: ignore[reportOptionalMemberAccess]
+                        eval_freq=self._original_interval,
                         batch_size=algorithm.config.train_batch_size_per_learner,  # pyright: ignore[reportOptionalMemberAccess]
                         take_root=True,
                     )
                     # 0 for no evaluation
-                    if algorithm.config.evaluation_interval  # pyright: ignore[reportOptionalMemberAccess]
+                    if self._original_interval  # pyright: ignore[reportOptionalMemberAccess]
                     else [0] * len(self._budget["step_sizes"])
                 ),
             )
@@ -114,10 +114,11 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         metrics_logger: Optional[MetricsLogger] = None,
         **kwargs,
     ) -> None:
-        # TODO: What when using checkpoint?
         self._set_budget_on_algorithm_init(algorithm=algorithm, metrics_logger=metrics_logger, **kwargs)
         assert self._budget
         assert algorithm.config
+        # TODO: When loading checkpoints and original differs from loaded, this is a problem
+        self._original_interval = algorithm.config.evaluation_interval
         self._set_evaluation_intervals(algorithm=algorithm)
         self._set_step_counter_on_algorithm_init(algorithm=algorithm, metrics_logger=metrics_logger)
         super().on_algorithm_init(algorithm=algorithm, metrics_logger=metrics_logger)
@@ -145,6 +146,7 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         assert metrics_logger
         self._set_step_counter_on_checkpoint_loaded(algorithm=algorithm, metrics_logger=metrics_logger)
         self._set_budget_on_checkpoint_loaded(algorithm=algorithm, **kwargs)
+        # TODO: problem when loading config.evaluation_interval is already based on the loaded config
         self._set_evaluation_intervals(algorithm=algorithm)
         super().on_checkpoint_loaded(algorithm=algorithm, metrics_logger=metrics_logger, **kwargs)  # calls updater
 
