@@ -11,6 +11,8 @@ functionality specific to machine learning experiments and checkpointing workflo
 from __future__ import annotations
 
 # pyright: enableExperimentalFeatures=true
+import argparse
+from ast import literal_eval
 import logging
 import sys
 from contextlib import contextmanager
@@ -300,9 +302,13 @@ class PatchArgsMixin(Tap):
 
         # Parse original CLI args (excluding script name)
         argv_ns, orig_unknown = parser_argv.parse_known_args(original_argv[1:])
+        if orig_unknown:
+            logger.warning("Passed unknown args for this parser via sys.argv: %s", orig_unknown, stacklevel=2)
 
         # Parse patch args
         patch_ns, patch_unknown = patch_parser.parse_known_args(list(map(str, args)))
+        if patch_unknown:
+            logger.warning("Patching with unknown args: %s", patch_unknown, stacklevel=2)
 
         # Remove NO_VALUE entries to keep those that were actually passed:
         passed_argv = {dest: v for dest, v in vars(argv_ns).items() if v is not NO_VALUE}
@@ -382,7 +388,7 @@ class PatchArgsMixin(Tap):
             else:
                 logger.warning("Unexpected nargs value for option '%s': %s", option, action.nargs)
                 new_args.extend([option] + (value if value is not None else []))
-        patched_argv = [original_argv[0], *map(str, new_args)]
+        patched_argv = [original_argv[0], *map(str, new_args), *orig_unknown]
         sys.argv = patched_argv
 
         try:
@@ -429,10 +435,10 @@ class _DefaultSetupArgumentParser(Tap):
 
 
 class _EnvRunnerParser(Tap):
-    num_env_runners: int = 0
+    num_env_runners: NeverRestore[int] = 0
     """Number of CPU workers to use for training"""
 
-    evaluation_num_env_runners: int = 0
+    evaluation_num_env_runners: NeverRestore[int] = 0
     """Number of CPU workers to use for evaluation"""
 
     num_envs_per_env_runner: int = 8
@@ -460,12 +466,33 @@ class _EnvRunnerParser(Tap):
         )
 
 
+def _parse_lr(value: str) -> float | list[tuple[int, float]]:
+    try:
+        # Try to parse as a float
+        return float(value)
+    except ValueError:
+        # If it fails, try to parse as a list of tuples or lists
+        try:
+            result = literal_eval(value)
+        except (ValueError, SyntaxError) as e:
+            raise argparse.ArgumentTypeError(f"Invalid learning rate format: {value}") from e
+        else:
+            for item in result:
+                if not (isinstance(item, (list, tuple)) and all(isinstance(x, (float, int)) for x in item)):
+                    raise argparse.ArgumentTypeError(
+                        f"Invalid learning rate: Each item must be a list or tuple of floats or ints, got: {item}"
+                    )
+            return result
+
+
 class RLlibArgumentParser(_EnvRunnerParser):
     """Attributes of this class have to be attributes of the AlgorithmConfig."""
 
     train_batch_size_per_learner: int = 2048  # batch size that ray samples
     minibatch_size: int = 128
     """Minibatch size used for backpropagation/optimization"""
+
+    lr: float | list[tuple[int, float]] = 1e-4
 
     def configure(self) -> None:
         super().configure()
@@ -474,6 +501,11 @@ class RLlibArgumentParser(_EnvRunnerParser):
             dest="train_batch_size_per_learner",
             type=int,
             required=False,
+        )
+        self.add_argument(
+            "--lr",
+            "-lr",
+            type=_parse_lr,
         )
 
     def process_args(self):
@@ -723,6 +755,11 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
     The accumulated gradients will be averaged before backpropagation.
     """
 
+    no_dynamic_eval_interval: AlwaysRestore[bool] = False
+    """
+    Does not add the :class:`.DynamicEvalInterval` callback that is added per default
+    """
+
     def process_args(self) -> None:
         super().process_args()
         budget = split_timestep_budget(
@@ -781,6 +818,19 @@ class OptunaArgumentParser(Tap):
             self.optimize_config = True
 
 
+class ConfigFilePreParser(Tap):
+    config_files: list[str] = []  # noqa: RUF012
+    """
+    Files with additional commands that should be added to the commands passed
+    with a lower priority.
+    """
+
+    def configure(self) -> None:
+        self.allow_abbrev = False
+        super().configure()
+        self.add_argument("--config_files", "-cfg", nargs="+", default=[])
+
+
 class DefaultArgumentParser(
     SupportsMetaAnnotations,
     OptionalExtensionsArgs,  # Needs to be before _DefaultSetupArgumentParser
@@ -795,4 +845,5 @@ class DefaultArgumentParser(
     PatchArgsMixin,
 ):
     def configure(self) -> None:
+        self.allow_abbrev = False
         super().configure()

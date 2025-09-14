@@ -22,6 +22,7 @@ Example:
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 
 # fmt: off
@@ -61,9 +62,28 @@ __all__ = [
     "trial_name_creator",
 ]
 
-logger = nice_logger(__name__, level="DEBUG")
+
+logger = nice_logger(__name__, level=os.environ.get("RAY_UTILITIES_LOG_LEVEL", "DEBUG"))
 logger.info("Ray utilities imported")
 logger.debug("Ray utilities logger debug level set")
+
+# suppress a deprecation warning from ray, by creating a RLModuleConfig once
+try:
+    from ray.rllib.core.rl_module.rl_module import RLModuleConfig
+except ImportError:  # might not exist anymore in the future
+    pass
+else:
+    from ray.rllib.utils.deprecation import logger as __deprecation_logger
+    import logging
+
+    # This suppresses a deprecation warning from RLModuleConfig
+    __old_level = __deprecation_logger.getEffectiveLevel()
+    __deprecation_logger.setLevel(logging.ERROR)
+    RLModuleConfig()
+    __deprecation_logger.setLevel(__old_level)
+    del __deprecation_logger
+    del logging
+    del RLModuleConfig
 
 
 def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, Any]]:
@@ -110,5 +130,6 @@ def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, An
     return nested_metrics
 
 
-if TYPE_CHECKING:
-    del Any, TYPE_CHECKING
+if not TYPE_CHECKING:
+    del Any
+del os, TYPE_CHECKING

@@ -77,6 +77,7 @@ MOCK_MODULES = [
     "tap",
     "tensorflow",
     "tensorflow_probability",
+    "testfixtures",
     "torch",
     "tqdm",
     "tree",

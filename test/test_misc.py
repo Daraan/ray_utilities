@@ -7,7 +7,7 @@ import pytest
 import ray.tune.logger
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
-from ray_utilities.misc import RE_TRIAL_ID_FROM_CHECKPOINT
+from ray_utilities.misc import RE_GET_TRIAL_ID
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import Cases, DisableLoggers, check_args, iter_cases, patch_args
 from ray_utilities.training.helpers import make_divisible
@@ -68,12 +68,23 @@ class TestNoLoggers(DisableLoggers):
 @pytest.mark.basic
 class TestMisc(TestCase):
     def test_re_find_id(self):
-        match = RE_TRIAL_ID_FROM_CHECKPOINT.search("sdf_sdgsg_12:12:id=sd353_00002_sdfgf")
+        match = RE_GET_TRIAL_ID.search("sdf_sdgsg_12:12:id=52e65_00002_sdfgf")
         assert match is not None
-        self.assertEqual(match.group(), "id=sd353_00002")
-        self.assertEqual(match.group(1), "sd353")
-        self.assertEqual(match.groups(), ("sd353", "00002"))
-        self.assertEqual(match.groupdict(), {"trial_id": "sd353", "checkpoint": "00002"})
+        self.assertEqual(match.groups(), ("52e65_00002", "52e65", "00002"))
+        self.assertEqual(match.group(), "id=52e65_00002")
+        self.assertEqual(match.group(1), "52e65_00002")
+        self.assertEqual(match.group("trial_id"), "52e65_00002")
+        self.assertEqual(
+            match.groupdict(), {"trial_id": "52e65_00002", "trial_id_part1": "52e65", "trial_number": "00002"}
+        )
+
+        match = RE_GET_TRIAL_ID.search("sdf_sdgsg_12:12:id=52e65_sdfgf")
+        assert match is not None
+        self.assertEqual(match.groups(), ("52e65", "52e65", None))
+        self.assertEqual(match.group(), "id=52e65")
+        self.assertEqual(match.group(1), "52e65")
+        self.assertEqual(match.group("trial_id"), "52e65")
+        self.assertEqual(match.groupdict(), {"trial_id": "52e65", "trial_id_part1": "52e65", "trial_number": None})
 
     def test_make_divisible(self):
         a, b = random.randint(1, 1000), random.randint(1, 1000)
@@ -150,7 +161,7 @@ class TestMisc(TestCase):
 
             f2()
 
-        # Test exception
+        # Test exception;  OK
         @patch_args("--it", 10, except_parser_errors=["--it", "10"])
         def h():
             AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
@@ -158,6 +169,7 @@ class TestMisc(TestCase):
         h()
 
         # Exception order matters
+
         with self.assertRaisesRegex(ValueError, re.escape("Unexpected unrecognized args: ['--it', '10']")):
 
             @patch_args("--it", 10, except_parser_errors=["10", "--it"])
@@ -168,16 +180,25 @@ class TestMisc(TestCase):
 
         # Exception order matters
         with self.assertRaisesRegex(
-            ValueError, re.escape("Unexpected unrecognized args: ['--foo', '10', '--it', '10', '--bar', '10']")
+            ValueError, re.escape("Unexpected unrecognized args: ['--foo', '12', '--bar', '13']")
         ):
 
-            @patch_args("--foo", "10", "--it", "10", "--bar", "10", except_parser_errors=["10", "--it"])
+            @patch_args("--foo", "10", "--it", "12", "--bar", "13", except_parser_errors=["10", "--it"])
             def g():
                 AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
 
             g()
 
-        with patch_args("--it", 10):
-
-            def g():
+    def test_parse_args_as_with(self):
+        with self.assertRaisesRegex(ValueError, re.escape("Unexpected unrecognized args: ['--it', '10']")):
+            with patch_args("--it", 10):
                 AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
+
+        with self.assertRaisesRegex(ExceptionGroup, "Unexpected unrecognized args"):
+            with patch_args("--it", 10):
+                AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
+                raise ValueError("Some other error")
+
+        # Test exception;  OK
+        with patch_args("--it", 10, except_parser_errors=["--it", "10"]):
+            AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)

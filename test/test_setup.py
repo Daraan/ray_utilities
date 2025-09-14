@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import os
 import subprocess
 from ast import literal_eval
@@ -11,12 +12,12 @@ import pyarrow as pa
 import pytest
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import NUM_ENV_RUNNERS_0_1_EQUAL
-from ray_utilities.config.model_config_parsers import MLPConfigParser
+from ray_utilities.config.mlp_argument_parser import SimpleMLPParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
 from ray_utilities.misc import raise_tune_errors
 from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.runfiles import run_tune
-from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
+from ray_utilities.setup.ppo_mlp_setup import MLPSetup, PPOMLPSetup
 from ray_utilities.training.helpers import make_divisible
 from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultIterationStopper
 
@@ -58,12 +59,14 @@ from ray_utilities.random import seed_everything
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger
 from ray_utilities.testing_utils import (
+    ENV_RUNNER_CASES,
     TWO_ENV_RUNNER_CASES,
     Cases,
     DisableGUIBreakpoints,
     InitRay,
     SetupDefaults,
     SetupWithCheck,
+    TestHelpers,
     TrainableWithChecks,
     iter_cases,
     patch_args,
@@ -136,6 +139,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             ignore=[
                 # ignore callbacks that are created on Trainable.setup
                 "callbacks_on_environment_created",
+                "evaluation_interval",
             ],
         )
 
@@ -414,6 +418,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 "--extra", "abc",  # nargs
                 "--env_seeding_strategy", "constant",
                 "--wandb", "offline",  # possibly do not restore
+                "--num_env_runners", "1",  # NeverRestore
             ):  # fmt: skip
                 with AlgorithmSetup(init_trainable=False) as setup:
                     # These depend on args and CANNOT be restored!
@@ -434,6 +439,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 self.assertEqual(setup.args.extra, ["abc"])  # nargs
                 self.assertEqual(setup.args.env_seeding_strategy, "constant")
                 self.assertEqual(setup.args.wandb, "offline")
+                self.assertEqual(setup.args.num_env_runners, 1)
 
                 setup_state = setup.get_state()
                 # Check saved state
@@ -491,8 +497,9 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 self.assertEqual(setup2.config.num_epochs, 5)
                 # restored from 1st
                 self.assertEqual(setup2.args.extra, ["abc"])
-                # NeverRestore; wandb is the defaul value again
+                # NeverRestore; wandb is the default value again
                 self.assertEqual(setup2.args.wandb, DefaultArgumentParser.wandb)
+                self.assertEqual(setup2.args.num_env_runners, DefaultArgumentParser.num_env_runners)
                 # Changed manually
                 self.assertEqual(setup2.config.evaluation_sample_timeout_s, default_timeout)
 
@@ -507,7 +514,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             "--num_jobs", DefaultArgumentParser.num_jobs + 2,  # NeverRestore
             "--log_level", "WARNING",  # NeverRestore
             "--env_type", "cart",  # AlwaysRestore
-            "--actor_type", "mlp",
+            "--agent_type", "mlp",
         ):  # fmt: skip
             setup = AlgorithmSetup()
             self.assertEqual(setup.args.log_level, "WARNING")
@@ -622,6 +629,65 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                         logged_seeds[i], logged_seeds[j], f"Deque at index {i} is equal to deque at index {j}"
                     )
 
+    def test_cfg_loading(self):
+        with patch_args("-cfg", "./experiments/models/tiny.cfg"):
+            setup = MLPSetup(init_param_space=False)
+            self.assertEqual(setup.args.fcnet_hiddens, [8, 8])
+            module = str(setup.config.rl_module_spec.build())
+            self.assertIn("in_features=8, out_features=8", module)
+
+    def test_lr_loading(self):
+        with patch_args("--lr", "0.123"):
+            setup = MLPSetup(init_param_space=False, init_trainable=False)
+            self.assertEqual(setup.args.lr, 0.123)
+            self.assertEqual(setup.config.lr, 0.123)
+        with patch_args("--lr", "[[0, 0.111], [64, 0.333]]", "--fcnet_hiddens", "4", "--batch_size", 32):
+            with MLPSetup(init_param_space=False) as setup:
+                setup.config.training(num_epochs=5)
+            self.assertEqual(setup.args.lr, [[0, 0.111], [64, 0.333]])
+            self.assertEqual(setup.config.lr, [[0, 0.111], [64, 0.333]])
+            algo = setup.config.build_algo()
+            learner = algo.learner_group._learner
+            optimizer = learner.get_optimizer()
+            self.assertAlmostEqual(optimizer.param_groups[0]["lr"], 0.111)
+            self.assertEqual(learner.config.lr, [[0, 0.111], [64, 0.333]])
+            # TODO: learners are likely updated with NUM_ENV_STEPS_SAMPLED which is not exact
+            for i in range(1, 5):
+                if i == 1:
+                    self.assertAlmostEqual(optimizer.param_groups[0]["lr"], 0.111)
+                algo.step()
+                if i == 1:
+                    self.assertAlmostEqual(optimizer.param_groups[0]["lr"], 0.222)
+                if i >= 2:
+                    self.assertAlmostEqual(optimizer.param_groups[0]["lr"], 0.333)
+
+    def test_current_step_in_result(self):
+        trainable = self._DEFAULT_SETUP.trainable_class()
+        result = trainable.train()
+        self.assertEqual(result["current_step"], self._DEFAULT_SETUP.config.train_batch_size_per_learner)
+        trainable.stop()
+        with patch_args("--batch_size", "32", "--num_envs_per_env_runner", "4"):
+            setup = AlgorithmSetup()
+            trainable2 = setup.trainable_class()
+        result2 = trainable2.train()
+        trainable2.stop()
+        self.assertEqual(result2["current_step"], 32)
+        trainable3 = setup.trainable_class(setup.sample_params())
+        result3 = trainable3.train()
+        self.assertEqual(result3["current_step"], 32)
+        self.assertEqual(trainable3.algorithm_config.get_rollout_fragment_length(), 32 / 4)
+        self.assertEqual(
+            trainable3.algorithm.env_runner_group.foreach_env_runner(
+                lambda r: (
+                    r.num_envs,  # pyright: ignore[reportAttributeAccessIssue]
+                    r.config.train_batch_size_per_learner,
+                    r.config.get_rollout_fragment_length(),
+                )
+            ),
+            [(4, 32, 32 // 4)],
+        )
+        trainable3.stop()
+
 
 class TestPPOMLPSetup(InitRay, num_cpus=4):
     def test_basic(self):
@@ -641,7 +707,7 @@ class TestPPOMLPSetup(InitRay, num_cpus=4):
             setup = PPOMLPSetup()
         model_config = setup._model_config_from_args(setup.args)
         assert model_config, f"Not truthy {model_config}"
-        for k, v in MLPConfigParser().parse_args([]).as_dict().items():
+        for k, v in SimpleMLPParser().parse_args([]).as_dict().items():
             self.assertIn(k, model_config)
             self.assertEqual(v, model_config[k])
 
@@ -656,7 +722,7 @@ class TestPPOMLPSetup(InitRay, num_cpus=4):
             module: DefaultPPOTorchRLModule = algo.get_module()  # pyright: ignore[reportAssignmentType]
             mlp_encoder: torch.nn.Sequential = module.encoder.encoder.net.mlp
             # Use default for empty args
-            expected_layers = MLPConfigParser.fcnet_hiddens if not args else literal_eval(args[-1])
+            expected_layers = SimpleMLPParser.fcnet_hiddens if not args else literal_eval(args[-1])
             self.assertEqual(len(mlp_encoder), 2 * len(expected_layers))
             size_iter = iter(expected_layers)
             for layer in mlp_encoder:
@@ -736,6 +802,8 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
         config = setup.config
         setup.args.num_jobs = 1
         setup.args.num_samples = 1
+        self.assertEqual(self._DEFAULT_SETUP_LOW_RES.config.train_batch_size_per_learner, 64)
+        BATCH_SIZE = 64
 
         def fake_trainable(params):
             algo = config.build_algo()
@@ -763,7 +831,9 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
         # With stopper should only iterate 4 times:
         assert tuner._local_tuner
         # Define stopper
-        tuner._local_tuner._run_config.stop = {ENV_RUNNER_RESULTS + "/" + NUM_ENV_STEPS_SAMPLED_LIFETIME: 512}
+        tuner._local_tuner._run_config.stop = {
+            ENV_RUNNER_RESULTS + "/" + NUM_ENV_STEPS_SAMPLED_LIFETIME: 4 * BATCH_SIZE
+        }
         with tempfile.TemporaryDirectory(prefix=".ckpt_") as tempdir1:
             result_grid = tuner.fit()
             checkpoint = result_grid[0].checkpoint
@@ -775,12 +845,15 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
                 algo_restored.metrics.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)), 0
             )
             self.assertEqual(
-                algo_restored.metrics.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)), 512
+                algo_restored.metrics.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)),
+                4 * BATCH_SIZE,
             )
             self.assertEqual(algo_restored.iteration, 4)
             assert result_grid[0].metrics
             self.assertEqual(result_grid[0].metrics["training_iteration"], 4)
-            self.assertEqual(result_grid[0].metrics["evaluation/env_runners/episode_return_mean"], 512 // 128 - 1)
+            self.assertEqual(
+                result_grid[0].metrics["evaluation/env_runners/episode_return_mean"], (4 * BATCH_SIZE) // 64 - 1
+            )
 
     _MAX_STEP_SIZE = 4096
     _MIN_STEP_SIZE = 128
@@ -900,8 +973,46 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
                 self.assertEqual(budget["total_steps"], next(iter(total_steps)))
                 self.assertEqual(len(iterations), 3, iterations)
 
+    def test_model_config_saver_callback_creates_json(self):
+        # Use AlgorithmSetup to build a real Algorithm
+        with (
+            patch_args(
+                "--fcnet_hiddens",
+                "[11, 12, 13]",
+                "-it",
+                1,
+                "-J",
+                1,
+                "--wandb",
+                "offline",
+                "--comet",
+                "offline",
+                "--batch_size",
+                32,
+                "--num_envs_per_env_runner",
+                1,
+            ),
+            MLPSetup() as setup,
+        ):
+            setup.config.env_runners(num_env_runners=0)
+        # Test with tuner
+        tuner = setup.create_tuner()
+        tuner._local_tuner.get_run_config().checkpoint_config.checkpoint_at_end = False  # pyright: ignore[reportOptionalMemberAccess]
+        results = tuner.fit()
+        out_path = os.path.join(results[0].path, "model_architecture.json")
+        self.assertTrue(os.path.exists(out_path))
+        with open(out_path, "r") as f:
+            data = json.load(f)
+        self.assertIn("config", data)
+        self.assertIn("architecture", data)
+        self.assertIsInstance(data["architecture"].get("layers"), list)
+        self.assertIn("in_features=11, out_features=12", data["architecture"]["summary_str"])
+        self.assertIn("in_features=12, out_features=13", data["architecture"]["summary_str"])
+        # Value Function:
+        self.assertIn("in_features=13, out_features=1", data["architecture"]["summary_str"])
 
-class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpus=4):
+
+class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
     def _test_checkpoint_values(self, result1: dict[str, Any], result2: dict[str, Any], msg: Optional[str] = None):
         """Test NUM_ENV_STEPS_SAMPLED and NUM_ENV_STEPS_PASSED_TO_LEARNER values of two training results."""
         env_runner1 = result1
@@ -988,6 +1099,8 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
             "--minibatch_size", expected_minibatch_size,
             "--iterations", str(frequency * num_checkpoints),
             "--seed", str(cli_seed),
+            "--fcnet_hiddens", "[4]",
+            "--num_envs_per_env_runner", 1,
         ):  # fmt: skip
             assert OTHER_MINI_BATCH_SIZE != ENV_STEPS_PER_ITERATION
 
@@ -998,14 +1111,14 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
                 ):
                     # cannot make this deterministic on local vs remote
                     seed_everything(None, setup_seed)
-                    with AlgorithmSetup(init_trainable=False) as setup:
+                    with MLPSetup(init_trainable=False) as setup:
                         setup.config.env_runners(num_env_runners=num_env_runners_a)
                         setup.config.training(minibatch_size=OTHER_MINI_BATCH_SIZE)  # insert some noise
                         setup.config.debugging(seed=setup_seed)
                     setup.trainable_class.use_pbar = False
                     tuner_0 = setup.create_tuner()
                     seed_everything(None, setup_seed)
-                    with AlgorithmSetup(init_trainable=False) as setup:
+                    with MLPSetup(init_trainable=False) as setup:
                         setup.config.env_runners(num_env_runners=num_env_runners_b)
                         setup.config.training(minibatch_size=OTHER_MINI_BATCH_SIZE)  # insert some noise
                         setup.config.debugging(seed=setup_seed)
@@ -1063,12 +1176,14 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
                             self.assertEqual(restored_trainable._setup.args.seed, cli_seed)
 
                             self.assertEqual(restored_trainable.algorithm_config.num_env_runners, num_env_runners)
-                            self.assertEqual(restored_trainable.algorithm_config.minibatch_size, 5)
+                            self.assertEqual(restored_trainable.algorithm_config.minibatch_size, OTHER_MINI_BATCH_SIZE)
 
                             # NOTE: config overrides may not be applied to the setup with favors get_config_from_args!
                             # Adjust the tests if changing this behavior
-                            self.assertEqual(restored_trainable._setup.config.minibatch_size, expected_minibatch_size)
-                            self.assertEqual(restored_trainable._setup.config.num_env_runners, 0)  # not updated
+                            # OLD Checked for expected_minibatch_size
+                            # NEW: apply overrides even before config is set OTHER_MINI_BATCH_SIZE
+                            self.assertEqual(restored_trainable._setup.config.minibatch_size, OTHER_MINI_BATCH_SIZE)
+                            self.assertEqual(restored_trainable._setup.config.num_env_runners, num_env_runners)
 
                             tune_results[num_env_runners]["trainables"].append(restored_trainable)
                     self.assertGreater(len(tune_results[num_env_runners_a]["trainables"]), 0)
@@ -1456,7 +1571,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
                 )
                 config.env_runners(num_env_runners=num_env_runners_a)
                 config.evaluation(
-                    evaluation_interval=1,
+                    evaluation_interval=1,  # <-- changed by DynamicEvalInterval
                     evaluation_duration=100,
                     evaluation_duration_unit="timesteps",
                     evaluation_num_env_runners=0,
@@ -1473,7 +1588,7 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
                 )
                 config.env_runners(num_env_runners=num_env_runners_b)
                 config.evaluation(
-                    evaluation_interval=1,
+                    evaluation_interval=1,  # <-- changed by DynamicEvalInterval
                     evaluation_duration=100,
                     evaluation_duration_unit="timesteps",
                     evaluation_num_env_runners=0,
@@ -1536,6 +1651,70 @@ class TestMetricsRestored(InitRay, DisableGUIBreakpoints, SetupDefaults, num_cpu
         # self.set_max_diff(40000)
 
         # self.assertDictEqual(results["env_runners"][0]["step_3"], results["env_runners"][1]["step_3"])
+
+    @Cases(ENV_RUNNER_CASES)
+    def test_restored_trainables(self, cases):
+        for num_env_runners in iter_cases(cases):
+            # Use multiple envs per env runner to speed up test
+            num_envs_per_env_runner = 4
+            with patch_args(
+                "--batch_size", make_divisible(ENV_STEPS_PER_ITERATION, num_envs_per_env_runner),
+                "--minibatch_size", (minibatch_size :=make_divisible(ENV_STEPS_PER_ITERATION // 2, num_envs_per_env_runner)),
+                "--log_stats",  "most",  # increase log stats to assure necessary keys are present
+                # Stuck when num_envs_per_env_runner is too high. Unclear why.
+                "--num_envs_per_env_runner", num_envs_per_env_runner,
+                "--env_seeding_strategy", "same",
+                "--seed", 11,
+                "--num_env_runners", num_env_runners,
+            ):  # fmt: skip
+                with AlgorithmSetup(init_trainable=False) as setup:
+                    config = setup.config
+                    config.training(
+                        num_epochs=2,
+                    )
+                    # These overrides are NOT enforced when restoring from checkpoint, as ambiguous with config_from_args
+                    # config.evaluation(
+                    #    evaluation_interval=2,
+                    #    evaluation_duration_unit="timesteps",
+                    #    evaluation_duration=100,
+                    # )
+                Trainable1 = setup.trainable_class
+            trainable1 = Trainable1(setup.sample_params())
+
+            # self.assertEqual(trainable0.algorithm_config.num_env_runners, num_env_runners)
+            self.assertEqual(trainable1.algorithm_config.minibatch_size, minibatch_size)
+            self.assertEqual(trainable1.algorithm_config.seed, 11)
+            self.assertEqual(trainable1.algorithm_config.num_epochs, 2)
+            self.assertEqual(trainable1.algorithm_config.num_env_runners, num_env_runners)
+
+            trainable1.train()
+            del setup
+
+            with tempfile.TemporaryDirectory(prefix=".ckpt_a0_") as checkpoint_0_step1:
+                trainable1.save_checkpoint(checkpoint_0_step1)
+                with patch_args(
+                    "--from_checkpoint", checkpoint_0_step1,
+                    "--num_env_runners", num_env_runners,
+                    "--env_seeding_strategy", "same",
+                    "--seed", 11, # Never restored, set to be same
+                    # TODO: Allow change of: "--num_envs_per_env_runner", 2,
+                ):  # fmt: skip
+                    with AlgorithmSetup() as setup2:
+                        setup2.config.training(num_epochs=2)
+                    self.assertEqual(setup2.config.num_epochs, 2)
+                Trainable2 = setup2.trainable_class
+                trainable2 = Trainable2(setup2.sample_params())
+                self.assertEqual(trainable2.algorithm_config.num_epochs, 2)
+                # This is from setup.state and not restored
+                self.assertEqual(trainable2._setup.config.num_epochs, 2)
+                self.assertEqual(trainable2._current_step, trainable1._current_step)
+                self.assertEqual(trainable2.algorithm_config.num_env_runners, num_env_runners)
+                self.assertEqual(trainable2.algorithm.env_runner_group.num_remote_env_runners(), num_env_runners)
+            self.compare_trainables(
+                trainable1, trainable2, minibatch_size=minibatch_size, num_env_runners=num_env_runners
+            )
+            trainable1.stop()
+            trainable2.stop()
 
 
 if __name__ == "__main__":

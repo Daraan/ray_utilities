@@ -49,7 +49,7 @@ jobs:
         # Run basic tests. If these fail others likely fail as well
         # NOTE that fast is a patched default in conftest.py
         pytest -xv -m "basic and length(speed='fast')"
-    - name: Test with pytest
+    - name: Run pytest (fast tests only)
       run: |
         source .venv/bin/activate
         export KEEP_MAX_DIFF=1
@@ -57,6 +57,8 @@ jobs:
         # Split tests because of deadlock
         # Test all others execluded by tests below
         pytest -k "not test_trainable" -m "not basic and length(speed='fast')" -v -x --fast
+      env:
+        COMET_API_KEY: ${{ secrets.COMET_API_KEY }}
   test-standard-medium-length:
     runs-on: ubuntu-latest
     steps:
@@ -75,13 +77,13 @@ jobs:
         export DISABLE_BREAKPOINTS=1
         # Run basic tests. If these fail others likely fail as well
         pytest -xv -m "basic and not length(speed='fast')"
-    - name: Test with pytest
+    - name: Run pytest (not fast)
       run: |
         source .venv/bin/activate
         export KEEP_MAX_DIFF=1
         export DISABLE_BREAKPOINTS=1
         # Split tests because of deadlock
-        # Test all others execluded by tests below
+        # Test all others excluded by tests below
         pytest -k "not test_trainable" -m "not basic and not length(speed='fast')" -v -x --fast
   
   test-tuner-and-trainable:
@@ -125,7 +127,7 @@ jobs:
         source .venv/bin/activate
         pytest test/test_trainable.py::TestClassCheckpointing::test_tuner_checkpointing -v --mp-only --timeout_method=thread
   
-  pytest_minimal:
+  pyright_minimal:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

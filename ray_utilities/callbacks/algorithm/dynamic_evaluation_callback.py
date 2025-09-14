@@ -10,6 +10,7 @@ from ray_utilities.dynamic_config.dynamic_buffer_update import get_dynamic_evalu
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms.algorithm import Algorithm
+    from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 
 
@@ -35,10 +36,12 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         new_eval_interval = self._evaluation_intervals.get(env_steps, None)
         if new_eval_interval is None:
             logger.error(
-                "No evaluation interval for %s steps in %s. Expected a value in the dictionary. Steps: %s",
+                "No evaluation interval for current step %s in %s. "
+                "Expected a value in the dictionary for global step %s. Not changing it, stays: %d",
                 env_steps,
                 self._evaluation_intervals,
                 global_step,
+                algorithm.config.evaluation_interval,
             )
             # do not change it
             return
@@ -46,7 +49,7 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
             return
         # Change evaluation interval
         assert metrics_logger
-        logger.debug(
+        logger.info(
             "Evaluation interval changed from %s to %s at iteration %s - step %s",
             algorithm.config.evaluation_interval,
             new_eval_interval,
@@ -83,12 +86,12 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
                 (
                     get_dynamic_evaluation_intervals(
                         self._budget["step_sizes"],
-                        eval_freq=algorithm.config.evaluation_interval,  # pyright: ignore[reportOptionalMemberAccess]
+                        eval_freq=self._original_interval,
                         batch_size=algorithm.config.train_batch_size_per_learner,  # pyright: ignore[reportOptionalMemberAccess]
                         take_root=True,
                     )
                     # 0 for no evaluation
-                    if algorithm.config.evaluation_interval  # pyright: ignore[reportOptionalMemberAccess]
+                    if self._original_interval  # pyright: ignore[reportOptionalMemberAccess]
                     else [0] * len(self._budget["step_sizes"])
                 ),
             )
@@ -111,10 +114,11 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         metrics_logger: Optional[MetricsLogger] = None,
         **kwargs,
     ) -> None:
-        # TODO: What when using checkpoint?
         self._set_budget_on_algorithm_init(algorithm=algorithm, metrics_logger=metrics_logger, **kwargs)
         assert self._budget
         assert algorithm.config
+        # TODO: When loading checkpoints and original differs from loaded, this is a problem
+        self._original_interval = algorithm.config.evaluation_interval
         self._set_evaluation_intervals(algorithm=algorithm)
         self._set_step_counter_on_algorithm_init(algorithm=algorithm, metrics_logger=metrics_logger)
         super().on_algorithm_init(algorithm=algorithm, metrics_logger=metrics_logger)
@@ -131,6 +135,7 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         # self._planned_current_step likely safer way to get correct step, instead of using metrics_logger
         self._updater(algorithm, metrics_logger, global_step=self._planned_current_step)
 
+    # Note this is not executed in the get_set_state tests
     def on_checkpoint_loaded(
         self,
         *,
@@ -138,8 +143,18 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         metrics_logger: Optional[MetricsLogger] = None,
         **kwargs,
     ) -> None:
-        self._set_budget_on_checkpoint_loaded(algorithm=algorithm, **kwargs)
         assert metrics_logger
-        self._set_step_counter_on_checkpoint_loaded(algorithm=algorithm, metrics_logger=metrics_logger, **kwargs)
-        self._updater(algorithm, None, global_step="???" or self._planned_current_step)
-        # TODO: self._training_iterations = 0
+        self._set_step_counter_on_checkpoint_loaded(algorithm=algorithm, metrics_logger=metrics_logger)
+        self._set_budget_on_checkpoint_loaded(algorithm=algorithm, **kwargs)
+        # TODO: problem when loading config.evaluation_interval is already based on the loaded config
+        self._set_evaluation_intervals(algorithm=algorithm)
+        super().on_checkpoint_loaded(algorithm=algorithm, metrics_logger=metrics_logger, **kwargs)  # calls updater
+
+
+def add_dynamic_eval_callback_if_missing(callbacks: list[type[RLlibCallback]]):
+    """Adds a DynamicEvalInterval callback if it's not already present"""
+    if all(not issubclass(cb, DynamicEvalInterval) for cb in callbacks):
+        # if any(issubclass(cb, AutoEvalIntervalOnInit) for cb in callbacks):
+        #    logger.info("Removing a AutoEvalIntervalOnInit callback in favor of DynamicEvalInterval")
+        # callbacks = [cb for cb in callbacks if not issubclass(cb, AutoEvalIntervalOnInit)]
+        callbacks.append(DynamicEvalInterval)

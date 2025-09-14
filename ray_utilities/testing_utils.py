@@ -93,11 +93,13 @@ from testfixtures import LogCapture
 from typing_extensions import Final, NotRequired, Required, Sentinel, TypeAliasType, get_origin, get_type_hints
 
 from ray_utilities.config import DefaultArgumentParser
+from ray_utilities.config.mlp_argument_parser import MLPArgumentParser
+from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.dynamic_config.dynamic_buffer_update import logger as dynamic_buffer_logger
 from ray_utilities.misc import raise_tune_errors
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger as experiment_base_logger
-from ray_utilities.setup.ppo_mlp_setup import MLPArgumentParser, PPOMLPSetup
+from ray_utilities.setup.ppo_mlp_setup import MLPSetup, PPOMLPSetup
 from ray_utilities.setup.tuner_setup import TunerSetup
 from ray_utilities.setup.tuner_setup import logger as tuner_setup_logger
 from ray_utilities.training.default_class import DefaultTrainable, TrainableBase, TrainableStateDict
@@ -278,27 +280,80 @@ def check_args(
 
 
 class PatchArgsDecorator(ContextDecorator):
+    def _extract_arg_errors(self, log_capture):
+        errors = []
+        for record in log_capture.records:
+            if "The following arguments were not recognized by the parser" in record.message:
+                unknown_args = record.args[0] if record.args and isinstance(record.args[0], list) else []
+                if unknown_args and self._exceptions:
+                    args_seq = tuple(unknown_args)
+                    argv_seq = tuple(self._exceptions)
+                    matches = [
+                        i
+                        for i in range(len(args_seq) - len(argv_seq) + 1)
+                        if args_seq[i : i + len(argv_seq)] == argv_seq
+                    ]
+                    for match in matches:
+                        unknown_args = list(args_seq[:match]) + list(args_seq[match + len(argv_seq) :])
+                        args_seq = tuple(unknown_args)
+                if unknown_args:
+                    errors.append(ValueError(f"Unexpected unrecognized args: {unknown_args}"))
+        return errors
+
     def __init__(self, patch_obj: mock._patch, exceptions):
         self._patch_obj = patch_obj
         self._exceptions = exceptions
         self._patch_cm = None
+        self._log_capture = None
 
     def __enter__(self):
         self._patch_cm = self._patch_obj.__enter__()
+        self._log_capture = LogCapture(
+            "ray_utilities.setup.experiment_base",
+            level=logging.WARNING,
+            attributes=["getMessage", "args", "levelname", "name"],
+        )
+        self._log_capture.__enter__()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         self._patch_cm = None
+        self._log_capture.__exit__(exc_type, exc_value, traceback)  # pyright: ignore[reportOptionalMemberAccess]
+        arg_errors = self._extract_arg_errors(self._log_capture)
+        if arg_errors:
+            if exc_value:
+                arg_errors.insert(0, exc_value)
+            if len(arg_errors) == 1:
+                raise arg_errors[0]
+            raise ExceptionGroup("Unexpected unrecognized args and further errors encountered.", arg_errors)
+        if exc_value is not None:
+            raise exc_value
         return self._patch_obj.__exit__(exc_type, exc_value, traceback)
 
     def __call__(self, func: _C) -> _C:
-        checked = check_args(func, exceptions=self._exceptions)
-
-        # patch_obj is a contextmanager, so we need to wrap the function so that patch is active during call
         @wraps(func)
         def wrapper(*args, **kwargs):
+            error = None
             with self._patch_obj:
-                return checked(*args, **kwargs)
+                with LogCapture(
+                    "ray_utilities.setup.experiment_base",
+                    level=logging.WARNING,
+                    attributes=["getMessage", "args", "levelname", "name"],
+                ) as capture:
+                    try:
+                        result = func(*args, **kwargs)
+                    except Exception as e:  # noqa: BLE001
+                        error = e
+                arg_errors = self._extract_arg_errors(capture)
+                if arg_errors:
+                    if error:
+                        arg_errors.insert(0, error)
+                    if len(arg_errors) == 1:
+                        raise arg_errors[0]
+                    raise ExceptionGroup("Unexpected unrecognized args and further errors encountered.", arg_errors)
+                if error is not None:
+                    raise error
+                return result  # pyright: ignore[reportPossiblyUnboundVariable]
 
         return wrapper  # pyright: ignore[reportReturnType]
 
@@ -344,8 +399,8 @@ def patch_args(
         ("-a", "no_actor_provided_by_patch_args")
         if (
             "-a" not in args
-            and "--actor_type" not in args
-            and (not extend_argv or ("-a" not in old_args and "--actor_type" not in old_args))
+            and "--agent_type" not in args
+            and (not extend_argv or ("-a" not in old_args and "--agent_type" not in old_args))
         )
         else ()
     )
@@ -450,6 +505,7 @@ class InitRay(unittest.TestCase):
 
 
 OVERRIDE_KEYS: Final[set[str]] = {"num_env_runners", "num_epochs", "minibatch_size", "train_batch_size_per_learner"}
+"""Keys that are overridden in set_trainable"""
 
 
 def _remove_values_on_tensor_stats(struct, path: tuple[str, ...] = (), parent: dict[str, Any] | None = None):
@@ -552,11 +608,13 @@ class TestHelpers(unittest.TestCase):
     @patch_args(
         "--iterations", "5",
         "--total_steps", "320",
-        "--batch_size", "64",
+        "--batch_size", "64",  # overwritten with 32!
         "--comment", "created by TestHelpers.get_trainable",
         "--seed", "42",
-        "--min_step_size", "16",  # try not to adjust total_steps
-        "--max_step_size", "16",  # try not to adjust total_steps
+        "--min_step_size", "64",  # try not to adjust total_steps
+        "--max_step_size", "64",  # try not to adjust total_steps
+        "--num_envs_per_env_runner", "1",
+        "--no_dynamic_eval_interval",
     )  # fmt: skip
     def get_trainable(
         self,
@@ -565,6 +623,7 @@ class TestHelpers(unittest.TestCase):
         env_seed: int | None | _NOT_PROVIDED = _NOT_PROVIDED,
         train: bool = True,
         fast_model=True,
+        eval_interval: Optional[int] = 1,
     ):
         # NOTE: In this test attributes are shared BY identity, this is just a weak test.
         if fast_model:
@@ -579,8 +638,13 @@ class TestHelpers(unittest.TestCase):
         # this initializes the algorithm; overwrite batch_size of 64 again.
         # This does not modify the state["setup"]["config"]
         overrides = AlgorithmConfig.overrides(
-            num_env_runners=num_env_runners, num_epochs=2, minibatch_size=32, train_batch_size_per_learner=32
+            num_env_runners=num_env_runners,
+            num_epochs=2,
+            minibatch_size=32,
+            train_batch_size_per_learner=32,
         )
+        if eval_interval is not None:
+            overrides["evaluation_interval"] = eval_interval
         if env_seed is _NOT_PROVIDED:
             # use a random but reproducible seed
             if not hasattr(self, "_env_seed_rng"):
@@ -599,10 +663,14 @@ class TestHelpers(unittest.TestCase):
             )
         self._created_trainables.append(trainable)
         self.assertEqual(trainable._algorithm_overrides, overrides)
-        self.assertEqual(overrides.keys(), OVERRIDE_KEYS)
+        if eval_interval is None:
+            self.assertSetEqual(set(overrides.keys()), OVERRIDE_KEYS)
+        else:
+            self.assertSetEqual(set(overrides.keys()), OVERRIDE_KEYS | {"evaluation_interval"})
+            self.assertEqual(trainable.algorithm_config.evaluation_interval, eval_interval)
         self.assertEqual(trainable.algorithm_config.num_env_runners, num_env_runners)
         self.assertEqual(trainable.algorithm_config.minibatch_size, 32)
-        self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 32)
+        self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 32)  # overwritten
         self.assertEqual(trainable.algorithm_config.num_epochs, 2)
         self.assertEqual(trainable._setup.args.iterations, 5)
         self.assertEqual(trainable._setup.args.total_steps, 320)
@@ -611,7 +679,26 @@ class TestHelpers(unittest.TestCase):
         if not train:
             return trainable, None
         result1 = trainable.train()
+        self.assertEqual(result1[TRAINING_ITERATION], 1)
+        self.assertEqual(result1["current_step"], 32)
+        self.assertFalse(trainable._setup.args.no_exact_sampling)
+        self.assertEqual(
+            trainable.algorithm.metrics.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)), 32
+        )
         return trainable, result1
+
+    @staticmethod
+    def on_checkpoint_loaded_callbacks(trainable: TrainableBase[Any, Any, Algorithm | Any]):
+        """Executed the on_checkpoint_loaded callbacks of the algorithm if any."""
+        if trainable.algorithm.callbacks is not None:
+            if isinstance(trainable.algorithm.callbacks, Iterable):
+                cb: RLlibCallback
+                for cb in trainable.algorithm.callbacks:
+                    cb.on_checkpoint_loaded(algorithm=trainable.algorithm, metrics_logger=trainable.algorithm.metrics)
+            else:
+                trainable.algorithm.callbacks.on_checkpoint_loaded(
+                    algorithm=trainable.algorithm, metrics_logger=trainable.algorithm.metrics
+                )
 
     # endregion
 
@@ -737,19 +824,31 @@ class TestHelpers(unittest.TestCase):
             msg=(msg or "") + f" NaN values differ: {metrics_0}\n!=\n{metrics_1} {msg}",
         )
         # not nans
-        if "environments" in metrics_0 and seed_subset_ok:
+        if "environments" in metrics_0:
             metrics_0 = deepcopy(metrics_0)
             metrics_1 = deepcopy(metrics_1)
-            seeds0: dict[str, Iterable[int]] = metrics_0["environments"]["seeds"]
-            seeds1: dict[str, Iterable[int]] = metrics_1["environments"]["seeds"]
-            # when having multiple env runners the seed sequence might be
-            seq0 = set(seeds0.pop("seed_sequence"))  # A
-            seq1 = set(seeds1.pop("seed_sequence"))  # A B
-            self.assertEqual(len(seq0), len(set(seq0)), f"Seeds are not unique: {seq0}")
-            self.assertEqual(len(seq1), len(set(seq1)), f"Seeds are not unique: {seq1}")
-            self.assertTrue(
-                seq0 <= seq1 or seq0 >= seq1, f"One seed sequences should be a subset of the other: {seq0} vs {seq1}"
-            )
+            seeds_data0: dict[str, Iterable[int]] = metrics_0["environments"]["seeds"]
+            seeds_data1: dict[str, Iterable[int]] = metrics_1["environments"]["seeds"]
+            seq0 = list(seeds_data0.pop("seed_sequence"))  # A
+            seq1 = list(seeds_data1.pop("seed_sequence"))  # A B
+            seeds0 = set(seq0)
+            seeds1 = set(seq1)
+            # when having multiple env runners the logged seeds in the restored one are merged
+            # and lack the total length
+            self.assertEqual(len(seq0), len(seeds0), f"Seeds are not unique: {seq0}")
+            self.assertEqual(len(seq1), len(seeds1), f"Seeds are not unique: {seq1}")
+            if seed_subset_ok:
+                self.assertTrue(
+                    seq0 <= seq1 or seq0 >= seq1,
+                    f"One seed sequences should be a subset of the other: {seq0} vs {seq1}",
+                )
+            else:
+                # num_env_runners > 1 order might be different A B vs. B A. Still compare as sets
+                self.assertSetEqual(
+                    seeds0,
+                    seeds1,
+                    f"Seed sequences do not match: {seq0} vs {seq1}",
+                )
         if len(all_keys) == 0:
             logger.warning("No keys to compare.")
 
@@ -912,7 +1011,7 @@ class TestHelpers(unittest.TestCase):
                     err_msg=f"Key '{key}' not equal in both states {msg}",
                 )
 
-    def compare_env_runner_configs(self, algo: Algorithm, algo_restored: Algorithm):
+    def compare_env_runner_configs(self, algo: Algorithm, algo_restored: Algorithm, *, ignore_overrides_key=True):
         self.set_max_diff(self.maxDiff and max(self.maxDiff or 0, 20000))
 
         def assertCleanDictEqual(a, b, *args, **kwargs):  # noqa: N802
@@ -922,7 +1021,12 @@ class TestHelpers(unittest.TestCase):
 
         algo_config_dict = algo.config.to_dict()
         algo_restored_config_dict = algo_restored.config.to_dict()
-        assertCleanDictEqual(algo_restored_config_dict, algo_config_dict)
+        if ignore_overrides_key:
+            assertCleanDictEqual(
+                {k: v for k, v in algo_restored_config_dict.items() if k != "_restored_overrides"}, algo_config_dict
+            )
+        else:
+            assertCleanDictEqual(algo_restored_config_dict, algo_config_dict)
         assert algo.config
         if algo.config.num_env_runners == 0:
             self.assertEqual(algo_restored.config.num_env_runners, 0)  # pyright: ignore[reportOptionalMemberAccess]
@@ -932,7 +1036,13 @@ class TestHelpers(unittest.TestCase):
             )
             restored_env_runner_config_dict = algo_restored.env_runner.config.to_dict()
             assertCleanDictEqual(restored_env_runner_config_dict, algo_restored_config_dict)
-            assertCleanDictEqual(algo_config_dict, restored_env_runner_config_dict)
+            if ignore_overrides_key:
+                assertCleanDictEqual(
+                    {k: v for k, v in restored_env_runner_config_dict.items() if k != "_restored_overrides"},
+                    algo_config_dict,
+                )
+            else:
+                assertCleanDictEqual(algo_config_dict, restored_env_runner_config_dict)
 
         remote_configs = algo.env_runner_group.foreach_env_runner(lambda r: r.config.to_dict(), local_env_runner=False)
         local_config = algo.env_runner_group.local_env_runner.config.to_dict()
@@ -950,6 +1060,9 @@ class TestHelpers(unittest.TestCase):
         )
         local_config_restored = algo_restored.env_runner_group.local_env_runner.config.to_dict()
         for i, config in enumerate((local_config_restored, *remote_configs_restored), start=1):
+            if ignore_overrides_key:
+                algo_restored_config_dict.pop("_restored_overrides", None)
+                config.pop("_restored_overrides", None)
             assertCleanDictEqual(
                 config,
                 algo_restored_config_dict,
@@ -1244,14 +1357,15 @@ class TestHelpers(unittest.TestCase):
 
     def compare_trainables(
         self,
-        trainable: DefaultTrainable["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
-        trainable2: DefaultTrainable["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
+        trainable: TrainableBase["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
+        trainable2: TrainableBase["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
         msg: str = "",
         *,
         ignore_env_runner_state: bool = True,
         ignore_timers: bool = False,
         iteration_after_step=2,
         minibatch_size=32,
+        ignore_restored_overrides_key=True,
         **subtest_kwargs,
     ) -> None:
         """
@@ -1266,20 +1380,27 @@ class TestHelpers(unittest.TestCase):
             iteration_after_step: The expected iteration after the step.
             minibatch_size: The expected minibatch size.
             subtest_kwargs: passed to the subtest context.
+            ignore_restored_overrides_key: Ignore the "_restored_overrides" key in the config dict comparison.
 
         Attention:
             Does perform a step on each trainable
         """
-        if minibatch_size != make_divisible(minibatch_size, DefaultArgumentParser.train_batch_size_per_learner):
+        if trainable.algorithm_config.train_batch_size_per_learner != make_divisible(
+            trainable.algorithm_config.train_batch_size_per_learner, minibatch_size
+        ):
             logger.warning(
-                "compare_trainables: Minibatch size is not divisible by train_batch_size_per_learner. "
-                "If this test fails pass the divisible minibatch_size as an argument."
+                "compare_trainables: Trainable.train_batch_size_per_learner %d is not divisible "
+                "by argument minibatch_size %d. If this test fails pass the divisible minibatch_size as an argument.",
+                trainable.algorithm_config.train_batch_size_per_learner,
+                minibatch_size,
             )
         self.maxDiff = None
         with self.subTest("Step 1: Compare trainables " + msg, **subtest_kwargs):
             if hasattr(trainable, "_args") or hasattr(trainable2, "_args"):
                 self.assertDictEqual(trainable2._args, trainable._args)  # type: ignore[attr-defined]
-            self.assertEqual(trainable.algorithm_config.minibatch_size, minibatch_size)  # <-- passed as divisible?
+            self.assertEqual(
+                trainable.algorithm_config.minibatch_size, minibatch_size
+            )  # <-- passed as divisible or modified and != argument?  # noqa: E501
             self.assertEqual(trainable2.algorithm_config.minibatch_size, trainable.algorithm_config.minibatch_size)
             self.assertEqual(trainable2._iteration, trainable._iteration)
 
@@ -1289,7 +1410,13 @@ class TestHelpers(unittest.TestCase):
             config_dict1.pop("class", None)
             config_dict2 = trainable2.algorithm_config.to_dict()
             config_dict2.pop("class", None)
-            self.assertDictEqual(config_dict2, config_dict1)
+            if ignore_restored_overrides_key:
+                self.assertDictEqual(
+                    {k: v for k, v in config_dict2.items() if k != "_restored_overrides"},
+                    {k: v for k, v in config_dict1.items() if k != "_restored_overrides"},
+                )
+            else:
+                self.assertDictEqual(config_dict2, config_dict1)
             setup_data1 = trainable._setup.get_state()  # does not compare setup itself
             setup_data2 = trainable2._setup.get_state()
             # check all keys
@@ -1302,6 +1429,33 @@ class TestHelpers(unittest.TestCase):
             keys.remove("setup_class")
             assert setup_data1["config"] and setup_data2["config"]
             self.compare_configs(setup_data1["config"], setup_data2["config"])
+            # Check that num_env runners matches config
+            self.assertEqual(
+                trainable.algorithm_config.num_env_runners,
+                trainable.algorithm.env_runner_group.num_remote_env_runners(),
+            )
+            self.assertEqual(
+                trainable2.algorithm_config.num_env_runners,
+                trainable2.algorithm.env_runner_group.num_remote_env_runners(),
+            )
+            if trainable2.algorithm_config.num_env_runners != trainable.algorithm_config.num_env_runners:
+                logger.warning("num_env_runners are different for the two trainables. Check if this is intended.")
+            trainable2_eval_config = trainable2.algorithm_config.get_evaluation_config_object()
+            trainable_eval_config = trainable.algorithm_config.get_evaluation_config_object()
+            self.assertIs(
+                type(trainable_eval_config),
+                type(trainable2_eval_config),
+                f"Evaluation config types do not match: {type(trainable_eval_config)} != {type(trainable2_eval_config)}",
+            )
+            if trainable2_eval_config:
+                self.assertEqual(
+                    trainable2_eval_config.num_env_runners,
+                    trainable2.algorithm.eval_env_runner_group.num_remote_env_runners(),
+                )
+                assert trainable_eval_config
+                if trainable2_eval_config.num_env_runners != trainable_eval_config.num_env_runners:
+                    logger.warning("num_env_runners are different for the two trainables. Check if this is intended.")
+
             keys.remove("config")
             self.assertDictEqual(setup_data1["config_overrides"], setup_data2["config_overrides"])
             keys.remove("config_overrides")
@@ -1327,9 +1481,19 @@ class TestHelpers(unittest.TestCase):
                 self.compare_pbar_state(trainable._pbar._get_state(), trainable2._pbar._get_state())  # pyright: ignore[reportAttributeAccessIssue]
 
             # Compare states
+            state1: dict = nan_to_zero_hist_leaves(trainable.get_state(), key=None, remove_all=True)
+            state2: dict = nan_to_zero_hist_leaves(trainable2.get_state(), key=None, remove_all=True)
+            if ignore_restored_overrides_key:
+                state1.pop("_restored_overrides", None)
+                state2.pop("_restored_overrides", None)
+                if "algorithm" in state1 and "algorithm" in state2:
+                    state1["algorithm"]["config"].pop("_restored_overrides", None)
+                    state2["algorithm"]["config"].pop("_restored_overrides", None)
+                state1["algorithm_config"].pop("_restored_overrides", None)
+                state2["algorithm_config"].pop("_restored_overrides", None)
             self.compare_trainable_state(
-                nan_to_zero_hist_leaves(trainable.get_state(), key=None, remove_all=True),
-                nan_to_zero_hist_leaves(trainable2.get_state(), key=None, remove_all=True),
+                state1,
+                state2,
                 msg=msg,
                 ignore_env_runner_state=ignore_env_runner_state,
                 ignore_timers=ignore_timers,
@@ -1338,15 +1502,64 @@ class TestHelpers(unittest.TestCase):
             # Step 2
             result2 = trainable.train()
             result2_restored = trainable2.train()
+            self.assertEqual(
+                trainable2.algorithm_config.get_rollout_fragment_length(),
+                trainable.algorithm_config.get_rollout_fragment_length(),
+            )
+            self.assertTrue(trainable.algorithm.env_runner is not None)
+            self.assertTrue(trainable2.algorithm.env_runner is not None)
+            # NOTE: If num_env_runners is not explicitly set for trainable2 it will have 0 env runners the args default!
+            # Therefore compare only last env_runner in list (might be the local one)
+            self.assertEqual(
+                trainable2.algorithm.env_runner_group.foreach_env_runner(
+                    lambda r: (
+                        r.config.get_rollout_fragment_length(),
+                        r.config.total_train_batch_size,
+                        r.config.train_batch_size_per_learner,
+                        r.config.num_envs_per_env_runner
+                        == r.num_envs,  # This is False for the local env runner # pyright: ignore[reportAttributeAccessIssue]
+                        r.config.get_rollout_fragment_length() * r.num_envs,  # pyright: ignore[reportAttributeAccessIssue]
+                    )
+                )[-1],
+                trainable.algorithm.env_runner_group.foreach_env_runner(
+                    lambda r: (
+                        r.config.get_rollout_fragment_length(),
+                        r.config.total_train_batch_size,
+                        r.config.train_batch_size_per_learner,
+                        r.config.num_envs_per_env_runner == r.num_envs,  # pyright: ignore[reportAttributeAccessIssue]
+                        r.config.get_rollout_fragment_length() * r.num_envs,  # pyright: ignore[reportAttributeAccessIssue]
+                    )
+                )[-1],
+            )
+            self.assertEqual(
+                trainable2.algorithm_config.total_train_batch_size,
+                trainable.algorithm_config.total_train_batch_size,
+            )
+            self.assertEqual(
+                trainable2.algorithm_config.total_train_batch_size,
+                trainable.algorithm_config.total_train_batch_size,
+            )
             self.assertEqual(result2[TRAINING_ITERATION], result2_restored[TRAINING_ITERATION], msg)
             self.assertEqual(result2[TRAINING_ITERATION], iteration_after_step, msg)
+            self.assertEqual(result2["current_step"], result2_restored["current_step"])
+            self.compare_env_runner_results(
+                result2_restored[ENV_RUNNER_RESULTS],  # pyright: ignore[reportArgumentType]
+                result2[ENV_RUNNER_RESULTS],  # pyright: ignore[reportArgumentType]
+                "results after step 2",
+                compare_steps_sampled=False,
+                compare_results=False,
+            )
 
         # Compare env_runners
         self.maxDiff = None
         with self.subTest("Step 2 Compare env_runner configs " + msg, **subtest_kwargs):
             if trainable.algorithm.env_runner or trainable2.algorithm.env_runner:
                 assert trainable.algorithm.env_runner and trainable2.algorithm.env_runner
-                self.compare_env_runner_configs(trainable.algorithm, trainable2.algorithm)
+                self.compare_env_runner_configs(
+                    trainable.algorithm,
+                    trainable2.algorithm,
+                    ignore_overrides_key=ignore_restored_overrides_key,
+                )
 
     # endregion
     # region utilities
@@ -1390,23 +1603,6 @@ class TestHelpers(unittest.TestCase):
             return result
         result["evaluation"] = cls.clean_timer_logs(evaluation_dict)
         return result
-
-    def is_algorithm_callback_added(self, config: AlgorithmConfig, callback_class: type[RLlibCallback]) -> bool:
-        return (
-            config.callbacks_class is callback_class
-            or (
-                isinstance(callback_class, partial)
-                and (
-                    config.callbacks_class is callback_class.func
-                    or (
-                        isinstance(config.callbacks_class, partial)
-                        and config.callbacks_class.func is callback_class.func
-                    )
-                )
-            )
-            or (isinstance(config.callbacks_class, type) and issubclass(config.callbacks_class, callback_class))
-            or (isinstance(config.callbacks_class, (list, tuple)) and callback_class in config.callbacks_class)
-        )
 
     def check_stopper_added(
         self,
@@ -1462,14 +1658,55 @@ class TestHelpers(unittest.TestCase):
     # endregion
 
 
-class SetupDefaults(TestHelpers, DisableLoggers):
+class SetupWithEnv(TestHelpers):
+    def setUp(self):
+        self._env = gym.make("CartPole-v1")
+        self._OBSERVATION_SPACE = self._env.observation_space
+        self._ACTION_SPACE = self._env.action_space
+        super().setUp()
+
+    def tearDown(self):
+        super().tearDown()
+        self._env.close()
+
+
+class SetupLowRes(TestHelpers):
+    """
+    Attributes:
+        _DEFAULT_SETUP_LOW_RES: The default low resolution setup.
+    Methods:
+        _create_low_res_setup: Creates a setup with minimal resources.
+    """
+
+    def _create_low_res_setup(self, *args_for_patch, init_trainable=True, **kwargs):
+        with (
+            change_log_level(experiment_base_logger, logging.ERROR),
+            change_log_level(dynamic_buffer_logger, logging.ERROR),
+            patch_args(
+                "--fcnet_hiddens",
+                "[8]",
+                "--num_envs_per_env_runner",
+                "1",
+                *args_for_patch,
+            ),
+        ):
+            setup = MLPSetup(init_trainable=False, **kwargs)
+            setup.config.training(train_batch_size_per_learner=64, minibatch_size=32, num_epochs=2).env_runners(
+                num_env_runners=0, num_envs_per_env_runner=1, num_cpus_per_env_runner=0, gym_env_vectorize_mode="SYNC"
+            ).learners(num_learners=0, num_cpus_per_learner=0)
+            if init_trainable:
+                setup.create_trainable()
+        return setup
+
+    def setUp(self):
+        super().setUp()
+        self._DEFAULT_SETUP_LOW_RES = self._create_low_res_setup(init_trainable=True)
+
+
+class SetupDefaults(SetupLowRes, SetupWithEnv, TestHelpers, DisableLoggers):
     @clean_args
     def setUp(self):
         super().setUp()
-        env = gym.make("CartPole-v1")
-
-        self._OBSERVATION_SPACE = env.observation_space
-        self._ACTION_SPACE = env.action_space
 
         self._DEFAULT_CONFIG_DICT: MappingProxyType[str, Any] = MappingProxyType(
             DefaultArgumentParser().parse_args().as_dict()
@@ -1480,21 +1717,14 @@ class SetupDefaults(TestHelpers, DisableLoggers):
             change_log_level(dynamic_buffer_logger, logging.ERROR),
         ):
             self._DEFAULT_SETUP = AlgorithmSetup(init_trainable=False)
-            self._DEFAULT_SETUP_LOW_RES = AlgorithmSetup(init_trainable=False)
-            self._DEFAULT_SETUP_LOW_RES.config.training(
-                train_batch_size_per_learner=128, minibatch_size=64, num_epochs=2
-            ).env_runners(num_env_runners=0, num_envs_per_env_runner=1, num_cpus_per_env_runner=0).learners(
-                num_learners=0, num_cpus_per_learner=0
-            )
-            self._DEFAULT_SETUP_LOW_RES.create_trainable()
             self._DEFAULT_SETUP.create_trainable()
-        self._INPUT_LENGTH = env.observation_space.shape[0]  # pyright: ignore[reportOptionalSubscript]
+        self._INPUT_LENGTH = self._env.observation_space.shape[0]  # pyright: ignore[reportOptionalSubscript]
         self._DEFAULT_INPUT = jnp.arange(self._INPUT_LENGTH * 2).reshape((2, self._INPUT_LENGTH))
         self._DEFAULT_BATCH: dict[str, chex.Array] = MappingProxyType({"obs": self._DEFAULT_INPUT})  # pyright: ignore[reportAttributeAccessIssue]
         self._ENV_SAMPLE = jnp.arange(self._INPUT_LENGTH)
         model_key = jax.random.PRNGKey(self._DEFAULT_CONFIG_DICT["seed"] or 2)
         self._RANDOM_KEY, self._ACTOR_KEY, self._CRITIC_KEY = jax.random.split(model_key, 3)
-        self._ACTION_DIM: int = self._ACTION_SPACE.n  # type: ignore[attr-defined]
+        self._ACTION_DIM: int = self._ACTION_SPACE.n  # pyright: ignore[reportAttributeAccessIssue]
         self._OBS_DIM: int = self._OBSERVATION_SPACE.shape[0]  # pyright: ignore[reportOptionalSubscript]
 
 
@@ -1579,8 +1809,8 @@ class _TrainableWithCheckProto(Protocol):
     def define(cls, setup_cls: AlgorithmSetup) -> Any: ...
 
 
-def SetupWithCheck(check: type["TrainableWithChecks"]):  # noqa: N802
-    class SetupWithCheck(AlgorithmSetup):
+def SetupWithCheck(check: type["TrainableWithChecks"], base=AlgorithmSetup):  # noqa: N802
+    class SetupWithCheck(base):
         _check_class = check
 
         def _create_trainable(self):

@@ -9,6 +9,7 @@ from functools import partial
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, Optional, TypeVar, cast, overload
 
+import ray
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core import COMPONENT_LEARNER, COMPONENT_METRICS_LOGGER, COMPONENT_RL_MODULE
@@ -34,8 +35,11 @@ from ray_utilities.warn import (
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
+    from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
     from ray.rllib.env.env_runner import EnvRunner
+    from ray.rllib.env.multi_agent_env_runner import MultiAgentEnvRunner
+    from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
 
     from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
@@ -356,6 +360,8 @@ def setup_trainable(
                 algo = config.build_algo(use_copy=True)  # copy=True is default; maybe use False
             except AttributeError:
                 algo = config.build()
+            # FIXME too much info in model_config (most cli args)
+
         # Load from checkpoint
         elif checkpoint_loader := (
             setup or setup_class
@@ -411,10 +417,26 @@ def get_total_steps(args: dict[str, Any], config: "AlgorithmConfig") -> int | No
     )
 
 
-def _set_env_runner_state(env_runner: EnvRunner, state: dict[str, Any]):
+def _set_env_runner_state(
+    env_runner: EnvRunner | SingleAgentEnvRunner | MultiAgentEnvRunner,
+    state_ref: ray.ObjectRef,
+    config_ref: ray.ObjectRef,
+):
+    state: dict = ray.get(state_ref)
     if COMPONENT_METRICS_LOGGER not in state:
         raise KeyError(f"State dictionary missing required key '{COMPONENT_METRICS_LOGGER}'.")
+    config: AlgorithmConfig = ray.get(config_ref)
+    env_runner.config = config
     env_runner.metrics.set_state(state[COMPONENT_METRICS_LOGGER])
+    if hasattr(env_runner, "num_envs"):
+        if 0 != env_runner.num_envs != env_runner.config.num_envs_per_env_runner:  # pyright: ignore[reportAttributeAccessIssue]
+            # local env runner can have zero envs when we are remote
+            logger.error(
+                "EnvRunner has %d envs, but config.num_envs_per_env_runner is %d. Recreating envs.",
+                env_runner.num_envs,  # pyright: ignore[reportAttributeAccessIssue]
+                env_runner.config.num_envs_per_env_runner,
+            )
+            env_runner.make_env()
 
 
 def _clear_nan_stats(stat: dict[str, Any | list[list[float]]]):
@@ -521,6 +543,8 @@ def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
             }
         }
     }
+    # Do not sync EnvRunner seeds here as they are already set (or will be reset)
+    env_runner_metrics_state[COMPONENT_METRICS_LOGGER]["stats"].pop("environments--seeds--seed_sequence", None)
     eval_stats = {
         k.removeprefix(EVALUATION_RESULTS + "--" + ENV_RUNNER_RESULTS + "--"): split_sum_stats_over_env_runners(
             nan_to_zero_hist_leaves(v), num_env_runners=algorithm.config.num_env_runners or 1
@@ -540,9 +564,11 @@ def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
             # env_runner_metrics=env_runner_metrics,
         )
         # Sync metrics
+        state_ref = ray.put(env_runner_metrics_state)
+        config_ref = ray.put(algorithm.config)
 
         algorithm.env_runner_group.foreach_env_runner(
-            partial(_set_env_runner_state, state=env_runner_metrics_state),
+            partial(_set_env_runner_state, state_ref=state_ref, config_ref=config_ref),
             remote_worker_ids=None,  # pyright: ignore[reportArgumentType]
             local_env_runner=True,
             # kwargs is not save to use here, not used on all code paths
@@ -562,8 +588,10 @@ def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
             # env_runner_metrics=env_runner_metrics,
         )
         if eval_stats:
+            eval_state_ref = ray.put(eval_runner_metrics)
+            eval_config_ref = ray.put(algorithm.config.get_evaluation_config_object())
             algorithm.eval_env_runner_group.foreach_env_runner(
-                partial(_set_env_runner_state, state=eval_runner_metrics),
+                partial(_set_env_runner_state, state_ref=eval_state_ref, config_ref=eval_config_ref),
                 remote_worker_ids=None,  # pyright: ignore[reportArgumentType]
                 local_env_runner=False,
                 # kwargs is not save to use here, not used on all code paths
@@ -576,3 +604,18 @@ def make_divisible(a: int, b: int | None) -> int:
     if b is not None and a % b != 0:
         a = (a // b + 1) * b
     return a
+
+
+def is_algorithm_callback_added(config: AlgorithmConfig, callback_class: type[RLlibCallback]) -> bool:
+    return (
+        config.callbacks_class is callback_class
+        or (
+            isinstance(callback_class, partial)
+            and (
+                config.callbacks_class is callback_class.func
+                or (isinstance(config.callbacks_class, partial) and config.callbacks_class.func is callback_class.func)
+            )
+        )
+        or (isinstance(config.callbacks_class, type) and issubclass(config.callbacks_class, callback_class))
+        or (isinstance(config.callbacks_class, (list, tuple)) and callback_class in config.callbacks_class)
+    )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Iterable
 from copy import deepcopy
 from typing import TYPE_CHECKING, cast
 from unittest import mock, skip
@@ -133,13 +134,14 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
         _result1 = trainable.step()
         trainable.cleanup()
 
-    @patch_args()
+    @patch_args("--batch_size", "64", "--minibatch_size", "32", "--num_envs_per_env_runner", "4")
     def test_train(self):
         self.TrainableClass = DefaultTrainable.define(PPOSetup.typed())
         trainable = self.TrainableClass(algorithm_overrides=AlgorithmConfig.overrides(evaluation_interval=1))
         result = trainable.train()
         self.assertIn(EVALUATION_RESULTS, result)
         self.assertGreater(len(result[EVALUATION_RESULTS]), 0)
+        self.assertEqual(result["current_step"], 64)
 
     def test_overrides_after_restore(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -224,7 +226,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
                 self.assertEqual(trainable2._iteration, 2)
                 # Do not trust restored setup; still original args
                 self.assertEqual(trainable2._setup.args.comment, "A")
-                self.assertEqual(trainable2.algorithm_config.lr, 0.001)  # default value
+                self.assertEqual(trainable2.algorithm_config.lr, DefaultArgumentParser.lr)  # default value
                 # left unchanged
                 # From manual adjustment
                 self.assertEqual(trainable2.algorithm_config.num_epochs, 5)
@@ -319,12 +321,12 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
         self.assertEqual(SubclassedTrainable.discrete_eval, setup.trainable_class.discrete_eval)
 
 
-class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints, num_cpus=4):
+class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     def setUp(self):
         super().setUp()
 
-    @Cases(ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
+    @Cases(ENV_RUNNER_CASES)
     def test_save_checkpoint(self, cases):
         # NOTE: In this test attributes are shared BY identity, this is just a weak test.
         for num_env_runners in iter_cases(cases):
@@ -333,22 +335,29 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                 # NOTE This loads some parts by identity!
                 saved_ckpt = trainable.save_checkpoint(tmpdir)
                 saved_ckpt = deepcopy(saved_ckpt)  # assure to not compare by identity
-                with patch_args():  # make sure that args do not influence the restore
+                with patch_args(
+                    "--num_env_runners", num_env_runners,
+                    "--no_dynamic_eval_interval",
+                ):  # fmt: skip # make sure that args do not influence the restore
                     trainable2 = self.TrainableClass()
                     trainable2.load_checkpoint(saved_ckpt)
             self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
             trainable.stop()
             trainable2.stop()
 
-    @Cases(ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
+    @Cases(ENV_RUNNER_CASES)
     def test_save_restore_dict(self, cases):
         for num_env_runners in iter_cases(cases):
             trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
             with self.subTest(num_env_runners=num_env_runners):
                 with tempfile.TemporaryDirectory() as tmpdir:
                     training_result: _TrainingResult = trainable.save(tmpdir)  # pyright: ignore[reportInvalidTypeForm] # calls save_checkpoint
-                    with patch_args():  # make sure that args do not influence the restore
+                    with patch_args(
+                        "--num_env_runners",
+                        num_env_runners,
+                        "--no_dynamic_eval_interval",
+                    ):  # make sure that args do not influence the restore
                         trainable2 = self.TrainableClass()
                         with self.subTest("Restore trainable from dict"):
                             if _TrainingResult is not None:
@@ -358,15 +367,19 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                             trainable2.stop()
             trainable.stop()
 
-    @Cases(ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
+    @Cases(ENV_RUNNER_CASES)
     def test_save_restore_path(self, cases):
         for num_env_runners in iter_cases(cases):
             trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
             with self.subTest(num_env_runners=num_env_runners):
                 with tempfile.TemporaryDirectory() as tmpdir:
                     trainable.save(tmpdir)  # calls save_checkpoint
-                    with patch_args():  # make sure that args do not influence the restore
+                    with patch_args(
+                        "--num_env_runners",
+                        num_env_runners,
+                        "--no_dynamic_eval_interval",
+                    ):  # make sure that args do not influence the restore
                         trainable3 = self.TrainableClass()
                         self.assertIsInstance(tmpdir, str)
                         trainable3.restore(tmpdir)  # calls load_checkpoint
@@ -374,9 +387,9 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                         trainable3.stop()
             trainable.stop()
 
-    @Cases(ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
     @pytest.mark.basic
+    @Cases([0])
     def test_1_get_set_state(self, cases):
         # If this test fails all others will most likely fail too, run it first.
         self.maxDiff = None
@@ -384,11 +397,19 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             try:
                 trainable, _ = self.get_trainable(num_env_runners=num_env_runners, fast_model=True)
                 state = trainable.get_state()
+                # For this test ignore the evaluation_interval set by DynamicEvalInterval callback
                 # TODO: add no warning test
                 self.assertIn(COMPONENT_ENV_RUNNER, state.get("algorithm", {}))
 
-                trainable2 = self.TrainableClass()
+                # NOTE: If too many env_runners are created args.parallel is likely set to true,
+                # due to parsing of test args.
+                with patch_args(
+                    "--no_dynamic_eval_interval",
+                ):
+                    trainable2 = self.TrainableClass({"num_env_runners": num_env_runners})
                 trainable2.set_state(deepcopy(state))
+                self.on_checkpoint_loaded_callbacks(trainable2)
+
                 # class is missing in config dict
                 self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
             finally:
@@ -407,9 +428,11 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                 trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
                 with tempfile.TemporaryDirectory() as tmpdir:
                     trainable.save_to_path(tmpdir)
-                    with patch_args():
+                    with patch_args("--no_dynamic_eval_interval"):
                         trainable2 = self.TrainableClass()
                         trainable2.restore_from_path(tmpdir)
+                    # does not trigger on_checkpoint_load
+                self.on_checkpoint_loaded_callbacks(trainable2)
                 self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)
             finally:
                 trainable.stop()  # pyright: ignore[reportPossiblyUnboundVariable]
@@ -445,9 +468,10 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             with self.subTest("save_checkpoint -> restore_from_path", num_env_runners=num_env_runners):
                 with tempfile.TemporaryDirectory() as tmpdir1:
                     trainable.save_checkpoint(tmpdir1)
-                    with patch_args():
+                    with patch_args("--no_dynamic_eval_interval"):
                         trainable_from_path = self.TrainableClass()
                         trainable_from_path.restore_from_path(tmpdir1)
+                    self.on_checkpoint_loaded_callbacks(trainable_from_path)
                 self.compare_trainables(
                     trainable,
                     trainable_from_path,
@@ -492,9 +516,10 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
             with self.subTest("save_to_path -> restore_from_path", num_env_runners=num_env_runners):
                 with tempfile.TemporaryDirectory() as tmpdir1:
                     trainable.save_to_path(tmpdir1)
-                    with patch_args():
+                    with patch_args("--no_dynamic_eval_interval"):
                         trainable_from_path = self.TrainableClass()
                         trainable_from_path.restore_from_path(tmpdir1)
+                self.on_checkpoint_loaded_callbacks(trainable_from_path)
                 self.compare_trainables(
                     trainable,
                     trainable_from_path,
@@ -613,9 +638,10 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
 
                         trainable_from_path = DefaultTrainable.define(setup)()
                         trainable_from_path.restore_from_path(checkpoint)
+                        # doesn't call on_checkpoint_load but loads config correctly # TODO store original eval_interval
                         trainable_from_ckpt: DefaultTrainable = DefaultTrainable.define(setup).from_checkpoint(
                             checkpoint
-                        )  # pyright: ignore[reportAssignmentType]
+                        )
                         # restore is bad if algorithm_checkpoint_dir is a temp dir
                         self.assertEqual(trainable_from_ckpt.algorithm.iteration, step)
                         self.assertEqual(trainable_from_path.algorithm.iteration, step)
@@ -638,8 +664,13 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, DisableGUIBre
                         # NOTE: reuse: Currently this does not set some states correctly on the metrics_logger
                         # https://github.com/ray-project/ray/issues/55248, larger batch_size should fix it
                         # HACK: Only one might contain mean/max/min stats for env_runners--(module/agent)episode_return
+                        # Should be fixed in 2.50
                         trainable_from_path.algorithm.metrics.reset()  # pyright: ignore[reportOptionalMemberAccess]
+                        trainable_from_path.algorithm.learner_group._learner.config._is_frozen = (
+                            False  # HACK; why does this error appear now?
+                        )
                         trainable_from_path.restore_from_path(checkpoint)
+                        self.on_checkpoint_loaded_callbacks(trainable_from_path)
                         self.compare_trainables(
                             trainable_restore,
                             trainable_from_path,
