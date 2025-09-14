@@ -416,7 +416,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 "--comment", "A",
                 "--extra", "abc",  # nargs
                 "--env_seeding_strategy", "constant",
-                "--wandb", "offline",  # possibly do not restore"
+                "--wandb", "offline",  # possibly do not restore
                 "--num_env_runners", "1",  # NeverRestore
             ):  # fmt: skip
                 with AlgorithmSetup(init_trainable=False) as setup:

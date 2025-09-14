@@ -24,9 +24,13 @@ class _DiscreteTorchModelBase(DiscreteModelABC, TorchModel): ...
 
 
 if TYPE_CHECKING:
+    import os
     from ray.rllib.core.models.tf.base import TfModel  # pyright: ignore[reportMissingImports] # ray has removed this somewhere around 2.40
 
-    from typing import type_check_only
+    if not os.environ.get("SPHINX_BUILD", "0") == "1":
+        from typing import type_check_only
+    else:
+        type_check_only = lambda x: x  # noqa: E731
 
     @type_check_only
     class _DiscreteTFModelBase(DiscreteModelABC, TfModel): ...

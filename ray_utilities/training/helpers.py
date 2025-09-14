@@ -422,7 +422,6 @@ def _set_env_runner_state(
     state_ref: ray.ObjectRef,
     config_ref: ray.ObjectRef,
 ):
-    # 7U14A1  Lifebook U7410
     state: dict = ray.get(state_ref)
     if COMPONENT_METRICS_LOGGER not in state:
         raise KeyError(f"State dictionary missing required key '{COMPONENT_METRICS_LOGGER}'.")

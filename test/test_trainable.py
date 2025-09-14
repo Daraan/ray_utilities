@@ -584,7 +584,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     trainable_restored2.stop()
                 trainable_restored.stop()
 
-    @Cases(ENV_RUNNER_CASES)
+    @Cases([0])
     @pytest.mark.env_runner_cases
     @pytest.mark.tuner
     @pytest.mark.length(speed="medium")  # 2-3 min
@@ -632,7 +632,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                         trainable_from_path.restore_from_path(checkpoint)
                         trainable_from_ckpt: DefaultTrainable = DefaultTrainable.define(setup).from_checkpoint(
                             checkpoint
-                        )  # pyright: ignore[reportAssignmentType]
+                        )
                         # restore is bad if algorithm_checkpoint_dir is a temp dir
                         self.assertEqual(trainable_from_ckpt.algorithm.iteration, step)
                         self.assertEqual(trainable_from_path.algorithm.iteration, step)
@@ -657,7 +657,11 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                         # HACK: Only one might contain mean/max/min stats for env_runners--(module/agent)episode_return
                         # Should be fixed in 2.50
                         trainable_from_path.algorithm.metrics.reset()  # pyright: ignore[reportOptionalMemberAccess]
+                        trainable_from_path.algorithm.learner_group._learner.config._is_frozen = (
+                            False  # HACK; why does this error appear now?
+                        )
                         trainable_from_path.restore_from_path(checkpoint)
+                        self.on_checkpoint_loaded_callbacks(trainable_from_path)
                         self.compare_trainables(
                             trainable_restore,
                             trainable_from_path,

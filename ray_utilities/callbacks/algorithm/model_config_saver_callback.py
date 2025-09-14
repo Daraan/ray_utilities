@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias
 
 from ray.rllib.core.rl_module.multi_rl_module import MultiRLModule
 from ray.rllib.core.rl_module.torch.torch_rl_module import TorchRLModule
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_Node = dict[str, str | dict[str, "_Node"] | list["_Node"]]
+_Node: TypeAlias = dict[str, str | dict[str, "_Node"] | list["_Node"]]
 
 
 def _jsonify_summary(summary: str) -> dict:

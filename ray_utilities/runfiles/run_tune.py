@@ -74,7 +74,9 @@ def _run_without_tuner(
     if isclass(trainable):
         # If trainable is a class, instantiate it with the sampled parameters
         trainable_instance = trainable(setup.sample_params())
-        logger.warning("[TESTING] Using a Trainable clas, without a Tuner relying on a stopper or 'done' return value.")
+        logger.warning(
+            "[TESTING] Using a Trainable class, without a Tuner relying on a stopper or 'done' return value."
+        )
 
         tuner = setup.create_tuner()
         assert tuner._local_tuner

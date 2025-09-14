@@ -73,9 +73,9 @@ class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType_co, ConfigType_co,
         to avoid error logs about missing configuration keys.
 
     Example:
-        >>> class MySetup(SetupWithDynamicBuffer, ExperimentSetupBase):
-        ...     config_class = PPOConfig
-        ...     algo_class = PPO
+        class MySetup(SetupWithDynamicBuffer, ExperimentSetupBase):
+            config_class = PPOConfig
+            algo_class = PPO
 
     See Also:
         :class:`~ray_utilities.callbacks.algorithm.dynamic_buffer_callback.DynamicBufferUpdate`: Buffer update callback
@@ -119,56 +119,54 @@ class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType_co, ConfigType_co,
 
 
 class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType_co, ConfigType_co, AlgorithmType_co]):
-    """Mixin class for dynamic batch size adjustment through gradient accumulation.
+    """Mixin class for dynamic batch size adjustment through gradient
+    accumulation.
 
-    This mixin enables dynamic batch size control during training by utilizing
-    gradient accumulation rather than directly modifying the ``train_batch_size_per_learner``.
-    This approach provides more flexible batch size management while maintaining
-    computational efficiency.
-
-    The mixin automatically integrates the :class:`~ray_utilities.callbacks.algorithm.dynamic_batch_size.DynamicGradientAccumulation`
-    callback when dynamic batch sizing is enabled, allowing the effective batch size
-    to be adjusted dynamically based on training progress or hyperparameter optimization.
+    This mixin enables dynamic batch size control during training by
+    utilizing gradient accumulation rather than directly modifying the
+    ``train_batch_size_per_learner``. It integrates the
+    :class:`~ray_utilities.callbacks.algorithm.dynamic_batch_size.DynamicGradientAccumulation`
+    callback when dynamic batch sizing is enabled so the effective batch
+    size can be adjusted during training or tuning.
 
     Features:
         - Dynamic batch size control via gradient accumulation
         - Predefined batch size parameter space for Ray Tune optimization
-        - Automatic callback registration for gradient accumulation management
+        - Automatic callback registration for gradient accumulation
         - Integration with dynamic evaluation intervals
-        - Maintains computational efficiency through gradient accumulation
 
-    Class Attributes:
-        batch_size_sample_space: Ray Tune parameter space with batch sizes ranging
-            from 16 to 16384, suitable for grid search or adaptive optimization.
+    Attributes:
+        batch_size_sample_space: Ray Tune parameter
+            space with batch sizes from 16 to 16384.
 
     Note:
-        This setup uses gradient accumulation to control the effective batch size
-        rather than increasing ``train_batch_size_per_learner`` directly. For direct
-        batch size parameter tuning, use :class:`SetupWithDynamicBuffer` which
-        controls the ``rollout_size`` parameter instead.
+        Use :class:`SetupWithDynamicBuffer` for direct tuning of rollout
+        sizes. This mixin controls effective batch size via gradient
+        accumulation.
 
     Warning:
-        The ``batch_size`` parameter added to the parameter space refers to the
-        effective batch size achieved through gradient accumulation, not the
-        direct gradient accumulation multiplier values.
+        The ``batch_size`` tuning values refer to effective batch sizes
+        achieved via gradient accumulation, not direct accumulation
+        multipliers.
 
-    Example:
-        >>> class MySetup(SetupWithDynamicBatchSize, ExperimentSetupBase):
-        ...     config_class = PPOConfig
-        ...     algo_class = PPO
-        ...
-        ...     def create_config(self, args):
-        ...         config = super().create_config(args)
-        ...         if args.dynamic_batch:
-        ...             # Gradient accumulation will be handled automatically
-        ...             pass
-        ...         return config
+    Examples:
+
+        class MySetup(SetupWithDynamicBatchSize, ExperimentSetupBase):
+            config_class = PPOConfig
+            algo_class = PPO
+
+            def create_config(self, args):
+                config = super().create_config(args)
+                if args.dynamic_batch:
+                    # Gradient accumulation will be handled automatically
+                    pass
+                return config
 
     See Also:
-        :class:`~ray_utilities.callbacks.algorithm.dynamic_batch_size.DynamicGradientAccumulation`:
+        :class:`~ray_utilities.callbacks.algorithm.dynamic_batch_size.DynamicGradientAccumulation`
             Gradient accumulation callback
-        :class:`SetupWithDynamicBuffer`: Companion mixin for buffer size dynamics
-        :class:`~ray_utilities.callbacks.algorithm.dynamic_evaluation_callback.DynamicEvalInterval`:
+        :class:`SetupWithDynamicBuffer` Companion mixin for buffer size dynamics
+        :class:`~ray_utilities.callbacks.algorithm.dynamic_evaluation_callback.DynamicEvalInterval`
             Evaluation callback
     """
 

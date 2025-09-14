@@ -12,10 +12,10 @@ ray\_utilities.config.create\_algorithm module
    :undoc-members:
    :show-inheritance:
 
-ray\_utilities.config.model\_config\_parsers module
----------------------------------------------------
+ray\_utilities.config.mlp\_argument\_parser module
+--------------------------------------------------
 
-.. automodule:: ray_utilities.config.model_config_parsers
+.. automodule:: ray_utilities.config.mlp_argument_parser
    :members:
    :undoc-members:
    :show-inheritance:

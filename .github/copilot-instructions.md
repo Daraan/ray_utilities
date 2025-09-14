@@ -111,6 +111,16 @@ PR Checklist
 - Update pyproject.toml extras if public API changes
 - Keep PRs small and focused; link issues when possible
 
+Documentation guidance
+- Use Google-style docstrings
+- the napoleon and sphinx_autodoc_typehints Sphinx extensions are enabled
+- Always use cross referencing when appropriate; to internal and external objects
+- do not add type-hints in the attribute listing of docstrings
+- keep line length to 100 characters, up to 120 can be an exception
+- sphinx is used for docs generation
+- do not remove todo notes in docstrings
+
+
 Example Snippets
 Minimal RLlibCallback:
 
