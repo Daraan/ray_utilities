@@ -1370,6 +1370,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         restored = cast("Self", restored)
         # Restore algorithm metric states; see my PR https://github.com/ray-project/ray/pull/54148/
         # sync_env_runner_states_after_reload(restored.algorithm)
+        # callbacks are not called by the above methods.
+        make_callback(
+            "on_checkpoint_loaded",
+            # ray has a wrong type signature here, accepting only list
+            callbacks_objects=restored.algorithm.callbacks,  # pyright: ignore[reportArgumentType]
+            callbacks_functions=restored.algorithm.config.callbacks_on_checkpoint_loaded,  # pyright: ignore[reportArgumentType,reportOptionalMemberAccess]
+            kwargs={"algorithm": restored.algorithm, "metrics_logger": restored.algorithm.metrics},
+        )
         return restored
 
 

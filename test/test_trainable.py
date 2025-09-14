@@ -630,6 +630,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
 
                         trainable_from_path = DefaultTrainable.define(setup)()
                         trainable_from_path.restore_from_path(checkpoint)
+                        # doesn't call on_checkpoint_load but loads config correctly # TODO store original eval_interval
                         trainable_from_ckpt: DefaultTrainable = DefaultTrainable.define(setup).from_checkpoint(
                             checkpoint
                         )

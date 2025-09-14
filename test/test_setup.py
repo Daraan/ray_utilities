@@ -139,6 +139,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             ignore=[
                 # ignore callbacks that are created on Trainable.setup
                 "callbacks_on_environment_created",
+                "evaluation_interval",
             ],
         )
 
