@@ -463,6 +463,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     with patch_args():
                         trainable_from_path = self.TrainableClass()
                         trainable_from_path.restore_from_path(tmpdir1)
+                    self.on_checkpoint_loaded_callbacks(trainable_from_path)
                 self.compare_trainables(
                     trainable,
                     trainable_from_path,
@@ -510,6 +511,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     with patch_args():
                         trainable_from_path = self.TrainableClass()
                         trainable_from_path.restore_from_path(tmpdir1)
+                self.on_checkpoint_loaded_callbacks(trainable_from_path)
                 self.compare_trainables(
                     trainable,
                     trainable_from_path,

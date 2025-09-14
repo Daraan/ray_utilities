@@ -238,9 +238,15 @@ class TestProcessing(unittest.TestCase):
         for choice in get_args(LogStatsChoices):
             with self.subTest(f"Testing log_stats with choice: {choice}"):
                 with patch_args(
-                    "--log_stats", choice, "--minibatch_size", "8", "--batch_size", "8", "--num_epochs", "1"
+                    "--log_stats",
+                    choice,
+                    "--minibatch_size",
+                    "8",
+                    "--batch_size",
+                    "8",
                 ):
-                    setup = AlgorithmSetup()
+                    with AlgorithmSetup(init_trainable=False) as setup:
+                        setup.config.num_epochs = 1
                     self.assertEqual(setup.args.log_stats, choice)
                     if isclass(setup.trainable):
                         _result = setup.trainable_class(setup.sample_params()).train()
@@ -255,7 +261,7 @@ class TestProcessing(unittest.TestCase):
             self.assertIsInstance(context.exception.__context__, argparse.ArgumentError)
 
     def test_not_a_model_parameter_clean(self):
-        with patch_args("--not_parallel", "--optimize_config", "--tune", "batch_size", "--num-jobs", 3):
+        with patch_args("--not_parallel", "--optimize_config", "--tune", "batch_size", "--num_jobs", 3):
             setup = AlgorithmSetup()
             removable_params = setup.parser.get_non_cli_args()  # pyright: ignore[reportAttributeAccessIssue]
             self.assertGreater(len(removable_params), 0)

@@ -1809,8 +1809,8 @@ class _TrainableWithCheckProto(Protocol):
     def define(cls, setup_cls: AlgorithmSetup) -> Any: ...
 
 
-def SetupWithCheck(check: type["TrainableWithChecks"]):  # noqa: N802
-    class SetupWithCheck(AlgorithmSetup):
+def SetupWithCheck(check: type["TrainableWithChecks"], base=AlgorithmSetup):  # noqa: N802
+    class SetupWithCheck(base):
         _check_class = check
 
         def _create_trainable(self):

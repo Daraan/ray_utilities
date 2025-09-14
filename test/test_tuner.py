@@ -414,16 +414,18 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
 
         for num_env_runners in iter_cases(cases):
             with self.subTest(num_env_runners=num_env_runners):
-                with patch_args(
-                    "--num_samples", "1",
-                    "--num_jobs", "1",
-                    "--batch_size", batch_size,  # overwrite
-                    "--use_exact_total_steps",  # do not adjust total_steps
-                    "--minibatch_size", MINIBATCH_SIZE,  # keep
-                    "--iterations", "1",  # overwrite
+                with (
+                    patch_args(
+                        "--num_samples", "1",
+                        "--num_jobs", "1",
+                        "--batch_size", batch_size,  # overwrite
+                        "--use_exact_total_steps",  # do not adjust total_steps
+                        "--minibatch_size", MINIBATCH_SIZE,  # keep
+                        "--iterations", "1",  # overwrite
+                    ),
+                     AlgorithmSetup() as setup1
                 ):  # fmt: skip
-                    with AlgorithmSetup() as setup1:
-                        setup1.config.env_runners(num_env_runners=num_env_runners)
+                    setup1.config.env_runners(num_env_runners=num_env_runners)
                 tuner1 = setup1.create_tuner()
                 tuner1._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
                     checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
@@ -486,9 +488,11 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                         1,
                     )
                 self.maxDiff = None
+                # DynamicEvalInterval can change evaluation_interval; ignore that key
                 self.compare_configs(
                     trainable2_local.algorithm_config.to_dict(),
                     setup2.config.to_dict(),
+                    ignore=("evaluation_interval",),
                 )
                 self.assertEqual(trainable2_local.algorithm_config.train_batch_size_per_learner, batch_size * 2)
                 trainable2_local.stop()

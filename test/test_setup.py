@@ -1110,14 +1110,14 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
                 ):
                     # cannot make this deterministic on local vs remote
                     seed_everything(None, setup_seed)
-                    with AlgorithmSetup(init_trainable=False) as setup:
+                    with MLPSetup(init_trainable=False) as setup:
                         setup.config.env_runners(num_env_runners=num_env_runners_a)
                         setup.config.training(minibatch_size=OTHER_MINI_BATCH_SIZE)  # insert some noise
                         setup.config.debugging(seed=setup_seed)
                     setup.trainable_class.use_pbar = False
                     tuner_0 = setup.create_tuner()
                     seed_everything(None, setup_seed)
-                    with AlgorithmSetup(init_trainable=False) as setup:
+                    with MLPSetup(init_trainable=False) as setup:
                         setup.config.env_runners(num_env_runners=num_env_runners_b)
                         setup.config.training(minibatch_size=OTHER_MINI_BATCH_SIZE)  # insert some noise
                         setup.config.debugging(seed=setup_seed)
@@ -1175,12 +1175,14 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
                             self.assertEqual(restored_trainable._setup.args.seed, cli_seed)
 
                             self.assertEqual(restored_trainable.algorithm_config.num_env_runners, num_env_runners)
-                            self.assertEqual(restored_trainable.algorithm_config.minibatch_size, 5)
+                            self.assertEqual(restored_trainable.algorithm_config.minibatch_size, OTHER_MINI_BATCH_SIZE)
 
                             # NOTE: config overrides may not be applied to the setup with favors get_config_from_args!
                             # Adjust the tests if changing this behavior
-                            self.assertEqual(restored_trainable._setup.config.minibatch_size, expected_minibatch_size)
-                            self.assertEqual(restored_trainable._setup.config.num_env_runners, 0)  # not updated
+                            # OLD Checked for expected_minibatch_size
+                            # NEW: apply overrides even before config is set OTHER_MINI_BATCH_SIZE
+                            self.assertEqual(restored_trainable._setup.config.minibatch_size, OTHER_MINI_BATCH_SIZE)
+                            self.assertEqual(restored_trainable._setup.config.num_env_runners, num_env_runners)
 
                             tune_results[num_env_runners]["trainables"].append(restored_trainable)
                     self.assertGreater(len(tune_results[num_env_runners_a]["trainables"]), 0)

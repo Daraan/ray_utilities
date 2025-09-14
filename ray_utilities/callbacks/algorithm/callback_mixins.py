@@ -131,7 +131,10 @@ class GetGlobalStepMixin:
                 NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
             ].peek()  # NOTE: Custom key
         else:
-            gs = metrics_logger.stats[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME].peek()
+            gs = metrics_logger.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=-1)
+        if gs == -1:
+            assert metrics_logger.peek("training_iteration", default=0) == 0
+            gs = 0
         # gs = metrics_logger.stats[ENV_RUNNERS][NUM_ENV_STEPS_SAMPLED_LIFETIME"].peek()
         # logger.debug("Global step %s", gs)
         return gs
@@ -221,5 +224,10 @@ class StepCounterMixin(GetGlobalStepMixin):
         algorithm: Algorithm,
         metrics_logger: MetricsLogger,
     ) -> None:
-        # current_step is likely missing
-        self._planned_current_step = metrics_logger.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME))
+        self._planned_current_step = metrics_logger.peek(
+            (ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=-1
+        )
+        if self._planned_current_step == -1:
+            # this should only happen if 0 training steps have been done:
+            assert metrics_logger.peek("training_iteration", default=0) == 0
+            self._planned_current_step = 0
