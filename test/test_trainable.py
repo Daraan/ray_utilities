@@ -336,8 +336,9 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 saved_ckpt = trainable.save_checkpoint(tmpdir)
                 saved_ckpt = deepcopy(saved_ckpt)  # assure to not compare by identity
                 with patch_args(
-                    "--num_env_runners", num_env_runners
-                ):  # make sure that args do not influence the restore
+                    "--num_env_runners", num_env_runners,
+                    "--no_dynamic_eval_interval",
+                ):  # fmt: skip # make sure that args do not influence the restore
                     trainable2 = self.TrainableClass()
                     trainable2.load_checkpoint(saved_ckpt)
             self.compare_trainables(trainable, trainable2, num_env_runners=num_env_runners)

@@ -514,7 +514,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             "--num_jobs", DefaultArgumentParser.num_jobs + 2,  # NeverRestore
             "--log_level", "WARNING",  # NeverRestore
             "--env_type", "cart",  # AlwaysRestore
-            "--actor_type", "mlp",
+            "--agent_type", "mlp",
         ):  # fmt: skip
             setup = AlgorithmSetup()
             self.assertEqual(setup.args.log_level, "WARNING")

@@ -399,8 +399,8 @@ def patch_args(
         ("-a", "no_actor_provided_by_patch_args")
         if (
             "-a" not in args
-            and "--actor_type" not in args
-            and (not extend_argv or ("-a" not in old_args and "--actor_type" not in old_args))
+            and "--agent_type" not in args
+            and (not extend_argv or ("-a" not in old_args and "--agent_type" not in old_args))
         )
         else ()
     )
