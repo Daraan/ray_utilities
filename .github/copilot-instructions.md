@@ -113,7 +113,8 @@ PR Checklist
 
 Documentation guidance
 - Use Google-style docstrings
-- the napoleon and sphinx_autodoc_typehints Sphinx extensions are enabled
+- the napoleon and sphinx autodoc typehints Sphinx extensions are enabled. Have this in mind when suggesting changes, for example because of autodoc typehints are type-hints in docstrings not needed
+- Use <name>: <description> for attribute listing in the Attributes section of docstrings.
 - Always use cross referencing when appropriate; to internal and external objects
 - do not add type-hints in the attribute listing of docstrings
 - keep line length to 100 characters, up to 120 can be an exception

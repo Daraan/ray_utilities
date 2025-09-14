@@ -135,10 +135,6 @@ class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType_co, ConfigType_
         - Automatic callback registration for gradient accumulation
         - Integration with dynamic evaluation intervals
 
-    Attributes:
-        batch_size_sample_space: Ray Tune parameter
-            space with batch sizes from 16 to 16384.
-
     Note:
         Use :class:`SetupWithDynamicBuffer` for direct tuning of rollout
         sizes. This mixin controls effective batch size via gradient
@@ -150,29 +146,34 @@ class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType_co, ConfigType_
         multipliers.
 
     Examples:
+        .. code-block:: python
 
-        class MySetup(SetupWithDynamicBatchSize, ExperimentSetupBase):
-            config_class = PPOConfig
-            algo_class = PPO
+            class MySetup(SetupWithDynamicBatchSize, ExperimentSetupBase):
+                config_class = PPOConfig
+                algo_class = PPO
 
-            def create_config(self, args):
-                config = super().create_config(args)
-                if args.dynamic_batch:
-                    # Gradient accumulation will be handled automatically
-                    pass
-                return config
+                def create_config(self, args):
+                    config = super().create_config(args)
+                    if args.dynamic_batch:
+                        # Gradient accumulation will be handled automatically
+                        pass
+                    return config
 
     See Also:
-        :class:`~ray_utilities.callbacks.algorithm.dynamic_batch_size.DynamicGradientAccumulation`
+        :class:`~ray_utilities.callbacks.algorithm.dynamic_batch_size.DynamicGradientAccumulation`:
             Gradient accumulation callback
-        :class:`SetupWithDynamicBuffer` Companion mixin for buffer size dynamics
-        :class:`~ray_utilities.callbacks.algorithm.dynamic_evaluation_callback.DynamicEvalInterval`
+        :class:`SetupWithDynamicBuffer`:
+            Companion mixin for buffer size dynamics
+        :class:`~ray_utilities.callbacks.algorithm.dynamic_evaluation_callback.DynamicEvalInterval`:
             Evaluation callback
     """
 
     batch_size_sample_space: ClassVar[ParameterSpace[int]] = tune.grid_search(
         [32, 64, 128, 256, 512, 1024, 2048, 3072, 4096, 6144, 8192, 10240, 16384]
     )
+    """
+    Tune parameter space with batch sizes from 32 to 16384.
+    """
 
     @classmethod
     def _get_callbacks_from_args(cls, args) -> list[type[RLlibCallback]]:
