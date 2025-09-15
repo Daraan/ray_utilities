@@ -40,6 +40,7 @@ from ray_utilities.runfiles import run_tune
 from ray_utilities.setup import optuna_setup
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner
+from ray_utilities.setup.ppo_mlp_setup import MLPSetup
 from ray_utilities.testing_utils import (
     ENV_RUNNER_CASES,
     Cases,
@@ -53,6 +54,7 @@ from ray_utilities.testing_utils import (
     format_result_errors,
     iter_cases,
     mock_result,
+    no_parallel_envs,
     patch_args,
 )
 from ray_utilities.training.default_class import DefaultTrainable
@@ -158,8 +160,19 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
 
     def test_run_tune_function(self):
         batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
-        with patch_args("--num_samples", "3", "--num_jobs", "3", "--batch_size", batch_size, "--iterations", "3"):
-            with AlgorithmSetup(init_trainable=False) as setup:
+        with patch_args(
+            "--num_samples",
+            "3",
+            "--num_jobs",
+            "3",
+            "--batch_size",
+            batch_size,
+            "--iterations",
+            "3",
+            "--fcnet_hiddens",
+            "[4]",
+        ):
+            with MLPSetup(init_trainable=False) as setup:
                 setup.config.training(num_epochs=2, minibatch_size=batch_size)
                 setup.config.evaluation(evaluation_interval=1)  # else eval metric not in dict
             results = run_tune(setup)
@@ -183,9 +196,10 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             "--use_exact_total_steps",  # do not adjust total_steps
             "--checkpoint_frequency_unit", "steps",
             "--checkpoint_frequency", batch_size * 2,
+            "--fcnet_hiddens", "[4]",
         ):  # fmt: skip
             # FIXME: new default steps does not align with other tests!
-            setup = AlgorithmSetup()
+            setup = MLPSetup()
             # Workaround for NOT working StepCheckpointer as it works on a copy of the result dict.
             # AlgoStepCheckpointer is not added, hardcoded checkpointing!
             # is_algorithm_callback_added(
@@ -318,8 +332,9 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
             "--batch_size", BATCH_SIZE,
             "--minibatch_size", MINIBATCH_SIZE,
             "--iterations", "4",
+            "--fcnet_hiddens", "[4]",
         ):  # fmt: skip
-            setup = AlgorithmSetup()
+            setup = MLPSetup()
         tuner = setup.create_tuner()
         tuner._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
             checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
@@ -344,9 +359,10 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
             "--batch_size", BATCH_SIZE,
             "--minibatch_size", MINIBATCH_SIZE,
             "--iterations", "2",
+            "--fcnet_hiddens", "[4]",
         ):  # fmt: skip
 
-            class CheckpointSetup(AlgorithmSetup):
+            class CheckpointSetup(MLPSetup):
                 def _create_trainable(self):
                     class DefaultTrainableWithCheckpoint(DefaultTrainable):
                         def step(self):

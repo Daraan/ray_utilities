@@ -7,9 +7,18 @@ import pytest
 import ray.tune.logger
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
+from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.misc import RE_GET_TRIAL_ID
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
-from ray_utilities.testing_utils import Cases, DisableLoggers, check_args, iter_cases, patch_args
+from ray_utilities.testing_utils import (
+    Cases,
+    DisableLoggers,
+    check_args,
+    iter_cases,
+    mock_trainable_algorithm,
+    no_parallel_envs,
+    patch_args,
+)
 from ray_utilities.training.helpers import make_divisible
 
 if sys.version_info < (3, 11):
@@ -48,6 +57,14 @@ class TestMeta(TestCase):
         eval_config = config.get_evaluation_config_object()
         assert eval_config
         self.assertDictEqual(eval_config.env_config, {"a": 5, "b": 3, "c": 4, "d": 5})
+
+    @no_parallel_envs
+    @mock_trainable_algorithm
+    def test_no_parallel_envs(self):
+        self.assertEqual(DefaultArgumentParser.num_envs_per_env_runner, 1)
+        self.assertEqual(
+            AlgorithmSetup(init_param_space=False).trainable_class().algorithm_config.num_envs_per_env_runner, 1
+        )
 
 
 class TestNoLoggers(DisableLoggers):

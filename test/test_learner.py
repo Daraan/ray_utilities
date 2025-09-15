@@ -12,7 +12,8 @@ from ray_utilities.learners import mix_learners
 from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import PPOTorchLearnerWithGradientAccumulation
 from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
-from ray_utilities.testing_utils import DisableLoggers, InitRay, TestHelpers, patch_args
+from ray_utilities.setup.ppo_mlp_setup import MLPSetup
+from ray_utilities.testing_utils import DisableLoggers, InitRay, TestHelpers, no_parallel_envs, patch_args
 from ray_utilities.training.helpers import is_algorithm_callback_added, make_divisible
 
 if TYPE_CHECKING:
@@ -30,9 +31,18 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
     def test_ppo_torch_learner_with_gradient_accumulation(self):
         batch_size = make_divisible(64, DefaultArgumentParser.num_envs_per_env_runner)
         with patch_args(
-            "-a", "mlp", "--accumulate_gradients_every", "2", "--batch_size", batch_size, "--minibatch_size", batch_size
+            "-a",
+            "mlp",
+            "--accumulate_gradients_every",
+            "2",
+            "--batch_size",
+            batch_size,
+            "--minibatch_size",
+            batch_size,
+            "--fcnet_hiddens",
+            "[8, 8]",
         ):
-            setup = AlgorithmSetup(init_trainable=False)
+            setup = MLPSetup(init_trainable=False)
         self.assertEqual(setup.config.train_batch_size_per_learner, batch_size)
         # NOTE: Need RemoveMaskedSamplesLearner to assure only one epoch is done
         setup.config.training(
@@ -108,8 +118,9 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
             "--total_steps", total_steps,  # 1x128 + 2x64 + 4x32 = 3x128, 4+2*2+4 = 12 iterations
             "--min_step_size", lower_step_size,
             "--max_step_size", step_sizes[-1],
+            "--fcnet_hiddens", "[8, 8]",
             ),
-            AlgorithmSetup(init_trainable=False) as setup,
+            MLPSetup(init_trainable=False) as setup,
         ):  # fmt: skip
             setup.config.training(
                 num_epochs=1,
@@ -159,16 +170,13 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
         accumulate_every = 3
 
         with patch_args(
-            "-a",
-            "mlp",
-            "--accumulate_gradients_every",
-            str(accumulate_every),
-            "--batch_size",
-            batch_size,
-            "--minibatch_size",
-            batch_size,
-        ):
-            setup = AlgorithmSetup(init_trainable=False)
+            "-a", "mlp",
+            "--accumulate_gradients_every", str(accumulate_every),
+            "--batch_size", batch_size,
+            "--minibatch_size", batch_size,
+            "--fcnet_hiddens", "[8, 8]",
+        ):  # fmt: skip
+            setup = MLPSetup(init_trainable=False)
 
         setup.config.training(num_epochs=1)
         algorithm = setup.config.build_algo()
@@ -278,14 +286,12 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
         accumulate_every = 2
 
         with patch_args(
-            "--accumulate_gradients_every",
-            accumulate_every,
-            "--batch_size",
-            batch_size,
-            "--minibatch_size",
-            batch_size,
-        ):
-            setup = AlgorithmSetup(init_trainable=False)
+            "--accumulate_gradients_every", accumulate_every,
+            "--batch_size", batch_size,
+            "--minibatch_size", batch_size,
+            "--fcnet_hiddens", "[8, 8]",
+        ):  # fmt: skip
+            setup = MLPSetup(init_trainable=False)
 
         setup.config.training(num_epochs=1)
         if accumulate_every == 1:  # pyright: ignore[reportUnnecessaryComparison]

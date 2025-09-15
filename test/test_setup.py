@@ -69,6 +69,7 @@ from ray_utilities.testing_utils import (
     TestHelpers,
     TrainableWithChecks,
     iter_cases,
+    mock_trainable_algorithm,
     patch_args,
 )
 from ray_utilities.training.default_class import DefaultTrainable, TrainableBase
@@ -114,6 +115,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         self.assertNotIn("gpu", tags)
         self.assertIn("test", tags)
 
+    @mock_trainable_algorithm
     def test_frozen_config(self):
         with patch_args():
             setup = AlgorithmSetup()
@@ -143,6 +145,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             ],
         )
 
+    @mock_trainable_algorithm
     def test_context_manager(self):
         with patch_args():
             for setup in [
@@ -340,12 +343,13 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 if grid:
                     self.assertLessEqual(choices, set(grid), f"Choices {choices} not in grid {grid}")
 
+    @mock_trainable_algorithm
     def test_config_overrides_via_setup(self):
         with patch_args("--batch_size", "1234", "--minibatch_size", "444"):
             # test with init_trainable=False
-            setup = AlgorithmSetup(init_trainable=False)
-            setup.config.training(num_epochs=3, minibatch_size=321)
-            Trainable = setup.create_trainable()
+            with AlgorithmSetup(init_trainable=False) as setup:
+                setup.config.training(num_epochs=3, minibatch_size=321)
+            Trainable = setup.trainable_class
             assert isinstance(Trainable, type) and issubclass(Trainable, DefaultTrainable)
             trainable = Trainable()
 
@@ -738,10 +742,12 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
         super().setUp()
 
     def test_evaluate(self):
-        _result = self._DEFAULT_SETUP.build_algo().evaluate()
+        algo = self._DEFAULT_SETUP_LOW_RES.build_algo()
+        algo.evaluate()
+        algo.stop()
 
     def test_step(self):
-        algo = self._DEFAULT_SETUP.build_algo()
+        algo = self._DEFAULT_SETUP_LOW_RES.build_algo()
         _result = algo.step()
 
         with self.subTest("test weights after step"):
@@ -789,12 +795,14 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
                 eval_module.get_state(),
                 algo_module.get_state(),
             )
+            algo.stop()
 
     def test_train(self):
         self._DEFAULT_SETUP_LOW_RES.unset_trainable()  # we do not use Trainable here
         self._DEFAULT_SETUP_LOW_RES.config.evaluation(evaluation_interval=1)
         algo = self._DEFAULT_SETUP_LOW_RES.build_algo()
         algo.train()
+        algo.stop()
 
     @pytest.mark.tuner
     def test_stopper_with_checkpoint(self):

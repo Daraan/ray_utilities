@@ -29,6 +29,7 @@ from ray_utilities.testing_utils import (
     TestHelpers,
     iter_cases,
     mock_trainable_algorithm,
+    no_parallel_envs,
     patch_args,
 )
 from ray_utilities.training.default_class import DefaultTrainable
@@ -62,14 +63,14 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
     @patch_args()
     def test_trainable_simple(self):
         def _create_trainable(self: PPOSetup):
-            global a_trainable_function  # noqa: PLW0603
+            global _a_trainable_function  # noqa: PLW0603
 
-            def a_trainable_function(params) -> TrainableReturnData:  # noqa: ARG001
+            def _a_trainable_function(params) -> TrainableReturnData:  # noqa: ARG001
                 # This is a placeholder for the actual implementation of the trainable.
                 # It should return a dictionary with training data.
                 return self.config.build().train()  # type: ignore
 
-            return a_trainable_function
+            return _a_trainable_function
 
         with mock.patch.object(PPOSetup, "_create_trainable", _create_trainable):
             with self.subTest("With parameters"):
@@ -77,7 +78,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
                 setup.config.evaluation(evaluation_interval=1)
                 setup.config.training(num_epochs=2, train_batch_size_per_learner=64, minibatch_size=32)
                 trainable = setup.create_trainable()
-                self.assertIs(trainable, a_trainable_function)
+                self.assertIs(trainable, _a_trainable_function)
                 print("Invalid check")
                 self.assertNotIsInstance(trainable, DefaultTrainable)
 
@@ -85,16 +86,22 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
                 params = setup.sample_params()
                 _result = trainable(params)
 
+    @no_parallel_envs
     def test_get_trainable_util(self):
         trainable1, _ = self.get_trainable(num_env_runners=0, env_seed=5)
         trainable2, _ = self.get_trainable(num_env_runners=0, env_seed=5)
-        self.compare_trainables(trainable1, trainable2, num_env_runners=0, ignore_timers=True)
+        self.compare_trainables(
+            trainable1, trainable2, num_env_runners=0, ignore_timers=True, ignore_env_runner_state=False
+        )
 
         trainable1_1, _ = self.get_trainable(num_env_runners=1, env_seed=5)
         trainable2_1, _ = self.get_trainable(num_env_runners=1, env_seed=5)
-        self.compare_trainables(trainable1_1, trainable2_1, num_env_runners=1, ignore_timers=True)
+        self.compare_trainables(
+            trainable1_1, trainable2_1, num_env_runners=1, ignore_timers=True, ignore_env_runner_state=False
+        )
 
     @pytest.mark.basic
+    @no_parallel_envs
     def test_get_trainable_fast_model(self):
         # Test model sizes:
         DefaultArgumentParser.num_envs_per_env_runner = 1
@@ -134,7 +141,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
         self.assertAlmostEqual(trainable.algorithm_config.train_batch_size_per_learner, 64)
         self.assertEqual(trainable.algorithm_config.num_epochs, 2)
         _result1 = trainable.step()
-        trainable.cleanup()
+        trainable.stop()
 
     @patch_args("--batch_size", "64", "--minibatch_size", "32", "--num_envs_per_env_runner", "4")
     def test_train(self):
@@ -242,14 +249,15 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
                 # NOT restored as set by config_from_args
                 self.assertEqual(trainable2.algorithm_config.minibatch_size, mini_batch_size1)
 
+    @no_parallel_envs
     def test_perturbed_keys(self):
         with (
-            patch_args("--batch_size", 512),
+            patch_args("--batch_size", 512, "--fcnet_hiddens", "[1]"),
             tempfile.TemporaryDirectory() as tmpdir,
             tempfile.TemporaryDirectory() as tmpdir2,
             tempfile.TemporaryDirectory() as tmpdir3,
         ):
-            setup = AlgorithmSetup()
+            setup = MLPSetup()
             trainable = setup.trainable_class()
             self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 512)
             trainable.stop()
