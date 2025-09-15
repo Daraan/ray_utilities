@@ -65,7 +65,7 @@ class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType_co, ConfigType_co,
 
     Class Attributes:
         rollout_size_sample_space: Ray Tune parameter space with common rollout sizes
-            ranging from 16 to 16384 steps, suitable for grid search optimization.
+            ranging from 32 to 8192 steps, suitable for grid search optimization.
 
     Note:
         This mixin should be used before other setups that add
@@ -84,7 +84,7 @@ class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType_co, ConfigType_co,
     """
 
     rollout_size_sample_space: ClassVar[ParameterSpace[int]] = tune.grid_search(
-        [32, 64, 128, 256, 512, 1024, 2048, 3072, 4096, 6144, 8192, 10240, 16384]
+        [32, 64, 128, 256, 512, 1024, 2048, 3072, 4096, 2048 * 3, 8192]  # 4096 * 3, 16384]
     )
 
     @classmethod
@@ -169,7 +169,7 @@ class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType_co, ConfigType_
     """
 
     batch_size_sample_space: ClassVar[ParameterSpace[int]] = tune.grid_search(
-        [32, 64, 128, 256, 512, 1024, 2048, 3072, 4096, 6144, 8192, 10240, 16384]
+        [32, 64, 128, 256, 512, 1024, 2048, 3072, 4096, 2048 * 3, 8192]  # 4096 * 3, 16384]
     )
     """
     Tune parameter space with batch sizes from 32 to 16384.
