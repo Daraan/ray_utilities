@@ -346,7 +346,9 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             # to disable set TUNE_DISABLE_AUTO_CALLBACK_LOGGERS environment variable to "1"
             callbacks=callbacks,  # type: ignore[reportArgumentType] # Ray New Train Interface!
             # Use fail_fast for during debugging/testing to stop all experiments
-            failure_config=FailureConfig(fail_fast=self._setup.args.test),
+            failure_config=FailureConfig(
+                fail_fast=self._setup.args.test, max_failures=0 if self._setup.args.test else 2
+            ),
             checkpoint_config=CheckpointConfig(
                 num_to_keep=self._setup.args.num_to_keep,
                 checkpoint_score_order="max",
