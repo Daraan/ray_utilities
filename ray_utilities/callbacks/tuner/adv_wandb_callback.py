@@ -158,14 +158,8 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
         config.setdefault("experiment_id", run_id)
         # replace potential _ in trial_id
         if "_" in trial.trial_id:
-            trial_number = int(trial.trial_id.split("_")[-1])
-            if trial_number != self._trials_created:
-                # NOTE: might be out of order 00001 before 00000
-                _logger.warning(
-                    "Trial number does not match the number of created trials: id=%s != %d",
-                    trial.trial_id,
-                    self._trials_created,
-                )
+            _trial_number = int(trial.trial_id.split("_")[-1])
+            # cannot check for id as they are possibly created out of order, 00000 last, 00001 first
         config["experiment_key"] = f"{run_id:0<20}xXx{trial.trial_id}xXx{self._trials_created:0>4}".replace("_", "x00x")
         # --- New Code --- : Remove nested keys
         for nested_key in filter(lambda x: "/" in x, self.excludes):
