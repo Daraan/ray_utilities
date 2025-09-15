@@ -48,7 +48,7 @@ from ray import tune
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core.rl_module import MultiRLModuleSpec
 from tap.tap import Tap
-from typing_extensions import Self, TypedDict, TypeVar, deprecated
+from typing_extensions import NotRequired, Self, TypedDict, TypeVar, deprecated
 
 from ray_utilities import run_id
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
@@ -77,6 +77,7 @@ if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
     from ray.rllib.utils.typing import EnvType
+    from ray.tune.experiment import Trial as TuneTrial
     from ray.tune.result_grid import ResultGrid
 
     from ray_utilities.training.default_class import TrainableBase
@@ -156,6 +157,9 @@ class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, Algor
     """
     config_overrides: dict[str, Any]
     """Hold the current dict created by updating config_overrides"""
+
+    trial_name_creator: NotRequired[Optional[Callable[[TuneTrial], str]]]
+    """Optional trial name creator function for Ray Tune trials."""
 
 
 class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmType_co]):
@@ -277,6 +281,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         init_param_space: bool = True,
         init_trainable: bool = True,
         parse_args: bool = True,
+        trial_name_creator: Optional[Callable[[TuneTrial], str]] = None,
     ):
         """
         Initializes the experiment base class with optional argument parsing and setup.
@@ -293,6 +298,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             init_param_space : Whether to initialize the parameter space. Defaults to True.
             init_trainable : Whether to initialize the trainable component. Defaults to True.
             parse_args : Whether to parse the provided arguments. Defaults to True.
+            trial_name_creator: trial_name_creator function for :class:`ray.tune.Trial` objects
+                when using :class:`ray.tune.Tuner`.
 
         Note:
             When the setup creates a trainable that is a class, the config is frozen to
@@ -319,6 +326,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         self._config_overrides: Optional[dict[str, Any]] = None
         self._config_files = config_files
         self._load_args = load_args
+        self._tune_trial_name_creator = trial_name_creator
         self.parser: Parser[ParserType_co]
         self.parser = self.create_parser(config_files)
         if load_args:
@@ -674,7 +682,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             if module_spec.module_class is not None:
                 module = module_spec.module_class.__name__
             else:
-                module = f"DEFAULT_MODULE({self.args.agent_type})"
+                module = f"RLModule({self.args.agent_type})"
         else:
             module = None
         # Arguments reported on the CLI
@@ -1190,6 +1198,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             eval_metric=EVAL_METRIC_RETURN_MEAN,
             eval_metric_order="max",
             add_iteration_stopper=self._tuner_add_iteration_stopper(),
+            trial_name_creator=self._tune_trial_name_creator,
         ).create_tuner()
 
     # endregion
@@ -1467,6 +1476,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             # Allows to recreate the config based on args
             "param_space": getattr(self, "param_space", {"__params_not_created__": True}),
             "setup_class": type(self),
+            "trial_name_creator": self._tune_trial_name_creator,
         }
         return data
 
@@ -1495,7 +1505,13 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 stacklevel=2,
             )
         setup_class = cast("type[Self]", setup_class)
-        new = setup_class(init_config=False, init_param_space=False, init_trainable=False, parse_args=False)
+        new = setup_class(
+            init_config=False,
+            init_param_space=False,
+            init_trainable=False,
+            parse_args=False,
+            trial_name_creator=data.get("trial_name_creator"),
+        )
         new.config_overrides(**data.get("config_overrides", {}))
         config: ConfigType_co | Literal[False] = data.get("config", False)
         new.param_space = data["param_space"]

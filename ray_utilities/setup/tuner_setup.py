@@ -40,7 +40,7 @@ from ray_utilities.constants import (
     CLI_REPORTER_PARAMETER_COLUMNS,
     EVAL_METRIC_RETURN_MEAN,
 )
-from ray_utilities.misc import trial_name_creator
+from ray_utilities.misc import trial_name_creator as default_trial_name_creator
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner, create_search_algo
 from ray_utilities.training.helpers import get_current_step
 from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
@@ -135,7 +135,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
         :func:`~ray_utilities.misc.trial_name_creator`: Trial naming function
     """
 
-    trial_name_creator = trial_name_creator
+    trial_name_creator = default_trial_name_creator
 
     def __init__(
         self,
@@ -145,11 +145,14 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
         setup: ExperimentSetupBase[ParserTypeT, ConfigTypeT, _AlgorithmType_co],
         extra_tags: Optional[list[str]] = None,
         add_iteration_stopper: bool | None = None,
+        trial_name_creator: Optional[Callable[[Trial], str]] = None,
     ):
         self.eval_metric: str = eval_metric
         self.eval_metric_order: Literal["max", "min"] = eval_metric_order
         self._setup = setup
         self.add_iteration_stopper = add_iteration_stopper
+        if trial_name_creator is not None:
+            self.trial_name_creator = trial_name_creator
         super().__init__(setup=setup, extra_tags=extra_tags)
         self._stopper: Optional[OptunaSearchWithPruner | Stopper | Literal["not_set"]] = "not_set"
 
@@ -281,7 +284,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             metric=self.eval_metric,
             search_alg=searcher,
             mode=self.eval_metric_order,
-            trial_name_creator=trial_name_creator,
+            trial_name_creator=self.trial_name_creator,
             max_concurrent_trials=None if self._setup.args.not_parallel else self._setup.args.num_jobs,
             # scheduler=Fifo,
         )
