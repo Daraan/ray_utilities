@@ -47,7 +47,7 @@ from ray_utilities.callbacks.progress_bar import restore_pbar, save_pbar_state, 
 from ray_utilities.callbacks.tuner.metric_checkpointer import TUNE_RESULT_IS_A_COPY
 from ray_utilities.config.typed_argument_parser import LOG_STATS, LogStatsChoices
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, PERTURBED_HPARAMS
-from ray_utilities.misc import is_pbar
+from ray_utilities.misc import AutoInt, is_pbar
 from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.training.functional import training_step
 from ray_utilities.training.helpers import (
@@ -587,17 +587,23 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             assert algorithm is not None
             self._algorithm = algorithm
         assert self.algorithm.config
-
         # Use the config from setup_trainable to calculate total steps, which handles both algorithm and non-algorithm cases
-        algo_config_for_calculation = self.algorithm.config if self.algorithm else _algo_config
         steps_to_new_goal = args["total_steps"] - current_step
         iterations_to_new_goal = (
-            steps_to_new_goal // algo_config_for_calculation.train_batch_size_per_learner + 1
-            if steps_to_new_goal % algo_config_for_calculation.train_batch_size_per_learner != 0
-            else steps_to_new_goal // algo_config_for_calculation.train_batch_size_per_learner
+            steps_to_new_goal // self.algorithm.config.train_batch_size_per_learner + 1
+            if steps_to_new_goal % self.algorithm.config.train_batch_size_per_learner != 0
+            else steps_to_new_goal // self.algorithm.config.train_batch_size_per_learner
         )
-        args["iterations"] = iterations_to_new_goal
-        steps_with_current_batch_size = get_total_steps(args, algo_config_for_calculation)
+        if isinstance(args["iterations"], AutoInt):
+            # if dynamic buffer to not recalculate total_steps
+            args["iterations"] = "auto" if args["dynamic_buffer"] else iterations_to_new_goal
+            steps_with_current_batch_size = get_total_steps(args, self.algorithm.config)
+            args["iterations"] = iterations_to_new_goal
+        else:
+            steps_with_current_batch_size = get_total_steps(args, self.algorithm.config)
+
+        # iterations was passed by user; do not overwrite
+        # adjust total_steps instead
         if steps_with_current_batch_size is not None:
             total_steps = steps_with_current_batch_size + current_step
         else:
