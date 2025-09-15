@@ -120,6 +120,7 @@ Documentation guidance
 - keep line length to 100 characters, up to 120 can be an exception
 - sphinx is used for docs generation
 - do not remove todo notes in docstrings
+- for examples use code blocks and avoid inline code or shell snippets, i.e. avoid `>>>` and `...` in front of code.
 
 
 Example Snippets

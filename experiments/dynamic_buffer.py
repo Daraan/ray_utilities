@@ -2,6 +2,7 @@
 from ray_utilities import run_tune
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
+from ray_utilities.misc import extend_trial_name
 from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 
 if __name__ == "__main__":
@@ -24,5 +25,8 @@ if __name__ == "__main__":
         "--log_level", "INFO",
         "--log_stats", "most",
     ):  # fmt: skip
-        setup = PPOMLPSetup(config_files=["experiments/default.cfg"])  # Replace with your own setup class
+        setup = PPOMLPSetup(
+            config_files=["experiments/default.cfg"],
+            trial_name_creator=extend_trial_name(prepend="Dynamic_RolloutBuffer"),
+        )
         results = run_tune(setup)

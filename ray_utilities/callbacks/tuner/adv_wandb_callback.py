@@ -119,7 +119,11 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
     def on_trial_start(self, iteration: int, trials: list["Trial"], trial: "Trial", **info):
         super().on_trial_start(iteration, trials, trial, **info)
         if self._trials_created != len(trials):
-            _logger.warning("Number of created trials does not match the number of active trials.")
+            _logger.warning(
+                "Number of created trials %d does not match the number of tracked trials %d.",
+                len(trials),
+                self._trials_created,
+            )
         self._trials = trials  # keep them in case of a failure to access paths.
 
     def log_trial_start(self, trial: "Trial"):

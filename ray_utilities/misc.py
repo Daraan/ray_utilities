@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import functools
+import logging
 import re
 import sys
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -28,6 +29,8 @@ if TYPE_CHECKING:
     from ray.tune.experiment import Trial
 
 _T = TypeVar("_T")
+
+_logger = logging.getLogger(__name__)
 
 RE_GET_TRIAL_ID = re.compile(r"id=(?P<trial_id>(?P<trial_id_part1>[a-zA-Z0-9]{5,6})(?:_(?P<trial_number>[0-9]{5}))?)")
 """Regex pattern to extract the trial ID from checkpoint paths.
@@ -65,16 +68,16 @@ def trial_name_creator(trial: Trial) -> str:
     start_time = datetime.datetime.fromtimestamp(
         trial.run_metadata.start_time or RAY_UTILITIES_INITIALIZATION_TIMESTAMP
     )
-    start_time_str = start_time.strftime("%Y-%m-%d_%H:%M")
+    start_time_str = start_time.strftime("%Y-%m-%d_%H-%M")
     module = trial.config.get("module", None)
     if module is None and "cli_args" in trial.config:
         module = trial.config["cli_args"]["agent_type"]
     fields = [
-        trial.trainable_name,
         trial.config["env"],
+        trial.trainable_name,
         module,
-        start_time_str,
         "id=" + trial.trial_id,
+        start_time_str,
     ]
     if "cli_args" in trial.config and trial.config["cli_args"]["from_checkpoint"]:
         match = RE_GET_TRIAL_ID.match(trial.config["cli_args"]["from_checkpoint"])
@@ -84,6 +87,90 @@ def trial_name_creator(trial: Trial) -> str:
     if setup_cls is not None:
         fields.insert(0, setup_cls)
     return "_".join(fields)
+
+
+_NOT_FOUND = object()
+
+
+def _is_key(key: str):
+    return key.startswith("<") and key.endswith(">")
+
+
+def _format_key(key: str) -> str:
+    assert key[0] == "<" and key[-1] == ">", "Key must be wrapped in angle brackets."
+    key = key[1:-1]  # remove angle brackets
+    if key == "batch_size":
+        return "train_batch_size_per_learner"
+    return key
+
+
+def extend_trial_name(
+    insert: Iterable[str] = (), *, prepend: Iterable[str] = (), append: Iterable[str] = ()
+) -> Callable[[Trial], str]:
+    """
+    Inserts strings or values from the trials config into the trial name.
+
+    Values to be extracted from the config must be wrapped in angle brackets,
+    e.g. "<my_param>". The function returns a new trial name creator that can be
+    used in place of the default one.
+
+    Args:
+        insert: Iterable of strings or config keys to insert before the "_id=" part.
+        prepend: Iterable of strings or config keys to prepend at the start.
+        append: Iterable of strings or config keys to append at the end.
+
+    Example:
+        name_creator = extend_trial_name(insert=["<param1>"], prepend=["NEW"], append=["<param2>"])
+        # This will create trial names like "NEW_<param1>_..._id=..._<param2>"
+
+    Hint:
+        For `train_batch_size_per_learner`, you can use the shorthand `<batch_size>` instead of the full key.
+
+    Returns:
+        A callable that takes a :class:`ray.tune.experiment.Trial` and returns
+        a modified trial name string with the specified insertions.
+    """
+    if isinstance(insert, str):
+        insert = (insert,)
+    if isinstance(prepend, str):
+        prepend = (prepend,)
+    if isinstance(append, str):
+        append = (append,)
+
+    def extended_trial_name_creator(trial: Trial) -> str:
+        base = trial_name_creator(trial)
+
+        start, end = base.split("_id=")
+        for key in insert:
+            if _is_key(key):
+                value = trial.config.get(_format_key(key), _NOT_FOUND)
+                if value is _NOT_FOUND:
+                    _logger.warning("Key %s not found in trial config, skipping insertion into trial name.", key)
+                    continue
+                start += f"_{key[1:-1]}={value}"
+            else:
+                start += f"_{key}"
+        for key in prepend:
+            if _is_key(key):
+                value = trial.config.get(_format_key(key), _NOT_FOUND)
+                if value is _NOT_FOUND:
+                    _logger.warning("Key %s not found in trial config, skipping prepending into trial name.", key)
+                    continue
+                start = f"{key[1:-1]}={value}_" + start
+            else:
+                start = f"{key}_" + start
+        for key in append:
+            if _is_key(key):
+                value = trial.config.get(_format_key(key), _NOT_FOUND)
+                if value is _NOT_FOUND:
+                    _logger.warning("Key %s not found in trial config, skipping appending into trial name.", key)
+                    continue
+                end += f"_{key[1:-1]}={value}"
+            else:
+                end += f"_{key}"
+        return start + "_id=" + end
+
+    return extended_trial_name_creator
 
 
 def get_trainable_name(trainable: Callable) -> str:
