@@ -63,7 +63,8 @@ import ray.tune.logger
 import ray.tune.logger.unified
 import tree
 from ray.experimental import tqdm_ray
-from ray.rllib.algorithms import AlgorithmConfig
+from ray.rllib.algorithms import Algorithm, AlgorithmConfig
+from ray.rllib.algorithms import algorithm as algorithm_module
 from ray.rllib.core import ALL_MODULES
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
@@ -92,6 +93,7 @@ from ray.tune.trainable.metadata import _TrainingRunMetadata
 from testfixtures import LogCapture
 from typing_extensions import Final, NotRequired, Required, Sentinel, TypeAliasType, get_origin, get_type_hints
 
+import ray_utilities.config.create_algorithm
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.mlp_argument_parser import MLPArgumentParser
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
@@ -117,7 +119,6 @@ if TYPE_CHECKING:
     from flax.training.train_state import TrainState
     from jaxlib.xla_extension import pytree  # pyright: ignore[reportMissingModuleSource,reportMissingImports] pyi file
     from ray import tune
-    from ray.rllib.algorithms import Algorithm
     from ray.rllib.algorithms.ppo.ppo import PPO, PPOConfig
     from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.tune import Result
@@ -1888,8 +1889,40 @@ class _FakeFutureResult(_FutureTrainingResult):
     def __init__(self, result):
         self.result = result
 
-    def resolve(self, block: bool = True):
+    def resolve(self, block: bool = True):  # noqa: ARG002, FBT001, FBT002
         return self.result
+
+
+def mock_trainable_algorithm(func):
+    """
+    Decorator to create cheap Trainable with the expensive algorithm parts mocked out,
+    i.e. no learner and env_runners created.
+    """
+    mock_env_runers = mock.patch.object(DefaultArgumentParser, "num_envs_per_env_runner", 1)
+    mock_learner_build = mock.patch.object(AlgorithmConfig, "build_learner_group")
+    try:
+        mock_old_api_multi_agent_setup = mock.patch.object(
+            AlgorithmConfig,
+            "get_multi_agent_setup",
+            lambda *args, **kwargs: ({}, None),  # noqa: ARG005
+        )
+    except AttributeError:
+        mock_old_api_multi_agent_setup = nullcontext()
+    algorithm_mock_runners = mock.patch.object(algorithm_module, "EnvRunnerGroup")
+    mock_model_save = mock.patch.object(ray_utilities.config.create_algorithm, "save_model_config_and_architecture")
+
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        with (
+            mock_env_runers,
+            mock_learner_build,
+            mock_old_api_multi_agent_setup,
+            algorithm_mock_runners,
+            mock_model_save,
+        ):
+            return func(self, *args, **kwargs)
+
+    return wrapper
 
 
 class _MockTrialRunner:
