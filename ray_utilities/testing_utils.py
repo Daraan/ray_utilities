@@ -1465,6 +1465,11 @@ class TestHelpers(unittest.TestCase):
             param_space1 = setup_data1["param_space"]
             param_space2 = setup_data2["param_space"]
             keys.remove("param_space")
+            if "trial_name_creator" in setup_data1 and "trial_name_creator" in setup_data2:
+                self.assertEqual(setup_data1["trial_name_creator"], setup_data2["trial_name_creator"])
+            elif "trial_name_creator" in setup_data1 or "trial_name_creator" in setup_data2:
+                self.fail("One of the trainables has a trial_name_creator, the other does not.")
+            keys.remove("trial_name_creator")
             self.assertEqual(len(keys), 0, f"Unchecked keys: {keys}")  # checked all params
             self.compare_param_space(param_space1, param_space2)  # pyright: ignore[reportArgumentType]
 

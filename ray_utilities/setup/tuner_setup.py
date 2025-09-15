@@ -135,7 +135,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
         :func:`~ray_utilities.misc.trial_name_creator`: Trial naming function
     """
 
-    trial_name_creator = default_trial_name_creator
+    trial_name_creator = staticmethod(default_trial_name_creator)
 
     def __init__(
         self,
