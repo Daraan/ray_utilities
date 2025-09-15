@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import ray
+
 from ray_utilities import run_tune
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
@@ -6,8 +8,9 @@ from ray_utilities.misc import extend_trial_name
 from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 
 if __name__ == "__main__":
+    ray.init(object_store_memory=4 * 1024**3)  # 4 GB
     PPOMLPSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
-    PPOMLPSetup.group_name = "tune-batch_size"  # pyright: ignore
+    PPOMLPSetup.group_name = "tune:batch_size"  # pyright: ignore
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
         "--tune", "batch_size",

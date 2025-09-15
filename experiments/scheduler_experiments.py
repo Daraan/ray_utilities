@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Experimental scheduler tests"""
 
+import ray
 from ray.tune.tuner import Tuner
 
 from ray_utilities import run_tune
@@ -10,6 +11,7 @@ from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 from ray_utilities.setup.tuner_setup import ScheduledTunerSetup
 
 if __name__ == "__main__":
+    ray.init(object_store_memory=4 * 1024**3)  # 4 GB
     PPOMLPSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
     PPOMLPSetup.group_name = "test-scheduler"  # pyright: ignore
 
