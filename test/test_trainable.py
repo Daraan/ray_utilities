@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import tempfile
-from collections.abc import Iterable
 from copy import deepcopy
 from typing import TYPE_CHECKING, cast
 from unittest import mock, skip
@@ -18,7 +17,9 @@ from ray.util.multiprocessing import Pool
 
 from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN, PERTURBED_HPARAMS
+from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
+from ray_utilities.setup.ppo_mlp_setup import MLPSetup
 from ray_utilities.testing_utils import (
     ENV_RUNNER_CASES,
     Cases,
@@ -27,6 +28,7 @@ from ray_utilities.testing_utils import (
     InitRay,
     TestHelpers,
     iter_cases,
+    mock_trainable_algorithm,
     patch_args,
 )
 from ray_utilities.training.default_class import DefaultTrainable
@@ -319,6 +321,33 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
             self.assertNotEqual(SubclassedTrainable._git_repo_sha, "unknown")
         self.assertEqual(SubclassedTrainable.use_pbar, setup.trainable_class.use_pbar)
         self.assertEqual(SubclassedTrainable.discrete_eval, setup.trainable_class.discrete_eval)
+
+    @mock_trainable_algorithm
+    def test_total_steps_and_iterations(self):
+        with patch_args("--batch_size", "2048", "--iterations", 100, "--fcnet_hiddens", "[1]"), MLPSetup() as setup:
+            self.assertEqual(setup.args.iterations, 100)
+            # do not check args.total_steps
+        trainable = setup.trainable_class()
+        self.assertEqual(trainable._total_steps["total_steps"], 2048 * 100)
+        self.assertEqual(trainable._setup.args.iterations, 100)
+        if "cli_args" in trainable.config:
+            self.assertEqual(trainable.config["cli_args"]["iterations"], 100)
+        trainable.stop()
+        del setup
+
+        with patch_args("--batch_size", "2048", "--dynamic_buffer", "--total_steps", "1_000_000"):
+            setup2 = MLPSetup()
+
+        trainable = setup2.trainable_class()
+        budget = split_timestep_budget(
+            total_steps=1_000_000,
+            min_size=32,
+            max_size=4096 * 2,
+            assure_even=True,
+        )
+        self.assertEqual(trainable._total_steps["total_steps"], budget["total_steps"])  # evened default value
+        self.assertEqual(trainable._setup.args.iterations, budget["total_iterations"])
+        trainable.stop()
 
 
 class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
