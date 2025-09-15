@@ -139,8 +139,8 @@ def _get_module(algorithm: "Algorithm") -> TorchRLModule:
 
 def _get_module_config(module: TorchRLModule | RLModule) -> dict:
     # config of RLModule is deprecated
-    args, kwargs = module.get_ctor_args_and_kwargs()
-    return {"args": args, **kwargs}
+    constructor_params = module.get_ctor_args_and_kwargs()
+    return {"args": constructor_params[0], **constructor_params[1]}
 
 
 def _get_model_architecture(module: TorchRLModule) -> dict:

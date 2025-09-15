@@ -93,6 +93,7 @@ from ray.tune.trainable.metadata import _TrainingRunMetadata
 from testfixtures import LogCapture
 from typing_extensions import Final, NotRequired, Required, Sentinel, TypeAliasType, get_origin, get_type_hints
 
+import ray_utilities.callbacks.algorithm.model_config_saver_callback
 import ray_utilities.config.create_algorithm
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.mlp_argument_parser import MLPArgumentParser
@@ -1016,6 +1017,7 @@ class TestHelpers(unittest.TestCase):
         self.set_max_diff(self.maxDiff and max(self.maxDiff or 0, 20000))
 
         def assertCleanDictEqual(a, b, *args, **kwargs):  # noqa: N802
+            __tracebackhide__ = True
             self.assertDictEqual(
                 self.filter_incompatible_remote_config(a), self.filter_incompatible_remote_config(b), *args, **kwargs
             )
@@ -1893,33 +1895,101 @@ class _FakeFutureResult(_FutureTrainingResult):
         return self.result
 
 
-def mock_trainable_algorithm(func):
+def mock_trainable_algorithm(
+    func: Optional[Callable[..., None]] = None,
+    *,
+    parallel_envs=1,
+    mock_env_runners=True,
+    mock_learner=True,
+    mock_save_model_callback=True,
+):
     """
     Decorator to create cheap Trainable with the expensive algorithm parts mocked out,
     i.e. no learner and env_runners created.
     """
-    mock_env_runers = mock.patch.object(DefaultArgumentParser, "num_envs_per_env_runner", 1)
-    mock_learner_build = mock.patch.object(AlgorithmConfig, "build_learner_group")
-    try:
-        mock_old_api_multi_agent_setup = mock.patch.object(
-            AlgorithmConfig,
-            "get_multi_agent_setup",
-            lambda *args, **kwargs: ({}, None),  # noqa: ARG005
+    if func is None:
+        return partial(
+            mock_trainable_algorithm,
+            parallel_envs=parallel_envs,
+            mock_env_runners=mock_env_runners,
+            mock_learner=mock_learner,
+            mock_save_model_callback=mock_save_model_callback,
         )
-    except AttributeError:
-        mock_old_api_multi_agent_setup = nullcontext()
-    algorithm_mock_runners = mock.patch.object(algorithm_module, "EnvRunnerGroup")
-    mock_model_save = mock.patch.object(ray_utilities.config.create_algorithm, "save_model_config_and_architecture")
+    if parallel_envs != DefaultArgumentParser.num_envs_per_env_runner:
+        env_runner_settings_mock = mock.patch.object(DefaultArgumentParser, "num_envs_per_env_runner", parallel_envs)
+    else:
+        env_runner_settings_mock = nullcontext()
+    learner_mock = mock.patch.object(AlgorithmConfig, "build_learner") if mock_learner else nullcontext()
+    learner_group_mock = mock.patch.object(AlgorithmConfig, "build_learner_group") if mock_learner else nullcontext()
+    module_spec_mock = (
+        mock.patch.object(AlgorithmConfig, "get_multi_rl_module_spec")
+        if mock_learner or mock_env_runners
+        else nullcontext()
+    )
+    env_runner_group_mock = mock.patch.object(algorithm_module, "EnvRunnerGroup") if mock_env_runners else nullcontext()
+    save_model_mock = (
+        # use a lambda to allow comparision
+        mock.patch.object(
+            ray_utilities.config.create_algorithm,
+            "save_model_config_and_architecture",
+            new=lambda *args, **kwargs: None,  # noqa: ARG005
+        )
+        if mock_save_model_callback
+        else nullcontext()
+    )
+    save_model_mock_origin = (
+        mock.patch.object(
+            ray_utilities.callbacks.algorithm.model_config_saver_callback,
+            "_get_module",
+        )
+        if mock_save_model_callback
+        else nullcontext()
+    )
+    save_model_mock_origin_b = (
+        mock.patch.object(
+            ray_utilities.callbacks.algorithm.model_config_saver_callback,
+            "open",
+            new=lambda *args, **kwargs: nullcontext(),  # noqa: ARG005
+        )
+        if mock_save_model_callback
+        else nullcontext()
+    )
+    save_model_mock_origin_c = (
+        mock.patch.object(
+            ray_utilities.callbacks.algorithm.model_config_saver_callback,
+            "json",
+        )
+        if mock_save_model_callback
+        else nullcontext()
+    )
 
     @wraps(func)
     def wrapper(self, *args, **kwargs):
         with (
-            mock_env_runers,
-            mock_learner_build,
-            mock_old_api_multi_agent_setup,
-            algorithm_mock_runners,
-            mock_model_save,
+            env_runner_settings_mock,
+            learner_group_mock,
+            learner_mock,
+            module_spec_mock,
+            # mock_old_api_multi_agent_setup,
+            env_runner_group_mock,
+            save_model_mock,
+            save_model_mock_origin,
+            save_model_mock_origin_b,
+            save_model_mock_origin_c,
         ):
+            return func(self, *args, **kwargs)
+
+    return wrapper
+
+
+def no_parallel_envs(func):
+    """
+    Decorator to set num_envs_per_env_runner to 1 for the duration of the test.
+    """
+
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        with mock.patch.object(DefaultArgumentParser, "num_envs_per_env_runner", 1):
             return func(self, *args, **kwargs)
 
     return wrapper
