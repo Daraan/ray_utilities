@@ -15,9 +15,9 @@ from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
 from ray.tune.experiment import Trial
 from ray.tune.utils import flatten_dict
 
-from ray_utilities import run_id
 from ray_utilities.callbacks.tuner._save_video_callback import SaveVideoFirstCallback
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, EPISODE_VIDEO_PREFIX
+from ray_utilities.misc import make_experiment_key
 from ray_utilities.video.numpy_to_video import numpy_to_video
 
 if TYPE_CHECKING:
@@ -249,10 +249,13 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
             experiment_cls = Experiment if self.online else OfflineExperiment
             experiment_kwargs = self.experiment_kwargs.copy()
             # Key needs to be at least 32 but not more than 50
-            experiment_kwargs["experiment_key"] = (
-                f"{run_id:0<18}xXx{trial.trial_id}xXx{self._trials_created:0>4}".replace("_", "xXx")
-            )
-            assert 32 <= len(experiment_kwargs["experiment_key"]) <= 50, len(experiment_kwargs["experiment_key"])
+            experiment_kwargs.setdefault("experiment_key", make_experiment_key(trial, self._trials_created))
+            if not (32 <= len(experiment_kwargs["experiment_key"]) <= 50):
+                _LOGGER.error(
+                    "Comet experiment key '%s' is invalid. It must be between 32 and 50 characters.",
+                    experiment_kwargs["experiment_key"],
+                )
+                raise ValueError("Invalid experiment key length.")
             self._check_workspaces(trial)
             experiment = experiment_cls(**experiment_kwargs)
             if self._log_pip_packages:

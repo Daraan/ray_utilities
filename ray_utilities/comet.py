@@ -65,11 +65,18 @@ import comet_ml
 from ray_utilities.constants import COMET_OFFLINE_DIRECTORY
 
 _api: Optional[comet_ml.API] = None
-"""Singleton instance of the Comet API client to make use of caching."""
+"""
+Singleton instance of the Comet API client to make use of caching.
+
+Use :func:`get_comet_api` to access this instance
+and initialize it if it first if it is not already created.
+"""
 
 _LOGGER = logging.getLogger(__name__)
 
 __all__ = [
+    "COMET_OFFLINE_DIRECTORY",
+    "CometArchiveTracker",
     "comet_assure_project_exists",
     "comet_upload_offline_experiments",
     "get_comet_api",

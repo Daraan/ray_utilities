@@ -13,10 +13,10 @@ from urllib.error import HTTPError
 from ray.air.integrations.wandb import WandbLoggerCallback, _clean_log, _QueueItem, _WandbLoggingActor
 from ray.tune.utils import flatten_dict
 
-from ray_utilities import run_id
+from ray_utilities import RUN_ID
 from ray_utilities.comet import _LOGGER
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS
-from ray_utilities.misc import RE_GET_TRIAL_ID
+from ray_utilities.misc import RE_GET_TRIAL_ID, make_experiment_key
 
 from ._save_video_callback import SaveVideoFirstCallback
 
@@ -154,13 +154,12 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
         # remove unpickleable items!
         config: dict[str, Any] = _clean_log(config)  # pyright: ignore[reportAssignmentType]
         config = {key: value for key, value in config.items() if key not in self.excludes}
-        config["run_id"] = run_id
-        config.setdefault("experiment_id", run_id)
+        config["run_id"] = RUN_ID
         # replace potential _ in trial_id
         if "_" in trial.trial_id:
             _trial_number = int(trial.trial_id.split("_")[-1])
             # cannot check for id as they are possibly created out of order, 00000 last, 00001 first
-        config["experiment_key"] = f"{run_id:0<20}xXx{trial.trial_id}xXx{self._trials_created:0>4}".replace("_", "x00x")
+        config.setdefault("experiment_key", make_experiment_key(trial, self._trials_created))
         # --- New Code --- : Remove nested keys
         for nested_key in filter(lambda x: "/" in x, self.excludes):
             key, sub_key = nested_key.split("/")

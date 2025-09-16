@@ -35,7 +35,7 @@ else:
     del comet_ml
 # fmt: on
 
-from ray_utilities.constants import entry_point_id, run_id
+from ray_utilities.constants import ENTRY_POINT_ID, RUN_ID
 from ray_utilities.misc import get_trainable_name, is_pbar, trial_name_creator
 from ray_utilities.nice_logger import nice_logger
 from ray_utilities.random import seed_everything
@@ -46,17 +46,17 @@ from ray_utilities.training.helpers import episode_iterator
 from ray_utilities.typing.algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
 
 __all__ = [
+    "ENTRY_POINT_ID",
+    "RUN_ID",
     "AlgorithmReturnData",
     "DefaultTrainable",
     "StrictAlgorithmReturnData",
     "create_default_trainable",
     "default_trainable",
-    "entry_point_id",
     "episode_iterator",
     "get_trainable_name",
     "is_pbar",
     "nice_logger",
-    "run_id",
     "run_tune",
     "seed_everything",
     "trial_name_creator",

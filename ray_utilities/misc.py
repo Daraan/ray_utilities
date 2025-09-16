@@ -21,7 +21,7 @@ from ray.tune.result_grid import ResultGrid
 from tqdm import tqdm
 from typing_extensions import Iterable, TypeIs
 
-from ray_utilities.constants import RAY_UTILITIES_INITIALIZATION_TIMESTAMP
+from ray_utilities.constants import RAY_UTILITIES_INITIALIZATION_TIMESTAMP, RUN_ID
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -202,6 +202,26 @@ def get_trainable_name(trainable: Callable) -> str:
         while hasattr(trainable, "__wrapped__"):
             trainable = trainable.__wrapped__  # type: ignore[attr-defined]
     return trainable.__name__
+
+
+def make_experiment_key(trial: Trial, trials_created: int) -> str:
+    """
+    Build a unique experiment key for a trial, making use of the :attr:`RUN_ID`,
+    :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`, and the number of trials created so far.
+
+    It has the format::
+        {RUN_ID:x<26}xX{trial_id}X{trials_created:0>3} with all underscores replaced by "xx".
+
+    References:
+        - :attr:`RUN_ID <ray_utilities.constants.RUN_ID>`: A unique identifier for the current execution.
+        - :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`: The unique ID of the trial.
+
+    Note:
+        The resulting key replaces underscores with "xx". For compatibility it should only contain
+        numbers and letters.
+        For comet it should be at most 50 characters long. This is not enforced here.
+    """
+    return f"{RUN_ID:x<26}xX{trial.trial_id}X{trials_created:0>3}".replace("_", "xx")
 
 
 def is_pbar(pbar: Iterable[_T]) -> TypeIs[tqdm_ray.tqdm | tqdm[_T]]:

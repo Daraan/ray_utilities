@@ -19,9 +19,11 @@ Example:
 """
 
 import hashlib
+import logging
 import os
 import sys
 import time
+import warnings
 from pathlib import Path
 
 import gymnasium as gym
@@ -41,29 +43,146 @@ from ray.rllib.utils.metrics import (
     EVALUATION_RESULTS,
 )
 
-_COMET_OFFFLINE_DIRECTORY_SUGGESTION = (Path("../") / "outputs" / ".cometml-runs").resolve()
-_COMET_OFFFLINE_DIRECTORY_SUGGESTION_STR = str(_COMET_OFFFLINE_DIRECTORY_SUGGESTION)
+_logger = logging.getLogger(__name__)
+
+# region runtime constants
+
+RAY_UTILITIES_INITIALIZATION_TIMESTAMP = time.time()
+"""float: Unix timestamp of when the Ray Utilities package was first imported.
+
+Useful for tracking package initialization time and calculating elapsed time since import.
+"""
+
+# Constant for one execution
+
+ENTRY_POINT: str = (
+    sys.argv[0] if len(sys.argv) > 0 and (sys.argv[0] and not sys.argv[0].endswith("ipython")) else "__console__"
+)
+"""The entry point script's filename, i.e. sys.argv[0] or "__console__" if not available."""
+
+ENTRY_POINT_ID: str = hashlib.blake2b(
+    os.path.basename(ENTRY_POINT).encode(), digest_size=3, usedforsecurity=False
+).hexdigest()
+"""Hash of the entry point script's filename, i.e. sys.argv[0]'s basename"""
+
+RUN_ID = (
+    ENTRY_POINT_ID
+    + "x"
+    + time.strftime("%y%m%d%H%M", time.localtime(RAY_UTILITIES_INITIALIZATION_TIMESTAMP))
+    + "x"
+    + hashlib.blake2b(os.urandom(8) + ENTRY_POINT_ID.encode(), digest_size=3, usedforsecurity=False).hexdigest()
+    + "v2"
+)
+"""
+A short partly random created UUID for the current execution. Only containing numbers and letters.
+It is build as: <6 chars entry_point_id> + <datetime as yymmddHHMM> + <6 chars random> + "v" + <version char>.
+It is 6 + 10 + 6 + 2 = 24 characters long.
+
+It can be used to easier identify trials that have the same entry point and were run
+during the same execution.
+
+The last character is the version of the run_id format. It is currently "2".
+"""
+
+_COMET_OFFLINE_DIRECTORY_SUGGESTION = (
+    Path("../")
+    / "outputs"
+    / ".cometml-runs"
+    / (
+        (
+            Path(ENTRY_POINT).stem
+            + time.strftime(r"_%Y-%m-%d_%H-%M-%S", time.localtime(RAY_UTILITIES_INITIALIZATION_TIMESTAMP))
+        )
+        if os.environ.get("RAY_UTILITIES_SEPARATE_COMET_LOG_DIRS", "1") == "1"
+        else ""
+    )
+).resolve()
+_COMET_OFFLINE_DIRECTORY_SUGGESTION_STR = str(_COMET_OFFLINE_DIRECTORY_SUGGESTION)
 
 if (
-    os.environ.get("COMET_OFFLINE_DIRECTORY", _COMET_OFFFLINE_DIRECTORY_SUGGESTION_STR)
-    != _COMET_OFFFLINE_DIRECTORY_SUGGESTION_STR
+    os.environ.get("COMET_OFFLINE_DIRECTORY", _COMET_OFFLINE_DIRECTORY_SUGGESTION_STR)
+    != _COMET_OFFLINE_DIRECTORY_SUGGESTION_STR
+    and "RAY_UTILITIES_SET_COMET_DIR" not in os.environ
 ):
-    import logging
+    _logger.warning(
+        "COMET_OFFLINE_DIRECTORY already set to: %s. Overwriting it with %s. "
+        "Set RAY_UTILITIES_SET_COMET_DIR=0 or 1 to disable directory change or to silence this warning.",
+        os.environ.get("COMET_OFFLINE_DIRECTORY"),
+        _COMET_OFFLINE_DIRECTORY_SUGGESTION_STR,
+    )
+if os.environ.get("RAY_UTILITIES_SET_COMET_DIR", "1").lower() not in ("0", "false", "off"):
+    os.environ["COMET_OFFLINE_DIRECTORY"] = _COMET_OFFLINE_DIRECTORY_SUGGESTION_STR
 
-    logging.getLogger(__name__).warning(
-        "COMET_OFFLINE_DIRECTORY already set to: %s", os.environ.get("COMET_OFFLINE_DIRECTORY")
+if "COMET_OFFLINE_DIRECTORY" not in os.environ:
+    warnings.warn(
+        "COMET_OFFLINE_DIRECTORY is not set in os.environ and RAY_UTILITIES_SET_COMET_DIR is disabled. "
+        "Comet ML offline experiments may not be saved to a persistent directory.",
+        stacklevel=1,
     )
 
-os.environ["COMET_OFFLINE_DIRECTORY"] = COMET_OFFLINE_DIRECTORY = _COMET_OFFFLINE_DIRECTORY_SUGGESTION_STR
+COMET_OFFLINE_DIRECTORY = os.environ.get("COMET_OFFLINE_DIRECTORY", _COMET_OFFLINE_DIRECTORY_SUGGESTION_STR)
 """str: Directory path for storing offline Comet ML experiments.
 
 This directory is where Comet ML stores experiment archives when running in offline mode.
-The default location is ``../outputs/.cometml-runs`` relative to the current working directory.
-Can be overridden by setting the ``COMET_OFFLINE_DIRECTORY`` environment variable.
+The default location is ``../outputs/.cometml-runs/<entry_point_stem>_<timestamp>``
+relative to the current working directory.
+The subdir is omitted if RAY_UTILITIES_SEPARATE_COMET_LOG_DIRS is set to anything other than "1".
+
+The location can be changed by setting the ``COMET_OFFLINE_DIRECTORY`` environment variable.
+Note, when COMET_OFFLINE_DIRECTORY is already present a UserWarning is logged unless
+RAY_UTILITIES_SET_COMET_DIR is set as well.
+RAY_UTILITIES_SET_COMET_DIR=1 (default) will set COMET_OFFLINE_DIRECTORY to the default location as describes above,
+RAY_UTILITIES_SET_COMET_DIR=0 will leave COMET_OFFLINE_DIRECTORY unchanged.
 
 See Also:
     :class:`ray_utilities.comet.CometArchiveTracker`: For managing offline experiments
 """
+
+Path(COMET_OFFLINE_DIRECTORY).mkdir(parents=True, exist_ok=True)
+_logger.info("Using COMET_OFFLINE_DIRECTORY: %s", COMET_OFFLINE_DIRECTORY)
+
+
+# Version Compatibility Flags
+RAY_VERSION = parse_version(ray.__version__)
+"""Version: Parsed version of the currently installed Ray package.
+
+Used throughout the codebase for version-specific compatibility checks and feature detection.
+
+Example:
+    >>> from ray_utilities.constants import RAY_VERSION
+    >>> if RAY_VERSION >= Version("2.40.0"):
+    ...     print("New API stack available")
+"""
+
+GYM_VERSION = parse_version(gym.__version__)
+"""Version: Parsed version of the currently installed Gymnasium package."""
+
+GYM_V1: bool = GYM_VERSION >= Version("1.0.0")
+"""bool: True if Gymnasium version 1.0.0 or higher is installed.
+
+Gymnasium 1.0.0 introduced significant API changes and improvements over earlier versions.
+"""
+
+GYM_V_0_26: bool = GYM_VERSION >= Version("0.26")
+"""bool: True if Gymnasium version 0.26 or higher is installed.
+
+Version 0.26 was the first official Gymnasium release after the transition from OpenAI Gym.
+This flag is used to handle compatibility between legacy Gym and modern Gymnasium.
+"""
+
+RAY_NEW_API_STACK_ENABLED = RAY_VERSION >= Version("2.40.0")
+"""bool: True if Ray's new API stack is available (Ray >= 2.40.0).
+
+The new API stack introduced significant improvements to RLlib's architecture,
+including better modularity and performance. This flag enables conditional
+code paths for new vs. legacy API usage.
+
+See Also:
+    `Ray RLlib New API Stack Migration Guide
+    <https://docs.ray.io/en/latest/rllib/new-api-stack-migration-guide.html>`_
+"""
+
+# endregion
 
 # Evaluation and Training Metric Keys
 EVAL_METRIC_RETURN_MEAN = EVALUATION_RESULTS + "/" + ENV_RUNNER_RESULTS + "/" + EPISODE_RETURN_MEAN
@@ -154,39 +273,6 @@ was actually run during a particular training iteration, which is useful for
 conditional processing of evaluation results.
 """
 
-# Version Compatibility Flags
-RAY_VERSION = parse_version(ray.__version__)
-"""Version: Parsed version of the currently installed Ray package.
-
-Used throughout the codebase for version-specific compatibility checks and feature detection.
-
-Example:
-    >>> from ray_utilities.constants import RAY_VERSION
-    >>> if RAY_VERSION >= Version("2.40.0"):
-    ...     print("New API stack available")
-"""
-
-GYM_VERSION = parse_version(gym.__version__)
-"""Version: Parsed version of the currently installed Gymnasium package."""
-
-GYM_V1: bool = GYM_VERSION >= Version("1.0.0")
-"""bool: True if Gymnasium version 1.0.0 or higher is installed.
-
-Gymnasium 1.0.0 introduced significant API changes and improvements over earlier versions.
-"""
-
-GYM_V_0_26: bool = GYM_VERSION >= Version("0.26")
-"""bool: True if Gymnasium version 0.26 or higher is installed.
-
-Version 0.26 was the first official Gymnasium release after the transition from OpenAI Gym.
-This flag is used to handle compatibility between legacy Gym and modern Gymnasium.
-"""
-
-RAY_UTILITIES_INITIALIZATION_TIMESTAMP = time.time()
-"""float: Unix timestamp of when the Ray Utilities package was first imported.
-
-Useful for tracking package initialization time and calculating elapsed time since import.
-"""
 
 # CLI and Reporting Configuration
 CLI_REPORTER_PARAMETER_COLUMNS = ["algo", "module", "model_config"]
@@ -194,18 +280,6 @@ CLI_REPORTER_PARAMETER_COLUMNS = ["algo", "module", "model_config"]
 
 These parameter keys from the search space will be shown in Ray Tune's command-line
 progress reporter for easier experiment monitoring.
-"""
-
-RAY_NEW_API_STACK_ENABLED = RAY_VERSION >= Version("2.40.0")
-"""bool: True if Ray's new API stack is available (Ray >= 2.40.0).
-
-The new API stack introduced significant improvements to RLlib's architecture,
-including better modularity and performance. This flag enables conditional
-code paths for new vs. legacy API usage.
-
-See Also:
-    `Ray RLlib New API Stack Migration Guide
-    <https://docs.ray.io/en/latest/rllib/new-api-stack-migration-guide.html>`_
 """
 
 # Sampling and Training Metrics
@@ -248,25 +322,6 @@ Note:
     not be set manually in experiment configurations.
 """
 
-# Constant for one execution
-
-entry_point_id = hashlib.blake2b(
-    os.path.basename(sys.argv[0]).encode(), digest_size=3, usedforsecurity=False
-).hexdigest()
-"""Hash of the entry point script's filename, i.e. sys.argv[0]'s basename"""
-
-run_id = (
-    entry_point_id
-    + "xXXXXx"
-    + hashlib.blake2b(os.urandom(8) + entry_point_id.encode(), digest_size=3, usedforsecurity=False).hexdigest()
-)
-"""
-A short randomly created UUID for the current execution.
-It is build as: entry_point_id + "xXXXXx" + random and is 3 * 6 = 18 characters long.
-
-It can be used to easier identify trials that have the same entry point and were run
-during the same execution
-"""
 EPISODE_METRICS_KEYS = (
     EPISODE_DURATION_SEC_MEAN,
     EPISODE_LEN_MAX,

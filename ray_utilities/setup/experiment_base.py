@@ -50,7 +50,7 @@ from ray.rllib.core.rl_module import MultiRLModuleSpec
 from tap.tap import Tap
 from typing_extensions import NotRequired, Self, TypedDict, TypeVar, deprecated
 
-from ray_utilities import run_id
+from ray_utilities import RUN_ID
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
@@ -584,7 +584,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 )
                 continue
             extra_tags[i] = subst
-        extra_tags.append(f"run_id:{run_id}")
+        extra_tags.append(f"run_id:{RUN_ID}")
         return list(filter(None, extra_tags))
 
     def create_tags(self, extra_tags: Sequence[str] | None = None) -> list[str]:
@@ -713,8 +713,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         # Other args not shown in the CLI
         # Log CLI args as hyperparameters
         param_space["cli_args"] = self.clean_args_to_hparams(self.args)
-        param_space["run_id"] = run_id
-        param_space["experiment_id"] = run_id
+        param_space["run_id"] = RUN_ID
+        param_space["experiment_id"] = RUN_ID
         param_space["experiment_name"] = self.project_name
         param_space["experiment_group"] = self.group_name
         self.param_space = param_space
