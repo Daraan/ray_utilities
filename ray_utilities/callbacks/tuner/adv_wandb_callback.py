@@ -5,7 +5,7 @@ import logging
 import os
 import pickle
 import re
-from collections.abc import Sequence
+import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.error import HTTPError
@@ -245,6 +245,60 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
                     video_dict["video"] = Video(os.path.abspath(video_dict.pop("video_path")), format="mp4")  # pyright: ignore[reportPossiblyUnboundVariable] # fmt: skip
 
         return metrics  # type: ignore[return-value]
+
+    def on_trial_complete(self, iteration: int, trials: list["Trial"], trial: "Trial", **info):
+        """Called when a trial has completed. Triggers sync for offline runs."""
+        # Call parent method to handle normal trial completion
+        super().on_trial_complete(iteration, trials, trial, **info)
+
+        # If we are in offline mode, try to sync this trial's run immediately
+        self._sync_offline_run_if_available(trial)
+
+    def _sync_offline_run_if_available(self, trial: "Trial"):
+        """Sync offline WandB run for the given trial if it exists."""
+        try:
+            # Check if we're in offline mode
+            wandb_mode = os.environ.get('WANDB_MODE', '').lower()
+            if wandb_mode != 'offline':
+                # Try to check if the run was created in offline mode by checking wandb's offline directory
+                if not any(Path.home().glob("wandb/offline-run-*")):
+                    _logger.debug("No offline runs detected for trial %s", trial.trial_id)
+                    return
+
+            # Look for offline runs that might belong to this trial
+            wandb_dir = Path.home() / "wandb"
+            if not wandb_dir.exists():
+                _logger.debug("WandB directory does not exist: %s", wandb_dir)
+                return
+
+            # Find the most recent offline run directory
+            offline_runs = list(wandb_dir.glob("offline-run-*"))
+            if not offline_runs:
+                _logger.debug("No offline runs found for upload")
+                return
+
+            # Sort by modification time and take the most recent
+            latest_run = max(offline_runs, key=lambda p: p.stat().st_mtime)
+
+            _logger.info("Attempting to sync offline WandB run: %s", latest_run)
+
+            # Use wandb sync command to upload the offline run
+            result = subprocess.run(
+                ["wandb", "sync", str(latest_run)],
+                check=False, capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+
+            if result.returncode == 0:
+                _logger.info("Successfully synced offline run for trial %s", trial.trial_id)
+            else:
+                _logger.warning("Failed to sync offline run for trial %s: %s", trial.trial_id, result.stderr)
+
+        except subprocess.TimeoutExpired:
+            _logger.warning("Timeout while syncing offline run for trial %s", trial.trial_id)
+        except (OSError, subprocess.SubprocessError) as e:
+            _logger.warning("Failed to sync offline run for trial %s: %s", trial.trial_id, e)
 
     def log_trial_result(
         self,
