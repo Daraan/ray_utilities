@@ -138,7 +138,6 @@ See Also:
     :class:`ray_utilities.comet.CometArchiveTracker`: For managing offline experiments
 """
 
-Path(COMET_OFFLINE_DIRECTORY).mkdir(parents=True, exist_ok=True)
 _logger.info("Using COMET_OFFLINE_DIRECTORY: %s", COMET_OFFLINE_DIRECTORY)
 
 

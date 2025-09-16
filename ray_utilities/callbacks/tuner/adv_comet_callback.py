@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Iterable, List, Literal, Optional, cast
 
 from ray.air.integrations.comet import CometLoggerCallback
@@ -16,7 +17,7 @@ from ray.tune.experiment import Trial
 from ray.tune.utils import flatten_dict
 
 from ray_utilities.callbacks.tuner._save_video_callback import SaveVideoFirstCallback
-from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, EPISODE_VIDEO_PREFIX
+from ray_utilities.constants import COMET_OFFLINE_DIRECTORY, DEFAULT_VIDEO_DICT_KEYS, ENTRY_POINT, EPISODE_VIDEO_PREFIX
 from ray_utilities.misc import make_experiment_key
 from ray_utilities.video.numpy_to_video import numpy_to_video
 
@@ -152,6 +153,8 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
                 constructor for comet_ml.Experiment (or OfflineExperiment if
                 online=False).
         """
+        if not experiment_kwargs.get("disabled", False):
+            Path(COMET_OFFLINE_DIRECTORY).mkdir(parents=True, exist_ok=True)
         super().__init__(online=online, tags=tags, save_checkpoints=save_checkpoints, **experiment_kwargs)  # pyright: ignore[reportArgumentType]
 
         # Join video keys for flat dict access
@@ -258,6 +261,7 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
                 raise ValueError("Invalid experiment key length.")
             self._check_workspaces(trial)
             experiment = experiment_cls(**experiment_kwargs)
+            experiment.set_filename(ENTRY_POINT)
             if self._log_pip_packages:
                 try:
                     experiment.set_pip_packages()
