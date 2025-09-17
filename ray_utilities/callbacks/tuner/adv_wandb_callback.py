@@ -6,7 +6,6 @@ import os
 import pickle
 import re
 import subprocess
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
 from urllib.error import HTTPError
@@ -19,6 +18,7 @@ from ray_utilities.comet import _LOGGER
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS
 from ray_utilities.misc import RE_GET_TRIAL_ID, make_experiment_key
 
+from ._log_result_grouping import non_metric_results
 from ._save_video_callback import SaveVideoFirstCallback
 
 if TYPE_CHECKING:
@@ -99,11 +99,7 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
     AUTO_CONFIG_KEYS: ClassVar[list[str]] = list(
         {
             *WandbLoggerCallback.AUTO_CONFIG_KEYS,
-            "trainable_name",
-            "experiment_group",
-            "experiment_name",
-            "run_id",
-            "experiment_key",
+            *non_metric_results,
         }
     )
 
@@ -266,7 +262,9 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
                     parent_dir = cast("_LogMetricsEvalEnvRunnersResultsDict", parent_dir)
                     parent_dir[keys[-1]] = video_dict = cast("VideoMetricsDict", parent_dir[keys[-1]]).copy()  # pyright: ignore[reportTypedDictNotRequiredAccess]  # fmt: skip
                     # IMPORTANT use absolute path as local path is a ray session!
-                    video_dict["video"] = Video(os.path.abspath(video_dict.pop("video_path")), format="mp4")  # pyright: ignore[reportPossiblyUnboundVariable] # fmt: skip
+                    video_dict["video"] = Video(  # pyright: ignore[reportPossiblyUnboundVariable]
+                        os.path.abspath(video_dict.pop("video_path")), format="mp4"
+                    )
 
         return metrics  # type: ignore[return-value]
 

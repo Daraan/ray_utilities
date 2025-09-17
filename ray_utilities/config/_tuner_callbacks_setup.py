@@ -5,12 +5,13 @@ import os
 import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, ClassVar, Literal, Optional
 
 from dotenv import load_dotenv
 from typing_extensions import TypeVar
 
 from ray_utilities.callbacks.tuner import AdvCometLoggerCallback, create_tuner_callbacks
+from ray_utilities.callbacks.tuner._log_result_grouping import exclude_results
 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 
 try:
@@ -56,16 +57,17 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             - create_comet_logger: Create a Comet logger callback.
     """
 
-    EXCLUDE_METRICS = (
-        "time_since_restore",
-        "iterations_since_restore",
+    EXCLUDE_METRICS: ClassVar[list[str]] = [
+        *exclude_results,
+        # "time_since_restore",
+        # "iterations_since_restore",
         # "timestamp",  # autofilled
         # "num_agent_steps_sampled_lifetime",
         # "learners", # NEW: filtered by log_stats
         # "timers",
         # "fault_tolerance",
         # "training_iteration", #  needed for the callback
-    )
+    ]
 
     def __init__(
         self,
@@ -123,13 +125,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             project=self._setup.project_name,
             group=self._setup.group_name,  # if not set trainable name is used
             excludes=[
-                "node_ip",
                 *self.EXCLUDE_METRICS,
-                "cli_args/test",
-                "cli_args/num_jobs",
-                # "learners",
-                # "timers",
-                # "num_agent_steps_sampled_lifetime",
                 # "fault_tolerance",
             ],
             upload_checkpoints=False,

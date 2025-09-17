@@ -22,6 +22,8 @@ from ray_utilities.constants import COMET_OFFLINE_DIRECTORY, DEFAULT_VIDEO_DICT_
 from ray_utilities.misc import make_experiment_key
 from ray_utilities.video.numpy_to_video import numpy_to_video
 
+from ._log_result_grouping import exclude_results, non_metric_results
+
 if TYPE_CHECKING:
     from comet_ml import Experiment, OfflineExperiment
     from numpy.typing import NDArray
@@ -98,27 +100,19 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
 
     _trial_experiments: dict[Trial, Experiment | OfflineExperiment]
 
-    _exclude_results: ClassVar[list[str]] = [
-        *CometLoggerCallback._exclude_results,  # noqa: SLF001
-        "cli_args/test",
-        "evaluation/discrete/env_runners/episode_videos_best/video_path",
-        "evaluation/discrete/env_runners/episode_videos_worst/video_path",
-        "evaluation/env_runners/episode_videos_best/video_path",
-        "evaluation/env_runners/episode_videos_worst/video_path",
-    ]
+    _exclude_results: ClassVar[list[str]] = list(
+        {
+            *CometLoggerCallback._exclude_results,  # noqa: SLF001
+            *exclude_results,
+            "evaluation/discrete/env_runners/episode_videos_best/video_path",
+            "evaluation/discrete/env_runners/episode_videos_worst/video_path",
+            "evaluation/env_runners/episode_videos_best/video_path",
+            "evaluation/env_runners/episode_videos_worst/video_path",
+        }
+    )
     """Metrics that are not logged"""
 
-    _other_results: ClassVar[list[str]] = [
-        *CometLoggerCallback._other_results,
-        "comment",
-        "cli_args/comment",
-        "run_id",
-        "env_runners/environments/seeds",
-        "evaluation/env_runners/environments/seeds",
-        "experiment_name",
-        "experiment_group",
-        "experiment_key",
-    ]
+    _other_results: ClassVar[list[str]] = list({*CometLoggerCallback._other_results, *non_metric_results})
 
     def __init__(
         self,
