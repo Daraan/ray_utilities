@@ -595,6 +595,9 @@ def create_log_metrics(
         if save_video:
             save_videos(metrics)
     if log_stats == "minimal":
+        # reorganize some keys to align with other log_stats
+        metrics = _reorganize_timer_logs(metrics)  # pyright: ignore[reportArgumentType, reportAssignmentType]
+        metrics.pop(TIMERS, None)
         return metrics
     merged_result = deep_update(result, metrics)  # type: ignore[return-value]
     # clean videos
@@ -691,40 +694,32 @@ def _reorganize_connector_logs(results: dict[str, dict[str, Any | dict[str, Any]
 
 
 def _reorganize_timer_logs(results: dict[str, dict[str, Any | dict[str, Any]]]):
-    results[TIMERS]["time_since_restore"] = results.pop("time_since_restore")
-    # Keep always
-    results[TIMERS]["time_total_s"] = results.pop("time_total_s")
-    results[TIMERS]["time_this_iter_s"] = results["time_this_iter_s"]  # autofilled
+    results.setdefault(TIMERS, {})
+    for key in ("time_since_restore", "time_total_s"):
+        if key in results:
+            results[TIMERS][key] = results.pop(key)
+    if "time_this_iter_s" in results:
+        results[TIMERS]["time_this_iter_s"] = results["time_this_iter_s"]  # autofilled
     results[TIMERS].setdefault(ENV_RUNNER_RESULTS, {})
     # if sample amount is very low, e.g. during debugging, _done_episodes_for_metrics is empty
     # this results in keys missings for episodes
-    results[TIMERS][ENV_RUNNER_RESULTS][EPISODE_DURATION_SEC_MEAN] = results[ENV_RUNNER_RESULTS].pop(
-        EPISODE_DURATION_SEC_MEAN, float("nan")
-    )
-    try:
-        results[TIMERS][ENV_RUNNER_RESULTS][TIME_BETWEEN_SAMPLING] = results[ENV_RUNNER_RESULTS].pop(
-            TIME_BETWEEN_SAMPLING
-        )
-    except KeyError:
-        pass  # second step onward
-    results[TIMERS][ENV_RUNNER_RESULTS][SAMPLE_TIMER] = results[ENV_RUNNER_RESULTS].pop(SAMPLE_TIMER)
+    for key in (EPISODE_DURATION_SEC_MEAN, TIME_BETWEEN_SAMPLING, SAMPLE_TIMER):
+        if key in results[ENV_RUNNER_RESULTS]:
+            results[TIMERS][ENV_RUNNER_RESULTS][key] = results[ENV_RUNNER_RESULTS].pop(key)
     if EVALUATION_RESULTS in results and len(results[EVALUATION_RESULTS]) > 1:
         evaluation_timers: dict[str, Any] = results[TIMERS].setdefault(EVALUATION_RESULTS, {})
         assert EVALUATION_RESULTS not in evaluation_timers
         evaluation_timers[ENV_RUNNER_RESULTS] = {}
-        evaluation_timers[ENV_RUNNER_RESULTS][EPISODE_DURATION_SEC_MEAN] = results[EVALUATION_RESULTS][
-            ENV_RUNNER_RESULTS
-        ].pop(EPISODE_DURATION_SEC_MEAN, float("nan"))
-        # step 2+; else only mean=nan
-        evaluation_timers[ENV_RUNNER_RESULTS][SAMPLE_TIMER] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(
-            SAMPLE_TIMER
-        )
-        try:
-            evaluation_timers[ENV_RUNNER_RESULTS][TIME_BETWEEN_SAMPLING] = results[EVALUATION_RESULTS][
-                ENV_RUNNER_RESULTS
-            ].pop(TIME_BETWEEN_SAMPLING)
-        except KeyError:
-            pass  # second evaluation onward
+        # NOTE: Earlier we kept EPISODE_DURATION_SEC_MEAN at nan for first step
+        for key in (EPISODE_DURATION_SEC_MEAN, TIME_BETWEEN_SAMPLING, SAMPLE_TIMER):
+            if key in results[ENV_RUNNER_RESULTS]:
+                evaluation_timers[ENV_RUNNER_RESULTS][key] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(key)
+        if not evaluation_timers[ENV_RUNNER_RESULTS]:
+            results[TIMERS].pop(EVALUATION_RESULTS)
+    if not results[TIMERS][ENV_RUNNER_RESULTS]:
+        results[TIMERS].pop(ENV_RUNNER_RESULTS)
+    if not results[TIMERS]:
+        results.pop(TIMERS)
     return results
 
 

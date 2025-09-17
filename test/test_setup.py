@@ -296,6 +296,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     debug_step = False
                     debug_setup = False
                     _param_name = param
+                    use_pbar = False
 
                     def setup_check(self, config: dict[str, Any], algorithm_overrides=None):
                         self._param_to_check = config[self._param_name]
