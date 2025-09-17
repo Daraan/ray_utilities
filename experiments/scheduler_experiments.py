@@ -40,7 +40,7 @@ if __name__ == "__main__":
         "--test",
         "--total_steps", 20_000
     ):  # fmt: skip
-        setup = SchedulerSetup(config_files=["experiments/default.cfg"])  # Replace with your own setup class
+        setup = SchedulerSetup(config_files=["experiments/mlp/default.cfg"])  # Replace with your own setup class
         results = run_tune(setup)
 
         # TODO: Should not restore seed

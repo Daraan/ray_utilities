@@ -155,8 +155,11 @@ class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, Algor
     When ``True``, the config should be initialized from the args and the stored
     ``config`` field should be ignored and remain unset.
     """
+
     config_overrides: dict[str, Any]
     """Hold the current dict created by updating config_overrides"""
+
+    config_files: NotRequired[Optional[list[str | os.PathLike]]]
 
     trial_name_creator: NotRequired[Optional[Callable[[TuneTrial], str]]]
     """Optional trial name creator function for Ray Tune trials."""
@@ -599,10 +602,12 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         if not hasattr(self.args, "tags"):
             logger.info("Parsed arguments have not attribute tags.")
             return self._parse_extra_tags(extra_tags)
-        return [
-            *self.args.tags,
-            *self._parse_extra_tags(extra_tags),
-        ]
+        return DefaultArgumentParser.organize_subtags(
+            [
+                *self.args.tags,
+                *self._parse_extra_tags(extra_tags),
+            ]
+        )
 
     # endregion
     # region hparams
@@ -1481,6 +1486,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             "args": cast("ParserType_co", SimpleNamespace(**self.args_to_dict())),
             "config": self.config,
             "config_overrides": self.config_overrides(),
+            "config_files": self._config_files,
             "__init_config__": True,
             # Allows to recreate the config based on args
             "param_space": getattr(self, "param_space", {"__params_not_created__": True}),
@@ -1497,7 +1503,17 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         load_class: bool = False,
         init_trainable: bool = True,
         init_config: Optional[bool] = None,
+        load_config_files: bool = True,
     ) -> Self:
+        """
+        Args:
+            init_config: If True, the config will be re-initialized from args after loading the state.
+                If False, the config from the state will be used. If None (default), the config will be
+                re-initialized if the stored __init_config__ is True in the state or if no config was saved.
+            load_config_files: By default updates to config files are respected and loaded,
+                this might change the loaded config. Set to False to not load the config files
+                and just use the args/config from the state.
+        """
         # TODO: Why not a classmethod again?
         saved_class = data.get("setup_class", cls)
         setup_class = saved_class if load_class else cls
@@ -1520,16 +1536,17 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             init_trainable=False,
             parse_args=False,
             trial_name_creator=data.get("trial_name_creator"),
+            config_files=None if not load_config_files else data.get("config_files", None),
         )
         new.config_overrides(**data.get("config_overrides", {}))
         config: ConfigType_co | Literal[False] = data.get("config", False)
         new.param_space = data["param_space"]
         if init_config is None and data["__init_config__"] and config:
-            # TODO: error needs overhaul
             logger.warning(
-                "Having __init_config__=True in the state while also passing config ignores the saved config object."
-                " You can control the behavior and disable this warning by setting init_config=True/False "
-                "in the from_saved method."
+                "Having __init_config__=True in the state while also restoring a config ignores "
+                "the restored config object. You can control the behavior and disable this warning "
+                "by setting init_config=True/False in the :meth:`from_saved` method. "
+                "Or, by removing/changing the keys of the state dict before calling this function."
             )
         init_config = data["__init_config__"] or not bool(config) if init_config is None else init_config
         if init_config:

@@ -29,7 +29,7 @@ if __name__ == "__main__":
         "--log_stats", "most",
     ):  # fmt: skip
         setup = PPOMLPSetup(
-            config_files=["experiments/default.cfg"],
+            config_files=["experiments/mlp/default.cfg"],
             trial_name_creator=extend_trial_name(prepend="Dynamic_RolloutBuffer"),
         )
         results = run_tune(setup)

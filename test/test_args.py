@@ -438,3 +438,56 @@ class TestProcessing(unittest.TestCase):
             self.assertIs(args.use_exact_total_steps, False)
             self.assertIs(args.wandb, False)
             self.assertIs(args.tune, False)
+
+
+class TestTagArgumentProcessing(unittest.TestCase):
+    @patch_args("--tag:foo")
+    def test_add_extra_tag(self):
+        parser = DefaultArgumentParser().parse_args(known_only=True)
+        self.assertEqual(len(parser.extra_args), 0)
+        self.assertIn("foo", parser.tags)
+        self.assertNotIn("--tag:foo", parser.extra_args)
+
+    @patch_args("--tag:foo", "--tag:bar", "--tags", "baz")
+    def test_add_multiple_extra_tags(self):
+        parser = DefaultArgumentParser().parse_args(known_only=True)
+        self.assertEqual(len(parser.extra_args), 0)
+        self.assertIn("foo", parser.tags)
+        self.assertIn("bar", parser.tags)
+        self.assertIn("baz", parser.tags)
+
+    @patch_args("--tag:foo:1", "--tag:foo:2", "--tag:bar:3")
+    def test_remove_duplicated_subtags_colon(self):
+        parser = DefaultArgumentParser().parse_args(known_only=True)
+        self.assertEqual(len(parser.extra_args), 0)
+        self.assertIn("foo:2", parser.tags)
+        self.assertIn("bar:3", parser.tags)
+        self.assertSetEqual({"bar:3", "foo:2"}, set(parser.tags))
+
+    @patch_args("--tag:foo=2", "--tag:bar=3", "--tags", "foo=1", "--tag:foo=3")
+    def test_remove_duplicated_subtags_equal(self):
+        parser = DefaultArgumentParser().parse_args(known_only=True)
+        self.assertEqual(len(parser.extra_args), 0)
+        self.assertIn("foo=1", parser.tags)
+        self.assertIn("bar=3", parser.tags)
+        self.assertSetEqual({"bar=3", "foo=1"}, set(parser.tags))
+
+    @patch_args("--tag:foo:1", "--tag:foo:2", "--tag:foo", "--tag:foo=3", "--tag:foo:4")
+    def test_tags_priority(self):
+        parser = DefaultArgumentParser().parse_args(known_only=True)
+        self.assertEqual(len(parser.extra_args), 0)
+        # Only one foo: or foo= should remain
+        self.assertListEqual(parser.tags, ["foo", "foo:4"])
+
+    @patch_args("foo:1", "--tag:foo", "--tag:foo:2")
+    def test_invalid_tag_format(self):
+        stderr_out = io.StringIO()
+        with self.assertRaises(SystemExit), redirect_stderr(stderr_out):
+            DefaultArgumentParser().parse_args(known_only=False)
+        parser = DefaultArgumentParser().parse_args(known_only=True)
+        self.assertListEqual(["foo", "foo:2"], parser.tags)
+        self.assertIn("foo:1", parser.extra_args)
+
+
+if __name__ == "__main__":
+    unittest.main()

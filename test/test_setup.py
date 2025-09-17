@@ -104,13 +104,39 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             self.assertEqual(AlgorithmSetup().config.train_batch_size_per_learner, 456)
 
     def test_tags(self):
-        with patch_args("--tags", "tag1", "tag2", "--test", "--num_envs_per_env_runner", 1):
-            tags = AlgorithmSetup(init_trainable=False, init_param_space=False, init_config=False).create_tags()
+        with tempfile.NamedTemporaryFile("w+") as f:
+            f.write("--tag:mlp\n--tag:mlp:small\n--agent_type mlp\n")
+            f.flush()
+            with patch_args(
+                "--tags",
+                "tag1",
+                "tag2",
+                "num_envs:2",  # overwritten by Setup's extra tag num_env=1
+                "num_envs=3",  # overwritten by Setup's extra tag num_env=1
+                "--tag:tag2",
+                "--tag:tag2:a",
+                "--tag:mlp:test",
+                "--test",
+                "--num_envs_per_env_runner", 1,  # for num_env tag
+            ):  # fmt: skip
+                tags = AlgorithmSetup(
+                    init_trainable=False,
+                    init_param_space=False,
+                    init_config=False,
+                    config_files=[f.name],
+                ).create_tags()
         self.assertIn("num_envs=1", tags)
         self.assertIn("tag1", tags)
         self.assertIn("tag2", tags)
+        self.assertEqual(tags.count("tag2"), 1)
         self.assertNotIn("gpu", tags)
         self.assertIn("test", tags)
+        self.assertIn("tag2:a", tags)
+        self.assertIn("mlp", tags)
+        self.assertIn("mlp:test", tags)
+        self.assertNotIn("mlp:small", tags)
+        self.assertNotIn("num_envs:2", tags)
+        self.assertNotIn("num_envs=3", tags)
 
     @mock_trainable_algorithm
     def test_frozen_config(self):

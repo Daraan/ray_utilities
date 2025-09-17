@@ -26,5 +26,5 @@ if __name__ == "__main__":
         "--log_stats", "most",
     ):  # fmt: skip
         # Replace with your own setup class
-        setup: PPOSetup[DefaultArgumentParser] = PPOMLPSetup(config_files=["experiments/default.cfg"])
+        setup: PPOSetup[DefaultArgumentParser] = PPOMLPSetup(config_files=["experiments/mlp/default.cfg"])
         results = run_tune(setup)
