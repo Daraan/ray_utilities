@@ -285,9 +285,26 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
         """Sync offline WandB run for the given trial if it exists."""
         try:
             # Look for offline runs that might belong to this trial
-            wandb_dir = Path(trial.local_path) / "wandb"
-            if not wandb_dir.exists():
-                time.sleep(5)  # wait a bit for ray to sync (but maybe this blocks)
+            assert trial.local_path
+            wandb_dir = Path(trial.local_path) / "wandb"  # might not be accessible
+            if not wandb_dir.exists() and trial.path is not None:
+                # Trigger a sync from local -> remote
+                if trial.storage:
+                    # local_experiment_path will always work but is overkill, try only wandb folder
+                    sync_locations: list[tuple[str, str]] = [
+                        (trial.local_experiment_path, trial.remote_experiment_path)
+                    ]
+                    sync_locations.insert(0, (wandb_dir.as_posix(), (Path(trial.path) / "wandb").as_posix()))
+                    for local_path, remote_path in sync_locations:
+                        try:
+                            if trial.storage.syncer.sync_up(
+                                local_path,
+                                remote_path,
+                            ):
+                                trial.storage.syncer.wait()
+                        except FileNotFoundError:  # noqa: PERF203
+                            pass
+                # Remote path
                 wandb_dir = Path(trial.path) / "wandb"
                 if not wandb_dir.exists():
                     _logger.debug("WandB directory does not exist: %s", wandb_dir)

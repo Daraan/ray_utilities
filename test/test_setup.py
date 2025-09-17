@@ -6,34 +6,18 @@ import io
 import json
 import os
 import subprocess
-from ast import literal_eval
-
-import pyarrow as pa
-import pytest
-
-from ray_utilities.callbacks.algorithm.seeded_env_callback import NUM_ENV_RUNNERS_0_1_EQUAL
-from ray_utilities.config.mlp_argument_parser import SimpleMLPParser
-from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
-from ray_utilities.misc import raise_tune_errors
-from ray_utilities.nice_logger import set_project_log_level
-from ray_utilities.runfiles import run_tune
-from ray_utilities.setup.ppo_mlp_setup import MLPSetup, PPOMLPSetup
-from ray_utilities.training.helpers import make_divisible
-from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultIterationStopper
-
-if "RAY_DEBUG" not in os.environ:
-    os.environ["RAY_DEBUG"] = "legacy"
-    # os.environ["RAY_DEBUG"]="0"
-
 import tempfile
 import unittest
 import unittest.mock
+from ast import literal_eval
 from copy import deepcopy
 from inspect import isclass
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, Final, Optional, cast
 
 import cloudpickle
+import pyarrow as pa
+import pytest
 import tree
 import typing_extensions as te
 from ray import tune
@@ -48,16 +32,23 @@ from ray.rllib.utils.metrics import (
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
 
+from ray_utilities.callbacks.algorithm.seeded_env_callback import NUM_ENV_RUNNERS_0_1_EQUAL
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config import logger as parser_logger
+from ray_utilities.config.mlp_argument_parser import SimpleMLPParser
 from ray_utilities.constants import (
     EVAL_METRIC_RETURN_MEAN,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
 )
+from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
+from ray_utilities.misc import raise_tune_errors
+from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.random import seed_everything
+from ray_utilities.runfiles import run_tune
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger
+from ray_utilities.setup.ppo_mlp_setup import MLPSetup, PPOMLPSetup
 from ray_utilities.testing_utils import (
     ENV_RUNNER_CASES,
     TWO_ENV_RUNNER_CASES,
@@ -73,6 +64,8 @@ from ray_utilities.testing_utils import (
     patch_args,
 )
 from ray_utilities.training.default_class import DefaultTrainable, TrainableBase
+from ray_utilities.training.helpers import make_divisible
+from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultIterationStopper
 
 if TYPE_CHECKING:
     import numpy as np
@@ -82,6 +75,10 @@ if TYPE_CHECKING:
 
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
     from ray_utilities.typing.metrics import LogMetricsDict
+
+if "RAY_DEBUG" not in os.environ:
+    os.environ["RAY_DEBUG"] = "legacy"
+    # os.environ["RAY_DEBUG"]="0"
 
 
 class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
@@ -557,7 +554,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 self.assertEqual(setup2.args.num_jobs, DefaultArgumentParser.num_jobs)
 
     @unittest.mock.patch.object(subprocess, "Popen", autospec=True)
-    def test_wandb_upload(self, mock_run: unittest.mock.MagicMock):
+    def test_wandb_upload(self, mock_popen_class: unittest.mock.MagicMock):
         # NOTE: This test is flaky, there are instances of no wandb folder copied
         # Does the actor die silently?
         self.no_pbar_updates()
@@ -571,13 +568,20 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 return None
 
         mocked_popen = MockPopen()
-        mock_run.return_value = mocked_popen
+        mock_popen_class.return_value = mocked_popen
         # use more iterations here for it to be more likely that the files are synced.
-        with patch_args("--wandb", "offline+upload", "--num_jobs", 1, "--iterations", 5, "--batch_size", 32):
+        with (
+            patch_args("--wandb", "offline+upload", "--num_jobs", 1, "--iterations", 5, "--batch_size", 32),
+            unittest.mock.patch("subprocess.run") as mock_run,  # upload on_trial_complete
+        ):
             setup = AlgorithmSetup()
             _results = run_tune(setup, raise_errors=True)
         mocked_popen.wait.assert_called_once()
-        self.assertDictEqual(mock_run.call_args.kwargs, {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT})
+        mock_run.assert_called_once()
+        self.assertDictEqual(
+            mock_popen_class.call_args.kwargs, {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT}
+        )
+        self.assertListEqual(mock_run.call_args.args[0][:2], ["wandb", "sync"])
 
     def test_seeded_env(self):
         with patch_args("--seed", "1234", "--num_env_runners", 2), AlgorithmSetup(init_trainable=False) as setup:
