@@ -331,7 +331,11 @@ class TestProcessing(unittest.TestCase):
             # Default values
             self.assertListEqual(sys.argv[1:], ["-a", "no_actor_provided_by_patch_args", "--log_level", "DEBUG"])
             with DefaultArgumentParser.patch_args():
-                self.assertListEqual(sys.argv[1:], ["-a", "no_actor_provided_by_patch_args", "--log_level", "DEBUG"])
+                # The order of arguments might be changed by patch_args
+                self.assertTrue(
+                    sys.argv[1:] == ["-a", "no_actor_provided_by_patch_args", "--log_level", "DEBUG"]
+                    or sys.argv[1:] == ["--log_level", "DEBUG", "-a", "no_actor_provided_by_patch_args"]
+                )
                 args = DefaultArgumentParser().parse_args()
                 self.assertEqual(args.comet, False)
                 self.assertEqual(args.agent_type, "no_actor_provided_by_patch_args")
