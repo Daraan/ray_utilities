@@ -664,7 +664,16 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     )
 
     def test_cfg_loading(self):
-        with patch_args("-cfg", "./experiments/models/tiny.cfg"):
+        with tempfile.NamedTemporaryFile("w+") as f, patch_args("-cfg", f.name):
+            f.write(
+                """
+                --tag:mlp
+                --tag:mlp:tiny
+                --agent_type mlp
+                --fcnet_hiddens 8, 8
+                """
+            )
+            f.flush()
             setup = MLPSetup(init_param_space=False)
             self.assertEqual(setup.args.fcnet_hiddens, [8, 8])
             module = str(setup.config.rl_module_spec.build())
