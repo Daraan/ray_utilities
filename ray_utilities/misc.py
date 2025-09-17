@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
 from ray.experimental import tqdm_ray
+from ray.tune.error import TuneError
 from ray.tune.result_grid import ResultGrid
 from tqdm import tqdm
 from typing_extensions import Iterable, TypeIs
@@ -309,6 +310,11 @@ def raise_tune_errors(result: ResultGrid | Sequence[Exception], msg: str = "Erro
     if isinstance(result, ResultGrid):
         if not result.errors:
             return
+        for i, error in enumerate(result.errors):
+            if not isinstance(error, BaseException):
+                _logger.debug("Error %d is not an exception: %s", i, error)
+                exception = TuneError("Error(s) occurred:\n" + str(error))
+                result.errors[i] = exception
         if len(result.errors) == 1:
             raise result.errors[0]
         errors = result.errors
