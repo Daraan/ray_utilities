@@ -1515,7 +1515,9 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 and just use the args/config from the state.
         """
         # TODO: Why not a classmethod again?
+        unchecked_keys = set(data.keys())
         saved_class = data.get("setup_class", cls)
+        unchecked_keys.discard("setup_class")
         setup_class = saved_class if load_class else cls
         if saved_class is not cls:
             logger.warning(
@@ -1538,8 +1540,14 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             trial_name_creator=data.get("trial_name_creator"),
             config_files=None if not load_config_files else data.get("config_files", None),
         )
+        unchecked_keys.discard("trial_name_creator")
+        unchecked_keys.discard("config_files")
+
         new.config_overrides(**data.get("config_overrides", {}))
         config: ConfigType_co | Literal[False] = data.get("config", False)
+        unchecked_keys.discard("config_overrides")
+        unchecked_keys.discard("config")
+
         new.param_space = data["param_space"]
         if init_config is None and data["__init_config__"] and config:
             logger.warning(
@@ -1548,6 +1556,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 "by setting init_config=True/False in the :meth:`from_saved` method. "
                 "Or, by removing/changing the keys of the state dict before calling this function."
             )
+        unchecked_keys.remove("param_space")
+
         init_config = data["__init_config__"] or not bool(config) if init_config is None else init_config
         if init_config:
             logger.info("Re-initializing config from args after state was loaded", stacklevel=2)
@@ -1558,9 +1568,12 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 "This may lead to unexpected behavior if the args do not match the config.",
                 stacklevel=2,
             )
+        unchecked_keys.remove("__init_config__")
+
         if config:
             new.config = config
         new.args = data["args"]
+        unchecked_keys.discard("args")
         new.setup(
             None,
             parse_args=False,
@@ -1568,6 +1581,11 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             init_trainable=init_trainable,
             init_config=init_config,
         )
+        if unchecked_keys:  # possibly a subclass has more keys
+            logger.info(
+                "Some keys in the state were not used: %s.",
+                unchecked_keys,
+            )
         return new
 
     # endregion
