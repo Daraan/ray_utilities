@@ -296,8 +296,10 @@ class CometArchiveTracker:
         if self._auto:
             self.update(archives)
             archives = self.archives
+        if archives is None:
+            archives = self.archives
         if not archives:
-            _LOGGER.info("No archives to upload")
+            _LOGGER.info("No archives to upload - might have already been moved.")
             return [], []
         archives_str = [str(p) for p in self.archives]
         _LOGGER.info("Uploading Archives: %s", archives_str)

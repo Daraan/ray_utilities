@@ -586,7 +586,9 @@ class TestHelpers(unittest.TestCase):
             with (
                 change_log_level(experiment_base_logger, logging.ERROR),
                 change_log_level(tuner_setup_logger, logging.ERROR),
+                mock.patch("logging.getLogger") as mock_get_logger,  # not log or adjust
             ):
+                mock_get_logger.return_value.name.split.return_value = ["Nothing"]
                 run_config = TunerSetup(
                     setup=AlgorithmSetup(init_config=False, init_trainable=False, init_param_space=False)
                 ).create_run_config([])
@@ -2068,7 +2070,7 @@ class _MockTrialRunner:
 
 
 class _MockTrial(Trial):
-    def __init__(self, i, config, storage):
+    def __init__(self, i, config=None, storage=None):
         self.trainable_name = "trial_{}".format(i)
         self.trial_id = str(i)
         self.config = config
@@ -2093,7 +2095,7 @@ class _MockTrial(Trial):
             ),
         )
         self.temporary_state = _TemporaryTrialState()
-        self.storage = storage
+        self.storage = storage or mock.MagicMock()
 
     @property
     def restored_checkpoint(self):

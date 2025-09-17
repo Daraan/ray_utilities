@@ -1377,8 +1377,9 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 logger.error(
                     "Wandb upload requested, but no results provided. This will not upload any offline experiments."
                 )
-            try:  # if no results (due to a failure) get them in a more hacky way
-                unfinished_wandb_uploads = self.wandb_upload_offline_experiments(results, tuner)
+            try:  # if no results (due to a failure) get them in a more hacky way.
+                # Do not wait to start uploading to comet.
+                unfinished_wandb_uploads = self.wandb_upload_offline_experiments(results, tuner, wait=False)
             except Exception:
                 logger.exception("Error while uploading offline experiments to WandB: %s")
         if self.args.comet and "upload" in self.args.comet:

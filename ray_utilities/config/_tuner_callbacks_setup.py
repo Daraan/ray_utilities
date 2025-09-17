@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Optional
@@ -96,7 +97,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
 
         # Note: Settings are overwritten by the keywords provided below (or by ray)
         try:
-            adv_settings = wandb.Settings(
+            adv_settings = wandb.Settings(  # pyright: ignore[reportPossiblyUnboundVariable]
                 disable_code=args.test,
                 disable_git=args.test,
                 # Internal setting
@@ -105,6 +106,14 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
                 # Disable check for latest version of wandb, from PyPI.
                 # x_disable_update_check=not args.test,  # not avail in latest version
             )
+        except NameError as e:
+            if "name 'wandb' is not defined" not in str(e):
+                raise
+            warnings.warn(
+                "wandb is not installed, cannot create WandbLoggerCallback. This will likely result in a RuntimeError",
+                stacklevel=2,
+            )
+            adv_settings = None
         except Exception:
             logger.exception("Error creating wandb.Settings")
             adv_settings = None
@@ -137,6 +146,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             log_config=False,  # Log "config" key of results; useful if params change. Defaults to False.
             # settings advanced wandb.Settings
             settings=adv_settings,
+            upload_offline_experiments=self._setup.args.wandb and "upload" in self._setup.args.wandb,
         )
 
     def create_comet_logger(
@@ -156,6 +166,8 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         )
 
         return AdvCometLoggerCallback(
+            # new key
+            upload_offline_experiments=self._setup.args.comet and "upload" in self._setup.args.comet,
             api_key=api_key,
             disabled=not args.comet and args.test if disabled is None else disabled,
             online=not use_comet_offline,  # do not upload

@@ -5,9 +5,10 @@ import logging
 import os
 import pickle
 import re
-from collections.abc import Sequence
+import subprocess
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
 from urllib.error import HTTPError
 
 from ray.air.integrations.wandb import WandbLoggerCallback, _clean_log, _QueueItem, _WandbLoggingActor
@@ -109,12 +110,35 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
     _logger_actor_cls = _WandbLoggingActorWithArtifactSupport
 
     _logged_architectures: set[Trial]
-    if not TYPE_CHECKING:  # keep signature of parent
 
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self._trials_created = 0
-            self._logged_architectures = set()
+    def __init__(
+        self,
+        *,
+        project: Optional[str] = None,
+        group: Optional[str] = None,
+        excludes: Optional[list[str]] = None,
+        upload_checkpoints: bool = False,
+        video_kwargs: Optional[dict] = None,
+        image_kwargs: Optional[dict] = None,
+        upload_offline_experiments: bool = False,
+        **kwargs,
+    ):
+        """For ``kwargs`` see :class:`ray.air.integrations.wandb.WandbLoggerCallback`"""
+        kwargs.update(
+            {
+                "project": project,
+                "group": group,
+                "excludes": excludes or [],
+                "upload_checkpoints": upload_checkpoints,
+                "video_kwargs": video_kwargs,
+                "image_kwargs": image_kwargs,
+            }
+        )
+        super().__init__(**kwargs)
+        self._trials_created = 0
+        self._logged_architectures = set()
+        self.upload_offline_experiments = upload_offline_experiments
+        """If True, offline experiments will be uploaded on trial completion."""
 
     def on_trial_start(self, iteration: int, trials: list["Trial"], trial: "Trial", **info):
         super().on_trial_start(iteration, trials, trial, **info)
@@ -245,6 +269,64 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
                     video_dict["video"] = Video(os.path.abspath(video_dict.pop("video_path")), format="mp4")  # pyright: ignore[reportPossiblyUnboundVariable] # fmt: skip
 
         return metrics  # type: ignore[return-value]
+
+    def on_trial_complete(self, iteration: int, trials: list["Trial"], trial: "Trial", **info):
+        """Called when a trial has completed. Triggers sync for offline runs."""
+        # Call parent method to handle normal trial completion
+        super().on_trial_complete(iteration, trials, trial, **info)
+
+        # If we are in offline mode, try to sync this trial's run immediately
+        if "offline" in self.kwargs.get("mode", "") and self.upload_offline_experiments:
+            print("SYNCING OFFLINE RUN")
+            # TODO: problem did the actor sync everything when we are here?
+            self._sync_offline_run_if_available(trial)
+
+    def _sync_offline_run_if_available(self, trial: "Trial"):
+        """Sync offline WandB run for the given trial if it exists."""
+        try:
+            # Look for offline runs that might belong to this trial
+            wandb_dir = Path(trial.local_path) / "wandb"
+            if not wandb_dir.exists():
+                time.sleep(5)  # wait a bit for ray to sync (but maybe this blocks)
+                wandb_dir = Path(trial.path) / "wandb"
+                if not wandb_dir.exists():
+                    _logger.debug("WandB directory does not exist: %s", wandb_dir)
+                    return
+
+            # Wandb file should be bound to the trial and not duplicated
+            offline_runs = list(wandb_dir.glob("offline-run-*"))
+            if len(offline_runs) > 1:
+                _logger.warning("Multiple wandb offline directories found in %s: %s", wandb_dir, offline_runs)
+
+            if not offline_runs:
+                _logger.error(
+                    "No wandb offline experiments found to upload in %s: %s. ", wandb_dir, list(wandb_dir.glob("*"))
+                )
+                return
+            # Sort by modification time and take the most recent
+
+            # likely just a single iteration
+            for run_dir in sorted(offline_runs, key=lambda p: p.stat().st_mtime, reverse=True):
+                # Use wandb sync command to upload the offline run
+                _logger.info("Attempting to sync offline WandB run: %s", run_dir)
+                result = subprocess.run(
+                    ["wandb", "sync", str(run_dir)],
+                    check=False,
+                    text=True,
+                    timeout=1500,  # timeout 30 minutes
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                )
+
+            if result.returncode == 0:  # pyright: ignore[reportPossiblyUnboundVariable]
+                _logger.info("Successfully synced offline run for trial %s\n%s", trial.trial_id, result.stdout)  # pyright: ignore[reportPossiblyUnboundVariable]
+            else:
+                _logger.warning("Failed to sync offline run for trial %s: %s", trial.trial_id, result.stderr)  # pyright: ignore[reportPossiblyUnboundVariable]
+
+        except subprocess.TimeoutExpired:
+            _logger.warning("Timeout while syncing offline run for trial %s", trial.trial_id)
+        except (OSError, subprocess.SubprocessError) as e:
+            _logger.warning("Failed to sync offline run for trial %s: %s", trial.trial_id, e)
 
     def log_trial_result(
         self,

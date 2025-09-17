@@ -17,6 +17,7 @@ from ray.tune.experiment import Trial
 from ray.tune.utils import flatten_dict
 
 from ray_utilities.callbacks.tuner._save_video_callback import SaveVideoFirstCallback
+from ray_utilities.comet import CometArchiveTracker
 from ray_utilities.constants import COMET_OFFLINE_DIRECTORY, DEFAULT_VIDEO_DICT_KEYS, ENTRY_POINT, EPISODE_VIDEO_PREFIX
 from ray_utilities.misc import make_experiment_key
 from ray_utilities.video.numpy_to_video import numpy_to_video
@@ -123,6 +124,7 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         self,
         *,
         online: bool = True,
+        upload_offline_experiments: bool = False,
         tags: Optional[List[str]] = None,
         save_checkpoints: bool = False,
         # Note: maybe want to log these in an algorithm debugger
@@ -197,6 +199,8 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
 
         self._trials_created = 0
         self._logged_architectures = set()
+        self.upload_offline_experiments = upload_offline_experiments
+        """If True, offline experiments will be uploaded on trial completion."""
 
     def _check_workspaces(self, trial: Trial) -> Literal[0, 1, 2]:
         """
@@ -401,3 +405,68 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
                             metadata=metadata,
                         )
             experiment.log_other("hasVideo", value=True)
+
+    def on_trial_complete(self, iteration: int, trials: list["Trial"], trial: "Trial", **info):
+        """Called when a trial has completed. Triggers upload for offline experiments."""
+        # Call parent method to handle normal trial completion
+        super().on_trial_complete(iteration, trials, trial, **info)
+
+        # If we are in offline mode, try to upload this trial's experiment immediately
+        if not self.online and self.upload_offline_experiments:
+            self._upload_offline_experiment_if_available(trial)
+
+    def _upload_offline_experiment_if_available(self, trial: "Trial"):
+        """Upload offline experiment for the given trial if it exists."""
+        try:
+            # Look for the experiment archive that was just created for this trial
+            comet_offline_path = Path(COMET_OFFLINE_DIRECTORY)
+            if not comet_offline_path.exists():
+                _LOGGER.debug("Comet offline directory does not exist: %s", comet_offline_path)
+                return
+
+            # The zip file should contain the trial ID with _ replaced by xx
+            zip_files = sorted(
+                comet_offline_path.glob(f"*{trial.trial_id.replace('_', 'xx')}*.zip"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if len(zip_files) > 1:
+                _LOGGER.warning(
+                    "Multiple offline experiment archives found for trial %s, using the most recent one: %s",
+                    trial.trial_id,
+                    zip_files,
+                )
+            elif len(zip_files) == 0:  # otherwise get all and pick the latest
+                _LOGGER.warning(
+                    "Could not find an offline experiment that contained the trial ID %s in %s. Picking latest .zip file",
+                    trial.trial_id,
+                    comet_offline_path,
+                )
+                zip_files = sorted(comet_offline_path.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
+                if trial.config.get("experiment_id"):
+                    # check that experiment_id at least matches
+                    zip_files_experiment = [f for f in zip_files if trial.config["experiment_id"] in f.name]
+                    if zip_files_experiment:
+                        zip_files = zip_files_experiment
+                    else:
+                        _LOGGER.warning(
+                            "Could also not find an offline experiment that contained the experiment ID %s. "
+                            "Picking latest .zip file",
+                            trial.config["experiment_id"],
+                        )
+
+            if not zip_files:
+                _LOGGER.debug("No offline experiment archives found for upload")
+                return
+
+            # Upload the most recent archive (likely from this trial)
+            # Use a custom tracker to upload only the latest experiment
+            latest_archive = zip_files[0]
+            _LOGGER.info("Attempting to upload comet offline experiment: %s", latest_archive)
+
+            tracker = CometArchiveTracker(track=[latest_archive], auto=False)
+            tracker.upload_and_move()
+
+        except (OSError, ImportError):
+            _LOGGER.exception("Failed to upload offline experiment for trial %s", trial.trial_id)
+            raise
