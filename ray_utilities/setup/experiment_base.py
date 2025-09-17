@@ -282,6 +282,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         init_trainable: bool = True,
         parse_args: bool = True,
         trial_name_creator: Optional[Callable[[TuneTrial], str]] = None,
+        change_log_level: Optional[bool] = True,
     ):
         """
         Initializes the experiment base class with optional argument parsing and setup.
@@ -300,6 +301,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             parse_args : Whether to parse the provided arguments. Defaults to True.
             trial_name_creator: trial_name_creator function for :class:`ray.tune.Trial` objects
                 when using :class:`ray.tune.Tuner`.
+            change_log_level: If the parser supports it change the log level of the project with
+                :func:`change_log_level`, if not none sets the `_change_log_level` of the parser.
 
         Note:
             When the setup creates a trainable that is a class, the config is frozen to
@@ -327,6 +330,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         self._config_files = config_files
         self._load_args = load_args
         self._tune_trial_name_creator = trial_name_creator
+        self._change_log_level = change_log_level
         self.parser: Parser[ParserType_co]
         self.parser = self.create_parser(config_files)
         if load_args:
@@ -408,6 +412,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     def create_parser(self, config_files: Optional[list[str | os.PathLike]] = None) -> Parser[ParserType_co]:
         self.parser = DefaultArgumentParser(allow_abbrev=False, config_files=config_files)
+        if self._change_log_level is not None:
+            self.parser._change_log_level = self._change_log_level
         return self.parser
 
     def postprocess_args(self, args: NamespaceType[ParserType_co]) -> NamespaceType[ParserType_co]:
@@ -449,6 +455,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             state: dict[str, Any] = pickle.load(f)
         # Create a patched parser with the old values as default values
         new_parser = self.create_parser()
+        if hasattr(new_parser, "_change_log_level"):
+            new_parser._change_log_level = False  # pyright: ignore[reportAttributeAccessIssue]
         self.parser = new_parser
         restored_args: dict[str, Any] = vars(state["setup"]["args"])
         for action in new_parser._actions:

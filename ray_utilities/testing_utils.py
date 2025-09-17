@@ -32,7 +32,7 @@ import unittest
 import unittest.util
 from collections import deque
 from collections.abc import Iterator, Mapping
-from contextlib import ContextDecorator, contextmanager, nullcontext
+from contextlib import ContextDecorator, nullcontext
 from copy import deepcopy
 from functools import partial, wraps
 from types import MappingProxyType
@@ -100,6 +100,7 @@ from ray_utilities.config.mlp_argument_parser import MLPArgumentParser
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.dynamic_config.dynamic_buffer_update import logger as dynamic_buffer_logger
 from ray_utilities.misc import raise_tune_errors
+from ray_utilities.nice_logger import change_log_level
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger as experiment_base_logger
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup, PPOMLPSetup
@@ -590,7 +591,9 @@ class TestHelpers(unittest.TestCase):
             ):
                 mock_get_logger.return_value.name.split.return_value = ["Nothing"]
                 run_config = TunerSetup(
-                    setup=AlgorithmSetup(init_config=False, init_trainable=False, init_param_space=False)
+                    setup=AlgorithmSetup(
+                        init_config=False, init_trainable=False, init_param_space=False, change_log_level=False
+                    )
                 ).create_run_config([])
             if run_config.storage_path is None:
                 return
@@ -600,8 +603,6 @@ class TestHelpers(unittest.TestCase):
                 logger.info("Removing testing storage path: %s", storage_path)
 
                 shutil.rmtree(storage_path.as_posix(), ignore_errors=True)
-            else:
-                logger.debug("Testing storage path does not exist: %s", storage_path)
         except OSError:
             logger.exception("Failed to remove testing storage path")
         except Exception:
@@ -1718,15 +1719,16 @@ class SetupDefaults(SetupLowRes, SetupWithEnv, TestHelpers, DisableLoggers):
     def setUp(self):
         super().setUp()
 
-        self._DEFAULT_CONFIG_DICT: MappingProxyType[str, Any] = MappingProxyType(
-            DefaultArgumentParser().parse_args().as_dict()
-        )
         self._DEFAULT_NAMESPACE = DefaultArgumentParser()
+        self._DEFAULT_NAMESPACE._change_log_level = False
+        self._DEFAULT_CONFIG_DICT: MappingProxyType[str, Any] = MappingProxyType(
+            self._DEFAULT_NAMESPACE.parse_args().as_dict()
+        )
         with (
             change_log_level(experiment_base_logger, logging.ERROR),
             change_log_level(dynamic_buffer_logger, logging.ERROR),
         ):
-            self._DEFAULT_SETUP = AlgorithmSetup(init_trainable=False)
+            self._DEFAULT_SETUP = AlgorithmSetup(init_trainable=False, change_log_level=False)
             self._DEFAULT_SETUP.create_trainable()
         self._INPUT_LENGTH = self._env.observation_space.shape[0]  # pyright: ignore[reportOptionalSubscript]
         self._DEFAULT_INPUT = jnp.arange(self._INPUT_LENGTH * 2).reshape((2, self._INPUT_LENGTH))
@@ -1872,18 +1874,8 @@ class TrainableWithChecks(DefaultTrainable[Any, "AlgorithmConfig", Any]):
         return metrics
 
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # check assignment
     __: type[_TrainableWithCheckProto] = TrainableWithChecks
-
-
-@contextmanager
-def change_log_level(logger: logging.Logger, new_level: logging._Level):
-    old_level = logger.getEffectiveLevel()
-    logger.setLevel(new_level)
-    try:
-        yield
-    finally:
-        logger.setLevel(old_level)
 
 
 # region Mock classes

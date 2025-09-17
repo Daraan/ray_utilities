@@ -624,6 +624,9 @@ class DefaultLoggingArgParser(Tap):
     log_stats: LogStatsChoices = "minimal"
     """Log all metrics and do not reduce them to the most important ones"""
 
+    _change_log_level = True
+    """Whether to apply :func:`set_project_log_level` in :meth:`process_args`."""
+
     @classmethod
     def _get_safe_str_patches(cls):
         try:
@@ -681,7 +684,8 @@ class DefaultLoggingArgParser(Tap):
 
     def process_args(self) -> None:
         super().process_args()
-        set_project_log_level(logging.getLogger("ray_utilities"), self.log_level)
+        if self._change_log_level:
+            set_project_log_level(logging.getLogger("ray_utilities"), self.log_level)
 
 
 class DefaultExtraArgs(Tap):
