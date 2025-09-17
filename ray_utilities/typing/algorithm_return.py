@@ -41,6 +41,9 @@ class EnvRunnersResultsDict(TypedDict, closed=False):
     Custom key added by exact_sampling_callback.
     """
 
+    environments: NotRequired[dict[str, Any]]
+    """Custom key - environments info"""
+
 
 if _PEP_728_AVAILABLE or TYPE_CHECKING:
 

@@ -73,8 +73,10 @@ from typing import (
 
 import numpy as np
 from ray.air.integrations.comet import CometLoggerCallback
+from ray.rllib.core import DEFAULT_AGENT_ID, DEFAULT_MODULE_ID
 from ray.rllib.utils.metrics import (
     ALL_MODULES,  # pyright: ignore[reportPrivateImportUsage]
+    CONNECTOR_PIPELINE_TIMER,
     # CONNECTOR_TIMERS,  # subkey of env_to_module_connector
     ENV_RESET_TIMER,
     ENV_RUNNER_RESULTS,
@@ -92,8 +94,15 @@ from ray.rllib.utils.metrics import (
     LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_OUT,
     LEARNER_RESULTS,
     MODULE_TO_ENV_CONNECTOR,
+    NUM_AGENT_STEPS_SAMPLED,
+    NUM_AGENT_STEPS_SAMPLED_LIFETIME,
+    NUM_ENV_STEPS_SAMPLED,
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
     NUM_ENV_STEPS_TRAINED_LIFETIME,
+    NUM_MODULE_STEPS_SAMPLED,
+    NUM_MODULE_STEPS_SAMPLED_LIFETIME,
+    NUM_MODULE_STEPS_TRAINED,
+    NUM_TRAINABLE_PARAMETERS,
     RLMODULE_INFERENCE_TIMER,
     SAMPLE_TIMER,  # OldAPI
     TIME_BETWEEN_SAMPLING,
@@ -114,6 +123,7 @@ from ray_utilities.typing.trainable_return import TrainableReturnData
 from ray_utilities.video.numpy_to_video import create_temp_video
 
 if TYPE_CHECKING:
+    from collections import deque as Deque
     from collections.abc import Sequence
 
     from typing_extensions import TypeForm
@@ -165,8 +175,8 @@ See Also:
     :class:`ray.air.integrations.comet.CometLoggerCallback`: Defines additional required keys
 """
 
-RESULTS_TO_REMOVE = {"fault_tolerance", "num_agent_steps_sampled_lifetime", "learners", "timers"}
-"""set[str]: Top-level result keys to remove during metric cleaning.
+RESULTS_TO_REMOVE = {"fault_tolerance", NUM_AGENT_STEPS_SAMPLED_LIFETIME, LEARNER_RESULTS, TIMERS}
+"""set[str]: Top-level result keys to remove when calling :func:`remove_unwanted_metrics`.
 
 These keys contain internal Ray RLlib state or verbose debugging information that
 is typically not needed for experiment analysis and logging. Removing them keeps
@@ -494,6 +504,10 @@ def create_log_metrics(
     else:
         eval_mean = float("nan")
         disc_eval_mean = float("nan")
+    environment_results = result[ENV_RUNNER_RESULTS].get("environments", {})
+    if environment_results:  # turn to a list
+        s_seq: Deque = environment_results["seeds"]["seed_sequence"]
+        environment_results["seeds"]["seed_sequence"] = list(s_seq)
 
     current_step = get_current_step(result)
     metrics: LogMetricsDict = {
@@ -604,11 +618,9 @@ def create_log_metrics(
             "num_env_steps_sampled_lifetime",  # superseded by current_step
         ):
             merged_result.pop(k)
-        merged_result[TIMERS].pop("time_since_restore")
 
     merged_result.pop("fault_tolerance")
-    merged_result.pop("env_runner_group")
-    merged_result.pop(NUM_ENV_STEPS_SAMPLED_LIFETIME + "_throughput", None)
+    merged_result.pop(NUM_ENV_STEPS_SAMPLED_LIFETIME + "_throughput", None)  # Lifetime key has same information
     # merged_result[ENV_RUNNER_RESULTS].pop("num_healthy_workers", )
     # merged_result[ENV_RUNNER_RESULTS].pop("num_remote_worker_restarts", None)
     merged_result[ENV_RUNNER_RESULTS].pop(ENV_TO_MODULE_SUM_EPISODES_LENGTH_IN)
@@ -625,12 +637,17 @@ def create_log_metrics(
     # most currently equivalent to timers+learners
     if "timers" not in log_stats and log_stats != "most":  # timers and timers+learners
         merged_result.pop(TIMERS)
+    elif "timers" not in log_stats:
+        _remove_less_interesting_timers(merged_result)
+
     if "learners" not in log_stats and log_stats != "most":  # learners and timers+learners
         merged_result.pop("learners", None)
-    else:
+    elif "learners" not in log_stats:
         merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_IN)
         merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_OUT)
         merged_result[LEARNER_RESULTS][ALL_MODULES].pop(NUM_ENV_STEPS_TRAINED_LIFETIME + "_throughput")
+        merged_result[LEARNER_RESULTS][ALL_MODULES].pop(NUM_MODULE_STEPS_TRAINED + "_throughput")
+    _remove_less_interesting_keys(merged_result)
     return merged_result  # type: ignore[return-value]
 
 
@@ -662,8 +679,8 @@ def _reorganize_connector_logs(results: dict[str, dict[str, Any | dict[str, Any]
 def _reorganize_timer_logs(results: dict[str, dict[str, Any | dict[str, Any]]]):
     results[TIMERS]["time_since_restore"] = results.pop("time_since_restore")
     # Keep always
-    # results[TIMERS]["time_total_s"] = results.pop("time_total_s")
-    # results[TIMERS]["time_this_iter_s"] = results["time_this_iter_s"] # autofilled
+    results[TIMERS]["time_total_s"] = results.pop("time_total_s")
+    results[TIMERS]["time_this_iter_s"] = results["time_this_iter_s"]  # autofilled
     results[TIMERS].setdefault(ENV_RUNNER_RESULTS, {})
     # if sample amount is very low, e.g. during debugging, _done_episodes_for_metrics is empty
     # this results in keys missings for episodes
@@ -695,6 +712,113 @@ def _reorganize_timer_logs(results: dict[str, dict[str, Any | dict[str, Any]]]):
         except KeyError:
             pass  # second evaluation onward
     return results
+
+
+def _remove_small_values(d: dict[Any, Any], threshold: float = 1e-4) -> dict[Any, Any]:
+    """
+    Recursively remove all key-value pairs from a nested dictionary where the value is a float
+    and less than the given threshold.
+
+    Args:
+        d: The dictionary to process.
+        threshold: The minimum value to keep.
+
+    Returns:
+        A new dictionary with small float values removed.
+    """
+    result = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            nested = _remove_small_values(v, threshold)
+            if nested:
+                result[k] = nested
+        elif isinstance(v, float):
+            if abs(v) >= threshold:
+                result[k] = v
+        else:
+            result[k] = v
+    return result
+
+
+def _remove_less_interesting_timers(metrics: dict[str, Any], remove_below=1e-4) -> None:
+    # Assume reorganized
+    clean_metrics = [metrics[TIMERS]]
+    if EVALUATION_RESULTS in metrics[TIMERS]:
+        clean_metrics.append(metrics[TIMERS][EVALUATION_RESULTS])
+
+    timer_dict: dict[str, dict]
+    for timer_dict in clean_metrics:
+        for key in (ENV_TO_MODULE_CONNECTOR, MODULE_TO_ENV_CONNECTOR):
+            try:
+                pipeline_timer = timer_dict[key][CONNECTOR_PIPELINE_TIMER]
+            except KeyError as e:
+                _logger.warning("Cannot access %s in %s: %s", CONNECTOR_PIPELINE_TIMER, key, e)
+                continue
+            timer_dict[key].clear()
+            timer_dict[key][CONNECTOR_PIPELINE_TIMER] = pipeline_timer
+
+    learner_connector_timer = metrics[TIMERS][LEARNER_CONNECTOR][CONNECTOR_PIPELINE_TIMER]
+    remove_masked_samples_timer = metrics[TIMERS][LEARNER_CONNECTOR].get("remove_masked_samples_connector", None)
+    metrics[TIMERS][LEARNER_CONNECTOR].clear()
+    metrics[TIMERS][LEARNER_CONNECTOR][CONNECTOR_PIPELINE_TIMER] = learner_connector_timer
+    if remove_masked_samples_timer:
+        metrics[TIMERS][LEARNER_CONNECTOR]["remove_masked_samples_connector"] = remove_masked_samples_timer
+    metrics[TIMERS] = _remove_small_values(metrics[TIMERS], threshold=remove_below)
+
+
+def _remove_less_interesting_keys(metrics: dict[str, Any]) -> None:
+    """Remove some duplicated and less interesting keys."""
+    metrics.pop("env_runner_group", None)  # just env_runner_group/actor_manager_num_outstanding_async_reqs
+
+    env_runner_results = metrics.get(ENV_RUNNER_RESULTS, None)
+    if env_runner_results:
+        if env_runner_results[NUM_MODULE_STEPS_SAMPLED][DEFAULT_MODULE_ID] == env_runner_results[NUM_ENV_STEPS_SAMPLED]:
+            env_runner_results.pop(NUM_MODULE_STEPS_SAMPLED, None)
+        if (
+            env_runner_results[NUM_MODULE_STEPS_SAMPLED_LIFETIME][DEFAULT_MODULE_ID]
+            == env_runner_results[NUM_ENV_STEPS_SAMPLED_LIFETIME]
+        ):
+            env_runner_results.pop(NUM_MODULE_STEPS_SAMPLED_LIFETIME, None)
+        # env_runners/num_agent_steps_sampled/default_agent
+        if (
+            env_runner_results[NUM_AGENT_STEPS_SAMPLED_LIFETIME][DEFAULT_AGENT_ID]
+            == env_runner_results[NUM_ENV_STEPS_SAMPLED_LIFETIME]
+        ):
+            env_runner_results.pop(NUM_AGENT_STEPS_SAMPLED_LIFETIME, None)
+        if env_runner_results[NUM_AGENT_STEPS_SAMPLED][DEFAULT_AGENT_ID] == env_runner_results[NUM_ENV_STEPS_SAMPLED]:
+            env_runner_results.pop(NUM_AGENT_STEPS_SAMPLED, None)
+        if "module_episode_return_mean" in env_runner_results and math.isclose(
+            env_runner_results["module_episode_return_mean"].get(DEFAULT_MODULE_ID, 0.0),
+            env_runner_results[EPISODE_RETURN_MEAN],
+        ):
+            env_runner_results.pop("module_episode_return_mean", None)
+        if "agent_episode_return_mean" in env_runner_results and math.isclose(
+            env_runner_results["agent_episode_return_mean"].get(DEFAULT_AGENT_ID, 0.0),
+            env_runner_results[EPISODE_RETURN_MEAN],
+        ):
+            env_runner_results.pop("agent_episode_return_mean", None)
+    if (evaluation_results := metrics.get(EVALUATION_RESULTS, None)) and len(
+        evaluation_results[ENV_RUNNER_RESULTS]
+    ) > 1:
+        _remove_less_interesting_keys(evaluation_results)
+    learner_results = metrics.get(LEARNER_RESULTS, None)
+    if learner_results:
+        # remove __all_modules if duplicated
+        modules: dict[str, dict[str, Any]] = {
+            k: v for k, v in learner_results.items() if isinstance(v, dict)
+        }  # best guess
+        for module_id, module_results in modules.items():
+            if module_id == ALL_MODULES or not isinstance(module_id, dict):
+                continue
+            for key in module_results.keys():
+                if key in learner_results[ALL_MODULES] and (
+                    module_results[key] == learner_results[ALL_MODULES][key]
+                    or (
+                        key.endswith("_throughput")
+                        and math.isclose(module_results[key], learner_results[ALL_MODULES][key], abs_tol=0.2)
+                    )
+                ):
+                    module_results.pop(key, None)
 
 
 def verify_keys(metrics: Mapping[Any, Any], typ: type[_TD], *, test_optional: bool = True) -> TypeGuard[_TD]:
