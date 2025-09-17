@@ -21,11 +21,11 @@ __all__ = [
     "LogMetricsDict",
 ]
 
-_LOG_METRICS_VIDEO_TYPES: TypeAlias = "list[NDArray] | str | Video"
+LOG_METRICS_VIDEO_TYPES: TypeAlias = "list[NDArray] | str | Video"
 
 
 class VideoMetricsDict(TypedDict, closed=True):
-    video: _LOG_METRICS_VIDEO_TYPES
+    video: LOG_METRICS_VIDEO_TYPES
     """
     A 5D numpy array representing a video; or a string pointing to a video file to upload.
 
@@ -55,8 +55,8 @@ class _LogMetricsEvalEnvRunnersResultsDict(_LogMetricsEnvRunnersResultsDict, tot
     representing the video, or a string pointing to a video file to upload.
     """
 
-    episode_videos_best: _LOG_METRICS_VIDEO_TYPES | VideoMetricsDict
-    episode_videos_worst: _LOG_METRICS_VIDEO_TYPES | VideoMetricsDict
+    episode_videos_best: LOG_METRICS_VIDEO_TYPES | VideoMetricsDict
+    episode_videos_worst: LOG_METRICS_VIDEO_TYPES | VideoMetricsDict
 
 
 class _LogMetricsEvaluationResultsWithoutDiscreteDict(_EvaluationNoDiscreteDict, _WarnVideosToEnvRunners):

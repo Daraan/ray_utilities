@@ -122,7 +122,19 @@ from ray_utilities.training.helpers import get_current_step
 from ray_utilities.typing.trainable_return import TrainableReturnData
 from ray_utilities.video.numpy_to_video import create_temp_video
 
+try:
+    from wandb import Video  # pyright: ignore[reportMissingImports]
+except ModuleNotFoundError:
+    if TYPE_CHECKING:
+        from wandb import Video  # pyright: ignore[reportMissingImports]
+    else:
+
+        class Video:  # need a type for isinstance
+            pass
+
+
 if TYPE_CHECKING:
+    from ray_utilities.typing.metrics import VideoMetricsDict
     from collections import deque as Deque
     from collections.abc import Sequence
 
@@ -131,7 +143,7 @@ if TYPE_CHECKING:
     from ray_utilities.config.typed_argument_parser import LogStatsChoices
     from ray_utilities.typing import LogMetricsDict, StrictAlgorithmReturnData
     from ray_utilities.typing.algorithm_return import EvaluationResultsDict
-    from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict
+    from ray_utilities.typing.metrics import LOG_METRICS_VIDEO_TYPES, AutoExtendedLogMetricsDict
 
 __all__ = ["RESULTS_TO_KEEP", "filter_metrics"]
 
@@ -402,18 +414,20 @@ def save_videos(
         if discrete_results
         else [eval_dict[ENV_RUNNER_RESULTS]]
     )
+    video_value: LOG_METRICS_VIDEO_TYPES | VideoMetricsDict | None
     for video_dict in video_dicts:
         for key in (EPISODE_BEST_VIDEO, EPISODE_WORST_VIDEO):
             if (
-                key in video_dict
+                (video_value := video_dict.get(key, None))
                 # skip if we already have a video path
-                and "video_path" not in video_dict[key]  # pyright: ignore[reportTypedDictNotRequiredAccess]
+                and not isinstance(video_value, Video)
+                and "video_path" not in video_value
             ):
-                value = video_dict[key]  # pyright: ignore[reportTypedDictNotRequiredAccess]
+                value = video_value
                 if (
                     isinstance(value, dict)
                     and not value.get("video_path", False)
-                    and not isinstance(value["video"], str)
+                    and not isinstance(value["video"], (str, Video))
                 ):
                     # Set VideoPath
                     value["video_path"] = create_temp_video(value["video"], dir=dir)
