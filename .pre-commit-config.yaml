@@ -33,6 +33,15 @@ repos:
     - id: name-tests-test
       args: [--fix=lf]
     - id: check-illegal-windows-names
+- repo: https://github.com/sphinx-contrib/sphinx-lint
+  rev: v1.0.0
+  hooks:
+    - id: sphinx-lint
+      args: [docs]
+- repo: https://github.com/rhysd/actionlint
+  rev: v1.7.7
+  hooks:
+    - id: actionlint
 - repo: https://github.com/woodruffw/zizmor-pre-commit
   rev: v1.13.0
   hooks:
