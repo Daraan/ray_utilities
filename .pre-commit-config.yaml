@@ -17,3 +17,23 @@ repos:
     # Run the formatter.
     - id: ruff-format
       args: ["-v"]
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v5.0.0
+  hooks:
+    - id: check-ast
+    - id: trailing-whitespace
+    - id: end-of-file-fixer
+    - id: check-yaml
+    - id: check-toml
+    - id: check-json
+    - id: pretty-format-json
+    - id: check-merge-conflict
+    - id: check-case-conflict
+    - id: mixed-line-ending
+    - id: name-tests-test
+      args: [--fix=lf]
+    - id: check-illegal-windows-names
+- repo: https://github.com/woodruffw/zizmor-pre-commit
+  rev: v1.13.0
+  hooks:
+    - id: zizmor
