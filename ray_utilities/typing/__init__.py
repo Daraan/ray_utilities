@@ -43,7 +43,7 @@ strictly typed required fields.
 """
 
 # ruff: noqa: E402
-from .algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
+from .algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData, EnvRunnersResultsDict, EvaluationResultsDict
 from .common import BaseEnvRunnersResultsDict, BaseEvaluationResultsDict, CommonVideoTypes
 from .metrics import FlatLogMetricsDict, LogMetricsDict
 from .trainable_return import RewardsDict, RewardUpdaters, TrainableReturnData
@@ -59,6 +59,8 @@ __all__ = [
     "BaseEvaluationResultsDict",
     "CommonVideoTypes",
     "CometStripedVideoFilename",
+    "EnvRunnersResultsDict",
+    "EvaluationResultsDict",
     "FlatLogMetricsDict",
     "FunctionalTrainable",
     "LogMetricsDict",

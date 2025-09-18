@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 __all__ = [
     "AlgorithmReturnData",
     "EnvRunnersResultsDict",
+    "EvalEnvRunnersResultsDict",
     "EvaluationResultsDict",
     "StrictAlgorithmReturnData",
 ]
