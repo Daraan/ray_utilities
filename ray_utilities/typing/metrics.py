@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, TypeGuard
 from typing_extensions import Never, NotRequired, Required, TypedDict
 
 from .algorithm_return import EvaluationResultsDict, _EvaluationNoDiscreteDict
+from .common import BaseEnvRunnersResultsDict, BaseEvaluationResultsDict, CommonVideoTypes
 
 if TYPE_CHECKING:
     import numpy as np
@@ -23,12 +24,12 @@ __all__ = [
     "LogMetricsDict",
 ]
 
-Shape4D = tuple[int, int, int, int]  # (B, C, H, W)
-Array4D: TypeAlias = "np.ndarray[Shape4D, np.dtype[np.floating | np.integer]]"  # shape=(B, C, H, W)
-Shape5D = tuple[int, int, int, int, int]  # (N, T, C, H, W)
-Array5D: TypeAlias = "np.ndarray[Shape5D, np.dtype[np.floating | np.integer]]"  # shape=(N, T, C, H, W)
+Shape4D = CommonVideoTypes.Shape4D
+Array4D = CommonVideoTypes.Array4D
+Shape5D = CommonVideoTypes.Shape5D
+Array5D = CommonVideoTypes.Array5D
 
-LOG_METRICS_VIDEO_TYPES: TypeAlias = "list[Array4D | Array5D] | Array5D | str | Video"
+LOG_METRICS_VIDEO_TYPES: TypeAlias = CommonVideoTypes.LogVideoTypes
 """
 Log types for videos in LogMetricsDict.
 
@@ -56,12 +57,13 @@ class _WarnVideosToEnvRunners(TypedDict):
     episode_videos_worst: NotRequired[Annotated[Never, "needs to be in env_runners"]]
 
 
-class _LogMetricsEnvRunnersResultsDict(TypedDict):
-    episode_return_mean: float
-    episode_return_max: NotRequired[float]
-    episode_return_min: NotRequired[float]
-    num_env_steps_sampled_lifetime: NotRequired[int]
-    num_env_steps_sampled: NotRequired[int]
+class _LogMetricsEnvRunnersResultsDict(BaseEnvRunnersResultsDict):
+    """Environment runner results optimized for logging metrics.
+    
+    Extends the base type with additional optional fields used in logging,
+    such as module and agent-specific step counts.
+    """
+    episode_return_mean: float  # Keep required for logging
     num_module_steps_sampled: NotRequired[dict[ModuleID, int]]
     num_module_steps_sampled_lifetime: NotRequired[dict[ModuleID, int]]
     num_agent_steps_sampled: NotRequired[dict[AgentID, int]]

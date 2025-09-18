@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from typing_extensions import Never, NotRequired, ReadOnly, Required, TypedDict
 
 from . import ExtraItems
+from .common import BaseEnvRunnersResultsDict, BaseEvaluationResultsDict
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -18,14 +19,17 @@ __all__ = [
 ]
 
 
-class EnvRunnersResultsDict(TypedDict, closed=False):
-    episode_return_mean: float
-    episode_return_max: float
-    episode_return_min: float
-    num_env_steps_sampled_lifetime: int
-    """Amount of sampling steps taken for the training of the agent"""
-    num_env_steps_sampled: int
-    """Amount of sampling steps taken for the training of the agent in this iteration"""
+class EnvRunnersResultsDict(BaseEnvRunnersResultsDict, closed=False):
+    """Environment runner results from Ray RLlib algorithm training.
+    
+    Extends the base type with additional required fields specific to
+    algorithm return data.
+    """
+    episode_return_mean: float  # Make required for algorithm returns
+    episode_return_max: float   # Make required for algorithm returns  
+    episode_return_min: float   # Make required for algorithm returns
+    num_env_steps_sampled_lifetime: int  # Make required for algorithm returns
+    num_env_steps_sampled: int  # Make required for algorithm returns
     num_env_steps_passed_to_learner: NotRequired[int]
     """
     Amount of steps passed to the learner in this iteration
@@ -67,12 +71,15 @@ class _EvaluationNoDiscreteDict(TypedDict, extra_items=ExtraItems):
     discrete: NotRequired[Never]
 
 
-class EvaluationResultsDict(TypedDict, extra_items=ExtraItems):
+class EvaluationResultsDict(BaseEvaluationResultsDict, extra_items=ExtraItems):
+    """Evaluation results structure for algorithm return data.
+    
+    Extends the base evaluation type with fields specific to algorithm returns,
+    including environment runner data and discrete evaluation support.
+    """
     env_runners: EvalEnvRunnersResultsDict
     discrete: NotRequired[_EvaluationNoDiscreteDict]
     """Custom key - evaluation results for discrete actions"""
-    evaluated_this_step: NotRequired[bool]
-    """Custom key"""
 
 
 class _RequiredEnvRunners(TypedDict, total=False, closed=False):

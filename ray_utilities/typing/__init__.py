@@ -44,6 +44,7 @@ strictly typed required fields.
 
 # ruff: noqa: E402
 from .algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
+from .common import BaseEnvRunnersResultsDict, BaseEvaluationResultsDict, CommonVideoTypes
 from .metrics import FlatLogMetricsDict, LogMetricsDict
 from .trainable_return import RewardsDict, RewardUpdaters, TrainableReturnData
 
@@ -54,6 +55,9 @@ if typing_extensions.TYPE_CHECKING:
 
 __all__ = [
     "AlgorithmReturnData",
+    "BaseEnvRunnersResultsDict",
+    "BaseEvaluationResultsDict",
+    "CommonVideoTypes",
     "CometStripedVideoFilename",
     "FlatLogMetricsDict",
     "FunctionalTrainable",
