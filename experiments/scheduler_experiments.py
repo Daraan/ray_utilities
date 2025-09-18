@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Experimental scheduler tests"""
 
+import os
+
 import ray
 from ray.tune.tuner import Tuner
 
@@ -9,6 +11,8 @@ from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 from ray_utilities.setup.tuner_setup import ScheduledTunerSetup
+
+os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
 
 if __name__ == "__main__":
     ray.init(object_store_memory=4 * 1024**3)  # 4 GB

@@ -51,13 +51,14 @@ See Also:
     :mod:`ray_utilities.video.numpy_to_video`: Video file creation utilities
     :mod:`ray_utilities.constants`: Metric key constants and video configurations
 """
+# pyright: enableExperimentalFeatures=true
+# ruff: noqa: PLC0415  # imports at top level of file; safe import time if not needed.
 
 from __future__ import annotations
 
-# pyright: enableExperimentalFeatures=true
-# ruff: noqa: PLC0415  # imports at top level of file; safe import time if not needed.
 import logging
 import math
+from copy import deepcopy
 from functools import wraps
 from typing import (
     TYPE_CHECKING,
@@ -68,6 +69,7 @@ from typing import (
     ParamSpec,
     TypedDict,
     TypeGuard,
+    cast,
     overload,
 )
 
@@ -102,7 +104,6 @@ from ray.rllib.utils.metrics import (
     NUM_MODULE_STEPS_SAMPLED,
     NUM_MODULE_STEPS_SAMPLED_LIFETIME,
     NUM_MODULE_STEPS_TRAINED,
-    NUM_TRAINABLE_PARAMETERS,
     RLMODULE_INFERENCE_TIMER,
     SAMPLE_TIMER,  # OldAPI
     TIME_BETWEEN_SAMPLING,
@@ -118,7 +119,7 @@ from ray_utilities.constants import (
 )
 from ray_utilities.misc import deep_update
 from ray_utilities.temp_dir import TEMP_DIR_PATH
-from ray_utilities.training.helpers import get_current_step
+from ray_utilities.training.helpers import get_current_step, get_evaluation_results
 from ray_utilities.typing.trainable_return import TrainableReturnData
 from ray_utilities.video.numpy_to_video import create_temp_video
 
@@ -140,13 +141,24 @@ if TYPE_CHECKING:
     from typing_extensions import TypeForm
 
     from ray_utilities.config.typed_argument_parser import LogStatsChoices
-    from ray_utilities.typing import LogMetricsDict, StrictAlgorithmReturnData
-    from ray_utilities.typing.algorithm_return import EvaluationResultsDict
+    from ray_utilities.typing.algorithm_return import (
+        EvalEnvRunnersResultsDict,
+        EvaluationResultsDict,
+        StrictAlgorithmReturnData,
+    )
     from ray_utilities.typing.metrics import (
         LOG_METRICS_VIDEO_TYPES,
-        AutoExtendedLogMetricsDict,
+        AnyAutoExtendedLogMetricsDict,
+        AnyLogMetricsDict,
+        LogMetricsDict,
+        NewLogMetricsDict,
         VideoMetricsDict,
+        _LogMetricsEnvRunnersResultsDict,
+        _LogMetricsEvalEnvRunnersResultsDict,
         _LogMetricsEvaluationResultsDict,
+        _LogMetricsEvaluationResultsWithoutDiscreteDict,
+        _NewLogMetricsEvaluationResultsDict,
+        _NewLogMetricsEvaluationResultsWithoutDiscreteDict,
     )
 
 __all__ = ["RESULTS_TO_KEEP", "filter_metrics"]
@@ -207,7 +219,12 @@ _T = TypeVar("_T")
 _TD = TypeVar("_TD", bound=TypedDict, default="TrainableReturnData")  # pyright: ignore[reportInvalidTypeForm]
 _P = ParamSpec("_P")
 
-_MetricDict = TypeVar("_MetricDict", "AutoExtendedLogMetricsDict", "LogMetricsDict")
+
+_MetricDict = TypeVar("_MetricDict", "AnyAutoExtendedLogMetricsDict", "AnyLogMetricsDict")
+"""Any LogMetricsDict or extensions thereof."""
+
+_LogT = TypeVar("_LogT", bound="dict[str, dict[str, Any | dict[str, Any]]] | LogMetricsDict")
+"""A nested dict structure or LogMetricsDict - not in the new layout."""
 
 _logger = logging.getLogger(__name__)
 
@@ -363,14 +380,14 @@ def remove_videos(metrics: _MetricDict) -> _MetricDict: ...
 
 
 @overload
-def remove_videos(metrics: dict[Any, Any]) -> dict: ...
+def remove_videos(metrics: dict[Any, Any]) -> dict[Any, Any]: ...
 
 
 # Caching not needed yet, this is especially for the json logger
 # @cached(cache=FIFOCache(maxsize=1), key=cachetools.keys.methodkey, info=True)
 def remove_videos(
-    metrics: dict[Any, Any] | LogMetricsDict,
-) -> dict | LogMetricsDict:
+    metrics: dict[str, Any] | AnyLogMetricsDict,
+) -> dict[str, Any] | AnyLogMetricsDict:
     """
     Removes video keys from the metrics
 
@@ -400,7 +417,7 @@ def remove_videos(
 
 
 def save_videos(
-    metrics: LogMetricsDict | AutoExtendedLogMetricsDict,
+    metrics: AnyLogMetricsDict | AnyAutoExtendedLogMetricsDict | StrictAlgorithmReturnData,
     dir=TEMP_DIR_PATH,
 ) -> None:
     """
@@ -409,15 +426,18 @@ def save_videos(
 
         Note that tensorboard uses gifs. WandB and Comet support multiple formats.
     """
-    if EVALUATION_RESULTS not in metrics:
+    eval_dict = get_evaluation_results(metrics)
+    if eval_dict is None:
         return
-    eval_dict = metrics[EVALUATION_RESULTS]
-    discrete_results = eval_dict.get("discrete", None)
-    video_dicts = (
-        [eval_dict[ENV_RUNNER_RESULTS], discrete_results[ENV_RUNNER_RESULTS]]
-        if discrete_results
-        else [eval_dict[ENV_RUNNER_RESULTS]]
+    discrete_results = cast(
+        "_NewLogMetricsEvaluationResultsWithoutDiscreteDict | _LogMetricsEvaluationResultsWithoutDiscreteDict | None",
+        eval_dict.get("discrete", None),
     )
+    if discrete_results and ENV_RUNNER_RESULTS in discrete_results:
+        discrete_results = discrete_results[ENV_RUNNER_RESULTS]
+    video_dicts: list[
+        EvalEnvRunnersResultsDict | _LogMetricsEvalEnvRunnersResultsDict | _NewLogMetricsEvaluationResultsDict
+    ] = [eval_dict, discrete_results] if discrete_results else [eval_dict]
     video_value: LOG_METRICS_VIDEO_TYPES | VideoMetricsDict | None
     for video_dict in video_dicts:
         for key in (EPISODE_BEST_VIDEO, EPISODE_WORST_VIDEO):
@@ -427,23 +447,23 @@ def save_videos(
                 and not isinstance(video_value, Video)
                 and "video_path" not in video_value
             ):
-                value = video_value
                 if (
-                    isinstance(value, dict)
-                    and not value.get("video_path", False)
-                    and not isinstance(value["video"], (str, Video))
+                    isinstance(video_value, dict)
+                    and not video_value.get("video_path", False)
+                    and not isinstance(video_value["video"], (str, Video))
                 ):
                     # Set VideoPath
-                    value["video_path"] = create_temp_video(value["video"], dir=dir)
-                elif not isinstance(value, (str, dict)):
-                    if isinstance(value, list) and len(value) == 0:
+                    video_value["video_path"] = create_temp_video(video_value["video"], dir=dir)
+                elif not isinstance(video_value, (str, dict)):
+                    if isinstance(video_value, list) and len(video_value) == 0:
                         _logger.warning("Empty video list %s - skipping to save video", key)
                         continue
                     # No VideoMetricsDict present and not yet a video
                     _logger.warning(
                         "Overwritting video with path. Consider moving the video to a subkey %s : {'video': video}", key
                     )
-                    video_dict[key] = create_temp_video(value, dir=dir)
+                    assert key in video_dict
+                    video_dict[key] = create_temp_video(video_value, dir=dir)
                 # else already str or VideoMetricsDict with a str
 
 
@@ -490,6 +510,33 @@ def _old_strip_metadata_from_flat_metrics(result: dict[str, Any]) -> dict[str, A
             check_if_video(video)
             result[k] = video  # place ndarray in result dict
     return result
+
+
+def log_metrics_to_new_layout(metrics: LogMetricsDict) -> NewLogMetricsDict:
+    """
+    Changes:
+        env_runners -> training
+        evaluation.env_runners -> evaluation
+
+        if only "__all_modules__" and "default_policy" are present in learners,
+        merges them.
+    """
+    new_metrics = deepcopy(metrics)  # pyright: ignore[reportAssignmentType]
+    new_metrics["training"] = cast("_LogMetricsEnvRunnersResultsDict", new_metrics.pop(ENV_RUNNER_RESULTS, {}))  # pyright: ignore[reportGeneralTypeIssues]
+    if "current_step" in new_metrics:
+        new_metrics.pop(NUM_ENV_STEPS_SAMPLED_LIFETIME, None)  # superseeded by current_step
+    if EVALUATION_RESULTS in new_metrics:
+        new_eval = new_metrics[EVALUATION_RESULTS]
+        new_eval.update(new_eval.pop(ENV_RUNNER_RESULTS, {}))  # pyright: ignore[reportArgumentType, reportCallIssue]
+        if "discrete" in new_eval:
+            new_eval["discrete"] = new_eval["discrete"]
+            new_eval["discrete"].update(new_eval["discrete"].pop(ENV_RUNNER_RESULTS, {}))
+    if LEARNER_RESULTS in new_metrics and {ALL_MODULES, DEFAULT_MODULE_ID} == set(new_metrics[LEARNER_RESULTS].keys()):
+        # merge the two
+        merged = new_metrics[LEARNER_RESULTS][ALL_MODULES]
+        merged.update(new_metrics[LEARNER_RESULTS][DEFAULT_MODULE_ID])
+        new_metrics[LEARNER_RESULTS] = merged
+    return cast("NewLogMetricsDict", new_metrics)
 
 
 def create_log_metrics(
@@ -604,7 +651,7 @@ def create_log_metrics(
         metrics.pop(TIMERS, None)
         _remove_less_interesting_keys(metrics)
         return metrics
-    merged_result = deep_update(result, metrics)  # type: ignore[return-value]
+    merged_result: LogMetricsDict = deep_update(result, metrics)  # type: ignore[return-value]
     # clean videos
     if EVALUATION_RESULTS in result:
         if not evaluation_videos_best:  # pyright: ignore[reportPossiblyUnboundVariable]
@@ -664,7 +711,7 @@ def create_log_metrics(
 
     if "learners" not in log_stats and log_stats != "most":  # learners and timers+learners
         merged_result.pop("learners", None)
-    elif "learners" not in log_stats:
+    elif "learners" not in log_stats and LEARNER_RESULTS in merged_result:
         merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_IN)
         merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_OUT)
         merged_result[LEARNER_RESULTS][ALL_MODULES].pop(NUM_ENV_STEPS_TRAINED_LIFETIME + "_throughput")
@@ -673,17 +720,20 @@ def create_log_metrics(
     return merged_result  # type: ignore[return-value]
 
 
-def _reorganize_connector_logs(results: dict[str, dict[str, Any | dict[str, Any]]]):
+def _reorganize_connector_logs(results: _LogT) -> _LogT:
     """Move timer results listed in env_runner to the timers key"""
+    results.setdefault(TIMERS, {})
+    assert TIMERS in results
     results[TIMERS][ENV_TO_MODULE_CONNECTOR] = results[ENV_RUNNER_RESULTS].pop(ENV_TO_MODULE_CONNECTOR)
     results[TIMERS][MODULE_TO_ENV_CONNECTOR] = results[ENV_RUNNER_RESULTS].pop(MODULE_TO_ENV_CONNECTOR)
     results[TIMERS][RLMODULE_INFERENCE_TIMER] = results[ENV_RUNNER_RESULTS].pop(RLMODULE_INFERENCE_TIMER)
     results[TIMERS][ENV_RESET_TIMER] = results[ENV_RUNNER_RESULTS].pop(ENV_RESET_TIMER)
     results[TIMERS][ENV_STEP_TIMER] = results[ENV_RUNNER_RESULTS].pop(ENV_STEP_TIMER)
-    results[TIMERS][LEARNER_CONNECTOR] = results[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR)
-    results[TIMERS][LEARNER_CONNECTOR].update(results[TIMERS][LEARNER_CONNECTOR].pop(TIMERS))
+    if LEARNER_RESULTS in results:
+        results[TIMERS][LEARNER_CONNECTOR] = results[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR)
+    results[TIMERS][LEARNER_CONNECTOR].update(results[TIMERS][LEARNER_CONNECTOR].pop(TIMERS))  # pyright: ignore[reportAttributeAccessIssue]
     if EVALUATION_RESULTS in results and results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(ENV_TO_MODULE_CONNECTOR):
-        evaluation_timers: dict[str, Any] = results[TIMERS].setdefault(EVALUATION_RESULTS, {})
+        evaluation_timers: dict[str, Any] = results[TIMERS].setdefault(EVALUATION_RESULTS, {})  # pyright: ignore[reportAssignmentType]
         evaluation_timers[ENV_TO_MODULE_CONNECTOR] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(
             ENV_TO_MODULE_CONNECTOR
         )
@@ -698,8 +748,9 @@ def _reorganize_connector_logs(results: dict[str, dict[str, Any | dict[str, Any]
     return results
 
 
-def _reorganize_timer_logs(results: dict[str, dict[str, Any | dict[str, Any]]]):
+def _reorganize_timer_logs(results: _LogT) -> _LogT:
     results.setdefault(TIMERS, {})
+    assert TIMERS in results
     for key in ("time_since_restore", "time_total_s"):
         if key in results:
             results[TIMERS][key] = results.pop(key)
@@ -754,8 +805,10 @@ def _remove_small_values(d: dict[Any, Any], threshold: float = 1e-4) -> dict[Any
     return result
 
 
-def _remove_less_interesting_timers(metrics: dict[str, Any], remove_below=1e-4) -> None:
+def _remove_less_interesting_timers(metrics: dict[str, Any] | LogMetricsDict, remove_below=1e-4) -> None:
     # Assume reorganized
+    if TIMERS not in metrics:
+        return
     clean_metrics = [metrics[TIMERS]]
     if EVALUATION_RESULTS in metrics[TIMERS]:
         clean_metrics.append(metrics[TIMERS][EVALUATION_RESULTS])

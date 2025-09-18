@@ -17,6 +17,7 @@ from ray.tune.experiment import Trial
 from ray.tune.utils import flatten_dict
 
 from ray_utilities.callbacks.tuner._save_video_callback import SaveVideoFirstCallback
+from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback
 from ray_utilities.comet import CometArchiveTracker
 from ray_utilities.constants import COMET_OFFLINE_DIRECTORY, DEFAULT_VIDEO_DICT_KEYS, ENTRY_POINT, EPISODE_VIDEO_PREFIX
 from ray_utilities.misc import make_experiment_key
@@ -29,8 +30,8 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
     from ray.tune.experiment.trial import Trial
 
-    from ray_utilities.typing import CometStripedVideoFilename, FlatLogMetricsDict
-    from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict
+    from ray_utilities.typing import CometStripedVideoFilename
+    from ray_utilities.typing.metrics import AnyFlatLogMetricsDict
 
 __all__ = [
     "AdvCometLoggerCallback",
@@ -39,7 +40,7 @@ __all__ = [
 _LOGGER = logging.getLogger(__name__)
 
 
-class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
+class AdvCometLoggerCallback(NewStyleLoggerCallback, SaveVideoFirstCallback, CometLoggerCallback):
     # Copy from parent for pylance
     """CometLoggerCallback for logging Tune results to Comet.
 
@@ -156,12 +157,12 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         # Join video keys for flat dict access
         self._video_keys = video_keys
         """Video keys in their tuple form; probably without /video and /reward suffix"""
-        joined_keys = ["/".join(keys) for keys in video_keys]
+        joined_video_keys = ["/".join(keys) for keys in video_keys]
         # Videos are stored as dict with "video" and "reward" keys
-        self._flat_video_lookup_keys = [k + "/video" if not k.endswith("/video") else k for k in joined_keys]
+        self._flat_video_lookup_keys = [k + "/video" if not k.endswith("/video") else k for k in joined_video_keys]
         """Contains only /video keys"""
         self._flat_video_keys = self._flat_video_lookup_keys + [
-            k + "/reward" if not k.endswith("/reward") else k for k in joined_keys
+            k + "/reward" if not k.endswith("/reward") else k for k in joined_video_keys
         ]
         """Contains /video and /reward keys"""
 
@@ -316,10 +317,15 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         if to_other:
             experiment.log_others(to_other)
 
-    def log_trial_result(self, iteration: int, trial: Trial, result: dict | AutoExtendedLogMetricsDict):
+    def log_trial_result(  # pyright: ignore[reportIncompatibleMethodOverride]
+        self,
+        iteration: int,
+        trial: Trial,
+        result,
+    ):
         step: int = result["training_iteration"]  # maybe result.get(TIMESTEPS_TOTAL) or result[TRAINING_ITERATION]
         # Will be flattened in super anyway
-        flat_result: FlatLogMetricsDict = flatten_dict(result, delimiter="/")  # type: ignore[arg-type]
+        flat_result: AnyFlatLogMetricsDict = flatten_dict(result, delimiter="/")  # pyright: ignore[reportArgumentType, reportAssignmentType]
         del result  # avoid using it by mistake
 
         videos: dict[str, NDArray | float | str] = {k: v for k in self._flat_video_keys if (v := flat_result.get(k))}
@@ -349,7 +355,7 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         # Cannot remove this
         log_result["training_iteration"] = step
         # Log normal metrics and parameters
-        super().log_trial_result(iteration, trial, log_result)
+        super().log_trial_result(iteration, trial, log_result)  # pyright: ignore[reportArgumentType]
         # Log model architecture
         if trial not in self._logged_architectures and "model_architecture.json" in os.listdir(trial.path):
             if trial.path is not None:
@@ -432,7 +438,8 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
                 )
             elif len(zip_files) == 0:  # otherwise get all and pick the latest
                 _LOGGER.warning(
-                    "Could not find an offline experiment that contained the trial ID %s in %s. Picking latest .zip file",
+                    "Could not find an offline experiment that contained the trial ID %s in %s. "
+                    "Picking latest .zip file",
                     trial.trial_id,
                     comet_offline_path,
                 )

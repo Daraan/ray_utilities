@@ -10,15 +10,16 @@ from typing import TYPE_CHECKING
 
 from ray.tune.logger import CSVLoggerCallback
 
+from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback
 from ray_utilities.postprocessing import remove_videos
 
 if TYPE_CHECKING:
     from ray.tune.experiment.trial import Trial
 
-    from ray_utilities.typing.metrics import LogMetricsDict
+    from ray_utilities.typing.metrics import AnyLogMetricsDict
 
 
-class AdvCSVLoggerCallback(CSVLoggerCallback):
+class AdvCSVLoggerCallback(NewStyleLoggerCallback, CSVLoggerCallback):
     """Logs trial results in json format.
 
     Also writes to a results file and param.json file when results or
@@ -29,12 +30,12 @@ class AdvCSVLoggerCallback(CSVLoggerCallback):
     at the first iteration.
     """
 
-    def log_trial_result(self, iteration: int, trial: "Trial", result: dict | LogMetricsDict):
+    def log_trial_result(self, iteration: int, trial: "Trial", result: AnyLogMetricsDict):  # pyright: ignore[reportIncompatibleMethodOverride]
         if trial not in self._trial_csv:
             # Keys are permanently set; remove videos from the first iteration
             result = remove_videos(result)
         super().log_trial_result(
             iteration,
             trial,
-            result,  # type: ignore[arg-type]
+            result,
         )

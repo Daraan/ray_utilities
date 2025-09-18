@@ -1,27 +1,25 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 from ray.tune.logger import TBXLoggerCallback
 
+from ray_utilities.callbacks.tuner.new_style_logger_callback import LogMetricsDictT, NewStyleLoggerCallback
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS
 
 if TYPE_CHECKING:
+    from ray_utilities.typing.metrics import Array5D
     from ray.tune.experiment.trial import Trial
 
-    from ray_utilities.typing.metrics import (
-        AutoExtendedLogMetricsDict,
-        VideoMetricsDict,
-        _LogMetricsEvalEnvRunnersResultsDict,
-    )
+    from ray_utilities.typing.metrics import VideoMetricsDict, _LogMetricsEvalEnvRunnersResultsDict
 
 
 logger = logging.getLogger(__name__)
 
 
-class AdvTBXLoggerCallback(TBXLoggerCallback):
+class AdvTBXLoggerCallback(NewStyleLoggerCallback, TBXLoggerCallback):
     """TensorBoardX Logger.
 
     Note that hparams will be written only after a trial has terminated.
@@ -41,7 +39,7 @@ class AdvTBXLoggerCallback(TBXLoggerCallback):
     _video_keys = DEFAULT_VIDEO_DICT_KEYS
 
     @staticmethod
-    def preprocess_videos(result: dict[str, Any] | AutoExtendedLogMetricsDict) -> dict[Any, Any]:
+    def preprocess_videos(result: LogMetricsDictT) -> LogMetricsDictT:
         """
         For tensorboard it must hold that:
 
@@ -50,21 +48,24 @@ class AdvTBXLoggerCallback(TBXLoggerCallback):
         did_copy = False
         for keys in DEFAULT_VIDEO_DICT_KEYS:
             subdir = result
+            # See if leaf is present
             for key in keys[:-1]:
                 if key not in subdir:
                     break
+                # key is present we can access it
                 subdir = subdir[key]  # pyright: ignore[reportGeneralTypeIssues, reportTypedDictNotRequiredAccess]
             else:
                 # Perform a selective deep copy on the modified items
                 subdir = cast("dict[str, VideoMetricsDict]", subdir)
+                # keys[-1] is best or worst
                 if keys[-1] in subdir and "video" in subdir[keys[-1]]:
                     if not did_copy:
-                        result = result.copy()
+                        result = result.copy()  # pyright: ignore[reportAssignmentType]
                         did_copy = True
                     parent_dir = result
                     for key in keys[:-1]:
-                        parent_dir[key] = parent_dir[key].copy()  # pyright: ignore[reportGeneralTypeIssues, reportTypedDictNotRequiredAccess]
-                        parent_dir = parent_dir[key]  # pyright: ignore[reportGeneralTypeIssues, reportTypedDictNotRequiredAccess]
+                        parent_dir[key] = parent_dir[key].copy()  # pyright: ignore[reportGeneralTypeIssues, reportTypedDictNotRequiredAccess]  # fmt: skip
+                        parent_dir = parent_dir[key]  # pyright: ignore[reportGeneralTypeIssues, reportTypedDictNotRequiredAccess]  # fmt: skip
                     parent_dir = cast("_LogMetricsEvalEnvRunnersResultsDict", parent_dir)
                     video = subdir[keys[-1]]["video"]
                     if isinstance(video, list):
@@ -73,10 +74,10 @@ class AdvTBXLoggerCallback(TBXLoggerCallback):
                         else:
                             video = video[0]
                     assert isinstance(video, np.ndarray) and video.ndim == 5
-                    parent_dir[keys[-1]] = video  # pyright: ignore[reportGeneralTypeIssues]
-        return result  # type: ignore[return-value]
+                    parent_dir[keys[-1]] = cast("Array5D", video)
+        return result
 
-    def log_trial_result(self, iteration: int, trial: "Trial", result: dict[str, Any] | AutoExtendedLogMetricsDict):
+    def log_trial_result(self, iteration: int, trial: Trial, result):
         super().log_trial_result(
             iteration,
             trial,

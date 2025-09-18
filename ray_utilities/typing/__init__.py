@@ -29,10 +29,10 @@ from typing_extensions import TypeAliasType, TypeVar
 
 if TYPE_CHECKING:
     import gymnasium as gym
+    import ray.tune
     from gymnasium.envs.registration import EnvSpec as _EnvSpec
     from gymnax.environments import environment as environment_gymnax
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
-    import ray.tune
 
 ExtraItems = Any  # float | int | str | bool | None | dict[str, "_ExtraItems"] | NDArray[Any] | Never
 """type: Type alias for additional items that can be included in TypedDict structures.

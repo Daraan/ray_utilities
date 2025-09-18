@@ -14,15 +14,29 @@ from typing_extensions import Never, NotRequired, Required, TypedDict
 from .algorithm_return import EvaluationResultsDict, _EvaluationNoDiscreteDict
 
 if TYPE_CHECKING:
-    from ray.rllib.utils.typing import ModuleID, AgentID
+    import numpy as np
     from numpy.typing import NDArray
+    from ray.rllib.utils.typing import AgentID, ModuleID
     from wandb import Video  # pyright: ignore[reportMissingImports] # TODO: can we use this as log type as well?
 
 __all__ = [
     "LogMetricsDict",
 ]
 
-LOG_METRICS_VIDEO_TYPES: TypeAlias = "list[NDArray] | str | Video"
+Shape4D = tuple[int, int, int, int]  # (B, C, H, W)
+Array4D: TypeAlias = "np.ndarray[Shape4D, np.dtype[np.floating | np.integer]]"  # shape=(B, C, H, W)
+Shape5D = tuple[int, int, int, int, int]  # (N, T, C, H, W)
+Array5D: TypeAlias = "np.ndarray[Shape5D, np.dtype[np.floating | np.integer]]"  # shape=(N, T, C, H, W)
+
+LOG_METRICS_VIDEO_TYPES: TypeAlias = "list[Array4D | Array5D] | Array5D | str | Video"
+"""
+Log types for videos in LogMetricsDict.
+
+Either a :class:`wandb.Video` object, a string pointing to a video file to upload,
+a 5D Numpy array representing a video, or a list of 4D or 5D Numpy arrays representing videos.
+The list should either be a single 5D array (N, T, C, H, W) or multiple 4D arrays (B, C, H, W)
+to be stacked to a 5D array.
+"""
 
 
 class VideoMetricsDict(TypedDict, closed=True):
@@ -74,9 +88,7 @@ class _LogMetricsEvaluationResultsDict(EvaluationResultsDict, _WarnVideosToEnvRu
     discrete: NotRequired[_LogMetricsEvaluationResultsWithoutDiscreteDict]  # pyright: ignore[reportIncompatibleVariableOverride]
 
 
-class LogMetricsDict(TypedDict):
-    env_runners: _LogMetricsEnvRunnersResultsDict
-    evaluation: _LogMetricsEvaluationResultsDict
+class _LogMetricsBase(TypedDict):
     training_iteration: int
     """The number of times train.report() has been called"""
 
@@ -97,7 +109,9 @@ class LogMetricsDict(TypedDict):
     """
 
     done: bool
-    timers: NotRequired[dict[str, float | dict[str, Any]]]
+    timers: NotRequired[dict[str, dict[str, Any] | Any]]
+    learners: NotRequired[dict[ModuleID | Literal["__all_modules__"], dict[str, Any] | Any]]
+
     fault_tolerance: NotRequired[Any]
     env_runner_group: NotRequired[Any]
     num_env_steps_sampled_lifetime: NotRequired[int]
@@ -112,6 +126,16 @@ class LogMetricsDict(TypedDict):
 
     num_training_step_calls_per_iteration: NotRequired[int]
     """How training_steps was called between two train.report() calls."""
+
+    config: NotRequired[dict[str, Any]]
+    """Algorithm config used for this training step."""
+
+
+class LogMetricsDict(_LogMetricsBase):
+    """Stays true to RLlib's naming."""
+
+    env_runners: _LogMetricsEnvRunnersResultsDict
+    evaluation: _LogMetricsEvaluationResultsDict
 
 
 class AutoExtendedLogMetricsDict(LogMetricsDict):
@@ -157,6 +181,80 @@ FlatLogMetricsDict = TypedDict(
     },
     closed=False,
 )
+
+
+class _NewLogMetricsEvaluationResultsWithoutDiscreteDict(_LogMetricsEvalEnvRunnersResultsDict):
+    discrete: NotRequired[Never]
+
+
+class _NewLogMetricsEvaluationResultsDict(_LogMetricsEvalEnvRunnersResultsDict):
+    discrete: NotRequired[_NewLogMetricsEvaluationResultsWithoutDiscreteDict]
+
+
+class NewLogMetricsDict(_LogMetricsBase):
+    """
+    Changes:
+        env_runners -> training
+        evaluation.env_runners -> evaluation
+
+        if only "__all_modules__" and "default_policy" are present in learners,
+        merges them.
+    """
+
+    training: _LogMetricsEnvRunnersResultsDict
+    evaluation: _NewLogMetricsEvaluationResultsDict
+
+
+AnyLogMetricsDict = LogMetricsDict | NewLogMetricsDict
+
+
+class NewAutoExtendedLogMetricsDict(NewLogMetricsDict):
+    """
+    Auto filled in keys after train.report.
+
+    Use this in Callbacks
+
+    See Also:
+        - https://docs.ray.io/en/latest/tune/tutorials/tune-metrics.html#tune-autofilled-metrics
+        - Trial.last_result
+    """
+
+    done: bool
+    training_iteration: int  # auto filled in
+    """The number of times train.report() has been called"""
+    trial_id: int | str  # auto filled in
+
+
+AnyAutoExtendedLogMetricsDict = AutoExtendedLogMetricsDict | NewAutoExtendedLogMetricsDict
+
+NewFlatLogMetricsDict = TypedDict(
+    "NewFlatLogMetricsDict",
+    {
+        "training_iteration": int,
+        "training/episode_return_mean": float,
+        "evaluation/episode_return_mean": float,
+        "evaluation/episode_videos_best": NotRequired["str | NDArray"],
+        "evaluation/episode_videos_best/reward": NotRequired[float],
+        "evaluation/episode_videos_best/video": NotRequired["NDArray"],
+        "evaluation/episode_videos_best/video_path": NotRequired["str"],
+        "evaluation/episode_videos_worst": NotRequired["NDArray | str"],
+        "evaluation/episode_videos_worst/reward": NotRequired[float],
+        "evaluation/episode_videos_worst/video": NotRequired["NDArray"],
+        "evaluation/episode_videos_worst/video_path": NotRequired["str"],
+        "evaluation/discrete/episode_return_mean": float,
+        "evaluation/discrete/episode_videos_best": NotRequired["str | NDArray"],
+        "evaluation/discrete/episode_videos_best/reward": NotRequired[float],
+        "evaluation/discrete/episode_videos_best/video": NotRequired["NDArray"],
+        "evaluation/discrete/episode_videos_best/video_path": NotRequired["str"],
+        "evaluation/discrete/episode_videos_worst": NotRequired["str | NDArray"],
+        "evaluation/discrete/episode_videos_worst/reward": NotRequired[float],
+        "evaluation/discrete/episode_videos_worst/video": NotRequired["NDArray"],
+        "evaluation/discrete/episode_videos_worst/video_path": NotRequired["str"],
+    },
+    closed=False,
+)
+
+AnyFlatLogMetricsDict = FlatLogMetricsDict | NewFlatLogMetricsDict
 
 # region TypeGuards
 

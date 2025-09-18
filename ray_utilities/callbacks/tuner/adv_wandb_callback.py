@@ -14,6 +14,7 @@ from ray.air.integrations.wandb import WandbLoggerCallback, _clean_log, _QueueIt
 from ray.tune.utils import flatten_dict
 
 from ray_utilities import RUN_ID
+from ray_utilities.callbacks.tuner.new_style_logger_callback import LogMetricsDictT, NewStyleLoggerCallback
 from ray_utilities.comet import _LOGGER
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS
 from ray_utilities.misc import RE_GET_TRIAL_ID, make_experiment_key
@@ -26,7 +27,6 @@ if TYPE_CHECKING:
     from wandb.sdk.interface.interface import PolicyName
 
     from ray_utilities.typing.metrics import (
-        AutoExtendedLogMetricsDict,
         VideoMetricsDict,
         _LogMetricsEvalEnvRunnersResultsDict,
     )
@@ -64,7 +64,7 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
             elif isinstance(v, FutureFile):
                 try:
                     self._wandb.save(v.global_str, base_path=v.base_path)
-                except (HTTPError, Exception) as e:
+                except (HTTPError, Exception) as e:  # noqa: BLE001
                     _logger.error("Failed to log artifact: %s", e)
             elif isinstance(v, FutureArtifact):
                 # not serializable
@@ -95,7 +95,7 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
         return log, config_update
 
 
-class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
+class AdvWandbLoggerCallback(NewStyleLoggerCallback, SaveVideoFirstCallback, WandbLoggerCallback):
     AUTO_CONFIG_KEYS: ClassVar[list[str]] = list(
         {
             *WandbLoggerCallback.AUTO_CONFIG_KEYS,
@@ -240,7 +240,7 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
         self._trials_created += 1
 
     @staticmethod
-    def preprocess_videos(metrics: dict[Any, Any] | AutoExtendedLogMetricsDict) -> dict[Any, Any]:
+    def preprocess_videos(metrics: LogMetricsDictT) -> LogMetricsDictT:
         did_copy = False
         for keys in DEFAULT_VIDEO_DICT_KEYS:
             subdir = metrics
@@ -253,7 +253,7 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
                 subdir = cast("dict[str, VideoMetricsDict]", subdir)
                 if keys[-1] in subdir and "video_path" in subdir[keys[-1]]:
                     if not did_copy:
-                        metrics = metrics.copy()
+                        metrics = metrics.copy()  # pyright: ignore[reportAssignmentType]
                         did_copy = True
                     parent_dir = metrics
                     for key in keys[:-1]:
@@ -347,7 +347,7 @@ class AdvWandbLoggerCallback(SaveVideoFirstCallback, WandbLoggerCallback):
         self,
         iteration: int,  # noqa: ARG002
         trial: "Trial",
-        result: "dict | AutoExtendedLogMetricsDict",
+        result,
     ):
         """Called each time a trial reports a result."""
         if trial not in self._trial_logging_actors:

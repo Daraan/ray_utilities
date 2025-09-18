@@ -92,8 +92,9 @@ def _run_without_tuner(
                 break
         from ray_utilities.postprocessing import create_log_metrics  # noqa: PLC0415, circular import
 
-        result["config"].setdefault("_train_batch_size_per_learner", setup.config.train_batch_size_per_learner)
-        return create_log_metrics(result, log_stats=setup.args)
+        if "config" in result:
+            result["config"].setdefault("_train_batch_size_per_learner", setup.config.train_batch_size_per_learner)
+        return create_log_metrics(result, log_stats=setup.args.log_stats)
     if test_mode_func:
         return test_mode_func(trainable, setup)
     return trainable(setup.sample_params())

@@ -80,8 +80,7 @@ if TYPE_CHECKING:
     from ray_utilities.callbacks.progress_bar import RangeState, RayTqdmState, TqdmState
     from ray_utilities.config import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import ExperimentSetupBase, SetupCheckpointDict
-    from ray_utilities.typing import LogMetricsDict
-    from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict
+    from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict, LogMetricsDict
 
 
 _logger = logging.getLogger(__name__)
@@ -675,7 +674,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             Does not check if learners need to be recreated.
             Assumes num_learners does not change.
         """
-        if self.algorithm is None:
+        if self._algorithm is None:
             return None
         call_setup_again = False
         env_runners_need_update = (

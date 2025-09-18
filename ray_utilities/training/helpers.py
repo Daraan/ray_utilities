@@ -47,7 +47,14 @@ if TYPE_CHECKING:
         RewardUpdaters,
         StrictAlgorithmReturnData,
     )
-    from ray_utilities.typing.metrics import LogMetricsDict
+    from ray_utilities.typing.algorithm_return import EvalEnvRunnersResultsDict
+    from ray_utilities.typing.metrics import (
+        AnyLogMetricsDict,
+        LogMetricsDict,
+        _LogMetricsEnvRunnersResultsDict,
+        _LogMetricsEvalEnvRunnersResultsDict,
+        _NewLogMetricsEvaluationResultsDict,
+    )
     from ray_utilities.typing.trainable_return import RewardUpdater
 
 logger = logging.getLogger(__name__)
@@ -619,3 +626,28 @@ def is_algorithm_callback_added(config: AlgorithmConfig, callback_class: type[RL
         or (isinstance(config.callbacks_class, type) and issubclass(config.callbacks_class, callback_class))
         or (isinstance(config.callbacks_class, (list, tuple)) and callback_class in config.callbacks_class)
     )
+
+
+def get_training_results(
+    result: StrictAlgorithmReturnData | AnyLogMetricsDict | dict[str, Any],
+) -> _LogMetricsEnvRunnersResultsDict:
+    """
+    Returns the training / env_runner results from the given result dict.
+
+    This method is agnostic to RAY_UTILITIES_NEW_LOG_METRICS and works with both
+    new and rllib metrics structure
+    """
+    if "training" in result:
+        return result["training"]
+    return result[ENV_RUNNER_RESULTS]
+
+
+def get_evaluation_results(
+    result: StrictAlgorithmReturnData | AnyLogMetricsDict | dict[str, Any],
+) -> None | EvalEnvRunnersResultsDict | _LogMetricsEvalEnvRunnersResultsDict | _NewLogMetricsEvaluationResultsDict:
+    if EVALUATION_RESULTS not in result:
+        return None
+    eval_results = result[EVALUATION_RESULTS]
+    if ENV_RUNNER_RESULTS in eval_results:
+        return eval_results[ENV_RUNNER_RESULTS]
+    return eval_results

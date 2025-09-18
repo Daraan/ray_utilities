@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import os
+
 import ray
 
 from ray_utilities import run_tune
@@ -6,6 +8,8 @@ from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
 from ray_utilities.misc import extend_trial_name
 from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
+
+os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
 
 if __name__ == "__main__":
     ray.init(object_store_memory=4 * 1024**3)  # 4 GB
