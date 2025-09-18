@@ -61,7 +61,7 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
                 continue
             if any(k.startswith(item + "/") or k == item for item in self._to_config):
                 config_update[k] = v
-            if isinstance(v, FutureFile):
+            elif isinstance(v, FutureFile):
                 try:
                     self._wandb.save(v.global_str, base_path=v.base_path)
                 except (HTTPError, Exception) as e:
