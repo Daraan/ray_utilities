@@ -42,7 +42,7 @@ runs:
           echo "No cache hit on venv, proceeding with the setup."
         fi
       env:
-        STEPS_CACHE_VENV_OUTPUTS_CACHE_HIT: ${{ steps.cache-venv.outputs.cache-hit == "true" }}
+        STEPS_CACHE_VENV_OUTPUTS_CACHE_HIT: ${{ steps.cache-venv.outputs.cache-hit }}
     - name: Set up Python (with pip cache)
       if: ${{ inputs.use-pip-cache == 'true' && steps.cache-venv.outputs.cache-hit != 'true'}}
       id: setup-pip-cached
