@@ -21,12 +21,10 @@ See Also:
     :mod:`typing_extensions`: Extended typing capabilities
 """
 
-import importlib.metadata
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping
 
 import typing_extensions
-from packaging.version import Version
 from typing_extensions import TypeAliasType, TypeVar
 
 if TYPE_CHECKING:
@@ -36,10 +34,6 @@ if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
     import ray.tune
 
-_PEP_728_AVAILABLE = getattr(typing_extensions, "_PEP_728_IMPLEMENTED", False) or Version(
-    importlib.metadata.version("typing-extensions")
-) >= Version("4.13")
-
 ExtraItems = Any  # float | int | str | bool | None | dict[str, "_ExtraItems"] | NDArray[Any] | Never
 """type: Type alias for additional items that can be included in TypedDict structures.
 
@@ -48,7 +42,6 @@ experiment results, metrics, or configuration dictionaries beyond the
 strictly typed required fields.
 """
 
-# Below requires _PEP_728_AVAILABLE
 # ruff: noqa: E402
 from .algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
 from .metrics import FlatLogMetricsDict, LogMetricsDict

@@ -1,5 +1,3 @@
-# Currently cannot use variables, even if final or literal, with TypedDict
-# Uses PEP 728 not yet released in typing_extensions
 # pyright: enableExperimentalFeatures=true
 from __future__ import annotations
 
@@ -7,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from typing_extensions import Never, NotRequired, ReadOnly, Required, TypedDict
 
-from . import _PEP_728_AVAILABLE, ExtraItems
+from . import ExtraItems
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -45,55 +43,36 @@ class EnvRunnersResultsDict(TypedDict, closed=False):
     """Custom key - environments info"""
 
 
-if _PEP_728_AVAILABLE or TYPE_CHECKING:
+class EvalEnvRunnersResultsDict(EnvRunnersResultsDict, total=False, extra_items=ExtraItems):
+    episode_videos_best: list[NDArray]
+    """
+    List, likely with on entry, of a 5D array
 
-    class EvalEnvRunnersResultsDict(EnvRunnersResultsDict, total=False, extra_items=ExtraItems):
-        episode_videos_best: list[NDArray]
-        """
-        List, likely with on entry, of a 5D array
+    # array is shape=3D -> An image (c, h, w).
+    # array is shape=4D -> A batch of images (B, c, h, w).
+    # array is shape=5D -> A video (1, L, c, h, w), where L is the length of the
+    """
+    episode_videos_worst: list[NDArray]
+    """
+    List, likely with on entry, of a 5D array
 
-        # array is shape=3D -> An image (c, h, w).
-        # array is shape=4D -> A batch of images (B, c, h, w).
-        # array is shape=5D -> A video (1, L, c, h, w), where L is the length of the
-        """
-        episode_videos_worst: list[NDArray]
-        """
-        List, likely with on entry, of a 5D array
-
-        # array is shape=3D -> An image (c, h, w).
-        # array is shape=4D -> A batch of images (B, c, h, w).
-        # array is shape=5D -> A video (1, L, c, h, w), where L is the length of the
-        """
-
-else:
-
-    class EvalEnvRunnersResultsDict(EnvRunnersResultsDict, total=False):
-        episode_videos_best: list[NDArray]
-        episode_videos_worst: list[NDArray]
+    # array is shape=3D -> An image (c, h, w).
+    # array is shape=4D -> A batch of images (B, c, h, w).
+    # array is shape=5D -> A video (1, L, c, h, w), where L is the length of the
+    """
 
 
-if _PEP_728_AVAILABLE or TYPE_CHECKING:
+class _EvaluationNoDiscreteDict(TypedDict, extra_items=ExtraItems):
+    env_runners: EvalEnvRunnersResultsDict
+    discrete: NotRequired[Never]
 
-    class _EvaluationNoDiscreteDict(TypedDict, extra_items=ExtraItems):
-        env_runners: EvalEnvRunnersResultsDict
-        discrete: NotRequired[Never]
 
-    class EvaluationResultsDict(TypedDict, extra_items=ExtraItems):
-        env_runners: EvalEnvRunnersResultsDict
-        discrete: NotRequired[_EvaluationNoDiscreteDict]
-        """Custom key - evaluation results for discrete actions"""
-        evaluated_this_step: NotRequired[bool]
-        """Custom key"""
-
-else:
-
-    class _EvaluationNoDiscreteDict(TypedDict):
-        env_runners: EvalEnvRunnersResultsDict
-        discrete: NotRequired[Never]
-
-    class EvaluationResultsDict(TypedDict, total=False):
-        env_runners: Required[EvalEnvRunnersResultsDict]
-        discrete: _EvaluationNoDiscreteDict
+class EvaluationResultsDict(TypedDict, extra_items=ExtraItems):
+    env_runners: EvalEnvRunnersResultsDict
+    discrete: NotRequired[_EvaluationNoDiscreteDict]
+    """Custom key - evaluation results for discrete actions"""
+    evaluated_this_step: NotRequired[bool]
+    """Custom key"""
 
 
 class _RequiredEnvRunners(TypedDict, total=False, closed=False):
@@ -126,71 +105,64 @@ class LearnersMetricsDict(_LearnerResults):
     default_policy: LearnerModuleDict
 
 
-if _PEP_728_AVAILABLE or TYPE_CHECKING:
+class _AlgoReturnDataWithoutEnvRunners(TypedDict, total=False, extra_items=ExtraItems):
+    done: Required[bool]
+    evaluation: EvaluationResultsDict
+    env_runners: Required[EnvRunnersResultsDict] | NotRequired[EnvRunnersResultsDict]
+    learners: Required[LearnersMetricsDict]
+    # Present in rllib results
+    training_iteration: Required[int]
+    """The number of times train.report() has been called"""
 
-    class _AlgoReturnDataWithoutEnvRunners(TypedDict, total=False, extra_items=ExtraItems):
-        done: Required[bool]
-        evaluation: EvaluationResultsDict
-        env_runners: Required[EnvRunnersResultsDict] | NotRequired[EnvRunnersResultsDict]
-        learners: Required[LearnersMetricsDict]
-        # Present in rllib results
-        training_iteration: Required[int]
-        """The number of times train.report() has been called"""
+    config: Required[dict[str, Any]]
 
-        config: Required[dict[str, Any]]
+    should_checkpoint: bool
 
-        should_checkpoint: bool
+    comment: str
+    trial_id: Required[int | str]
+    episodes_total: int
+    episodes_this_iter: int
 
-        comment: str
-        trial_id: Required[int | str]
-        episodes_total: int
-        episodes_this_iter: int
+    # Times
+    timers: dict[str, float]
+    timestamp: int
+    time_total_s: float
+    time_this_iter_s: float
+    """
+    Runtime of the current training iteration in seconds
+    i.e. one call to the trainable function or to _train() in the class API.
+    """
 
-        # Times
-        timers: dict[str, float]
-        timestamp: int
-        time_total_s: float
-        time_this_iter_s: float
-        """
-        Runtime of the current training iteration in seconds
-        i.e. one call to the trainable function or to _train() in the class API.
-        """
+    # System results
+    date: str
+    node_ip: str
+    hostname: str
+    pid: int
 
-        # System results
-        date: str
-        node_ip: str
-        hostname: str
-        pid: int
+    # Restore
+    iterations_since_restore: int
+    """The number of times train.report has been called after restoring the worker from a checkpoint"""
 
-        # Restore
-        iterations_since_restore: int
-        """The number of times train.report has been called after restoring the worker from a checkpoint"""
+    time_since_restore: int
+    """Time in seconds since restoring from a checkpoint."""
 
-        time_since_restore: int
-        """Time in seconds since restoring from a checkpoint."""
-
-        timesteps_since_restore: int
-        """Number of timesteps since restoring from a checkpoint"""
-
-    class AlgorithmReturnData(_AlgoReturnDataWithoutEnvRunners, _NotRequiredEnvRunners, extra_items=ExtraItems):
-        """
-        See Also:
-            - https://docs.ray.io/en/latest/tune/tutorials/tune-metrics.html#tune-autofilled-metrics
-        """
-
-    class StrictAlgorithmReturnData(  # pyright: ignore[reportIncompatibleVariableOverride]
-        _AlgoReturnDataWithoutEnvRunners, _RequiredEnvRunners, extra_items=ExtraItems
-    ):
-        """
-        Return data with env_runners present
-
-        See Also:
-            - https://docs.ray.io/en/latest/tune/tutorials/tune-metrics.html#tune-autofilled-metrics
-        """
+    timesteps_since_restore: int
+    """Number of timesteps since restoring from a checkpoint"""
 
 
-else:
-    # PEP 728 not yet released in typing_extensions
-    AlgorithmReturnData = dict
-    StrictAlgorithmReturnData = dict
-    _AlgoReturnDataWithoutEnvRunners = dict
+class AlgorithmReturnData(_AlgoReturnDataWithoutEnvRunners, _NotRequiredEnvRunners, extra_items=ExtraItems):
+    """
+    See Also:
+        - https://docs.ray.io/en/latest/tune/tutorials/tune-metrics.html#tune-autofilled-metrics
+    """
+
+
+class StrictAlgorithmReturnData(  # pyright: ignore[reportIncompatibleVariableOverride]
+    _AlgoReturnDataWithoutEnvRunners, _RequiredEnvRunners, extra_items=ExtraItems
+):
+    """
+    Return data with env_runners present
+
+    See Also:
+        - https://docs.ray.io/en/latest/tune/tutorials/tune-metrics.html#tune-autofilled-metrics
+    """
