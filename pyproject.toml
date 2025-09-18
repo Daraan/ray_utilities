@@ -35,6 +35,7 @@ dependencies = [
   "optuna",  # remove later -> optional
   "jax",  # remove later -> optional
   "exceptiongroup; python_version < '3.11'",
+  "typing_extensions >= 4.13",
 ]
 [project.optional-dependencies]
 test = [
@@ -170,6 +171,7 @@ extend-generics = [
 # during dev/refactoring phase make sure not to import from downstream packages
 "SYMPOL".msg = "Import from downstream packages; missing refactoring."
 "rllib_port".msg = "Import from downstream packages; missing refactoring."
+"docs".msg = "Importing from docs is not allowed."
 
 [tool.ruff.lint.per-file-ignores]
 "test/**/*.py" = ["ARG", "D"]
