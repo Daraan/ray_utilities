@@ -5,7 +5,7 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "ray_utilities"
-version = "0.4.0"
+version = "0.5.0"
 readme = "README.md"
 description = "Utilities for Ray RLlib and related workflows. Includes experiment setup, callbacks, and JAX model utilities."
 license = { file = "LICENSE" }
@@ -13,14 +13,14 @@ requires-python = ">=3.9"
 authors = [
   { name = "Daniel Sperber", email = "daniel.sperber@gmail.com" }
 ]
-classifiers = [
-  "Programming Language :: Python :: 3",
-  "License :: OSI Approved :: MIT License",
-  "Operating System :: OS Independent",
-  "Intended Audience :: Developers",
-  "Intended Audience :: Science/Research",
-  "Topic :: Scientific/Engineering :: Artificial Intelligence",
-]
+  classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  ]
 dependencies = [
   "ray[tune,rllib]",
   "typed-argument-parser",
@@ -110,7 +110,7 @@ select = [
   "PLR",
   "PLR0402", # import A.B as B; from A import B
   "PLR2044", # empty comment
-  "PLW", 
+  "PLW",
   "PYI",
   "Q003", "Q004",
   "RET",
