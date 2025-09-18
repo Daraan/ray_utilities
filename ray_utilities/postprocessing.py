@@ -134,7 +134,6 @@ except ModuleNotFoundError:
 
 
 if TYPE_CHECKING:
-    from ray_utilities.typing.metrics import VideoMetricsDict
     from collections import deque as Deque
     from collections.abc import Sequence
 
@@ -143,7 +142,12 @@ if TYPE_CHECKING:
     from ray_utilities.config.typed_argument_parser import LogStatsChoices
     from ray_utilities.typing import LogMetricsDict, StrictAlgorithmReturnData
     from ray_utilities.typing.algorithm_return import EvaluationResultsDict
-    from ray_utilities.typing.metrics import LOG_METRICS_VIDEO_TYPES, AutoExtendedLogMetricsDict
+    from ray_utilities.typing.metrics import (
+        LOG_METRICS_VIDEO_TYPES,
+        AutoExtendedLogMetricsDict,
+        VideoMetricsDict,
+        _LogMetricsEvaluationResultsDict,
+    )
 
 __all__ = ["RESULTS_TO_KEEP", "filter_metrics"]
 
@@ -598,6 +602,7 @@ def create_log_metrics(
         # reorganize some keys to align with other log_stats
         metrics = _reorganize_timer_logs(metrics)  # pyright: ignore[reportArgumentType, reportAssignmentType]
         metrics.pop(TIMERS, None)
+        _remove_less_interesting_keys(metrics)
         return metrics
     merged_result = deep_update(result, metrics)  # type: ignore[return-value]
     # clean videos
@@ -775,37 +780,40 @@ def _remove_less_interesting_timers(metrics: dict[str, Any], remove_below=1e-4) 
     metrics[TIMERS] = _remove_small_values(metrics[TIMERS], threshold=remove_below)
 
 
-def _remove_less_interesting_keys(metrics: dict[str, Any]) -> None:
+def _remove_less_interesting_keys(metrics: LogMetricsDict | _LogMetricsEvaluationResultsDict) -> None:
     """Remove some duplicated and less interesting keys."""
     metrics.pop("env_runner_group", None)  # just env_runner_group/actor_manager_num_outstanding_async_reqs
+    if metrics.get("num_training_step_calls_per_iteration", 0) == 1:
+        metrics.pop("num_training_step_calls_per_iteration", None)
 
     env_runner_results = metrics.get(ENV_RUNNER_RESULTS, None)
     if env_runner_results:
-        if env_runner_results[NUM_MODULE_STEPS_SAMPLED][DEFAULT_MODULE_ID] == env_runner_results[NUM_ENV_STEPS_SAMPLED]:
-            env_runner_results.pop(NUM_MODULE_STEPS_SAMPLED, None)
-        if (
-            env_runner_results[NUM_MODULE_STEPS_SAMPLED_LIFETIME][DEFAULT_MODULE_ID]
-            == env_runner_results[NUM_ENV_STEPS_SAMPLED_LIFETIME]
+        for env_key, mod_key, id_key in (
+            (NUM_ENV_STEPS_SAMPLED, NUM_MODULE_STEPS_SAMPLED, DEFAULT_MODULE_ID),
+            (NUM_ENV_STEPS_SAMPLED_LIFETIME, NUM_MODULE_STEPS_SAMPLED_LIFETIME, DEFAULT_MODULE_ID),
+            (NUM_ENV_STEPS_SAMPLED_LIFETIME, NUM_AGENT_STEPS_SAMPLED_LIFETIME, DEFAULT_AGENT_ID),
+            (NUM_ENV_STEPS_SAMPLED, NUM_AGENT_STEPS_SAMPLED, DEFAULT_AGENT_ID),
         ):
-            env_runner_results.pop(NUM_MODULE_STEPS_SAMPLED_LIFETIME, None)
-        # env_runners/num_agent_steps_sampled/default_agent
-        if (
-            env_runner_results[NUM_AGENT_STEPS_SAMPLED_LIFETIME][DEFAULT_AGENT_ID]
-            == env_runner_results[NUM_ENV_STEPS_SAMPLED_LIFETIME]
+            if (
+                env_key in env_runner_results
+                and mod_key in env_runner_results
+                and len(env_runner_results[mod_key]) == 1
+                and env_runner_results[mod_key][id_key] == env_runner_results[env_key]
+            ):
+                env_runner_results.pop(mod_key)
+        for metric_key, id_key in (
+            ("module_episode_return_mean", DEFAULT_MODULE_ID),
+            ("agent_episode_return_mean", DEFAULT_AGENT_ID),
         ):
-            env_runner_results.pop(NUM_AGENT_STEPS_SAMPLED_LIFETIME, None)
-        if env_runner_results[NUM_AGENT_STEPS_SAMPLED][DEFAULT_AGENT_ID] == env_runner_results[NUM_ENV_STEPS_SAMPLED]:
-            env_runner_results.pop(NUM_AGENT_STEPS_SAMPLED, None)
-        if "module_episode_return_mean" in env_runner_results and math.isclose(
-            env_runner_results["module_episode_return_mean"].get(DEFAULT_MODULE_ID, 0.0),
-            env_runner_results[EPISODE_RETURN_MEAN],
-        ):
-            env_runner_results.pop("module_episode_return_mean", None)
-        if "agent_episode_return_mean" in env_runner_results and math.isclose(
-            env_runner_results["agent_episode_return_mean"].get(DEFAULT_AGENT_ID, 0.0),
-            env_runner_results[EPISODE_RETURN_MEAN],
-        ):
-            env_runner_results.pop("agent_episode_return_mean", None)
+            if (
+                metric_key in env_runner_results
+                and len(env_runner_results[metric_key]) == 1
+                and math.isclose(
+                    env_runner_results[metric_key].get(id_key, 0.0),
+                    env_runner_results[EPISODE_RETURN_MEAN],
+                )
+            ):
+                env_runner_results.pop(metric_key)
     if (evaluation_results := metrics.get(EVALUATION_RESULTS, None)) and len(
         evaluation_results[ENV_RUNNER_RESULTS]
     ) > 1:

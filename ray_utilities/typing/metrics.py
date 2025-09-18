@@ -14,6 +14,7 @@ from typing_extensions import Never, NotRequired, Required, TypedDict
 from .algorithm_return import EvaluationResultsDict, _EvaluationNoDiscreteDict
 
 if TYPE_CHECKING:
+    from ray.rllib.utils.typing import ModuleID, AgentID
     from numpy.typing import NDArray
     from wandb import Video  # pyright: ignore[reportMissingImports] # TODO: can we use this as log type as well?
 
@@ -47,6 +48,10 @@ class _LogMetricsEnvRunnersResultsDict(TypedDict):
     episode_return_min: NotRequired[float]
     num_env_steps_sampled_lifetime: NotRequired[int]
     num_env_steps_sampled: NotRequired[int]
+    num_module_steps_sampled: NotRequired[dict[ModuleID, int]]
+    num_module_steps_sampled_lifetime: NotRequired[dict[ModuleID, int]]
+    num_agent_steps_sampled: NotRequired[dict[AgentID, int]]
+    num_agent_steps_sampled_lifetime: NotRequired[dict[AgentID, int]]
 
 
 class _LogMetricsEvalEnvRunnersResultsDict(_LogMetricsEnvRunnersResultsDict, total=False):
@@ -104,6 +109,9 @@ class LogMetricsDict(TypedDict):
 
     batch_size: NotRequired[int]
     """Current train_batch_size_per_learner. Should be logged in experiments were it can change."""
+
+    num_training_step_calls_per_iteration: NotRequired[int]
+    """How training_steps was called between two train.report() calls."""
 
 
 class AutoExtendedLogMetricsDict(LogMetricsDict):
