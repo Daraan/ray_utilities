@@ -184,7 +184,7 @@ def update_pbar(
         )
     ):
         eval_results = {
-            "mean": eval_runner_results[EPISODE_RETURN_MEAN],
+            "mean": eval_runner_results[ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN],
             "roll": rewards["running_eval_reward"],
         }
         eval_constructed = True
