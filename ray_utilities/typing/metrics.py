@@ -60,10 +60,15 @@ class _WarnVideosToEnvRunners(TypedDict):
 class _LogMetricsEnvRunnersResultsDict(BaseEnvRunnersResultsDict):
     """Environment runner results optimized for logging metrics.
     
-    Extends the base type with additional optional fields used in logging,
-    such as module and agent-specific step counts.
+    Extends the base type with additional optional fields used in logging.
+    Most fields are NotRequired in metrics context as they may not always be available.
     """
-    episode_return_mean: float  # Keep required for logging
+    episode_return_max: NotRequired[float]
+    episode_return_min: NotRequired[float]
+    num_env_steps_sampled_lifetime: NotRequired[int] 
+    num_env_steps_sampled: NotRequired[int]
+    num_env_steps_passed_to_learner: NotRequired[int]
+    num_env_steps_passed_to_learner_lifetime: NotRequired[int]
     num_module_steps_sampled: NotRequired[dict[ModuleID, int]]
     num_module_steps_sampled_lifetime: NotRequired[dict[ModuleID, int]]
     num_agent_steps_sampled: NotRequired[dict[AgentID, int]]

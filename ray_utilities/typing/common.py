@@ -39,27 +39,18 @@ __all__ = [
 ]
 
 
-class BaseEnvRunnersResultsDict(TypedDict, total=False):
+class BaseEnvRunnersResultsDict(TypedDict):
     """Base type for environment runner results shared between algorithm return and metrics.
     
-    Contains core metrics that are present in both raw algorithm results and
-    processed logging metrics. Specific modules extend this with additional
-    fields as needed.
+    Contains only the core metrics that are consistently Required in both raw algorithm 
+    results and processed logging metrics. Derived types add their specific Required vs 
+    NotRequired fields as appropriate.
     
     This eliminates duplication between EnvRunnersResultsDict and 
     _LogMetricsEnvRunnersResultsDict while maintaining their specific behaviors.
     """
     episode_return_mean: float
-    episode_return_max: NotRequired[float]
-    episode_return_min: NotRequired[float]
-    num_env_steps_sampled_lifetime: NotRequired[int]
-    """Total environment steps sampled across all training"""
-    num_env_steps_sampled: NotRequired[int] 
-    """Environment steps sampled in this iteration"""
-    num_env_steps_passed_to_learner: NotRequired[int]
-    """Steps passed to learner this iteration (added by exact_sampling_callback)"""
-    num_env_steps_passed_to_learner_lifetime: NotRequired[int]
-    """Total steps passed to learner (added by exact_sampling_callback)"""
+    """Always required - primary performance metric"""
 
 
 class CommonVideoTypes:

@@ -24,13 +24,14 @@ class EnvRunnersResultsDict(BaseEnvRunnersResultsDict, closed=False):
     """Environment runner results from Ray RLlib algorithm training.
     
     Extends the base type with additional required fields specific to
-    algorithm return data.
+    algorithm return data. Algorithm returns typically have most fields as Required.
     """
-    episode_return_mean: float  # Make required for algorithm returns
-    episode_return_max: float   # Make required for algorithm returns  
-    episode_return_min: float   # Make required for algorithm returns
-    num_env_steps_sampled_lifetime: int  # Make required for algorithm returns
-    num_env_steps_sampled: int  # Make required for algorithm returns
+    episode_return_max: float
+    episode_return_min: float  
+    num_env_steps_sampled_lifetime: int
+    """Amount of sampling steps taken for the training of the agent"""
+    num_env_steps_sampled: int
+    """Amount of sampling steps taken for the training of the agent in this iteration"""
     num_env_steps_passed_to_learner: NotRequired[int]
     """
     Amount of steps passed to the learner in this iteration
