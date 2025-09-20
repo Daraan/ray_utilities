@@ -28,6 +28,7 @@ from ray_utilities.testing_utils import (
     no_parallel_envs,
     patch_args,
 )
+from ray_utilities.testing_utils import _MockTrial as MockTrial
 from ray_utilities.training.helpers import make_divisible
 
 if sys.version_info < (3, 11):
@@ -228,18 +229,6 @@ class TestMisc(TestCase):
         # Test exception;  OK
         with patch_args("--it", 10, except_parser_errors=["--it", "10"]):
             AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
-
-
-class MockTrialX:
-    """Mock trial object for testing."""
-
-    def __init__(self, trial_id: str = ..., local_path: str = "/tmp/ray_results"):
-        self.trial_id = trial_id
-        self.local_path = local_path
-        self.config = {"experiment_id": "exp_12345"}
-
-
-from ray_utilities.testing_utils import _MockTrial as MockTrial
 
 
 class TestCallbackUploads(DisableLoggers, TestHelpers):

@@ -22,6 +22,7 @@ from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterati
 from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import PPOTorchLearnerWithGradientAccumulation
 from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
+from ray_utilities.setup.ppo_mlp_setup import MLPSetup
 from ray_utilities.testing_utils import DisableLoggers, SetupLowRes, SetupWithEnv, mock_trainable_algorithm, patch_args
 from ray_utilities.training.helpers import is_algorithm_callback_added
 
@@ -239,14 +240,13 @@ class TestProcessing(unittest.TestCase):
         for choice in get_args(LogStatsChoices):
             with self.subTest(f"Testing log_stats with choice: {choice}"):
                 with patch_args(
-                    "--log_stats",
-                    choice,
-                    "--minibatch_size",
-                    "8",
-                    "--batch_size",
-                    "8",
-                ):
-                    with AlgorithmSetup(init_trainable=False) as setup:
+                    "--log_stats", choice,
+                    "--minibatch_size", "8",
+                    "--batch_size", "8",
+                    "--fcnet_hiddens", "[1]",
+                    "--num_envs_per_env_runner", "1",
+                ):  # fmt: skip
+                    with MLPSetup(init_trainable=False) as setup:
                         setup.config.num_epochs = 1
                     self.assertEqual(setup.args.log_stats, choice)
                     if isclass(setup.trainable):

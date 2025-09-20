@@ -161,17 +161,12 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     def test_run_tune_function(self):
         batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
         with patch_args(
-            "--num_samples",
-            "3",
-            "--num_jobs",
-            "3",
-            "--batch_size",
-            batch_size,
-            "--iterations",
-            "3",
-            "--fcnet_hiddens",
-            "[4]",
-        ):
+            "--num_samples", "3",
+            "--num_jobs", "3",
+            "--batch_size", batch_size,
+            "--iterations", "3",
+            "--fcnet_hiddens", "[4]",
+        ):  # fmt: skip
             with MLPSetup(init_trainable=False) as setup:
                 setup.config.training(num_epochs=2, minibatch_size=batch_size)
                 setup.config.evaluation(evaluation_interval=1)  # else eval metric not in dict
