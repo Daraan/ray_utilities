@@ -461,12 +461,13 @@ class DisableLoggers(unittest.TestCase):
 
     def enable_loggers(self):
         """Enable loggers after disabling them in setUp."""
+        self._mock_env.stop()
         self._disable_tune_loggers.stop()
         self._disable_file_loggers.stop()
         self._disable_file_loggers2.stop()
-        self._mock_env.stop()
 
     def setUp(self):
+        super().setUp()
         self._mock_env = mock.patch.dict("os.environ", {"TUNE_DISABLE_AUTO_CALLBACK_LOGGERS": "1"})
         self._mock_env.start()
         self._disable_tune_loggers = mock.patch("ray_utilities.callbacks.tuner.create_tuner_callbacks", return_value=[])
@@ -476,7 +477,6 @@ class DisableLoggers(unittest.TestCase):
         self._disable_file_loggers2 = mock.patch.object(ray.tune.logger.unified, "DEFAULT_LOGGERS", ())
         """Disable local copy used by UnifiedLogger"""
         self._disable_file_loggers2.start()
-        super().setUp()
 
     def tearDown(self):
         self.enable_loggers()
@@ -551,6 +551,7 @@ class TestHelpers(unittest.TestCase):
     _fast_model_fcnet_hiddens: int = 1
 
     def setUp(self):
+        super().setUp()
         AlgorithmSetup.PROJECT = "TESTING"
         os.environ["WANDB_API_KEY"] = "test"
         assert TrainableBase.cls_model_config is None
@@ -560,16 +561,15 @@ class TestHelpers(unittest.TestCase):
             {"fcnet_hiddens": [self._fast_model_fcnet_hiddens], "head_fcnet_hiddens": []},
         )
         self.mock_reduced_model.start()
-        super().setUp()
         self._env_seed_rng = random.Random(111)
         atexit.register(self._clean_output_dir)
 
     def tearDown(self):
+        super().tearDown()
         TrainableBase.cls_model_config = None
         self.mock_reduced_model.stop()
         for trainable in self._created_trainables:
             trainable.stop()
-        super().tearDown()
 
     @staticmethod
     def _clean_output_dir():

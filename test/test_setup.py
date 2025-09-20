@@ -285,7 +285,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     "--num_jobs", "3",
                     "--num_samples", "3",
                     "--use_exact_total_steps",
-                    "--env_seeding_strategy", "same"
+                    "--env_seeding_strategy", "same",
                 )  # ,
                 # self.assertNoLogs(logger, level="WARNING"),
             ):  # fmt: skip
