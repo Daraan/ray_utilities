@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from ray_utilities.callbacks.algorithm.callback_mixins import BudgetMixin, StepCounterMixin
 from ray_utilities.callbacks.algorithm.dynamic_hyperparameter import DynamicHyperparameterCallback, UpdateFunction
 from ray_utilities.dynamic_config.dynamic_buffer_update import get_dynamic_evaluation_intervals
+from ray_utilities.misc import AutoInt
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms.algorithm import Algorithm
@@ -60,7 +61,7 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         self._update_algorithm(
             algorithm,
             key="evaluation_interval",
-            value=new_eval_interval,
+            value=AutoInt(new_eval_interval),
             update_learner=False,
             update_env_runners=False,
         )
