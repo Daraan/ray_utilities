@@ -24,11 +24,7 @@ __all__ = [
     "LogMetricsDict",
 ]
 
-Shape4D = CommonVideoTypes.Shape4D
-Array4D = CommonVideoTypes.Array4D
-Shape5D = CommonVideoTypes.Shape5D
-Array5D = CommonVideoTypes.Array5D
-
+# Use CommonVideoTypes attributes directly instead of creating new aliases
 LOG_METRICS_VIDEO_TYPES: TypeAlias = CommonVideoTypes.LogVideoTypes
 """
 Log types for videos in LogMetricsDict.
@@ -59,16 +55,22 @@ class _WarnVideosToEnvRunners(TypedDict):
 
 class _LogMetricsEnvRunnersResultsDict(BaseEnvRunnersResultsDict):
     """Environment runner results optimized for logging metrics.
-    
+
     Extends the base type with additional optional fields used in logging.
     Most fields are NotRequired in metrics context as they may not always be available.
+
+    See Also:
+        :class:`BaseEnvRunnersResultsDict`: Common base type
+        :data:`ray.rllib.utils.metrics.ENV_RUNNER_RESULTS`: Ray RLlib env runner metrics
     """
+
     episode_return_max: NotRequired[float]
     episode_return_min: NotRequired[float]
-    num_env_steps_sampled_lifetime: NotRequired[int] 
+    num_env_steps_sampled_lifetime: NotRequired[int]
     num_env_steps_sampled: NotRequired[int]
     num_env_steps_passed_to_learner: NotRequired[int]
     num_env_steps_passed_to_learner_lifetime: NotRequired[int]
+    episode_duration_sec_mean: NotRequired[float]
     num_module_steps_sampled: NotRequired[dict[ModuleID, int]]
     num_module_steps_sampled_lifetime: NotRequired[dict[ModuleID, int]]
     num_agent_steps_sampled: NotRequired[dict[AgentID, int]]
