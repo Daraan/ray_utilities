@@ -23,9 +23,6 @@ __all__ = [
 class EnvRunnersResultsDict(BaseEnvRunnersResultsDict, closed=False):
     """Environment runner results from Ray RLlib algorithm training.
 
-    Extends the base type with additional fields specific to algorithm return data.
-    Based on Ray RLlib's standard environment runner results structure.
-
     See Also:
         :data:`ray.rllib.utils.metrics.ENV_RUNNER_RESULTS`: Ray RLlib env runner metrics
         :class:`BaseEnvRunnersResultsDict`: Common base type
@@ -40,17 +37,9 @@ class EnvRunnersResultsDict(BaseEnvRunnersResultsDict, closed=False):
     num_env_steps_sampled: int
     """Amount of sampling steps taken for the training of the agent in this iteration"""
     num_env_steps_passed_to_learner: NotRequired[int]
-    """
-    Amount of steps passed to the learner in this iteration
-
-    Custom key added by exact_sampling_callback.
-    """
+    """Amount of steps passed to the learner in this iteration"""
     num_env_steps_passed_to_learner_lifetime: NotRequired[int]
-    """
-    Amount of steps passed to the learner in this iteration
-
-    Custom key added by exact_sampling_callback.
-    """
+    """Amount of steps passed to the learner in this iteration"""
 
     # Additional Ray RLlib fields based on metrics imports
     episode_duration_sec_mean: NotRequired[float]
@@ -95,9 +84,6 @@ class _EvaluationNoDiscreteDict(TypedDict, extra_items=ExtraItems):
 class EvaluationResultsDict(BaseEvaluationResultsDict, extra_items=ExtraItems):
     """Evaluation results structure for algorithm return data.
 
-    Extends the base evaluation type with fields specific to algorithm returns,
-    including environment runner data and discrete evaluation support.
-
     See Also:
         :data:`ray.rllib.utils.metrics.EVALUATION_RESULTS`: Ray RLlib evaluation metrics
         :class:`BaseEvaluationResultsDict`: Common base type
@@ -106,8 +92,6 @@ class EvaluationResultsDict(BaseEvaluationResultsDict, extra_items=ExtraItems):
     env_runners: EvalEnvRunnersResultsDict
     discrete: NotRequired[_EvaluationNoDiscreteDict]
     """Custom key - evaluation results for discrete actions"""
-    evaluated_this_step: NotRequired[bool]
-    """Custom key - whether evaluation was performed in this training step"""
 
 
 class _RequiredEnvRunners(TypedDict, total=False, closed=False):

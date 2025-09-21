@@ -24,20 +24,9 @@ __all__ = [
     "LogMetricsDict",
 ]
 
-# Use CommonVideoTypes attributes directly instead of creating new aliases
-LOG_METRICS_VIDEO_TYPES: TypeAlias = CommonVideoTypes.LogVideoTypes
-"""
-Log types for videos in LogMetricsDict.
-
-Either a :class:`wandb.Video` object, a string pointing to a video file to upload,
-a 5D Numpy array representing a video, or a list of 4D or 5D Numpy arrays representing videos.
-The list should either be a single 5D array (N, T, C, H, W) or multiple 4D arrays (B, C, H, W)
-to be stacked to a 5D array.
-"""
-
 
 class VideoMetricsDict(TypedDict, closed=True):
-    video: LOG_METRICS_VIDEO_TYPES
+    video: CommonVideoTypes.LogVideoTypes
     """
     A 5D numpy array representing a video; or a string pointing to a video file to upload.
 
@@ -78,13 +67,10 @@ class _LogMetricsEnvRunnersResultsDict(BaseEnvRunnersResultsDict):
 
 
 class _LogMetricsEvalEnvRunnersResultsDict(_LogMetricsEnvRunnersResultsDict, total=False):
-    """
-    Either a 5D Numpy array representing a video, or a dict with "video" and "reward" keys,
-    representing the video, or a string pointing to a video file to upload.
-    """
+    """Environment runner results for evaluation with video support."""
 
-    episode_videos_best: LOG_METRICS_VIDEO_TYPES | VideoMetricsDict
-    episode_videos_worst: LOG_METRICS_VIDEO_TYPES | VideoMetricsDict
+    episode_videos_best: CommonVideoTypes.LogVideoTypes | VideoMetricsDict
+    episode_videos_worst: CommonVideoTypes.LogVideoTypes | VideoMetricsDict
 
 
 class _LogMetricsEvaluationResultsWithoutDiscreteDict(_EvaluationNoDiscreteDict, _WarnVideosToEnvRunners):

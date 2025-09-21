@@ -53,7 +53,6 @@ from .common import (
     BaseEnvRunnersResultsDict,
     BaseEvaluationResultsDict,
     CommonVideoTypes,
-    VideoArrayShape,
 )
 from .metrics import FlatLogMetricsDict, LogMetricsDict
 from .trainable_return import RewardsDict, RewardUpdaters, TrainableReturnData
@@ -79,7 +78,6 @@ __all__ = [
     "StrictAlgorithmReturnData",
     "TestModeCallable",
     "TrainableReturnData",
-    "VideoArrayShape",
 ]
 
 
