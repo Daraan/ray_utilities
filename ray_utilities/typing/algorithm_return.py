@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from typing_extensions import Never, NotRequired, ReadOnly, Required, TypedDict
 
 from . import ExtraItems
+from .common import BaseEnvRunnersResultsDict, BaseEvaluationResultsDict
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -13,31 +14,44 @@ if TYPE_CHECKING:
 __all__ = [
     "AlgorithmReturnData",
     "EnvRunnersResultsDict",
+    "EvalEnvRunnersResultsDict",
     "EvaluationResultsDict",
     "StrictAlgorithmReturnData",
 ]
 
 
-class EnvRunnersResultsDict(TypedDict, closed=False):
-    episode_return_mean: float
-    episode_return_max: float
-    episode_return_min: float
+class EnvRunnersResultsDict(BaseEnvRunnersResultsDict, closed=False):
+    """Environment runner results from Ray RLlib algorithm training.
+
+    See Also:
+        :data:`ray.rllib.utils.metrics.ENV_RUNNER_RESULTS`: Ray RLlib env runner metrics
+        :class:`BaseEnvRunnersResultsDict`: Common base type
+    """
+
+    episode_return_max: NotRequired[float]
+    """Maximum episode return in this iteration"""
+    episode_return_min: NotRequired[float]
+    """Minimum episode return in this iteration"""
     num_env_steps_sampled_lifetime: int
     """Amount of sampling steps taken for the training of the agent"""
     num_env_steps_sampled: int
     """Amount of sampling steps taken for the training of the agent in this iteration"""
     num_env_steps_passed_to_learner: NotRequired[int]
-    """
-    Amount of steps passed to the learner in this iteration
-
-    Custom key added by exact_sampling_callback.
-    """
+    """Amount of steps passed to the learner in this iteration"""
     num_env_steps_passed_to_learner_lifetime: NotRequired[int]
-    """
-    Amount of steps passed to the learner in this iteration
+    """Amount of steps passed to the learner in this iteration"""
 
-    Custom key added by exact_sampling_callback.
-    """
+    # Additional Ray RLlib fields based on metrics imports
+    episode_duration_sec_mean: NotRequired[float]
+    """Mean duration of episodes in seconds"""
+    num_module_steps_sampled: NotRequired[dict[str, int]]
+    """Number of steps sampled per module"""
+    num_module_steps_sampled_lifetime: NotRequired[dict[str, int]]
+    """Lifetime number of steps sampled per module"""
+    num_agent_steps_sampled: NotRequired[dict[str, int]]
+    """Number of steps sampled per agent"""
+    num_agent_steps_sampled_lifetime: NotRequired[dict[str, int]]
+    """Lifetime number of steps sampled per agent"""
 
     environments: NotRequired[dict[str, Any]]
     """Custom key - environments info"""
@@ -67,12 +81,17 @@ class _EvaluationNoDiscreteDict(TypedDict, extra_items=ExtraItems):
     discrete: NotRequired[Never]
 
 
-class EvaluationResultsDict(TypedDict, extra_items=ExtraItems):
+class EvaluationResultsDict(BaseEvaluationResultsDict, extra_items=ExtraItems):
+    """Evaluation results structure for algorithm return data.
+
+    See Also:
+        :data:`ray.rllib.utils.metrics.EVALUATION_RESULTS`: Ray RLlib evaluation metrics
+        :class:`BaseEvaluationResultsDict`: Common base type
+    """
+
     env_runners: EvalEnvRunnersResultsDict
     discrete: NotRequired[_EvaluationNoDiscreteDict]
     """Custom key - evaluation results for discrete actions"""
-    evaluated_this_step: NotRequired[bool]
-    """Custom key"""
 
 
 class _RequiredEnvRunners(TypedDict, total=False, closed=False):

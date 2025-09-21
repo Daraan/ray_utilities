@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, TypeGuard
 from typing_extensions import Never, NotRequired, Required, TypedDict
 
 from .algorithm_return import EvaluationResultsDict, _EvaluationNoDiscreteDict
+from .common import BaseEnvRunnersResultsDict, BaseEvaluationResultsDict, CommonVideoTypes
 
 if TYPE_CHECKING:
     import numpy as np
@@ -23,24 +24,9 @@ __all__ = [
     "LogMetricsDict",
 ]
 
-Shape4D = tuple[int, int, int, int]  # (B, C, H, W)
-Array4D: TypeAlias = "np.ndarray[Shape4D, np.dtype[np.floating | np.integer]]"  # shape=(B, C, H, W)
-Shape5D = tuple[int, int, int, int, int]  # (N, T, C, H, W)
-Array5D: TypeAlias = "np.ndarray[Shape5D, np.dtype[np.floating | np.integer]]"  # shape=(N, T, C, H, W)
-
-LOG_METRICS_VIDEO_TYPES: TypeAlias = "list[Array4D | Array5D] | Array5D | str | Video"
-"""
-Log types for videos in LogMetricsDict.
-
-Either a :class:`wandb.Video` object, a string pointing to a video file to upload,
-a 5D Numpy array representing a video, or a list of 4D or 5D Numpy arrays representing videos.
-The list should either be a single 5D array (N, T, C, H, W) or multiple 4D arrays (B, C, H, W)
-to be stacked to a 5D array.
-"""
-
 
 class VideoMetricsDict(TypedDict, closed=True):
-    video: LOG_METRICS_VIDEO_TYPES
+    video: CommonVideoTypes.LogVideoTypes
     """
     A 5D numpy array representing a video; or a string pointing to a video file to upload.
 
@@ -56,12 +42,24 @@ class _WarnVideosToEnvRunners(TypedDict):
     episode_videos_worst: NotRequired[Annotated[Never, "needs to be in env_runners"]]
 
 
-class _LogMetricsEnvRunnersResultsDict(TypedDict):
-    episode_return_mean: float
+class _LogMetricsEnvRunnersResultsDict(BaseEnvRunnersResultsDict):
+    """Environment runner results optimized for logging metrics.
+
+    Extends the base type with additional optional fields used in logging.
+    Most fields are NotRequired in metrics context as they may not always be available.
+
+    See Also:
+        :class:`BaseEnvRunnersResultsDict`: Common base type
+        :data:`ray.rllib.utils.metrics.ENV_RUNNER_RESULTS`: Ray RLlib env runner metrics
+    """
+
     episode_return_max: NotRequired[float]
     episode_return_min: NotRequired[float]
     num_env_steps_sampled_lifetime: NotRequired[int]
     num_env_steps_sampled: NotRequired[int]
+    num_env_steps_passed_to_learner: NotRequired[int]
+    num_env_steps_passed_to_learner_lifetime: NotRequired[int]
+    episode_duration_sec_mean: NotRequired[float]
     num_module_steps_sampled: NotRequired[dict[ModuleID, int]]
     num_module_steps_sampled_lifetime: NotRequired[dict[ModuleID, int]]
     num_agent_steps_sampled: NotRequired[dict[AgentID, int]]
@@ -69,13 +67,10 @@ class _LogMetricsEnvRunnersResultsDict(TypedDict):
 
 
 class _LogMetricsEvalEnvRunnersResultsDict(_LogMetricsEnvRunnersResultsDict, total=False):
-    """
-    Either a 5D Numpy array representing a video, or a dict with "video" and "reward" keys,
-    representing the video, or a string pointing to a video file to upload.
-    """
+    """Environment runner results for evaluation with video support."""
 
-    episode_videos_best: LOG_METRICS_VIDEO_TYPES | VideoMetricsDict
-    episode_videos_worst: LOG_METRICS_VIDEO_TYPES | VideoMetricsDict
+    episode_videos_best: CommonVideoTypes.LogVideoTypes | VideoMetricsDict
+    episode_videos_worst: CommonVideoTypes.LogVideoTypes | VideoMetricsDict
 
 
 class _LogMetricsEvaluationResultsWithoutDiscreteDict(_EvaluationNoDiscreteDict, _WarnVideosToEnvRunners):
