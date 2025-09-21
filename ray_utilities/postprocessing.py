@@ -120,6 +120,7 @@ from ray_utilities.constants import (
 from ray_utilities.misc import deep_update
 from ray_utilities.temp_dir import TEMP_DIR_PATH
 from ray_utilities.training.helpers import get_current_step, get_evaluation_results
+from ray_utilities.typing.common import VideoTypes
 from ray_utilities.typing.trainable_return import TrainableReturnData
 from ray_utilities.video.numpy_to_video import create_temp_video
 
@@ -147,7 +148,6 @@ if TYPE_CHECKING:
         StrictAlgorithmReturnData,
     )
     from ray_utilities.typing.metrics import (
-        LOG_METRICS_VIDEO_TYPES,
         AnyAutoExtendedLogMetricsDict,
         AnyLogMetricsDict,
         LogMetricsDict,
@@ -438,7 +438,7 @@ def save_videos(
     video_dicts: list[
         EvalEnvRunnersResultsDict | _LogMetricsEvalEnvRunnersResultsDict | _NewLogMetricsEvaluationResultsDict
     ] = [eval_dict, discrete_results] if discrete_results else [eval_dict]
-    video_value: LOG_METRICS_VIDEO_TYPES | VideoMetricsDict | None
+    video_value: VideoTypes.LogVideoTypes | VideoMetricsDict | None
     for video_dict in video_dicts:
         for key in (EPISODE_BEST_VIDEO, EPISODE_WORST_VIDEO):
             if (
@@ -463,7 +463,8 @@ def save_videos(
                         "Overwritting video with path. Consider moving the video to a subkey %s : {'video': video}", key
                     )
                     assert key in video_dict
-                    video_dict[key] = create_temp_video(video_value, dir=dir)
+                    # Assign video to log dict (no list of numpy array anymore)
+                    video_dict[key] = create_temp_video(video_value, dir=dir)  # pyright: ignore[reportGeneralTypeIssues]
                 # else already str or VideoMetricsDict with a str
 
 
@@ -611,14 +612,14 @@ def create_log_metrics(
         ):
             metrics[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_BEST_VIDEO] = {
                 "video": evaluation_videos_best,
-                "reward": result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MAX],
+                "reward": result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(EPISODE_RETURN_MAX, eval_mean),
             }
         if evaluation_videos_worst := result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(
             EPISODE_WORST_VIDEO,
         ):
             metrics[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_WORST_VIDEO] = {
                 "video": evaluation_videos_worst,
-                "reward": result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MIN],
+                "reward": result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(EPISODE_RETURN_MIN, eval_mean),
             }
         if discrete_evaluation_results := result[EVALUATION_RESULTS].get("discrete"):
             if discrete_evaluation_videos_best := discrete_evaluation_results[ENV_RUNNER_RESULTS].get(
@@ -626,14 +627,14 @@ def create_log_metrics(
             ):
                 metrics[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS][EPISODE_BEST_VIDEO] = {  # pyright: ignore[reportTypedDictNotRequiredAccess]
                     "video": discrete_evaluation_videos_best,
-                    "reward": discrete_evaluation_results[ENV_RUNNER_RESULTS][EPISODE_RETURN_MAX],
+                    "reward": discrete_evaluation_results[ENV_RUNNER_RESULTS].get(EPISODE_RETURN_MAX, disc_eval_mean),
                 }  # fmt: skip
             if discrete_evaluation_videos_worst := discrete_evaluation_results[ENV_RUNNER_RESULTS].get(
                 EPISODE_WORST_VIDEO
             ):
                 metrics[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS][EPISODE_WORST_VIDEO] = {  # pyright: ignore[reportTypedDictNotRequiredAccess]
                     "video": discrete_evaluation_videos_worst,
-                    "reward": discrete_evaluation_results[ENV_RUNNER_RESULTS][EPISODE_RETURN_MIN],
+                    "reward": discrete_evaluation_results[ENV_RUNNER_RESULTS].get(EPISODE_RETURN_MIN, disc_eval_mean),
                 }  # fmt: skip
             if discrete_evaluation_videos_best:
                 check_if_video(discrete_evaluation_videos_best, "discrete" + EPISODE_BEST_VIDEO)

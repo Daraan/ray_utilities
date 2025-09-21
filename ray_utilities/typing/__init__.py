@@ -52,7 +52,7 @@ from .algorithm_return import (
 from .common import (
     BaseEnvRunnersResultsDict,
     BaseEvaluationResultsDict,
-    CommonVideoTypes,
+    VideoTypes,
 )
 from .metrics import FlatLogMetricsDict, LogMetricsDict
 from .trainable_return import RewardsDict, RewardUpdaters, TrainableReturnData
@@ -66,7 +66,6 @@ __all__ = [
     "AlgorithmReturnData",
     "BaseEnvRunnersResultsDict",
     "BaseEvaluationResultsDict",
-    "CommonVideoTypes",
     "CometStripedVideoFilename",
     "EnvRunnersResultsDict",
     "EvaluationResultsDict",
@@ -78,6 +77,7 @@ __all__ = [
     "StrictAlgorithmReturnData",
     "TestModeCallable",
     "TrainableReturnData",
+    "VideoTypes",
 ]
 
 

@@ -7,18 +7,16 @@ For algorithm return data, see `ray_utilities.typing.algorithm_return`
 # pyright: enableExperimentalFeatures=true
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, TypeGuard
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeGuard
 
 from typing_extensions import Never, NotRequired, Required, TypedDict
 
 from .algorithm_return import EvaluationResultsDict, _EvaluationNoDiscreteDict
-from .common import BaseEnvRunnersResultsDict, BaseEvaluationResultsDict, CommonVideoTypes
+from .common import BaseEnvRunnersResultsDict, VideoTypes
 
 if TYPE_CHECKING:
-    import numpy as np
     from numpy.typing import NDArray
     from ray.rllib.utils.typing import AgentID, ModuleID
-    from wandb import Video  # pyright: ignore[reportMissingImports] # TODO: can we use this as log type as well?
 
 __all__ = [
     "LogMetricsDict",
@@ -26,7 +24,7 @@ __all__ = [
 
 
 class VideoMetricsDict(TypedDict, closed=True):
-    video: CommonVideoTypes.LogVideoTypes
+    video: VideoTypes.LogVideoTypes
     """
     A 5D numpy array representing a video; or a string pointing to a video file to upload.
 
@@ -58,7 +56,9 @@ class _LogMetricsEnvRunnersResultsDict(BaseEnvRunnersResultsDict):
     num_env_steps_sampled_lifetime: NotRequired[int]
     num_env_steps_sampled: NotRequired[int]
     num_env_steps_passed_to_learner: NotRequired[int]
+    """Custom key for exact current_steps added by exact_sampling_callback"""
     num_env_steps_passed_to_learner_lifetime: NotRequired[int]
+    """Custom key for exact current_steps added by exact_sampling_callback"""
     episode_duration_sec_mean: NotRequired[float]
     num_module_steps_sampled: NotRequired[dict[ModuleID, int]]
     num_module_steps_sampled_lifetime: NotRequired[dict[ModuleID, int]]
@@ -69,8 +69,8 @@ class _LogMetricsEnvRunnersResultsDict(BaseEnvRunnersResultsDict):
 class _LogMetricsEvalEnvRunnersResultsDict(_LogMetricsEnvRunnersResultsDict, total=False):
     """Environment runner results for evaluation with video support."""
 
-    episode_videos_best: CommonVideoTypes.LogVideoTypes | VideoMetricsDict
-    episode_videos_worst: CommonVideoTypes.LogVideoTypes | VideoMetricsDict
+    episode_videos_best: VideoTypes.LogVideoTypes | VideoMetricsDict
+    episode_videos_worst: VideoTypes.LogVideoTypes | VideoMetricsDict
 
 
 class _LogMetricsEvaluationResultsWithoutDiscreteDict(_EvaluationNoDiscreteDict, _WarnVideosToEnvRunners):

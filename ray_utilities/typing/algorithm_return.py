@@ -37,9 +37,9 @@ class EnvRunnersResultsDict(BaseEnvRunnersResultsDict, closed=False):
     num_env_steps_sampled: int
     """Amount of sampling steps taken for the training of the agent in this iteration"""
     num_env_steps_passed_to_learner: NotRequired[int]
-    """Amount of steps passed to the learner in this iteration"""
+    """Amount of steps passed to the learner in this iteration. Custom key added by exact_sampling_callback"""
     num_env_steps_passed_to_learner_lifetime: NotRequired[int]
-    """Amount of steps passed to the learner in this iteration"""
+    """Amount of steps passed to the learner in this iteration. Custom key added by exact_sampling_callback"""
 
     # Additional Ray RLlib fields based on metrics imports
     episode_duration_sec_mean: NotRequired[float]
@@ -58,21 +58,22 @@ class EnvRunnersResultsDict(BaseEnvRunnersResultsDict, closed=False):
 
 
 class EvalEnvRunnersResultsDict(EnvRunnersResultsDict, total=False, extra_items=ExtraItems):
-    episode_videos_best: list[NDArray]
+    episode_videos_best: NotRequired[list[NDArray]]
     """
     List, likely with on entry, of a 5D array
 
     # array is shape=3D -> An image (c, h, w).
     # array is shape=4D -> A batch of images (B, c, h, w).
-    # array is shape=5D -> A video (1, L, c, h, w), where L is the length of the
+    # array is shape=5D -> A video (1, L, c, h, w), where L is the length of the video
     """
-    episode_videos_worst: list[NDArray]
+
+    episode_videos_worst: NotRequired[list[NDArray]]
     """
     List, likely with on entry, of a 5D array
 
     # array is shape=3D -> An image (c, h, w).
     # array is shape=4D -> A batch of images (B, c, h, w).
-    # array is shape=5D -> A video (1, L, c, h, w), where L is the length of the
+    # array is shape=5D -> A video (1, L, c, h, w), where L is the length of the video
     """
 
 
@@ -107,16 +108,16 @@ class _LearnerResults(TypedDict, extra_items=ReadOnly["int | float | _LearnerRes
 
 class LearnerAllModulesDict(_LearnerResults):
     num_env_steps_passed_to_learner: NotRequired[int]
-    """Key added by exact_sampling_callback"""
+    """Key added by custom connector"""
     num_env_steps_passed_to_learner_lifetime: NotRequired[int]
-    """Key added by exact_sampling_callback"""
+    """Key added by custom connector"""
 
 
 class LearnerModuleDict(_LearnerResults):
     num_env_steps_passed_to_learner: NotRequired[int]
-    """Key added by exact_sampling_callback"""
+    """Key added by custom connector"""
     num_env_steps_passed_to_learner_lifetime: NotRequired[int]
-    """Key added by exact_sampling_callback"""
+    """Key added by custom connector"""
 
 
 class LearnersMetricsDict(_LearnerResults):

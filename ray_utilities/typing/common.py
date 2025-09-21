@@ -21,14 +21,14 @@ from typing import TYPE_CHECKING, TypeAlias
 from typing_extensions import NotRequired, TypedDict
 
 if TYPE_CHECKING:
+    import numpy as np
     from numpy.typing import NDArray
-    from ray.rllib.utils.typing import AgentID, ModuleID
     from wandb import Video  # pyright: ignore[reportMissingImports]
 
 __all__ = [
     "BaseEnvRunnersResultsDict",
     "BaseEvaluationResultsDict",
-    "CommonVideoTypes",
+    "VideoTypes",
 ]
 
 
@@ -42,18 +42,21 @@ class BaseEnvRunnersResultsDict(TypedDict):
     """Always required - primary performance metric"""
 
 
-class CommonVideoTypes:
+class VideoTypes:
     """Common video type definitions used across the type hierarchy."""
 
     # Basic video types for algorithm returns
     BasicVideoList: TypeAlias = "list[NDArray]"
     """Simple list of video arrays for algorithm return data"""
 
-    # Advanced video types for logging metrics
-    Shape4D = tuple[int, int, int, int]  # (B, C, H, W)
-    Array4D: TypeAlias = "NDArray[Shape4D]"  # shape=(B, C, H, W)
-    Shape5D = tuple[int, int, int, int, int]  # (N, T, C, H, W)
-    Array5D: TypeAlias = "NDArray[Shape5D]"  # shape=(N, T, C, H, W)
+    Shape4D = tuple[int, int, int, int]
+    """(L, C, H, W)"""
+    Array4D: TypeAlias = "np.ndarray[Shape4D, np.dtype[np.number]]"
+    """4D numpy array (B, C, H, W), generally batch of images"""
+    Shape5D = tuple[int, int, int, int, int]
+    """(N, T, C, H, W)"""
+    Array5D: TypeAlias = "np.ndarray[Shape5D, np.dtype[np.number]]"
+    """5D numpy array (N, T, C, H, W), generally batch of videos"""
 
     LogVideoTypes: TypeAlias = "list[Array4D | Array5D] | Array5D | str | Video"
     """Advanced video types for metrics logging including Video objects and file paths"""
