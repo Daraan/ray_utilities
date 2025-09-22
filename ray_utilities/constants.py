@@ -17,15 +17,16 @@ Example:
     ...     # Use new Ray API features
     ...     pass
 """
+# pyright: enableExperimentalFeatures=true
 
 import hashlib
 import logging
 import os
 import sys
 import time
-from typing import Final
 import warnings
 from pathlib import Path
+from typing import Final
 
 import gymnasium as gym
 import ray
@@ -43,6 +44,7 @@ from ray.rllib.utils.metrics import (
     EPISODE_RETURN_MIN,
     EVALUATION_RESULTS,
 )
+from typing_extensions import Sentinel
 
 _logger = logging.getLogger(__name__)
 
@@ -53,6 +55,12 @@ RAY_UTILITIES_INITIALIZATION_TIMESTAMP = time.time()
 
 Useful for tracking package initialization time and calculating elapsed time since import.
 """
+
+RAY_UTILITIES_NEW_LOG_FORMAT: Final[str] = "RAY_UTILITIES_NEW_LOG_FORMAT"
+"""Environment variable key to enable new log format if found in :py:obj:`os.environ`."""
+
+TRAINING = "training"
+"""For the rllib layout use ENV_RUNNER_RESULTS instead of "training"."""
 
 # Constant for one execution
 
@@ -192,6 +200,9 @@ This metric key path follows Ray RLlib's hierarchical result structure:
 ``evaluation/env_runner_results/episode_return_mean``
 """
 
+NEW_LOG_EVAL_METRIC = EVALUATION_RESULTS + "/" + EPISODE_RETURN_MEAN
+"""Metric key used in loggers when new log format is used."""
+
 DISC_EVAL_METRIC_RETURN_MEAN = EVALUATION_RESULTS + "/discrete/" + ENV_RUNNER_RESULTS + "/" + EPISODE_RETURN_MEAN
 """str: Path for discrete evaluation episode return mean metric.
 
@@ -199,10 +210,31 @@ Used when discrete evaluation is enabled alongside standard evaluation:
 ``evaluation/discrete/env_runner_results/episode_return_mean``
 """
 
+NEW_LOG_DISC_EVAL_METRIC = EVALUATION_RESULTS + "/discrete/" + EPISODE_RETURN_MEAN
+"""Metric key used in loggers when new log format is used and discrete evaluation is enabled."""
+
 TRAIN_METRIC_RETURN_MEAN = ENV_RUNNER_RESULTS + "/" + EPISODE_RETURN_MEAN
 """str: Standard path for training episode return mean metric.
 
 Training metric path: ``env_runner_results/episode_return_mean``
+"""
+
+NEW_LOG_TRAIN_METRIC = TRAINING + "/" + EPISODE_RETURN_MEAN
+"""Metric key used in loggers when new log format is used and training is enabled."""
+
+DEFAULT_EVAL_METRIC = Sentinel("DEFAULT_EVAL_METRIC")
+"""typing.Sentinel value
+
+Default evaluation metric sentinel value to be replaced with actual metric key
+depending on wether the new log format is used or not, also possibly depending on
+wether discrete evaluation is enabled or not.
+
+The correct metric key should be retrived by:
+
+.. code-block:: python
+
+    if metric is DEFAULT_EVAL_METRIC:
+        metric = NEW_LOG_EVAL_METRIC if new_log_format_used() else EVAL_METRIC_RETURN_MEAN
 """
 
 # Video Recording Constants
@@ -226,12 +258,6 @@ DISCRETE_EVALUATION_BEST_VIDEO = "/".join(DISCRETE_EVALUATION_BEST_VIDEO_KEYS)
 DISCRETE_EVALUATION_WORST_VIDEO = "/".join(DISCRETE_EVALUATION_WORST_VIDEO_KEYS)
 
 # region: new layout for log metrics
-
-RAY_UTILITIES_NEW_LOG_FORMAT: Final[str] = "RAY_UTILITIES_NEW_LOG_FORMAT"
-"""Environment variable key to enable new log format if found in :py:obj:`os.environ`."""
-
-TRAINING = "training"
-"""For the rllib layout use ENV_RUNNER_RESULTS instead of "training"."""
 
 # NEW variants: omit ENV_RUNNER_RESULTS for evaluation, substitute ENV_RUNNER_RESULTS with "training" for training
 EVALUATION_BEST_VIDEO_KEYS_NEW = (EVALUATION_RESULTS, EPISODE_BEST_VIDEO)

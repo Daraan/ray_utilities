@@ -612,6 +612,7 @@ def create_log_metrics(
         ):
             metrics[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_BEST_VIDEO] = {
                 "video": evaluation_videos_best,
+                # if we have a video but no max reward, use the mean as the guaranteed metric present
                 "reward": result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(EPISODE_RETURN_MAX, eval_mean),
             }
         if evaluation_videos_worst := result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(

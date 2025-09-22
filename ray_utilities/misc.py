@@ -10,19 +10,27 @@ from __future__ import annotations
 import datetime
 import functools
 import logging
+import os
 import re
 import sys
 from typing import TYPE_CHECKING, Any, TypeVar
 
 if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
+
 from ray.experimental import tqdm_ray
 from ray.tune.error import TuneError
 from ray.tune.result_grid import ResultGrid
 from tqdm import tqdm
 from typing_extensions import Iterable, TypeIs
 
-from ray_utilities.constants import RAY_UTILITIES_INITIALIZATION_TIMESTAMP, RUN_ID
+from ray_utilities.constants import (
+    DEFAULT_EVAL_METRIC,
+    EVAL_METRIC_RETURN_MEAN,
+    NEW_LOG_EVAL_METRIC,
+    RAY_UTILITIES_INITIALIZATION_TIMESTAMP,
+    RUN_ID,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -339,3 +347,56 @@ class AutoInt(int):
         >>> isinstance(value, AutoInt)  # True
         >>> value + 10  # 52
     """
+
+
+_new_log_format_used: bool | None = None
+
+
+def new_log_format_used() -> bool:
+    """Check if the new log format is enabled via environment variable.
+
+    This function checks the environment variable
+    :envvar:`RAY_UTILITIES_NEW_LOG_FORMAT` to determine if the new logging format
+    should be used. The new format changes how metrics are structured in logs.
+
+    Returns:
+        ``True`` if the environment variable is set to a truthy value (not "0", "false", or "off"),
+        ``False`` otherwise.
+
+    Note:
+        The result is cached after the first call.
+    """
+    global _new_log_format_used  # noqa: PLW0603
+    if _new_log_format_used is not None:
+        return _new_log_format_used
+    _new_log_format_used = "RAY_UTILITIES_NEW_LOG_FORMAT" in os.environ and os.environ[
+        "RAY_UTILITIES_NEW_LOG_FORMAT"
+    ].lower() not in (
+        "0",
+        "false",
+        "off",
+    )
+    return _new_log_format_used
+
+
+def resolve_default_eval_metric(eval_metric: str | DEFAULT_EVAL_METRIC | None = None) -> str:
+    """Resolve the default evaluation metric based on log format.
+
+    This function determines the appropriate evaluation metric key to use
+    based on whether the new log format is enabled. If the provided
+    `eval_metric` is ``None``, it defaults to either
+    :attr:`EVAL_METRIC_RETURN_MEAN <ray_utilities.constants.EVAL_METRIC_RETURN_MEAN>` or
+    :attr:`NEW_LOG_EVAL_METRIC <ray_utilities.constants.NEW_LOG_EVAL_METRIC>` depending on
+    the log format.
+
+    Args:
+        eval_metric: The evaluation metric key to resolve, or ``None`` to use the default.
+
+    Returns:
+        The resolved evaluation metric key as a string.
+    """
+    if eval_metric is not DEFAULT_EVAL_METRIC and eval_metric is not None:
+        return eval_metric
+    if new_log_format_used():
+        return NEW_LOG_EVAL_METRIC
+    return EVAL_METRIC_RETURN_MEAN

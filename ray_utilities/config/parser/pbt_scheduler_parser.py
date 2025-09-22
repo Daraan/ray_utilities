@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 from ast import literal_eval
 from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, TypeAlias
 
 from ray.tune.schedulers import PopulationBasedTraining
 from tap import to_tap_class
+
+from ray_utilities.constants import (
+    DEFAULT_EVAL_METRIC,
+    EVAL_METRIC_RETURN_MEAN,
+    NEW_LOG_EVAL_METRIC,
+)
+from ray_utilities.misc import new_log_format_used
 
 if TYPE_CHECKING:
     from ray.tune.search.sample import Domain
@@ -94,6 +102,7 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
     """
 
     mode: Literal["min", "max"] = "max"
+    metric: str | DEFAULT_EVAL_METRIC = DEFAULT_EVAL_METRIC
     """One of {min, max}. Determines whether objective is minimizing or maximizing the metric attribute."""
     hyperparam_mutations: Optional[_HPMutationsType] = None
     require_attrs: bool = True
@@ -115,6 +124,11 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
             default=None,
             help="Hyperparameter mutations for PopulationBasedTraining.",
         )
+
+    def process_args(self) -> None:
+        super().process_args()
+        if self.metric is DEFAULT_EVAL_METRIC:
+            self.metric = NEW_LOG_EVAL_METRIC if new_log_format_used() else EVAL_METRIC_RETURN_MEAN
 
     def __init__(
         self,
@@ -152,10 +166,14 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
             args = self.parse_args().as_dict()
         else:
             args = self.as_dict()
+        args.pop("hyperparam_mutations", None)  # will be set below
+        # Set by Tuner, remove
+        args.pop("mode", None)
+        args.pop("metric", None)  # will be set by Tuner
         if self.resample_probability >= 1.0 and self.hyperparam_mutations is None:
             raise ValueError("hyperparam_mutations must be set if resample_probability is 1.0")
         assert not TYPE_CHECKING or self.hyperparam_mutations is not None  # ray has implicit optional
         return PopulationBasedTraining(
-            **args,
+            **{arg: val for arg, val in args.items() if arg in inspect.signature(PopulationBasedTraining).parameters},
             hyperparam_mutations=self.hyperparam_mutations,
         )

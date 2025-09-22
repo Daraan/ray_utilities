@@ -38,11 +38,12 @@ from ray_utilities.config import logger as parser_logger
 from ray_utilities.config.parser.mlp_argument_parser import SimpleMLPParser
 from ray_utilities.constants import (
     EVAL_METRIC_RETURN_MEAN,
+    NEW_LOG_EVAL_METRIC,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
 )
 from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
-from ray_utilities.misc import raise_tune_errors
+from ray_utilities.misc import new_log_format_used, raise_tune_errors
 from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.random import seed_everything
 from ray_utilities.runfiles import run_tune
@@ -692,6 +693,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             self.assertEqual(setup.config.lr, [[0, 0.111], [64, 0.333]])
             algo = setup.config.build_algo()
             learner = algo.learner_group._learner
+            assert learner
             optimizer = learner.get_optimizer()
             self.assertAlmostEqual(optimizer.param_groups[0]["lr"], 0.111)
             self.assertEqual(learner.config.lr, [[0, 0.111], [64, 0.333]])
@@ -1189,8 +1191,11 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
                     tune_results = {}
                     for num_env_runners, tuner in zip((num_env_runners_a, num_env_runners_b), [tuner_0, tuner_1]):
                         assert tuner._local_tuner
+
                         tuner._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(
-                            checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
+                            checkpoint_score_attribute=(
+                                NEW_LOG_EVAL_METRIC if new_log_format_used() else EVAL_METRIC_RETURN_MEAN
+                            ),
                             checkpoint_score_order="max",
                             checkpoint_frequency=frequency,  # Save every iteration
                             # NOTE: num_keep does not appear to work here

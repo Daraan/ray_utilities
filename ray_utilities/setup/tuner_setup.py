@@ -37,9 +37,11 @@ from ray_utilities.callbacks.tuner.metric_checkpointer import TUNE_RESULT_IS_A_C
 from ray_utilities.config._tuner_callbacks_setup import TunerCallbackSetup
 from ray_utilities.constants import (
     CLI_REPORTER_PARAMETER_COLUMNS,
+    DEFAULT_EVAL_METRIC,
     EVAL_METRIC_RETURN_MEAN,
+    NEW_LOG_EVAL_METRIC,
 )
-from ray_utilities.misc import trial_name_creator as default_trial_name_creator
+from ray_utilities.misc import new_log_format_used, trial_name_creator as default_trial_name_creator
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner, create_search_algo
 from ray_utilities.training.helpers import get_current_step
 from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultIterationStopper
@@ -135,7 +137,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
 
     def __init__(
         self,
-        eval_metric: str = EVAL_METRIC_RETURN_MEAN,
+        eval_metric: str | DEFAULT_EVAL_METRIC = DEFAULT_EVAL_METRIC,
         eval_metric_order: Literal["max", "min"] = "max",
         *,
         setup: SetupType_co,  # ExperimentSetupBase[ParserTypeT, ConfigTypeT, _AlgorithmType_co],
@@ -143,6 +145,8 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         add_iteration_stopper: bool | None = None,
         trial_name_creator: Optional[Callable[[Trial], str]] = None,
     ):
+        if eval_metric is DEFAULT_EVAL_METRIC:
+            eval_metric = NEW_LOG_EVAL_METRIC if new_log_format_used() else EVAL_METRIC_RETURN_MEAN
         self.eval_metric: str = eval_metric
         self.eval_metric_order: Literal["max", "min"] = eval_metric_order
         self._setup = setup

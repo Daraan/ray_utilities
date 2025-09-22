@@ -275,7 +275,7 @@ class AdvWandbLoggerCallback(NewStyleLoggerCallback, SaveVideoFirstCallback, Wan
 
         # If we are in offline mode, try to sync this trial's run immediately
         if "offline" in self.kwargs.get("mode", "") and self.upload_offline_experiments:
-            print("SYNCING OFFLINE RUN")
+            _LOGGER.info("Syncing offline WandB run for trial %s", trial.trial_id)
             # TODO: problem did the actor sync everything when we are here?
             self._sync_offline_run_if_available(trial)
 

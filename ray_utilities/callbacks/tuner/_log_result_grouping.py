@@ -10,6 +10,11 @@ non_metric_results = {
     "env_runners/environments/seeds/seed_sequence",
     "evaluation/env_runners/environments/seeds",
     "evaluation/env_runners/environments/seeds/seed_sequence",
+    # New log style
+    "training/environments/seeds",
+    "training/environments/seeds/seed_sequence",
+    "evaluation/environments/seeds",
+    "evaluation/environments/seeds/seed_sequence",
 }
 
 exclude_results = {

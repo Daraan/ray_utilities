@@ -36,6 +36,8 @@ import inspect
 import logging
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, cast, overload
 
+from ray_utilities.misc import new_log_format_used
+
 try:
     import optuna
 except ModuleNotFoundError:
@@ -49,7 +51,11 @@ from ray.tune.search.optuna import OptunaSearch
 from ray.tune.stopper import Stopper
 from ray.tune.utils import flatten_dict
 
-from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
+from ray_utilities.constants import (
+    DEFAULT_EVAL_METRIC,
+    EVAL_METRIC_RETURN_MEAN,
+    NEW_LOG_EVAL_METRIC,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -134,7 +140,7 @@ def create_search_algo(
     study_name: str,
     *,
     hparams: Optional[dict[str, Any | dict[Literal["grid_search"], Any]]],
-    metric=EVAL_METRIC_RETURN_MEAN,  # flattened key
+    metric: str | DEFAULT_EVAL_METRIC = DEFAULT_EVAL_METRIC,  # flattened key
     mode: str | list[str] | None = "max",
     initial_params: Optional[list[dict[str, Any]]] = None,
     storage: Optional[optuna.storages.BaseStorage] = None,
@@ -150,7 +156,7 @@ def create_search_algo(
     study_name: str,
     *,
     hparams: Optional[dict[str, Any | dict[Literal["grid_search"], Any]]],
-    metric=EVAL_METRIC_RETURN_MEAN,  # flattened key
+    metric: str | DEFAULT_EVAL_METRIC = DEFAULT_EVAL_METRIC,  # flattened key
     mode: str | list[str] | None = "max",
     initial_params: Optional[list[dict[str, Any]]] = None,
     storage: Optional[optuna.storages.BaseStorage] = None,
@@ -165,7 +171,7 @@ def create_search_algo(
     study_name: str,
     *,
     hparams: Optional[dict[str, Any | dict[Literal["grid_search"], Any]]],
-    metric=EVAL_METRIC_RETURN_MEAN,  # flattened key
+    metric: Optional[str | DEFAULT_EVAL_METRIC] = DEFAULT_EVAL_METRIC,  # flattened key
     mode: str | list[str] | None = "max",
     initial_params: Optional[list[dict[str, Any]]] = None,
     storage: Optional[optuna.storages.BaseStorage] = None,
@@ -218,6 +224,8 @@ def create_search_algo(
             Otherwise the default of ray's `OptunaSearch` is used.
         kwargs: Forwarded to OptunaSearch, for example `evaluated_rewards`.
     """
+    if metric is DEFAULT_EVAL_METRIC:
+        metric = NEW_LOG_EVAL_METRIC if new_log_format_used() else EVAL_METRIC_RETURN_MEAN
     grid_values = {}
     if hparams:
         grid_values = {k: v["grid_search"] for k, v in hparams.items() if isinstance(v, dict) and "grid_search" in v}
