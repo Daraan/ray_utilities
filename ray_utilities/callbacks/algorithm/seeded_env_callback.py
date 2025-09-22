@@ -53,17 +53,16 @@ class _SeededEnvCallbackMeta(_CallbackMeta):  # pyright: ignore[reportGeneralTyp
 
 class SeedEnvsCallback(DefaultCallbacks):
     """
-    Attributes:
-        env_seed: A common seed that is used for all workers and vector indices.
-            If None, the environment will not be seeded. Rendering this callback useless.
-
     Use make_seeded_env_callback(None) for pure randomness.
     Use make_seeded_env_callback(fixed_seed) to create reproducible runs.
     make_seeded_env_callback(0) is equivalent to using this class directly.
     """
 
     env_seed: ClassVar[int | None] = 0
-    """If None env will not be seeded"""
+    """A common seed that is used for all workers and vector indices.
+
+    If None, the environment will not be seeded. Making this callback a no-op.
+    """
 
     __logged_env_seed_none = False
 

@@ -52,10 +52,19 @@ ray\_utilities.callbacks.tuner.metric\_checkpointer module
    :undoc-members:
    :show-inheritance:
 
+ray\_utilities.callbacks.tuner.new\_style\_logger\_callback module
+------------------------------------------------------------------
+
+.. automodule:: ray_utilities.callbacks.tuner.new_style_logger_callback
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Module contents
 ---------------
 
 .. automodule:: ray_utilities.callbacks.tuner
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:

@@ -4,7 +4,7 @@ import os
 import ray
 
 from ray_utilities import run_tune
-from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
 from ray_utilities.setup import PPOSetup
 from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup

@@ -6,14 +6,13 @@ import random
 import unittest
 from unittest.mock import MagicMock, patch
 
-import pytest
 from ray.tune.experiment import Trial
 from ray.tune.schedulers.pbt import _PBTTrialState
 
 from ray_utilities.constants import PERTURBED_HPARAMS
 from ray_utilities.testing_utils import DisableLoggers, TestHelpers
-from ray_utilities.tune.scheduler.top_trial_scheduler import (
-    TopTrialScheduler,
+from ray_utilities.tune.scheduler.top_pbt_scheduler import (
+    TopPBTTrialScheduler,
     _debug_dump_new_config,
     _grid_search_sample_function,
 )
@@ -69,7 +68,7 @@ class TestTopTrialScheduler(DisableLoggers, TestHelpers):
         """Set up test fixtures."""
         super().setUp()
         # Create a scheduler with default settings
-        self.scheduler = TopTrialScheduler(
+        self.scheduler = TopPBTTrialScheduler(
             metric="reward",
             mode="max",
             perturbation_interval=10,
@@ -133,7 +132,7 @@ class TestTopTrialScheduler(DisableLoggers, TestHelpers):
     def test_quantiles_min_mode(self):
         """Test quantile calculation with min mode."""
         # Create a new scheduler with min mode and dummy hyperparam_mutations
-        scheduler = TopTrialScheduler(
+        scheduler = TopPBTTrialScheduler(
             mode="min",
             perturbation_interval=10,
             quantile_fraction=0.2,
@@ -201,34 +200,9 @@ class TestTopTrialScheduler(DisableLoggers, TestHelpers):
         result = {"reward": 100}
 
         # Mock parent class method
-        with patch("ray.tune.schedulers.pbt.PopulationBasedTraining.on_trial_complete", return_value=result):
-            ret_val = self.scheduler.on_trial_complete(mock_controller, trial, result)
+        self.scheduler.on_trial_complete(mock_controller, trial, result)
 
-        # Verify parent method was called and assignments were reset
-        self.assertEqual(ret_val, result)
         self.assertIsNone(self.scheduler._current_assignments)
-
-    def test_check_result_with_missing_attributes(self):
-        """Test _check_result with missing attributes."""
-        # Test with missing time_attr
-        result = {"not_time_attr": 10}
-
-        # Should log a warning but not raise an error with require_attrs=False
-        scheduler = TopTrialScheduler(metric="reward", require_attrs=False, hyperparam_mutations={"dummy": [1, 2]})
-
-        with self.assertLogs(level="WARNING"):
-            scheduler._check_result(result)
-
-        # Should raise with require_attrs=True
-        scheduler = TopTrialScheduler(metric="reward", require_attrs=True, hyperparam_mutations={"dummy": [1, 2]})
-
-        with self.assertRaises(RuntimeError):
-            scheduler._check_result(result)
-
-        # Test with missing metric
-        result = {scheduler._time_attr: 10}
-        with self.assertRaises(RuntimeError):
-            scheduler._check_result(result)
 
 
 class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
@@ -237,7 +211,7 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
     @patch("ray.tune.execution.tune_controller.TuneController")
     def test_checkpoint_or_exploit(self, mock_controller):
         """Test the checkpoint_or_exploit method."""
-        scheduler = TopTrialScheduler(
+        scheduler = TopPBTTrialScheduler(
             metric="reward",
             perturbation_interval=10,
             quantile_fraction=0.3,

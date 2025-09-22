@@ -15,7 +15,7 @@ from ray.rllib.utils.metrics import EVALUATION_RESULTS
 from ray.tune.utils import validate_save_restore
 from ray.util.multiprocessing import Pool
 
-from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN, PERTURBED_HPARAMS
 from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup

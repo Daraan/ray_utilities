@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from ray.rllib.env.multi_agent_env_runner import MultiAgentEnvRunner
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
 
-    from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+    from ray_utilities.config import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
     from ray_utilities.typing import (
         RewardUpdaters,

@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from typing_extensions import TypeVar
 
-from ray_utilities.config.mlp_argument_parser import MLPArgumentParser, SimpleMLPParser
+from ray_utilities.config.parser.mlp_argument_parser import MLPArgumentParser, SimpleMLPParser
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co
 

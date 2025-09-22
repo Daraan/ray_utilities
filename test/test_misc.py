@@ -15,7 +15,7 @@ from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
 from ray_utilities.callbacks.tuner.adv_comet_callback import AdvCometLoggerCallback
 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
-from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.misc import RE_GET_TRIAL_ID
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import (

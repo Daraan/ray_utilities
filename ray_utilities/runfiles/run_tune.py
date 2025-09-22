@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar
 from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
-from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.misc import raise_tune_errors
 from ray_utilities.random import seed_everything
 from ray_utilities.training.default_class import TrainableBase

@@ -96,7 +96,7 @@ from typing_extensions import Final, NotRequired, Required, Sentinel, TypeAliasT
 import ray_utilities.callbacks.algorithm.model_config_saver_callback
 import ray_utilities.config.create_algorithm
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.config.mlp_argument_parser import MLPArgumentParser
+from ray_utilities.config.parser.mlp_argument_parser import MLPArgumentParser
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.dynamic_config.dynamic_buffer_update import logger as dynamic_buffer_logger
 from ray_utilities.misc import raise_tune_errors

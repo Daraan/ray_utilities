@@ -20,12 +20,11 @@ import math
 import random
 from functools import partial
 from itertools import cycle
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, TypeVar, cast
 
-from ray.train._internal.session import _FutureTrainingResult
+from ray.train._internal.session import _FutureTrainingResult, _TrainingResult
 from ray.tune.experiment import Trial
 from ray.tune.schedulers.pbt import PopulationBasedTraining
-from ray.util.debug import log_once
 
 from ray_utilities.constants import PERTURBED_HPARAMS
 
@@ -35,6 +34,8 @@ if TYPE_CHECKING:
     from ray.tune.execution.tune_controller import TuneController
     from ray.tune.schedulers.pbt import _PBTTrialState
     from ray.tune.search.sample import Domain
+
+    from ray_utilities.typing.metrics import LogMetricsDict
 
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ def _debug_dump_new_config(new_config: dict, mutation_keys: list[str]):
     return new_config
 
 
-class TopTrialScheduler(PopulationBasedTraining):
+class TopPBTTrialScheduler(PopulationBasedTraining):
     """Enhanced Population Based Training scheduler with grid search and flexible quantiles.
 
     This scheduler extends Ray Tune's PopulationBasedTraining with support for grid search
@@ -196,43 +197,6 @@ class TopTrialScheduler(PopulationBasedTraining):
         """Updates the trials config with hyperparam_mutations"""
         # Adds a new trial with config updated based on hyperparam_mutations
         return super().on_trial_add(tune_controller, trial)
-
-    def on_trial_resultX(self, tune_controller: TuneController, trial: Trial, result: Dict) -> str:
-        self._check_result(result)
-        if self._metric not in result or self._time_attr not in result:
-            return self.CONTINUE  # todo ray use Enum
-        time = result[self._time_attr]
-        state = self._trial_state[trial]
-        # Continue training if burn-in period has not been reached, yet.
-        if time < self._burn_in_period:
-            logger.debug("Still in burn-in period: %s < %s", time, self._burn_in_period)
-            return self.CONTINUE
-
-        # Continue training if perturbation interval has not been reached, yet.
-        time_since_perturb = time - state.last_perturbation_time
-        if time_since_perturb < self._perturbation_interval:
-            logger.debug("Perturbation interval not reached: %s < %s", time_since_perturb, self._perturbation_interval)
-            return self.CONTINUE  # avoid checkpoint overhead
-
-        logger.debug("Updating trial state for trial %s at time %s", trial, time)
-        # update internal information, does not create a checkpoint!
-        self._save_trial_state(state, time, result, trial)
-
-        if not self._synch:
-            state.last_perturbation_time = time
-            # Divide executed trials in upper_quantile to safe
-            lower_quantile, upper_quantile = self._quantiles()
-            decision = self.CONTINUE
-            for other_trial in tune_controller.get_trials():
-                if other_trial.status in [Trial.PENDING, Trial.PAUSED]:
-                    decision = self.PAUSE
-                    break
-            self._checkpoint_or_exploit(trial, tune_controller, upper_quantile, lower_quantile)
-            return self.NOOP if trial.status == Trial.PAUSED else decision
-
-        # calls
-        self._checkpoint_or_exploit  # current_step (- last perturbation time) < self._perturbation_interval
-        return super().on_trial_result(tune_controller, trial, result)
 
     def _quantiles(self) -> Tuple[List[Trial], List[Trial]]:
         """Returns trials in the lower and upper `quantile` of the population.
@@ -368,14 +332,14 @@ class TopTrialScheduler(PopulationBasedTraining):
             )
 
             if isinstance(last_checkpoint, _FutureTrainingResult):
-                training_result = last_checkpoint.resolve()
+                training_result: _TrainingResult | None = last_checkpoint.resolve()
 
                 if training_result:
                     clone_state.last_result = training_result.metrics
                     clone_state.last_checkpoint = training_result.checkpoint
                     last_checkpoint = clone_state.last_checkpoint
                 else:
-                    logger.debug(
+                    logger.error(
                         "PBT-scheduled checkpoint save resolved to None. Trial "
                         "%s didn't save any checkpoint before "
                         "and can't be exploited.",
@@ -395,41 +359,13 @@ class TopTrialScheduler(PopulationBasedTraining):
         """
         self._current_assignments = None
 
-    def on_trial_complete(self, tune_controller: TuneController, trial: Trial, result: Dict):
+    def on_trial_complete(self, tune_controller: TuneController, trial: Trial, result: LogMetricsDict | dict[str, Any]):
         """Handle completed trial by cleaning up assignments."""
-        result = super().on_trial_complete(tune_controller, trial, result)
+        # FIXME: Doubt this happens after all perturbations are done.
+        super().on_trial_complete(
+            tune_controller,
+            trial,
+            cast("dict[str, object]", result),
+        )
         # Reset assignments when trials complete to ensure proper redistribution
         self.reset_exploitations()
-        return result
-
-    def _check_result(self, result: dict):
-        if self._time_attr not in result:
-            time_missing_msg = (
-                "Cannot find time_attr {} "
-                "in trial result {}. Make sure that this "
-                "attribute is returned in the "
-                "results of your Trainable.".format(self._time_attr, result)
-            )
-            if self._require_attrs:
-                raise RuntimeError(
-                    time_missing_msg + "If this error is expected, you can change this to "
-                    "a warning message by "
-                    "setting PBT(require_attrs=False)"
-                )
-            if log_once("pbt-time_attr-error"):
-                logger.warning(time_missing_msg)
-        if self._metric not in result:
-            metric_missing_msg = (
-                "Cannot find metric {} in trial result {}. "
-                "Make sure that this attribute is returned "
-                "in the "
-                "results of your Trainable.".format(self._metric, result)
-            )
-            if self._require_attrs:
-                raise RuntimeError(
-                    metric_missing_msg + "If this error is expected, "
-                    "you can change this to a warning message by "
-                    "setting PBT(require_attrs=False)"
-                )
-            if log_once("pbt-metric-error"):
-                logger.warning(metric_missing_msg)

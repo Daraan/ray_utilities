@@ -8,7 +8,14 @@ ray\_utilities.typing.algorithm\_return module
 ----------------------------------------------
 
 .. automodule:: ray_utilities.typing.algorithm_return
-   :no-index:
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+ray\_utilities.typing.common module
+-----------------------------------
+
+.. automodule:: ray_utilities.typing.common
    :members:
    :undoc-members:
    :show-inheritance:

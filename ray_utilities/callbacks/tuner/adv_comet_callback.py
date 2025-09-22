@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, ClassVar, Iterable, List, Literal, Optional, c
 
 from ray.air.integrations.comet import CometLoggerCallback
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
-from ray.tune.experiment import Trial
 from ray.tune.utils import flatten_dict
 
 from ray_utilities.callbacks.tuner._save_video_callback import SaveVideoFirstCallback
@@ -28,7 +27,7 @@ from ._log_result_grouping import exclude_results, non_metric_results
 if TYPE_CHECKING:
     from comet_ml import Experiment, OfflineExperiment
     from numpy.typing import NDArray
-    from ray.tune.experiment.trial import Trial
+    from ray.tune.experiment import Trial
 
     from ray_utilities.typing import CometStripedVideoFilename
     from ray_utilities.typing.metrics import AnyFlatLogMetricsDict

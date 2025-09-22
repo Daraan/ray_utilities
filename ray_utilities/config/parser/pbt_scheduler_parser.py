@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from ast import literal_eval
-from typing import TYPE_CHECKING, Any, Callable, Optional, TypeAlias
+from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, TypeAlias
 
 from ray.tune.schedulers import PopulationBasedTraining
 from tap import to_tap_class
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_HPMutationsType: TypeAlias = "dict[str, dict[Any, Any] | list[Any] | tuple[Any, ...] | Callable[[], Any] | Domain]"
+_HPMutationsType: TypeAlias = dict[str, "dict[Any, Any] | list[Any] | tuple[Any, ...] | Callable[[], Any] | Domain"]
 
 
 def _to_hyperparam_mutations(string: str) -> _HPMutationsType:
@@ -93,7 +93,8 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
             https://arxiv.org/pdf/1711.09846.pdf.
     """
 
-    mode: Optional[str] = "max"
+    mode: Literal["min", "max"] = "max"
+    """One of {min, max}. Determines whether objective is minimizing or maximizing the metric attribute."""
     hyperparam_mutations: Optional[_HPMutationsType] = None
     require_attrs: bool = True
     synch: bool = True

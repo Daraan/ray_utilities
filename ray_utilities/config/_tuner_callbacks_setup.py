@@ -24,10 +24,8 @@ if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
     from ray.tune import Callback
 
-    from ray_utilities.setup.experiment_base import (
-        DefaultArgumentParser,
-        ExperimentSetupBase,
-    )
+    from ray_utilities.config import DefaultArgumentParser
+    from ray_utilities.setup import ExperimentSetupBase
 
 
 class _TunerCallbackSetupBase(ABC):

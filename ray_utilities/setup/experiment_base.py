@@ -56,7 +56,7 @@ from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallba
 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 from ray_utilities.comet import CometArchiveTracker
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.config.typed_argument_parser import ConfigFilePreParser, SupportsMetaAnnotations
+from ray_utilities.config.parser.default_argument_parser import ConfigFilePreParser, SupportsMetaAnnotations
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 from ray_utilities.environment import create_env
 from ray_utilities.misc import RE_GET_TRIAL_ID, AutoInt, get_trainable_name
@@ -1209,7 +1209,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         return TunerSetup(
             setup=self,
             eval_metric=EVAL_METRIC_RETURN_MEAN,
-            eval_metric_order="max",
+            eval_metric_order=self.args.mode,
             add_iteration_stopper=self._tuner_add_iteration_stopper(),
             trial_name_creator=self._tune_trial_name_creator,
         ).create_tuner()

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, Optional, Protocol, cast, overload
 
 from ray import train, tune
 from ray.rllib.algorithms.ppo import PPO
@@ -42,18 +42,16 @@ from ray_utilities.constants import (
 from ray_utilities.misc import trial_name_creator as default_trial_name_creator
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner, create_search_algo
 from ray_utilities.training.helpers import get_current_step
-from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
 from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultIterationStopper
 
 if TYPE_CHECKING:
     from ray.air.config import RunConfig as RunConfigV1
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
-    from ray.tune import schedulers
     from ray.tune.execution.placement_groups import PlacementGroupFactory
     from ray.tune.experiment import Trial
     from ray.tune.stopper import Stopper
 
-    from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+    from ray_utilities.config import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import ExperimentSetupBase
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
 
@@ -62,10 +60,9 @@ __all__ = [
     "TunerSetup",
 ]
 
-
-ConfigTypeT = TypeVar("ConfigTypeT", bound="AlgorithmConfig")
-ParserTypeT = TypeVar("ParserTypeT", bound="DefaultArgumentParser")
-_AlgorithmType_co = TypeVar("_AlgorithmType_co", bound="Algorithm", covariant=True)
+SetupType_co = TypeVar(
+    "SetupType_co", bound="ExperimentSetupBase[DefaultArgumentParser, AlgorithmConfig, Algorithm]", covariant=True
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +81,7 @@ class _TunerSetupBase(Protocol):
     def create_tuner(self) -> tune.Tuner: ...
 
 
-class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
+class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
     """Configuration and management class for Ray Tune hyperparameter optimization.
 
     This class provides a comprehensive interface for setting up and running
@@ -141,7 +138,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
         eval_metric: str = EVAL_METRIC_RETURN_MEAN,
         eval_metric_order: Literal["max", "min"] = "max",
         *,
-        setup: ExperimentSetupBase[ParserTypeT, ConfigTypeT, _AlgorithmType_co],
+        setup: SetupType_co,  # ExperimentSetupBase[ParserTypeT, ConfigTypeT, _AlgorithmType_co],
         extra_tags: Optional[list[str]] = None,
         add_iteration_stopper: bool | None = None,
         trial_name_creator: Optional[Callable[[Trial], str]] = None,
@@ -401,20 +398,3 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             tune_config=tune_config,
             run_config=self.create_run_config(self.create_callbacks()),
         )
-
-
-class ScheduledTunerSetup(TunerSetup):
-    def create_scheduler(self) -> schedulers.TrialScheduler:
-        return ReTuneScheduler(
-            perturbation_interval=2048 * 3,  # FIXME: Hardcoded defaults
-            resample_probability=1.0,
-            hyperparam_mutations={"train_batch_size_per_learner": {"grid_search": [256, 512, 1024, 2048]}},
-            mode=None,  # filled in by Tuner
-            metric=None,  # filled in by Tuner
-            synch=True,
-        )
-
-    def create_tune_config(self) -> tune.TuneConfig:
-        tune_config = super().create_tune_config()
-        tune_config.scheduler = self.create_scheduler()
-        return tune_config

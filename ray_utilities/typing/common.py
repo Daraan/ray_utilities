@@ -16,7 +16,7 @@ Base Types:
 # pyright: enableExperimentalFeatures=true
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from typing_extensions import NotRequired, TypedDict
 
@@ -51,11 +51,11 @@ class VideoTypes:
 
     Shape4D = tuple[int, int, int, int]
     """(L, C, H, W)"""
-    Array4D: TypeAlias = "np.ndarray[Shape4D, np.dtype[np.number]]"
+    Array4D: TypeAlias = "np.ndarray[Shape4D, np.dtype[np.number[Any]]]"
     """4D numpy array (B, C, H, W), generally batch of images"""
     Shape5D = tuple[int, int, int, int, int]
     """(N, T, C, H, W)"""
-    Array5D: TypeAlias = "np.ndarray[Shape5D, np.dtype[np.number]]"
+    Array5D: TypeAlias = "np.ndarray[Shape5D, np.dtype[np.number[Any]]]"
     """5D numpy array (N, T, C, H, W), generally batch of videos"""
 
     LogVideoTypes: TypeAlias = "list[Array4D | Array5D] | Array5D | str | Video"

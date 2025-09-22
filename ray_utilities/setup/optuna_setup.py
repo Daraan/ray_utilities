@@ -34,14 +34,20 @@ from __future__ import annotations
 
 import inspect
 import logging
-from typing import Any, Dict, Literal, Optional, overload
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, cast, overload
 
-import optuna
+try:
+    import optuna
+except ModuleNotFoundError:
+    if TYPE_CHECKING:
+        import optuna
+    else:
+        optuna = cast("Any", ModuleNotFoundError)
 from ray import tune
+from ray.tune.search import sample
 from ray.tune.search.optuna import OptunaSearch
 from ray.tune.stopper import Stopper
 from ray.tune.utils import flatten_dict
-from ray.tune.search import sample
 
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 

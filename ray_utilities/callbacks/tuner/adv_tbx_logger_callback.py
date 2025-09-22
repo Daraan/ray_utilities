@@ -10,9 +10,9 @@ from ray_utilities.callbacks.tuner.new_style_logger_callback import LogMetricsDi
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS
 
 if TYPE_CHECKING:
-    from ray_utilities.typing.metrics import Array5D
     from ray.tune.experiment.trial import Trial
 
+    from ray_utilities.typing.common import VideoTypes
     from ray_utilities.typing.metrics import VideoMetricsDict, _LogMetricsEvalEnvRunnersResultsDict
 
 
@@ -74,7 +74,7 @@ class AdvTBXLoggerCallback(NewStyleLoggerCallback, TBXLoggerCallback):
                         else:
                             video = video[0]
                     assert isinstance(video, np.ndarray) and video.ndim == 5
-                    parent_dir[keys[-1]] = cast("Array5D", video)
+                    parent_dir[keys[-1]] = cast("VideoTypes.Array5D", video)
         return result
 
     def log_trial_result(self, iteration: int, trial: Trial, result):

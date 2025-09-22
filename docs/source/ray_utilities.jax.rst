@@ -18,7 +18,6 @@ ray\_utilities.jax.jax\_learner module
 --------------------------------------
 
 .. automodule:: ray_utilities.jax.jax_learner
-   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -59,6 +58,7 @@ Module contents
 ---------------
 
 .. automodule:: ray_utilities.jax
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:

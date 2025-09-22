@@ -26,6 +26,7 @@ Module contents
 ---------------
 
 .. automodule:: ray_utilities.callbacks
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:

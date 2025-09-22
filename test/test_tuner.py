@@ -28,7 +28,7 @@ from ray.tune.utils.mock_trainable import MOCK_TRAINABLE_NAME, register_mock_tra
 
 from ray_utilities.callbacks.algorithm import exact_sampling_callback
 from ray_utilities.callbacks.tuner.metric_checkpointer import StepCheckpointer  # pyright: ignore[reportDeprecated]
-from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.constants import (
     EVAL_METRIC_RETURN_MEAN,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
@@ -193,7 +193,6 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             "--checkpoint_frequency", batch_size * 2,
             "--fcnet_hiddens", "[4]",
         ):  # fmt: skip
-            # FIXME: new default steps does not align with other tests!
             setup = MLPSetup()
             # Workaround for NOT working StepCheckpointer as it works on a copy of the result dict.
             # AlgoStepCheckpointer is not added, hardcoded checkpointing!

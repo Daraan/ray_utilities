@@ -141,7 +141,7 @@ if TYPE_CHECKING:
 
     from typing_extensions import TypeForm
 
-    from ray_utilities.config.typed_argument_parser import LogStatsChoices
+    from ray_utilities.config.parser.default_argument_parser import LogStatsChoices
     from ray_utilities.typing.algorithm_return import (
         EvalEnvRunnersResultsDict,
         EvaluationResultsDict,

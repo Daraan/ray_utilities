@@ -35,7 +35,7 @@ from ray.rllib.utils.metrics import (
 from ray_utilities.callbacks.algorithm.seeded_env_callback import NUM_ENV_RUNNERS_0_1_EQUAL
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config import logger as parser_logger
-from ray_utilities.config.mlp_argument_parser import SimpleMLPParser
+from ray_utilities.config.parser.mlp_argument_parser import SimpleMLPParser
 from ray_utilities.constants import (
     EVAL_METRIC_RETURN_MEAN,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,

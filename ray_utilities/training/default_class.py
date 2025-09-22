@@ -45,7 +45,7 @@ from typing_extensions import Self, TypeAliasType
 
 from ray_utilities.callbacks.progress_bar import restore_pbar, save_pbar_state, update_pbar
 from ray_utilities.callbacks.tuner.metric_checkpointer import TUNE_RESULT_IS_A_COPY
-from ray_utilities.config.typed_argument_parser import LOG_STATS, LogStatsChoices
+from ray_utilities.config.parser.default_argument_parser import LOG_STATS, LogStatsChoices
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, PERTURBED_HPARAMS
 from ray_utilities.misc import AutoInt, is_pbar
 from ray_utilities.nice_logger import set_project_log_level
@@ -138,19 +138,6 @@ class TrainableStateDict(TypedDict):
     This TypedDict defines the complete state structure that can be saved
     and restored for a trainable algorithm, including the algorithm itself,
     its configuration, progress tracking information, and metadata.
-
-    Attributes:
-        trainable: The state obtained by :meth:`ray.tune.Trainable.get_state`.
-        algorithm: Optional algorithm state (may not be saved if algorithm
-            handles its own checkpointing).
-        algorithm_config: Serialized algorithm configuration state.
-        algorithm_overrides: Optional configuration overrides applied to the algorithm.
-        iteration: Current training iteration number.
-        pbar_state: Progress bar state for restoration of progress tracking.
-        reward_updaters: Dictionary mapping reward types to their historical values.
-        setup: Experiment setup checkpoint data.
-        current_step: Current environment step count.
-        git_sha: Optional SHA hash of the current git commit for reproducibility.
     """
 
     trainable: StateDict
@@ -228,12 +215,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         ``_ParserType``: Type of the argument parser (extends Tap)
         ``_ConfigType``: Type of the algorithm configuration
         ``_AlgorithmType``: Type of the RL algorithm
-
-    Attributes:
-        setup_class: The experiment setup class to use for this trainable.
-            Must be set via the :meth:`define` class method.
-        discrete_eval: Whether to use discrete evaluation episodes.
-        use_pbar: Whether to show progress bars during training.
 
     Checkpoint and Restoration Flow::
 

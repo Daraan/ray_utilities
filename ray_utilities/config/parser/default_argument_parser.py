@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Optional, TypeVar
 from tap import Tap
 from typing_extensions import Annotated, Literal, Sentinel, get_args, get_origin, get_type_hints
 
+from ray_utilities.config.parser.pbt_scheduler_parser import PopulationBasedTrainingParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, split_timestep_budget
 from ray_utilities.misc import AutoInt
 from ray_utilities.nice_logger import set_project_log_level
@@ -779,7 +780,7 @@ class CheckpointConfigArgumentParser(Tap):
         return super().process_args()
 
 
-class OptionalExtensionsArgs(RLlibArgumentParser):
+class OptionalExtensionsArgs(RLlibArgumentParser, PopulationBasedTrainingParser):
     dynamic_buffer: AlwaysRestore[bool] = False
     """Use DynamicBufferCallback. Increases env steps sampled and batch size"""
 
