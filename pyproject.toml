@@ -60,6 +60,9 @@ jax = [
   "optax",
   "chex",
 ]
+argcomplete = [
+  "argcomplete",
+]
 
 [tool.black]
 line-length = 120
@@ -166,6 +169,7 @@ extend-generics = [
     "ray_utilities.setup.ppo_mlp_setup.MLPSetup",
     "ray_utilities.setup.ppo_mlp_setup.PPOMLPSetup",
 ]
+allowed-unused-imports = ["hvplot.pandas", "default_arguments.PYTHON_ARGCOMPLETE_OK"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 # during dev/refactoring phase make sure not to import from downstream packages
@@ -189,6 +193,7 @@ ignorelist = ["copyright"]
 split_on_trailing_comma = true
 include_trailing_comma = true
 profile = "black"
+known_third_party = ["default_arguments"] # This is a a lie, default_arguments should be at the top as it applies mocking
 
 [tool.pyright]
 reportDeprecated = "warning"

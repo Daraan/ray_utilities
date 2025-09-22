@@ -230,6 +230,11 @@ class TestMisc(TestCase):
         with patch_args("--it", 10, except_parser_errors=["--it", "10"]):
             AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
 
+    def test_can_import_default_arguments(self):
+        # This test is just to ensure that the default_arguments module can be imported
+        # without errors. It does not need to do anything else.
+        import default_arguments.PYTHON_ARGCOMPLETE_OK  # noqa: PLC0415
+
 
 class TestCallbackUploads(DisableLoggers, TestHelpers):
     """Test callback upload behavior after trial completion."""

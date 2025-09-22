@@ -18,6 +18,13 @@ from ast import literal_eval
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional, TypeVar
 
+try:
+    import argcomplete
+
+    ARGCOMPLETE_AVAILABLE = True
+except ImportError:
+    ARGCOMPLETE_AVAILABLE = False
+
 from tap import Tap
 from typing_extensions import Annotated, Literal, Sentinel, get_args, get_origin, get_type_hints
 
@@ -916,3 +923,30 @@ class DefaultArgumentParser(
     def configure(self) -> None:
         self.allow_abbrev = False
         super().configure()
+
+    @classmethod
+    def enable_completion(cls) -> None:
+        """Enable shell completion for this parser using argcomplete.
+
+        This method should be called before parsing arguments if shell completion
+        is desired. To activate in your shell, you need to run:
+
+        ```bash
+        pip install argcomplete
+        eval "$(register-python-argcomplete your_script.py)"
+        ```
+
+        Or for all Python scripts:
+        ```bash
+        eval "$(register-python-argcomplete python)"
+        ```
+        """
+        if ARGCOMPLETE_AVAILABLE:
+            # Create a temporary parser instance to get the argparse object
+            temp_parser = cls()
+            temp_parser.parse_args([])
+            # Apply argcomplete to the underlying argparse parser
+            argcomplete.autocomplete(temp_parser)  # pyright: ignore[reportPossiblyUnboundVariable]
+            logger.debug("Shell completion enabled with argcomplete")
+        else:
+            logger.warning("argcomplete not available. Install with 'pip install argcomplete' for shell completion.")

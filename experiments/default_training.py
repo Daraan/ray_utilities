@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import os
 
+# Enable shell completion for this file
+import default_arguments.PYTHON_ARGCOMPLETE_OK
 import ray
 
 from ray_utilities import run_tune
