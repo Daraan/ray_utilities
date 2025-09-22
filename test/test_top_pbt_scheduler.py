@@ -9,13 +9,30 @@ from unittest.mock import MagicMock, patch
 from ray.tune.experiment import Trial
 from ray.tune.schedulers.pbt import _PBTTrialState
 
+from ray_utilities.config.parser.default_argument_parser import DefaultArgumentParser
+from ray_utilities.config.parser.pbt_scheduler_parser import PopulationBasedTrainingParser
 from ray_utilities.constants import PERTURBED_HPARAMS
-from ray_utilities.testing_utils import DisableLoggers, TestHelpers
+from ray_utilities.testing_utils import DisableLoggers, TestHelpers, patch_args
 from ray_utilities.tune.scheduler.top_pbt_scheduler import (
     TopPBTTrialScheduler,
     _debug_dump_new_config,
     _grid_search_sample_function,
 )
+
+
+class TestPBTParser(unittest.TestCase):
+    @unittest.skip("not implemented")
+    def test_hyperparam_mutations_parsing(self): ...
+
+    @patch_args()
+    def test_default_overrides(self):
+        for parser in (PopulationBasedTrainingParser(), DefaultArgumentParser()):
+            args = parser.parse_args(known_only=True)
+            self.assertEqual(args.time_attr, "current_step")
+            self.assertEqual(args.quantile_fraction, 0.1)
+            self.assertEqual(args.perturbation_interval, 100_000)
+            self.assertEqual(args.resample_probability, 1.0)
+            self.assertEqual(args.mode, "max")
 
 
 class TestGridSearchSampleFunction(DisableLoggers, TestHelpers):

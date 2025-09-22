@@ -116,6 +116,37 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
             help="Hyperparameter mutations for PopulationBasedTraining.",
         )
 
+    def __init__(
+        self,
+        *args,
+        underscores_to_dashes=False,
+        explicit_bool=False,
+        config_files=None,
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            *args,
+            underscores_to_dashes=underscores_to_dashes,
+            explicit_bool=explicit_bool,
+            config_files=config_files,
+            **kwargs,
+        )
+
+        # HACK: to_tap_class does not support overrides of default values
+        # see https://github.com/swansonk14/typed-argument-parser/issues/166
+        def replace_action(arg_name: str, new_default: Any) -> None:
+            for action in self._actions:
+                if action.dest == arg_name:
+                    action.default = new_default
+                    break
+
+        for var, val in vars(PopulationBasedTrainingParser).items():
+            if not (var.startswith("_") or callable(val) or isinstance(val, (staticmethod, classmethod, property))):
+                replace_action(var, val)
+        assert (action := next(a for a in self._actions if a.dest == "time_attr")).default == "current_step", (
+            f"got {action.default}"
+        )
+
     def to_scheduler(self) -> PopulationBasedTraining:
         if not self._parsed:
             args = self.parse_args().as_dict()
