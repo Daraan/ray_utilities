@@ -97,7 +97,7 @@ import ray_utilities.callbacks.algorithm.model_config_saver_callback
 import ray_utilities.config.create_algorithm
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.parser.mlp_argument_parser import MLPArgumentParser
-from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
+from ray_utilities.constants import ENVIRONMENT_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.dynamic_config.dynamic_buffer_update import logger as dynamic_buffer_logger
 from ray_utilities.misc import raise_tune_errors
 from ray_utilities.nice_logger import change_log_level
@@ -829,11 +829,11 @@ class TestHelpers(unittest.TestCase):
             msg=(msg or "") + f" NaN values differ: {metrics_0}\n!=\n{metrics_1} {msg}",
         )
         # not nans
-        if "environments" in metrics_0:
+        if ENVIRONMENT_RESULTS in metrics_0:
             metrics_0 = deepcopy(metrics_0)
             metrics_1 = deepcopy(metrics_1)
-            seeds_data0: dict[str, Iterable[int]] = metrics_0["environments"]["seeds"]
-            seeds_data1: dict[str, Iterable[int]] = metrics_1["environments"]["seeds"]
+            seeds_data0: dict[str, Iterable[int]] = metrics_0[ENVIRONMENT_RESULTS]["seeds"]
+            seeds_data1: dict[str, Iterable[int]] = metrics_1[ENVIRONMENT_RESULTS]["seeds"]
             seq0 = list(seeds_data0.pop("seed_sequence"))  # A
             seq1 = list(seeds_data1.pop("seed_sequence"))  # A B
             seeds0 = set(seq0)

@@ -10,12 +10,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, TypeAlias
 from ray.tune.schedulers import PopulationBasedTraining
 from tap import to_tap_class
 
-from ray_utilities.constants import (
-    DEFAULT_EVAL_METRIC,
-    EVAL_METRIC_RETURN_MEAN,
-    NEW_LOG_EVAL_METRIC,
-)
-from ray_utilities.misc import new_log_format_used
+from ray_utilities.constants import DEFAULT_EVAL_METRIC, EVAL_METRIC_RETURN_MEAN
 
 if TYPE_CHECKING:
     from ray.tune.search.sample import Domain
@@ -102,8 +97,9 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
     """
 
     mode: Literal["min", "max"] = "max"
-    metric: str | DEFAULT_EVAL_METRIC = DEFAULT_EVAL_METRIC
-    """One of {min, max}. Determines whether objective is minimizing or maximizing the metric attribute."""
+    """One of {min, max}.Determines whether objective is minimizing or maximizing the metric attribute."""
+    metric: str = EVAL_METRIC_RETURN_MEAN
+    """The metric to be optimized as flat key, e.g. 'evaluation/env_runners/episode_return_mean'."""
     hyperparam_mutations: Optional[_HPMutationsType] = None
     require_attrs: bool = True
     synch: bool = True
@@ -124,11 +120,13 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
             default=None,
             help="Hyperparameter mutations for PopulationBasedTraining.",
         )
-
-    def process_args(self) -> None:
-        super().process_args()
-        if self.metric is DEFAULT_EVAL_METRIC:
-            self.metric = NEW_LOG_EVAL_METRIC if new_log_format_used() else EVAL_METRIC_RETURN_MEAN
+        # As long as Sentinel cannot be pickled do not add it as default
+        # self.add_argument(
+        #    "--metric",
+        #    type=_resolve_default_metric,
+        #    default=DEFAULT_EVAL_METRIC,
+        #    help="The metric to be optimized, by default the evaluation metric.",
+        # )
 
     def __init__(
         self,
@@ -155,7 +153,10 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
                     break
 
         for var, val in vars(PopulationBasedTrainingParser).items():
-            if not (var.startswith("_") or callable(val) or isinstance(val, (staticmethod, classmethod, property))):
+            # On python < 3.11 Sentinel passes callable() check
+            if val is DEFAULT_EVAL_METRIC or not (
+                var.startswith("_") or callable(val) or isinstance(val, (staticmethod, classmethod, property))
+            ):
                 replace_action(var, val)
         assert (action := next(a for a in self._actions if a.dest == "time_attr")).default == "current_step", (
             f"got {action.default}"

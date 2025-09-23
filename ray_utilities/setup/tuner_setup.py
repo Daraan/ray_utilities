@@ -137,7 +137,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
 
     def __init__(
         self,
-        eval_metric: str | DEFAULT_EVAL_METRIC = DEFAULT_EVAL_METRIC,
+        eval_metric: str | DEFAULT_EVAL_METRIC = EVAL_METRIC_RETURN_MEAN,
         eval_metric_order: Literal["max", "min"] = "max",
         *,
         setup: SetupType_co,  # ExperimentSetupBase[ParserTypeT, ConfigTypeT, _AlgorithmType_co],

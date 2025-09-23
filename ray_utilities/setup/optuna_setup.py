@@ -140,7 +140,7 @@ def create_search_algo(
     study_name: str,
     *,
     hparams: Optional[dict[str, Any | dict[Literal["grid_search"], Any]]],
-    metric: str | DEFAULT_EVAL_METRIC = DEFAULT_EVAL_METRIC,  # flattened key
+    metric: str = EVAL_METRIC_RETURN_MEAN,  # flattened key
     mode: str | list[str] | None = "max",
     initial_params: Optional[list[dict[str, Any]]] = None,
     storage: Optional[optuna.storages.BaseStorage] = None,
@@ -156,7 +156,7 @@ def create_search_algo(
     study_name: str,
     *,
     hparams: Optional[dict[str, Any | dict[Literal["grid_search"], Any]]],
-    metric: str | DEFAULT_EVAL_METRIC = DEFAULT_EVAL_METRIC,  # flattened key
+    metric: str = EVAL_METRIC_RETURN_MEAN,  # flattened key
     mode: str | list[str] | None = "max",
     initial_params: Optional[list[dict[str, Any]]] = None,
     storage: Optional[optuna.storages.BaseStorage] = None,
@@ -171,7 +171,7 @@ def create_search_algo(
     study_name: str,
     *,
     hparams: Optional[dict[str, Any | dict[Literal["grid_search"], Any]]],
-    metric: Optional[str | DEFAULT_EVAL_METRIC] = DEFAULT_EVAL_METRIC,  # flattened key
+    metric: Optional[str | DEFAULT_EVAL_METRIC] = EVAL_METRIC_RETURN_MEAN,  # flattened key
     mode: str | list[str] | None = "max",
     initial_params: Optional[list[dict[str, Any]]] = None,
     storage: Optional[optuna.storages.BaseStorage] = None,

@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional
 import numpy as np
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
 
+from ray_utilities.constants import ENVIRONMENT_RESULTS
+
 try:
     from ray.tune.callback import _CallbackMeta
 except ImportError:
@@ -145,7 +147,7 @@ class SeedEnvsCallback(DefaultCallbacks):
         if metrics_logger:
             # HACK: Set clear_on_reduce=True and remove window again when https://github.com/ray-project/ray/issues/54324 is solved  # noqa: E501
             metrics_logger.log_value(
-                ("environments", "seeds", "seed_sequence"),
+                (ENVIRONMENT_RESULTS, "seeds", "seed_sequence"),
                 list(map(int, log_seeds.tolist())),  # assure int and not numpy int
                 clear_on_reduce=False,
                 reduce=None,

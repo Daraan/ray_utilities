@@ -17,9 +17,8 @@ from ray.tune.utils import validate_save_restore
 from ray.util.multiprocessing import Pool
 
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.constants import PERTURBED_HPARAMS
+from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN, PERTURBED_HPARAMS
 from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
-from ray_utilities.misc import resolve_default_eval_metric
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup
 from ray_utilities.testing_utils import (
@@ -657,7 +656,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     tuner = setup.create_tuner()
                     assert tuner._local_tuner
                     tuner._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(
-                        checkpoint_score_attribute=resolve_default_eval_metric(),
+                        checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
                         checkpoint_score_order="max",
                         checkpoint_frequency=1,  # Save every iteration
                         # NOTE: num_keep does not appear to work here

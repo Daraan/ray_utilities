@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import math
 import os
 import subprocess
 import tempfile
@@ -37,13 +38,14 @@ from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config import logger as parser_logger
 from ray_utilities.config.parser.mlp_argument_parser import SimpleMLPParser
 from ray_utilities.constants import (
+    ENVIRONMENT_RESULTS,
+    EPISODE_RETURN_MEAN,
     EVAL_METRIC_RETURN_MEAN,
-    NEW_LOG_EVAL_METRIC,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
 )
 from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
-from ray_utilities.misc import new_log_format_used, raise_tune_errors
+from ray_utilities.misc import raise_tune_errors
 from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.random import seed_everything
 from ray_utilities.runfiles import run_tune
@@ -78,8 +80,9 @@ if TYPE_CHECKING:
     from ray_utilities.typing.metrics import LogMetricsDict
 
 if "RAY_DEBUG" not in os.environ:
-    os.environ["RAY_DEBUG"] = "legacy"
+    # os.environ["RAY_DEBUG"] = "legacy"
     # os.environ["RAY_DEBUG"]="0"
+    pass
 
 
 class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
@@ -287,6 +290,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     "--num_samples", "3",
                     "--use_exact_total_steps",
                     "--env_seeding_strategy", "same",
+                    "--no_dynamic_eval_interval",
                 )  # ,
                 # self.assertNoLogs(logger, level="WARNING"),
             ):  # fmt: skip
@@ -338,6 +342,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
 
                 with Setup() as setup:
                     setup.config.minibatch_size = 8  # set to small value to prevent ValueErrors
+                    setup.config.evaluation_interval = 2
                 param_space = setup.param_space
                 self.assertIn(param, param_space)
                 self.assertIsNotNone(param_space[param])  # dict with list
@@ -357,6 +362,12 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 raise_tune_errors(results)
                 self.check_tune_result(results)
                 assert results[0].metrics
+                # Check that we really evaluate, and DynamicEvalCallback does not interfere
+                self.assertFalse(
+                    math.isnan(results[0].metrics[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN]),
+                    "eval metric is nan",
+                )
+                # self.assertTrue(results[0].metrics["config"]["evaluation_interval"])
                 self.assertIn(
                     "_checking_class_",
                     results[0].metrics,
@@ -635,7 +646,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             # when async these are not equal to the ones from the callback, but still based on them
             self.assertTrue(check_np_random_generator(trainable.algorithm.env_runner))
             logged_seed = trainable.algorithm.env_runner.metrics.peek(
-                ("environments", "seeds", "seed_sequence"), compile=False
+                (ENVIRONMENT_RESULTS, "seeds", "seed_sequence"), compile=False
             )
         else:
             # Cannot pickle generators => cannot pickle envs
@@ -655,7 +666,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 )
             )
             logged_seeds = trainable.algorithm.env_runner_group.foreach_env_runner(
-                lambda r: r.metrics.peek(("environments", "seeds", "seed_sequence")), local_env_runner=False
+                lambda r: r.metrics.peek((ENVIRONMENT_RESULTS, "seeds", "seed_sequence")), local_env_runner=False
             )
             self.assertEqual(len(logged_seeds), setup.config.num_env_runners)
             # Assert that the deques in logged_seeds are pairwise different
@@ -1193,9 +1204,7 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
                         assert tuner._local_tuner
 
                         tuner._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(
-                            checkpoint_score_attribute=(
-                                NEW_LOG_EVAL_METRIC if new_log_format_used() else EVAL_METRIC_RETURN_MEAN
-                            ),
+                            checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
                             checkpoint_score_order="max",
                             checkpoint_frequency=frequency,  # Save every iteration
                             # NOTE: num_keep does not appear to work here

@@ -57,7 +57,13 @@ Useful for tracking package initialization time and calculating elapsed time sin
 """
 
 RAY_UTILITIES_NEW_LOG_FORMAT: Final[str] = "RAY_UTILITIES_NEW_LOG_FORMAT"
-"""Environment variable key to enable new log format if found in :py:obj:`os.environ`."""
+"""
+Environment variable key to enable new log format if found in :py:obj:`os.environ`.
+
+Note:
+    The new logging format is used in downstream loggers, e.g. for WandB or Comet ML.
+    other callbacks and logs are not affected and should not check for the new format.
+"""
 
 TRAINING = "training"
 """For the rllib layout use ENV_RUNNER_RESULTS instead of "training"."""
@@ -226,15 +232,23 @@ DEFAULT_EVAL_METRIC = Sentinel("DEFAULT_EVAL_METRIC")
 """typing.Sentinel value
 
 Default evaluation metric sentinel value to be replaced with actual metric key
-depending on wether the new log format is used or not, also possibly depending on
-wether discrete evaluation is enabled or not.
+depending on wether the new log format is used or not (variable RAY_UTILITIES_NEW_LOG_FORMAT is set),
+also possibly depending on wether discrete evaluation is enabled or not.
 
-The correct metric key should be retrived by:
+The correct metric key should be retrieved by:
 
 .. code-block:: python
 
     if metric is DEFAULT_EVAL_METRIC:
         metric = NEW_LOG_EVAL_METRIC if new_log_format_used() else EVAL_METRIC_RETURN_MEAN
+"""
+
+ENVIRONMENT_RESULTS = "environments"
+"""
+Metric key for environment-specific results in Trainable results.
+
+See Also:
+    :class:`SeededEnvsCallback`
 """
 
 # Video Recording Constants

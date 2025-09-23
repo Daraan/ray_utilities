@@ -357,7 +357,8 @@ def new_log_format_used() -> bool:
 
     This function checks the environment variable
     :envvar:`RAY_UTILITIES_NEW_LOG_FORMAT` to determine if the new logging format
-    should be used. The new format changes how metrics are structured in logs.
+    should be used. The new format changes how metrics are structured in logs that are,
+    for example, sent to WandB or Comet ML.
 
     Returns:
         ``True`` if the environment variable is set to a truthy value (not "0", "false", or "off"),
@@ -382,7 +383,7 @@ def new_log_format_used() -> bool:
 def resolve_default_eval_metric(eval_metric: str | DEFAULT_EVAL_METRIC | None = None) -> str:
     """Resolve the default evaluation metric based on log format.
 
-    This function determines the appropriate evaluation metric key to use
+    This function determines the evaluation metric key to use
     based on whether the new log format is enabled. If the provided
     `eval_metric` is ``None``, it defaults to either
     :attr:`EVAL_METRIC_RETURN_MEAN <ray_utilities.constants.EVAL_METRIC_RETURN_MEAN>` or
@@ -394,6 +395,11 @@ def resolve_default_eval_metric(eval_metric: str | DEFAULT_EVAL_METRIC | None = 
 
     Returns:
         The resolved evaluation metric key as a string.
+
+    Attention:
+        This function is intended to be used with loggers like the WandB or Comet logger
+        where the log metrics are changed for better human interpretation and not
+        for other callbacks where the original metric keys are expected.
     """
     if eval_metric is not DEFAULT_EVAL_METRIC and eval_metric is not None:
         return eval_metric

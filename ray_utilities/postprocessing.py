@@ -114,6 +114,7 @@ from typing_extensions import TypeVar
 
 from ray_utilities.constants import (
     DEFAULT_VIDEO_DICT_KEYS,
+    ENVIRONMENT_RESULTS,
     EPISODE_BEST_VIDEO,
     EPISODE_WORST_VIDEO,
 )
@@ -570,7 +571,7 @@ def create_log_metrics(
     else:
         eval_mean = float("nan")
         disc_eval_mean = float("nan")
-    environment_results = result[ENV_RUNNER_RESULTS].get("environments", {})
+    environment_results = result[ENV_RUNNER_RESULTS].get(ENVIRONMENT_RESULTS, {})
     if environment_results:  # turn to a list
         s_seq: Deque = environment_results["seeds"]["seed_sequence"]
         environment_results["seeds"]["seed_sequence"] = list(s_seq)
@@ -648,6 +649,20 @@ def create_log_metrics(
         if save_video:
             save_videos(metrics)
     if log_stats == "minimal":
+        if not math.isnan(eval_mean) and EVALUATION_RESULTS in result:
+            # Add min/max
+            for key in (EPISODE_RETURN_MIN, EPISODE_RETURN_MAX):
+                if (
+                    eval_min_max := result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(key, None)
+                ) is not None and eval_min_max != eval_mean:
+                    metrics[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][key] = eval_min_max
+            if discrete_eval and "discrete" in result[EVALUATION_RESULTS]:
+                disc_eval_results = result[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS]  # pyright: ignore[reportTypedDictNotRequiredAccess]
+                for key in (EPISODE_RETURN_MIN, EPISODE_RETURN_MAX):
+                    if (
+                        eval_min_max := disc_eval_results.get(key, None)
+                    ) is not None and eval_min_max != disc_eval_mean:
+                        metrics[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS][key] = eval_min_max  # pyright: ignore[reportTypedDictNotRequiredAccess]
         # reorganize some keys to align with other log_stats
         metrics = _reorganize_timer_logs(metrics)  # pyright: ignore[reportArgumentType, reportAssignmentType]
         metrics.pop(TIMERS, None)

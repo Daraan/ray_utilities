@@ -30,11 +30,12 @@ from ray_utilities.callbacks.algorithm import exact_sampling_callback
 from ray_utilities.callbacks.tuner.metric_checkpointer import StepCheckpointer  # pyright: ignore[reportDeprecated]
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.constants import (
+    EVAL_METRIC_RETURN_MEAN,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
 )
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations
-from ray_utilities.misc import raise_tune_errors, resolve_default_eval_metric
+from ray_utilities.misc import raise_tune_errors
 from ray_utilities.runfiles import run_tune
 from ray_utilities.setup import optuna_setup
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
@@ -84,7 +85,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             assert tuner._local_tuner._tune_config.search_alg
             self.assertEqual(
                 tuner._local_tuner._tune_config.search_alg.metric,
-                resolve_default_eval_metric(),
+                EVAL_METRIC_RETURN_MEAN,
             )
         with patch_args("--num_samples", "1"):
             setup2 = AlgorithmSetup()
@@ -334,7 +335,7 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
         tuner = setup.create_tuner()
         tuner._local_tuner.get_run_config().checkpoint_config = (  # pyright: ignore[reportOptionalMemberAccess]
             tune.CheckpointConfig(
-                checkpoint_score_attribute=resolve_default_eval_metric(),
+                checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
                 checkpoint_score_order="max",
                 checkpoint_frequency=2,  # Save every two iterations
                 # NOTE: num_keep does not appear to work here
@@ -443,7 +444,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 tuner1 = setup1.create_tuner()
                 assert tuner1._local_tuner
                 tuner1._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(
-                    checkpoint_score_attribute=resolve_default_eval_metric(),
+                    checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
                     checkpoint_score_order="max",
                     checkpoint_frequency=1,
                 )
@@ -515,7 +516,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 tuner2 = setup2.create_tuner()
                 assert tuner2._local_tuner
                 tuner2._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(
-                    checkpoint_score_attribute=resolve_default_eval_metric(),
+                    checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
                     checkpoint_score_order="max",
                     checkpoint_frequency=1,
                 )
@@ -579,7 +580,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 tuner1 = setup1.create_tuner()
                 assert tuner1._local_tuner
                 tuner1._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(
-                    checkpoint_score_attribute=resolve_default_eval_metric(),
+                    checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
                     checkpoint_score_order="max",
                     checkpoint_frequency=1,
                 )
@@ -616,7 +617,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 tuner2 = setup2.create_tuner()
                 assert tuner2._local_tuner
                 tuner2._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(
-                    checkpoint_score_attribute=resolve_default_eval_metric(),
+                    checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
                     checkpoint_score_order="max",
                     checkpoint_frequency=1,
                 )
