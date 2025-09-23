@@ -4,9 +4,9 @@ import logging
 from abc import abstractmethod
 from typing import TYPE_CHECKING
 
-
 from ray.tune.stopper import CombinedStopper
 
+from ray_utilities.callbacks.tuner.sync_config_files_callback import SyncConfigFilesCallback
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner
 from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 from ray_utilities.setup.tuner_setup import SetupType_co, TunerSetup
@@ -14,7 +14,7 @@ from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
 
 if TYPE_CHECKING:
     from ray import tune
-    from ray.tune import schedulers
+    from ray.tune import Callback, schedulers
 
     from ray_utilities.config.parser.mlp_argument_parser import MLPArgumentParser
 
@@ -95,6 +95,11 @@ class PPOMLPWithReTuneSetup(PPOMLPSetup):
 class PBTTunerSetup(ScheduledTunerSetup["PPOMLPWithPBTSetup"]):
     def create_scheduler(self) -> schedulers.TrialScheduler:
         return self._setup.args.to_scheduler()
+
+    def create_callbacks(self) -> list[Callback]:
+        callbacks = super().create_callbacks()
+        callbacks.append(SyncConfigFilesCallback())
+        return callbacks
 
 
 class PPOMLPWithPBTSetup(PPOMLPSetup["MLPArgumentParser"]):

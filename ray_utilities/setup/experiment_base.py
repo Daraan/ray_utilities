@@ -76,6 +76,7 @@ if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
     from ray.rllib.utils.typing import EnvType
+    from ray.runtime_context import RuntimeContext as RayRuntimeContext
     from ray.tune.experiment import Trial as TuneTrial
     from ray.tune.result_grid import ResultGrid
 
@@ -158,7 +159,11 @@ class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, Algor
     config_overrides: dict[str, Any]
     """Hold the current dict created by updating config_overrides"""
 
-    config_files: NotRequired[Optional[list[str | os.PathLike]]]
+    config_files: NotRequired[Optional[list[str | os.PathLike | Path]]]
+    """
+    Optional list of configuration files used during argument parsing.
+    Should be present if setup / parser uses config files.
+    """
 
     trial_name_creator: NotRequired[Optional[Callable[[TuneTrial], str]]]
     """Optional trial name creator function for Ray Tune trials."""
@@ -277,8 +282,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         self,
         args: Optional[Sequence[str]] = None,
         *,
-        config_files: Optional[list[str | os.PathLike]] = None,
-        load_args: Optional[str | os.PathLike] = None,
+        config_files: Optional[list[str | os.PathLike | Path]] = None,
+        load_args: Optional[str | os.PathLike | Path] = None,
         init_config: bool = True,
         init_param_space: bool = True,
         init_trainable: bool = True,
@@ -412,7 +417,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     # region Argument Parsing
 
-    def create_parser(self, config_files: Optional[list[str | os.PathLike]] = None) -> Parser[ParserType_co]:
+    def create_parser(self, config_files: Optional[list[str | os.PathLike | Path]] = None) -> Parser[ParserType_co]:
         self.parser = DefaultArgumentParser(allow_abbrev=False, config_files=config_files)
         if self._change_log_level is not None:
             self.parser._change_log_level = self._change_log_level
@@ -731,6 +736,9 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         param_space["experiment_group"] = self.group_name
         self.param_space = param_space
         del self._dynamic_parameters_to_tune
+        if self._config_files:
+            # Store config files for trial to sync when using a scheduler or remote node.
+            param_space["_config_files"] = self._config_files
         return param_space
 
     # endregion
@@ -1531,13 +1539,57 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 stacklevel=2,
             )
         setup_class = cast("type[Self]", setup_class)
+
+        # Handle config file restoration
+        config_files_to_use = None
+
+        if load_config_files and (original_config_files := data.get("config_files")):
+            not_existing_files = [file for file in map(Path, original_config_files) if not file.exists()]
+            if not_existing_files:
+                synced_files = []
+                try:
+                    # sync missing config files without the need of the Syncing callback.
+                    ctx: RayRuntimeContext = ray.get_runtime_context()
+
+                    actor: TrainableBase | Any = ctx.worker.actors[ctx.worker.actor_id]
+                    if actor._storage:
+                        for file in map(Path, not_existing_files):
+                            if file.is_absolute():
+                                dest = file.relative_to(Path(os.environ["TUNE_ORIG_WORKING_DIR"])).as_posix()
+                                source = file.as_posix()
+                            else:
+                                dest = file.as_posix()
+                                source = (Path(os.environ["TUNE_ORIG_WORKING_DIR"]) / file).as_posix()
+                            actor._storage.syncer.sync_down(remote_dir=source, local_dir=dest)
+                            # FIXME: Is one wait enough when there are multiple files?
+                            try:
+                                actor._storage.syncer.wait()
+                            except FileNotFoundError as e:
+                                logger.error("Could not sync missing config files: %s", e)
+                            else:
+                                synced_files.append(dest)
+                    else:
+                        logger.error(
+                            "Config files %s do not exist and cannot be restored because no storage is configured. ",
+                            not_existing_files,
+                        )
+                        # TODO: possibly create empty files so that parser does not fail
+                except Exception:
+                    logger.exception("Could not restore missing config files %s.", not_existing_files)
+                config_files_to_use = [
+                    file for file in map(Path, original_config_files) if file not in not_existing_files
+                ]
+                config_files_to_use.extend(synced_files)
+            else:
+                config_files_to_use = original_config_files
+
         new = setup_class(
             init_config=False,
             init_param_space=False,
             init_trainable=False,
             parse_args=False,
             trial_name_creator=data.get("trial_name_creator"),
-            config_files=None if not load_config_files else data.get("config_files", None),
+            config_files=config_files_to_use,
         )
         unchecked_keys.discard("trial_name_creator")
         unchecked_keys.discard("config_files")

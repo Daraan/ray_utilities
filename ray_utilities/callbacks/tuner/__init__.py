@@ -9,6 +9,7 @@ from .adv_csv_callback import AdvCSVLoggerCallback
 from .adv_json_logger_callback import AdvJsonLoggerCallback
 from .adv_tbx_logger_callback import AdvTBXLoggerCallback
 from .adv_wandb_callback import AdvWandbLoggerCallback
+from .sync_config_files_callback import SyncConfigFilesCallback
 
 if TYPE_CHECKING:
     from ray.tune.callback import Callback
@@ -19,6 +20,7 @@ __all__ = [
     "AdvJsonLoggerCallback",
     "AdvTBXLoggerCallback",
     "AdvWandbLoggerCallback",
+    "SyncConfigFilesCallback",
 ]
 
 

@@ -810,7 +810,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         if isinstance(checkpoint, dict):
             keys_to_process = set(checkpoint.keys())  # Sanity check if processed all keys
 
-            # from_checkpoint calls restore_from_path which calls set state
+            # from_checkpoint calls restore_from_path which calls set_state
             # if checkpoint["algorithm_checkpoint_dir"] is a tempdir (e.g. from tune, this is wrong)
             # However, self.set_state should have take care of algorithm already even if checkpoint dir is missing
             if os.path.exists(checkpoint["algorithm_checkpoint_dir"]):
