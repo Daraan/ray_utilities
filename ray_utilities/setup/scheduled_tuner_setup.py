@@ -4,6 +4,10 @@ import logging
 from abc import abstractmethod
 from typing import TYPE_CHECKING
 
+
+from ray.tune.stopper import CombinedStopper
+
+from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner
 from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 from ray_utilities.setup.tuner_setup import SetupType_co, TunerSetup
 from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
@@ -40,6 +44,25 @@ class ScheduledTunerSetup(TunerSetup[SetupType_co]):
             )
             tune_config.search_alg = None
         return tune_config
+
+    def create_run_config(self, callbacks: list[tune.Callback]) -> tune.RunConfig:  # pyright: ignore[reportIncompatibleMethodOverride]
+        run_config = super().create_run_config(callbacks=callbacks)
+        # Should also remove OptunaPruner as stopper which is placed in run_config
+        if run_config.stop is not None:
+            if isinstance(run_config.stop, OptunaSearchWithPruner):
+                logger.info("Removing OptunaPruner stopper to not conflict with the scheduler %s", run_config.stop)
+                run_config.stop = None
+            elif isinstance(run_config.stop, CombinedStopper):
+                new_stoppers = [s for s in run_config.stop._stoppers if not isinstance(s, OptunaSearchWithPruner)]
+                if len(new_stoppers) != len(run_config.stop._stoppers):
+                    logger.info("Removing OptunaPruner stopper to not conflict with the scheduler %s", run_config.stop)
+                if len(new_stoppers) == 0:
+                    run_config.stop = None
+                elif len(new_stoppers) == 1:
+                    run_config.stop = new_stoppers[0]
+                else:
+                    run_config.stop = CombinedStopper(*new_stoppers)
+        return run_config
 
 
 # region ReTuner

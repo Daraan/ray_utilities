@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from ray.tune.logger import LoggerCallback
 
+from ray_utilities.constants import RAY_UTILITIES_NEW_LOG_FORMAT
 from ray_utilities.postprocessing import log_metrics_to_new_layout
 
 if TYPE_CHECKING:
@@ -39,7 +40,7 @@ class NewStyleLoggerCallback(LoggerCallback):
         **info,
     ):
         super().on_trial_result(iteration, trials, trial, result, **info)
-        if os.environ.get("RAY_UTILITIES_NEW_LOG_FORMAT", "1").lower() in ("0", "false", "off"):
+        if os.environ.get(RAY_UTILITIES_NEW_LOG_FORMAT, "1").lower() in ("0", "false", "off"):
             self.log_trial_result(
                 iteration,
                 trial,

@@ -122,7 +122,8 @@ class OptunaSearchWithPruner(OptunaSearch, Stopper):
             self._reported_metric_this_step = False  # TODO could set this to current iteration
             _logger.debug(
                 "KeyError in Stopper OptunaSearchWithPruner.__call__: %s. "
-                "Likely the tracked metric is not present before the first evaluation.",
+                "Likely the tracked metric is not present before the first evaluation. "
+                "or this class is used as a stopper without using it as a searcher at the same time.",
                 e,
             )
             return False
