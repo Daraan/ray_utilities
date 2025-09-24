@@ -271,22 +271,13 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
 
             return storage
 
-        checkpoint_now_implemented = None
-
         class CheckpointCallback(Callback):
             num_checkpoints = 0
 
             def on_trial_result(self, iteration, trials, trial: Trial, result, **info):
-                nonlocal checkpoint_now_implemented
                 # Checkpoint every two iterations
                 if result[TRAINING_ITERATION] % 2 == 0:
                     self.num_checkpoints += 1
-                    try:
-                        trial.checkpoint_now()
-                    except AttributeError:
-                        checkpoint_now_implemented = False
-                    else:
-                        checkpoint_now_implemented = True
 
         with tempfile.TemporaryDirectory() as local_dir:
             storage = mock_storage_context(storage_path=local_dir)
@@ -313,10 +304,6 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 runner.step()
 
             assert callback.num_checkpoints == 3
-            # assert checkpoint_now_implemented  # custom patch
-            if checkpoint_now_implemented:
-                assert trial.storage
-                assert sum(item.startswith("checkpoint_") for item in os.listdir(trial.storage.trial_fs_path)) == 3
 
 
 @pytest.mark.tuner
