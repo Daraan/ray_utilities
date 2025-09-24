@@ -227,7 +227,8 @@ class AdvCometLoggerCallback(NewStyleLoggerCallback, SaveVideoFirstCallback, Com
                 workspace,
                 workspaces,
             )
-            time.sleep(5)
+            if workspace != "TESTING":  # ignore error when testing
+                time.sleep(5)
             self.experiment_kwargs["workspace"] = None
             return 2
         return 0

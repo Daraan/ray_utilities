@@ -399,7 +399,7 @@ def patch_args(
     """
     old_args = sys.argv[1:]
     actor_args = (
-        ("-a", "no_actor_provided_by_patch_args")
+        ("-a", "no_actor_by_patch")
         if (
             "-a" not in args
             and "--agent_type" not in args
@@ -465,6 +465,8 @@ class DisableLoggers(unittest.TestCase):
         self._disable_tune_loggers.stop()
         self._disable_file_loggers.stop()
         self._disable_file_loggers2.stop()
+        self._disable_save_model_architecture_callback_added.stop()
+        self._disable_save_model_architecture_module.stop()
 
     def setUp(self):
         super().setUp()
@@ -477,6 +479,15 @@ class DisableLoggers(unittest.TestCase):
         self._disable_file_loggers2 = mock.patch.object(ray.tune.logger.unified, "DEFAULT_LOGGERS", ())
         """Disable local copy used by UnifiedLogger"""
         self._disable_file_loggers2.start()
+        self._disable_save_model_architecture_module = mock.patch(
+            "ray_utilities.callbacks.algorithm.model_config_saver_callback"
+        )
+        self._disable_save_model_architecture_callback_added = mock.patch(
+            "ray_utilities.config.create_algorithm.save_model_config_and_architecture",
+            new=lambda *a, **k: None,  # noqa: ARG005
+        )
+        self._disable_save_model_architecture_callback_added.start()
+        self._disable_save_model_architecture_module.start()
 
     def tearDown(self):
         self.enable_loggers()
@@ -492,6 +503,7 @@ class InitRay(unittest.TestCase):
                 include_dashboard=False,
                 ignore_reinit_error=True,
                 num_cpus=cls._num_cpus,
+                object_store_memory=1024**3 // 2,  # 512MB
             )
         super().setUpClass()
 

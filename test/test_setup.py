@@ -1035,26 +1035,21 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
                 self.assertEqual(len(iterations), 3, iterations)
 
     def test_model_config_saver_callback_creates_json(self):
+        # Disable required mock
+        self._disable_save_model_architecture_callback_added.stop()
         # Use AlgorithmSetup to build a real Algorithm
         with (
             patch_args(
-                "--fcnet_hiddens",
-                "[11, 12, 13]",
-                "-it",
-                1,
-                "-J",
-                1,
-                "--wandb",
-                "offline",
-                "--comet",
-                "offline",
-                "--batch_size",
-                32,
-                "--num_envs_per_env_runner",
-                1,
+                "--fcnet_hiddens", "[11, 12, 13]",
+                "-it", 1,
+                "-J", 1,
+                "--wandb", "offline",
+                "--comet", "offline",
+                "--batch_size", 32,
+                "--num_envs_per_env_runner", 1,
             ),
             MLPSetup() as setup,
-        ):
+        ):  # fmt: skip
             setup.config.env_runners(num_env_runners=0)
         # Test with tuner
         tuner = setup.create_tuner()

@@ -119,6 +119,7 @@ if (
     != _COMET_OFFLINE_DIRECTORY_SUGGESTION_STR
     and "RAY_UTILITIES_SET_COMET_DIR" not in os.environ
 ):
+    # This error might appear during tests, entry point first is test script then worker script.
     _logger.warning(
         "COMET_OFFLINE_DIRECTORY already set to: %s. Overwriting it with %s. "
         "Set RAY_UTILITIES_SET_COMET_DIR=0 or 1 to disable directory change or to silence this warning.",
