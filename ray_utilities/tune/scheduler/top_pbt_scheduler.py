@@ -387,6 +387,8 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         new_skips = self._get_current_best_mutations(upper_quantile)
         logger.debug("Updating CyclicMutation skip lists to %s", new_skips)
         self._deep_update_cyclic_mutation(self._hyperparam_mutations, new_skip=new_skips)
+        # TODO: a trial should just use the batch size assigned that it already has, i.e. actually no mutation, just load best checkpoint
+        # FIXME: next perturbation interval does not increase linearly. Trials train longer and longer as well
 
         # Create a checkpoint for all trials
         logger.debug("Instructing %s to save.", trial)

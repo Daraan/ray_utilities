@@ -327,7 +327,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         cfg_file_parser = ConfigFilePreParser()
         cfgs_from_cli = cfg_file_parser.parse_args(args, known_only=True)
         if config_files:
-            logger.info("Adding config files %s to those found in args: %s", config_files, cfgs_from_cli)
+            logger.info("Adding config files %s to those found in args: %s", config_files, cfgs_from_cli.config_files)
             config_files = config_files.copy()
             config_files.extend(cfgs_from_cli.config_files)
         else:
@@ -713,7 +713,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             "trainable_name": self.get_trainable_name(),  # "UNDEFINED" is called before create_trainable
         }
         # If not logged in choice will not be reported in the CLI interface
-        param_space = {k: tune.choice([v]) for k, v in param_space.items()}
+        # Comment out to not display in CLI
+        # param_space = {k: tune.choice([v]) for k, v in param_space.items()}
         if self.args.env_seeding_strategy == "same":
             # Fixed or same random selected seed
             # NOTE: This might not be used by create_algorithm_config.

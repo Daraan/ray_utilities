@@ -133,18 +133,21 @@ class AdvWandbLoggerCallback(NewStyleLoggerCallback, SaveVideoFirstCallback, Wan
         )
         super().__init__(**kwargs)
         self._trials_created = 0
+        self._trials_started = 0
+        """A Trial can be started multiple times due to restore."""
         self._logged_architectures = set()
         self.upload_offline_experiments = upload_offline_experiments
         """If True, offline experiments will be uploaded on trial completion."""
 
     def on_trial_start(self, iteration: int, trials: list["Trial"], trial: "Trial", **info):
         super().on_trial_start(iteration, trials, trial, **info)
-        if self._trials_created != len(trials):
+        if self._trials_created <= len(trials):
             _logger.warning(
                 "Number of created trials %d does not match the number of tracked trials %d.",
                 len(trials),
                 self._trials_created,
             )
+        _logger.debug("Trials created: %d, re-started: %d", self._trials_created, self._trials_started)
         self._trials = trials  # keep them in case of a failure to access paths.
 
     def log_trial_start(self, trial: "Trial"):
@@ -238,7 +241,9 @@ class AdvWandbLoggerCallback(NewStyleLoggerCallback, SaveVideoFirstCallback, Wan
         wandb_init_kwargs.update(self.kwargs)
 
         self._start_logging_actor(trial, exclude_results, **wandb_init_kwargs)
-        self._trials_created += 1
+        if trial not in self._trial_logging_actors:
+            self._trials_created += 1
+        self._trials_started += 1
 
     @staticmethod
     def preprocess_videos(metrics: LogMetricsDictT) -> LogMetricsDictT:
