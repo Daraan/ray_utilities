@@ -7,6 +7,7 @@ import pickle
 import re
 import subprocess
 from pathlib import Path
+import time
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
 from urllib.error import HTTPError
 
@@ -275,6 +276,8 @@ class AdvWandbLoggerCallback(NewStyleLoggerCallback, SaveVideoFirstCallback, Wan
 
         # If we are in offline mode, try to sync this trial's run immediately
         if "offline" in self.kwargs.get("mode", "") and self.upload_offline_experiments:
+            # Wandb dir is likely not yet saved by actor, wait for it, super does not wait that long.
+            self._cleanup_logging_actors(timeout=120, kill_on_timeout=False)
             _LOGGER.info("Syncing offline WandB run for trial %s", trial.trial_id)
             # TODO: problem did the actor sync everything when we are here?
             self._sync_offline_run_if_available(trial)
@@ -285,7 +288,13 @@ class AdvWandbLoggerCallback(NewStyleLoggerCallback, SaveVideoFirstCallback, Wan
             # Look for offline runs that might belong to this trial
             assert trial.local_path
             wandb_dir = Path(trial.local_path) / "wandb"  # might not be accessible
+            wait = 5
+            while not wandb_dir.exists() and wait < 30:
+                _logger.debug("WandB directory does not exist yet, waiting %s/30s: %s", wait, wandb_dir)
+                time.sleep(5)  # wait for possible sync
+                wait += 5
             if not wandb_dir.exists() and trial.path is not None:
+                _logger.debug("WandB directory does not exist on Tuner system %s", wandb_dir)
                 # Trigger a sync from local -> remote
                 if trial.storage:
                     # local_experiment_path will always work but is overkill, try only wandb folder
