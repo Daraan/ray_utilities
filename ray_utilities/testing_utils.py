@@ -1813,6 +1813,7 @@ def remote_breakpoint(port=5678):
         Make sure to start the debug server before connecting.
     """
     error = None
+
     if not debugpy.is_client_connected():
         print("starting debugpy. Listening on port:", port)
         try:

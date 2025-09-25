@@ -11,6 +11,7 @@ from ray.tune.schedulers import PopulationBasedTraining
 from tap import to_tap_class
 
 from ray_utilities.constants import DEFAULT_EVAL_METRIC, EVAL_METRIC_RETURN_MEAN
+from ray_utilities.tune.scheduler.top_pbt_scheduler import TopPBTTrialScheduler
 
 if TYPE_CHECKING:
     from ray.tune.search.sample import Domain
@@ -109,7 +110,18 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
     perturbation_interval: float = 100_000
     resample_probability: float = 1.0  # always resample
 
+    # custom_args, remove before passing to PopulationBasedTraining
+    use_native_pbt: bool = False
+    """Do not use TopPBTTrialScheduler"""
+
     def set_hyperparam_mutations(self, mutations: _HPMutationsType | None) -> None:
+        if mutations is None:
+            self.hyperparam_mutations = None
+            return
+        mutations = mutations.copy()
+        if "batch_size" in mutations:
+            mutations["train_batch_size_per_learner"] = mutations.pop("batch_size")
+            logger.debug("Renaming 'batch_size' hyperparam mutation to 'train_batch_size_per_learner'")
         self.hyperparam_mutations = mutations
 
     def configure(self) -> None:
@@ -169,13 +181,22 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
         else:
             args = self.as_dict()
         args.pop("hyperparam_mutations", None)  # will be set below
-        # Set by Tuner, remove
-        args.pop("mode", None)
-        args.pop("metric", None)  # will be set by Tuner
+        # Set by Tuner, unset
+        args["mode"] = None
+        args["metric"] = None
+        # non-scheduler args
+        use_native = args.pop("use_native_pbt")
         if self.resample_probability >= 1.0 and self.hyperparam_mutations is None:
             raise ValueError("hyperparam_mutations must be set if resample_probability is 1.0")
         assert not TYPE_CHECKING or self.hyperparam_mutations is not None  # ray has implicit optional
-        return PopulationBasedTraining(
-            **{arg: val for arg, val in args.items() if arg in inspect.signature(PopulationBasedTraining).parameters},
+        args = {arg: val for arg, val in args.items() if arg in inspect.signature(PopulationBasedTraining).parameters}
+
+        if use_native:
+            return PopulationBasedTraining(
+                **args,
+                hyperparam_mutations=self.hyperparam_mutations,
+            )
+        return TopPBTTrialScheduler(
+            **args,
             hyperparam_mutations=self.hyperparam_mutations,
         )

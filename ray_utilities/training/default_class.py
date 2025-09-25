@@ -516,7 +516,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # TODO: Possible unset setup._config to not confuse configs (or remove setup totally?)
         # use args = config["cli_args"] # XXX
 
-        _logger.debug("Sys argv during Trainable.setup(): %s", sys.argv)
+        # _logger.debug("Sys argv during Trainable.setup(): %s", sys.argv)
         _logger.info(
             "args %s are:\n %s",
             "(in config)" if "cli_args" in config else "(on setup)",

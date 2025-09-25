@@ -13,10 +13,7 @@ import logging
 import os
 import re
 import sys
-from typing import TYPE_CHECKING, Any, TypeVar
-
-if sys.version_info < (3, 11):
-    from exceptiongroup import ExceptionGroup
+from typing import TYPE_CHECKING, Any, Mapping, TypeVar
 
 from ray.experimental import tqdm_ray
 from ray.tune.error import TuneError
@@ -36,6 +33,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from ray.tune.experiment import Trial
+
+if sys.version_info < (3, 11):
+    from exceptiongroup import ExceptionGroup
 
 _T = TypeVar("_T")
 
@@ -406,3 +406,34 @@ def resolve_default_eval_metric(eval_metric: str | DEFAULT_EVAL_METRIC | None = 
     if new_log_format_used():
         return NEW_LOG_EVAL_METRIC
     return EVAL_METRIC_RETURN_MEAN
+
+
+def get_value_by_path(tree_dict: Mapping[Any, Any], path: tuple[Any, ...]) -> Any:
+    """Extract value from nested dict using a tuple path."""
+    value = tree_dict
+    for key in path:
+        value = value[key]
+    return value
+
+
+def flatten_mapping_with_path(d, path=()) -> list[tuple[tuple[Any, ...], Any]]:
+    """Similar to :func:`tree.flatten_with_path` but only for mappings."""
+    items = []
+    if isinstance(d, Mapping):
+        for k, v in d.items():
+            items.extend(flatten_mapping_with_path(v, (*path, k)))
+    else:
+        items.append((path, d))
+    return items
+
+
+# Build a nested dict with lists at the leaves
+def build_nested_dict(paths: list[tuple[Any, ...]], values: dict[tuple[Any, ...], list]) -> dict:
+    """Build a nested dict from paths and corresponding values."""
+    nested = {}
+    for path in paths:
+        d = nested
+        for key in path[:-1]:
+            d = d.setdefault(key, {})
+        d[path[-1]] = values[path]
+    return nested

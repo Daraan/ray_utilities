@@ -149,7 +149,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             eval_metric = NEW_LOG_EVAL_METRIC if new_log_format_used() else EVAL_METRIC_RETURN_MEAN
         self.eval_metric: str = eval_metric
         self.eval_metric_order: Literal["max", "min"] = eval_metric_order
-        self._setup = setup
+        self._setup: SetupType_co = setup
         self.add_iteration_stopper = add_iteration_stopper
         if trial_name_creator is not None:
             self.trial_name_creator = trial_name_creator

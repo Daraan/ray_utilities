@@ -242,6 +242,7 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
             trial.trial_id = f"trial_{i}"
             trial.is_finished.return_value = False
             trial.status = Trial.RUNNING
+            trial.config = {"dummy": -i}
 
             # For testing the temporary_state for paused trials
             if i < 3:  # Make first 3 trials be in upper quantile

@@ -5,7 +5,8 @@ import os
 import pickle
 import random
 import tempfile
-from collections.abc import Iterable, Mapping
+import time
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -21,6 +22,7 @@ from ray.train._internal.storage import StorageContext
 from ray.tune import CheckpointConfig
 from ray.tune.experiment import Trial
 from ray.tune.result import SHOULD_CHECKPOINT, TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
+from ray.tune.schedulers.pbt import logger as ray_pbt_logger
 from ray.tune.search.optuna import OptunaSearch
 from ray.tune.stopper import CombinedStopper
 from ray.tune.stopper.maximum_iteration import MaximumIterationStopper
@@ -35,12 +37,13 @@ from ray_utilities.constants import (
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
 )
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations
-from ray_utilities.misc import raise_tune_errors
+from ray_utilities.misc import is_pbar, raise_tune_errors
 from ray_utilities.runfiles import run_tune
 from ray_utilities.setup import optuna_setup
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup
+from ray_utilities.setup.scheduled_tuner_setup import PPOMLPWithPBTSetup
 from ray_utilities.testing_utils import (
     ENV_RUNNER_CASES,
     Cases,
@@ -54,17 +57,20 @@ from ray_utilities.testing_utils import (
     format_result_errors,
     iter_cases,
     mock_result,
-    no_parallel_envs,
     patch_args,
 )
 from ray_utilities.training.default_class import DefaultTrainable
 from ray_utilities.training.helpers import make_divisible
 from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
+from ray_utilities.tune.scheduler.top_pbt_scheduler import CyclicMutation, TopPBTTrialScheduler
 
 if TYPE_CHECKING:
+    from ray.tune.execution.tune_controller import TuneController
+
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
     from ray_utilities.typing.metrics import LogMetricsDict
     from ray_utilities.typing.trainable_return import TrainableReturnData
+
 
 logger = logging.getLogger(__name__)
 
@@ -1028,3 +1034,167 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
             if i != 2:
                 with open(os.path.join(trial.checkpoint.path[:-1] + "0", "model.mock"), "rb") as fp:
                     self.assertNotEqual(trial2_ckpt, pickle.load(fp))
+
+
+class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
+    # Some tests taken from ray's testing suite
+
+    def test_run_tune_with_top_trial_scheduler(self):
+        original_exploit = TopPBTTrialScheduler._exploit
+        perturbation_interval = 100
+        best_step_size_idx = 0
+        best_value_idx = 1
+        batch_sizes = (25, 50, 100)
+
+        num_exploits = 0
+
+        fake_results: dict[int, dict[int, float]] = {
+            batch_sizes[0]: {
+                v: v // batch_sizes[0] for v in range(batch_sizes[0], 401, batch_sizes[0])
+            },  # 1, 2, ..., 8
+            # exploit this:
+            batch_sizes[1]: {
+                v: v // batch_sizes[1] + 20 for v in range(batch_sizes[1], 401, batch_sizes[1])
+            },  # 21, 22, ..., 24
+            batch_sizes[2]: {v: v // batch_sizes[2] + 5 for v in range(batch_sizes[2], 401, batch_sizes[2])},  # 6, 7
+        }
+        best_step_size = batch_sizes[1]
+        best_step_size_for_step = {}
+        for batch_size, values in fake_results.items():
+            for step, step_value in values.items():
+                if step % perturbation_interval != 0:
+                    # not at perturbation interval
+                    continue
+                if step not in best_step_size_for_step or best_step_size_for_step[step][1] < step_value:
+                    best_step_size_for_step[step] = (batch_size, step_value)
+        # TODO: Currently 100 is always best, change later to 50 (this would mean) @ 200, the 50 steps is better.
+        assert all(
+            v > not_best_v
+            for v in fake_results[best_step_size].values()
+            for not_best_k, not_best_values in fake_results.items()
+            if not_best_k != best_step_size
+            for not_best_v in not_best_values.values()
+        )
+
+        race_conditions = 0
+
+        def test_exploit_function(
+            self: TopPBTTrialScheduler, tune_controller: TuneController, trial: Trial, trial_to_clone: Trial
+        ) -> None:
+            # check that best_step_size is used
+            # NOTE: trial.last_result has NOT been updated for the LAST (non-best) trial
+            # ALSO: If after perturbation and loading a checkpoint it is also off
+            nonlocal num_exploits
+            num_exploits += 1
+            print("Exploit number", num_exploits, "called at step", self._trial_state[trial].last_train_time)
+            if self._trial_state[trial].last_train_time % perturbation_interval != 0:
+                # We can end up here due to a race condition as Trial pause reached too slow and another step was taken
+                # ignore most of the asserts but check that we did not end up here more than once.
+                nonlocal race_conditions
+                race_conditions += 1
+                logger.warning(
+                    "Exploit called at step %s not at perturbation interval for trial. Likely due to race condition.",
+                    self._trial_state[trial].last_train_time,
+                )
+            else:
+                current_step = self._trial_state[trial].last_train_time
+                # When a trial is loaded, it can make a step
+                # assert current_step % perturbation_interval == 0
+                assert (
+                    self._trial_state[trial].last_score
+                    == fake_results[trial.config["train_batch_size_per_learner"]][current_step]
+                )
+                assert current_step == self._trial_state[trial].last_perturbation_time
+                assert (
+                    best_step_size_for_step[current_step][best_step_size_idx]
+                    == trial_to_clone.config["train_batch_size_per_learner"]
+                    == batch_sizes[1]
+                )
+                # check that value is the expected value
+                # trial_to_clone.last_result should already be updated.
+                assert (
+                    trial_to_clone.last_result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN]
+                    == best_step_size_for_step[current_step][best_value_idx]
+                )
+                # call original exploit function
+            original_exploit(self, tune_controller, trial, trial_to_clone)
+            # TODO: Check updated trial
+            # Do not perturb to best trials
+            assert trial.config["train_batch_size_per_learner"] != batch_sizes[1]
+
+        TopPBTTrialScheduler._exploit = test_exploit_function
+
+        class CheckTrainableForTop(TrainableWithChecks):
+            debug_step = False
+
+            def step(self) -> LogMetricsDict:
+                self._current_step += self.algorithm_config.train_batch_size_per_learner
+                result = {ENV_RUNNER_RESULTS: {}, EVALUATION_RESULTS: {ENV_RUNNER_RESULTS: {}}}
+                result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME] = self._current_step
+                result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER] = (
+                    self.algorithm_config.train_batch_size_per_learner
+                )
+                result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME] = self._current_step + 2
+                result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN] = fake_results[
+                    self.algorithm_config.train_batch_size_per_learner
+                ][self._current_step]
+                result["_checking_class_"] = "CheckTrainableForTop"  # pyright: ignore[reportGeneralTypeIssues]
+                logger.info(
+                    "Batch size: %s, step %s, result: %s",
+                    self.algorithm_config.train_batch_size_per_learner,
+                    self._current_step,
+                    result,
+                )
+                result["current_step"] = self._current_step
+                if is_pbar(self._pbar):
+                    self._pbar.update(1)
+                    self._pbar.set_description(
+                        f"Step: {self._current_step} batch_size={self.algorithm_config.train_batch_size_per_learner} "
+                        f"result={result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN]}"
+                    )
+                time.sleep(1)  # Avoid race conditions by pause being too slow.
+                return result  # pyright: ignore[reportReturnType]
+
+        ray_pbt_logger.setLevel(logging.DEBUG)
+        with patch_args(
+            # main args for this experiment
+            "--tune", "batch_size",
+            # Meta / less influential arguments for the experiment.
+            # NOTE: Num samples is multiplides by grid_search values. So effectively num_samples=3
+            "--num_samples", 1,
+            "--num_jobs", 3,
+            "--max_step_size", max(batch_sizes) * 2,
+            "--min_step_size", min(batch_sizes),
+            "--minibatch_size", min(batch_sizes),
+            "--env_seeding_strategy", "same",
+            # constant
+            "--seed", "42",
+            "--log_level", "DEBUG",
+            "--log_stats", "most",
+            "--perturbation_interval", perturbation_interval,
+            "--total_steps", max(batch_sizes) * 3,
+            "--use_exact_total_steps",
+            "--no_dynamic_eval_interval",
+            "--fcnet_hiddens", "[4]",
+            "--num_envs_per_env_runner", 5,
+            "--test",
+        ):  # fmt: skip
+            Setup = SetupWithCheck(CheckTrainableForTop, PPOMLPWithPBTSetup)
+            Setup.batch_size_sample_space = {"grid_search": batch_sizes}  # start values?
+            setup = Setup(
+                config_files=["experiments/models/mlp/default.cfg"],
+                # TODO: Trials are reused, trial name might be wrong then
+            )
+
+            setup.args.set_hyperparam_mutations(
+                {"train_batch_size_per_learner": CyclicMutation(Setup.batch_size_sample_space["grid_search"])}
+            )
+            results = run_tune(setup)
+            print("Num exploits:", num_exploits)
+            raise_tune_errors(results)  # pyright: ignore[reportArgumentType]
+            self.assertTrue(all(result.metrics["_checking_class_"] == "CheckTrainableForTop" for result in results))  # pyright: ignore[reportOptionalSubscript, reportAttributeAccessIssue]
+            # At final step (if batch_size % perturbation_interval) there is no exploitation
+            # There should be (3-1) x 2 = 4 exploitations
+            self.assertEqual(num_exploits, max(batch_sizes) * (3 - 1) // perturbation_interval * 2)
+            # Check that at most one race condition happened
+            self.assertLessEqual(race_conditions, 1)

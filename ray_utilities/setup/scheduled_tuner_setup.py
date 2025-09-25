@@ -4,7 +4,7 @@ import logging
 from abc import abstractmethod
 from typing import TYPE_CHECKING
 
-from ray.tune.stopper import CombinedStopper
+from ray.tune.stopper import CombinedStopper, MaximumIterationStopper
 
 from ray_utilities.callbacks.tuner.sync_config_files_callback import SyncConfigFilesCallback
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner
@@ -45,15 +45,22 @@ class ScheduledTunerSetup(TunerSetup[SetupType_co]):
             tune_config.search_alg = None
         return tune_config
 
+    # NOTE: MaximumIterationStopper is not necessary here depending on the TunerSetup.
+    # Our create_stoppers is smart to not add it if the batch_size is perturbed.
+    stoppers_to_remove: tuple[type[tune.Stopper], ...] = (OptunaSearchWithPruner, MaximumIterationStopper)
+    """Stoppers classes to remove when using this scheduler."""
+
     def create_run_config(self, callbacks: list[tune.Callback]) -> tune.RunConfig:  # pyright: ignore[reportIncompatibleMethodOverride]
         run_config = super().create_run_config(callbacks=callbacks)
         # Should also remove OptunaPruner as stopper which is placed in run_config
         if run_config.stop is not None:
-            if isinstance(run_config.stop, OptunaSearchWithPruner):
-                logger.info("Removing OptunaPruner stopper to not conflict with the scheduler %s", run_config.stop)
+            if isinstance(run_config.stop, self.stoppers_to_remove):
+                logger.info(
+                    "Removing stopper %s to not conflict with the scheduler %s", run_config.stop, run_config.stop
+                )
                 run_config.stop = None
             elif isinstance(run_config.stop, CombinedStopper):
-                new_stoppers = [s for s in run_config.stop._stoppers if not isinstance(s, OptunaSearchWithPruner)]
+                new_stoppers = [s for s in run_config.stop._stoppers if not isinstance(s, self.stoppers_to_remove)]
                 if len(new_stoppers) != len(run_config.stop._stoppers):
                     logger.info("Removing OptunaPruner stopper to not conflict with the scheduler %s", run_config.stop)
                 if len(new_stoppers) == 0:

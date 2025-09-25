@@ -20,26 +20,29 @@ import math
 import random
 from functools import partial
 from itertools import cycle
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Callable, Container, Dict, Generic, List, Optional, Tuple, TypeVar, cast
 
 from ray.train._internal.session import _FutureTrainingResult, _TrainingResult
 from ray.tune.experiment import Trial
 from ray.tune.schedulers.pbt import PopulationBasedTraining
 
 from ray_utilities.constants import PERTURBED_HPARAMS
+from ray_utilities.misc import build_nested_dict, flatten_mapping_with_path, get_value_by_path
 
 if TYPE_CHECKING:
+    from ray_utilities.typing.metrics import FlatLogMetricsDict
     from collections.abc import Iterable, MutableMapping
 
     from ray.tune.execution.tune_controller import TuneController
     from ray.tune.schedulers.pbt import _PBTTrialState
     from ray.tune.search.sample import Domain
 
-    from ray_utilities.typing.metrics import LogMetricsDict
-
 
 logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
+
+
+MAX_SKIP_LIST_LENGTH = 10000
 
 
 def _grid_search_sample_function(grid_search_space: Iterable[_T], *, repeat=True) -> Callable[[], _T]:
@@ -89,6 +92,65 @@ def _debug_dump_new_config(new_config: dict, mutation_keys: list[str]):
     return new_config
 
 
+class CyclicMutation(Generic[_T]):
+    def __init__(self, values: Iterable[_T], skip: Optional[Container[_T]] = None, *, disable_skip: bool = False):
+        self._cycler = cycle(values)
+        self._values = list(values)
+        self.skip = skip
+        self.disable_skip = disable_skip
+        self._warn_possible_infinite_loop()
+
+    def update_values(self, new_values: Iterable[_T]):
+        self._values = list(new_values)
+        self._cycler = cycle(self._values)
+        self._warn_possible_infinite_loop()
+
+    def update_skip(self, new_values: Container[_T] | None):
+        self.skip = new_values
+        self._warn_possible_infinite_loop()
+
+    def _warn_possible_infinite_loop(self) -> bool | None:
+        try:
+            if (
+                self.skip and not self.disable_skip and len(self.skip) >= len(self._values)  # pyright: ignore[reportArgumentType]
+            ):
+                logger.warning(
+                    "CyclicMutation skip list %s has length >= values %s. "
+                    "This may cause an infinite loop when sampling.",
+                    self.skip,
+                    self._values,
+                )
+                return True
+        except TypeError:
+            # self.skip is only a container, not sized
+            return None
+        return False
+
+    def __call__(self) -> _T:
+        v = next(self._cycler)
+        if self.disable_skip or self.skip is None:
+            return v
+        i = 0
+        while self.skip and v in self.skip:
+            v = next(self._cycler)
+            i += 1
+            if i > MAX_SKIP_LIST_LENGTH:
+                loop = self._warn_possible_infinite_loop()
+                if loop or loop is None:
+                    raise RuntimeError(
+                        "CyclicMutation appears to be stuck in an infinite loop due to skip list. "
+                        "Increase MAX_SKIP_LIST_LENGTH."
+                    )
+            elif i % 1000 == 0:
+                loop = self._warn_possible_infinite_loop()
+                logger.warning(
+                    "CyclicMutation still searching for non-skipped value after %s attempts. Is infinite loop: %s",
+                    i,
+                    loop or ("unknown (not Sized)" if loop is None else "no"),
+                )
+        return v
+
+
 class TopPBTTrialScheduler(PopulationBasedTraining):
     """Enhanced Population Based Training scheduler with grid search and flexible quantiles.
 
@@ -116,7 +178,6 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         hyperparam_mutations: Dictionary mapping hyperparameter names to mutation
             specifications. Supports grid_search definitions for deterministic sampling.
         quantile_fraction: Fraction of population to consider as "top performers".
-            Unlike standard PBT, values > 0.5 are supported for exploit-heavy strategies.
         resample_probability: Probability of resampling parameters during perturbation.
         perturbation_factors: Tuple of (lower, upper) factors for parameter perturbation.
         custom_explore_fn: Optional custom function for exploration logic.
@@ -133,7 +194,7 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         ...         "lr": {"grid_search": [1e-4, 5e-4, 1e-3]},
         ...         "batch_size": {"grid_search": [64, 128, 256]},
         ...     },
-        ...     quantile_fraction=0.8,  # Exploit top 80% of trials
+        ...     quantile_fraction=0.1,  # Keep and exploit the top 10% of trials
         ... )
 
     Note:
@@ -192,6 +253,7 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         )
         # Store assignments for exploit distribution
         self._exploit_assignments = {}
+        self._current_assignments: dict[Trial, Trial] | None = None
 
     def on_trial_add(self, tune_controller: TuneController, trial: Trial):
         """Updates the trials config with hyperparam_mutations"""
@@ -263,6 +325,48 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         logger.debug("Exploitation distribution: %s", distribution)
         return assignments
 
+    @classmethod
+    def _deep_update_cyclic_mutation(
+        cls,
+        mutations: dict[str, CyclicMutation[_T] | dict[str, Any] | Any],
+        new_skip: Optional[dict[str, Container[_T] | dict[str, Any] | None]],
+    ) -> None:
+        if new_skip is None:
+            return
+        for key, distribution in mutations.items():
+            if isinstance(distribution, dict) and key in new_skip:
+                deeper_skip = new_skip[key]
+                assert isinstance(deeper_skip, dict)
+                cls._deep_update_cyclic_mutation(distribution, cast("dict[str, Any]", deeper_skip))
+            elif isinstance(distribution, CyclicMutation):
+                deeper_skip = new_skip[key]
+                assert not isinstance(deeper_skip, dict)
+                cast("CyclicMutation[_T]", distribution).update_skip(deeper_skip)
+
+    def _get_current_best_mutations(self, upper_quantile: list[Trial]):
+        """
+        Get the values of hyperparameter mutations for the best trials.
+
+        Use to update the skip lists in CyclicMutation instances.
+        """
+        # Get all paths to leaves in the mutation space
+
+        flat_mutation_keys = flatten_mapping_with_path(self._hyperparam_mutations)
+        mutation_paths = [path for path, _ in flat_mutation_keys]
+
+        # Collect values for each path from all trial configs
+        path_to_values: dict[tuple, list] = {path: [] for path in mutation_paths}
+        for trial in upper_quantile:
+            config = trial.config
+            for path in mutation_paths:
+                try:
+                    value = get_value_by_path(config, path)
+                except KeyError:
+                    value = None
+                path_to_values[path].append(value)
+
+        return build_nested_dict(mutation_paths, path_to_values)
+
     def _checkpoint_or_exploit(
         self,
         trial: Trial,
@@ -278,8 +382,11 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         state = self._trial_state[trial]
 
         # Create exploitation assignments if needed
-        if not hasattr(self, "_current_assignments") or self._current_assignments is None:
-            self._current_assignments = self._distribute_exploitation(lower_quantile, upper_quantile)
+        self._current_assignments = self._distribute_exploitation(lower_quantile, upper_quantile)
+        # Update any CyclicMutation skip lists based on current top trials, to not resample these values.
+        new_skips = self._get_current_best_mutations(upper_quantile)
+        logger.debug("Updating CyclicMutation skip lists to %s", new_skips)
+        self._deep_update_cyclic_mutation(self._hyperparam_mutations, new_skip=new_skips)
 
         # Create a checkpoint for all trials
         logger.debug("Instructing %s to save.", trial)
@@ -320,6 +427,7 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
                 trial_to_clone = random.choice(upper_quantile)
 
             assert trial is not trial_to_clone
+            assert trial_to_clone in upper_quantile
             clone_state = self._trial_state[trial_to_clone]
             last_checkpoint = clone_state.last_checkpoint
 
@@ -359,9 +467,11 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         """
         self._current_assignments = None
 
-    def on_trial_complete(self, tune_controller: TuneController, trial: Trial, result: LogMetricsDict | dict[str, Any]):
+    def on_trial_complete(
+        self, tune_controller: TuneController, trial: Trial, result: FlatLogMetricsDict | dict[str, Any]
+    ):
         """Handle completed trial by cleaning up assignments."""
-        # FIXME: Doubt this happens after all perturbations are done.
+        # Happens on trial.Terminated, e.g. stopper returned True
         super().on_trial_complete(
             tune_controller,
             trial,
