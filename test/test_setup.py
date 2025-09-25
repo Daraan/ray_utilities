@@ -45,7 +45,7 @@ from ray_utilities.constants import (
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
 )
 from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
-from ray_utilities.misc import raise_tune_errors
+from ray_utilities.misc import is_pbar, raise_tune_errors
 from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.random import seed_everything
 from ray_utilities.runfiles import run_tune
@@ -987,6 +987,8 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
                         self.config["train_batch_size_per_learner"]
                         == self.algorithm_config.train_batch_size_per_learner
                     )
+                if is_pbar(self._pbar):
+                    self._pbar.update(1)
                 return {
                     "should_checkpoint": False,
                     "current_step": i * self.algorithm_config.train_batch_size_per_learner,

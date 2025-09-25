@@ -360,6 +360,8 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
                         def step(self):
                             result = super().step()
                             result[SHOULD_CHECKPOINT] = True
+                            if is_pbar(self._pbar):
+                                self._pbar.update(1)
                             return result
 
                         def save_checkpoint(self, checkpoint_dir: str):

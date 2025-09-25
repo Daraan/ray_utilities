@@ -99,7 +99,7 @@ from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.parser.mlp_argument_parser import MLPArgumentParser
 from ray_utilities.constants import ENVIRONMENT_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.dynamic_config.dynamic_buffer_update import logger as dynamic_buffer_logger
-from ray_utilities.misc import raise_tune_errors
+from ray_utilities.misc import is_pbar, raise_tune_errors
 from ray_utilities.nice_logger import change_log_level
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger as experiment_base_logger
@@ -1887,6 +1887,8 @@ class TrainableWithChecks(DefaultTrainable[Any, "AlgorithmConfig", Any]):
             log_stats=self.log_stats,
         )
         metrics["_checking_class_"] = True  # pyright: ignore[reportGeneralTypeIssues]
+        if is_pbar(self._pbar):
+            self._pbar.update(1)
         self.step_post_check(result, metrics, rewards)
         return metrics
 
