@@ -84,15 +84,16 @@ def episode_iterator(args: dict[str, Any], hparams: dict[str, Any], *, use_pbar:
     return range(args["iterations"])
 
 
-def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict) -> int:
+def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict | dict[str, Any]) -> int:
     # requires exact_sampling_callback to be set in the results, otherwise fallback
-    current_step = result.get("current_step")
+    current_step = result.get("current_step")  # likely not present
     if current_step is not None:  # LogMetricsDict
         return current_step
     result = cast("StrictAlgorithmReturnData", result)
-    current_step = result[LEARNER_RESULTS][ALL_MODULES].get(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)
-    if current_step is not None:
-        return current_step
+    if LEARNER_RESULTS in result:
+        current_step = result[LEARNER_RESULTS][ALL_MODULES].get(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)
+        if current_step is not None:
+            return current_step
     # try metric logged on env runner; else defaults to NUM_ENV_STEPS_SAMPLED_LIFETIME
     return result[ENV_RUNNER_RESULTS].get(
         NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]
