@@ -1079,7 +1079,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     ray.__version__,
                 )
         keys_to_process.remove("trainable")
-        self._current_step = state["current_step"]
+        self._current_step = int(state["current_step"])
         keys_to_process.remove("current_step")
 
         self._iteration = state["iteration"]

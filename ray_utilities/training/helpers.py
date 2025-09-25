@@ -95,8 +95,10 @@ def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict | dict[s
         if current_step is not None:
             return current_step
     # try metric logged on env runner; else defaults to NUM_ENV_STEPS_SAMPLED_LIFETIME
-    return result[ENV_RUNNER_RESULTS].get(
-        NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]
+    return int(
+        result[ENV_RUNNER_RESULTS].get(
+            NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]
+        )
     )
 
 

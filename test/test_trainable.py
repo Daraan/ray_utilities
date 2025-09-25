@@ -593,6 +593,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     @Cases(ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
     def test_restore_multiprocessing(self, cases):
+        self._disable_save_model_architecture_callback_added.stop()  # remote is not mocked
         for num_env_runners in iter_cases(cases):
             with tempfile.TemporaryDirectory() as tmpdir:
                 # pool works
