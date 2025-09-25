@@ -456,6 +456,10 @@ def get_leafpath_value(leaf: "LeafType"):
     return getattr(leaf, "name", getattr(leaf, "key", getattr(leaf, "idx", _NOT_FOUND)))
 
 
+def _noop_callback_replacement(*a, **k):  # noqa: ARG001
+    return None
+
+
 class DisableLoggers(unittest.TestCase):
     """Disable loggers for tests, so they do not interfere with the output."""
 
@@ -482,9 +486,10 @@ class DisableLoggers(unittest.TestCase):
         self._disable_save_model_architecture_module = mock.patch(
             "ray_utilities.callbacks.algorithm.model_config_saver_callback"
         )
+
         self._disable_save_model_architecture_callback_added = mock.patch(
             "ray_utilities.config.create_algorithm.save_model_config_and_architecture",
-            new=lambda *a, **k: None,  # noqa: ARG005
+            new=_noop_callback_replacement,
         )
         self._disable_save_model_architecture_callback_added.start()
         self._disable_save_model_architecture_module.start()
