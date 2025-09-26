@@ -271,7 +271,7 @@ def get_trainable_name(trainable: Callable) -> str:
     return trainable.__name__
 
 
-def make_experiment_key(trial: Trial, fork_data: Optional[tuple[str, int | None]]) -> str:
+def make_experiment_key(trial: Trial, fork_data: Optional[tuple[str, int | None]] = None) -> str:
     """
     Build a unique experiment key for a trial, making use of the :attr:`RUN_ID`,
     :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`, and the number of trials created so far.

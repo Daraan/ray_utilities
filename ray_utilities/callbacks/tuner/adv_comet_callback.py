@@ -17,9 +17,16 @@ from ray.tune.utils import flatten_dict
 
 from ray_utilities.callbacks.tuner._save_video_callback import SaveVideoFirstCallback
 from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback
+from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
 from ray_utilities.comet import CometArchiveTracker
-from ray_utilities.constants import COMET_OFFLINE_DIRECTORY, DEFAULT_VIDEO_DICT_KEYS, ENTRY_POINT, EPISODE_VIDEO_PREFIX
-from ray_utilities.misc import make_experiment_key
+from ray_utilities.constants import (
+    COMET_OFFLINE_DIRECTORY,
+    DEFAULT_VIDEO_DICT_KEYS,
+    ENTRY_POINT,
+    EPISODE_VIDEO_PREFIX,
+    FORK_FROM,
+)
+from ray_utilities.misc import make_experiment_key, parse_fork_from
 from ray_utilities.video.numpy_to_video import numpy_to_video
 
 from ._log_result_grouping import exclude_results, non_metric_results
@@ -39,7 +46,9 @@ __all__ = [
 _LOGGER = logging.getLogger(__name__)
 
 
-class AdvCometLoggerCallback(NewStyleLoggerCallback, SaveVideoFirstCallback, CometLoggerCallback):
+class AdvCometLoggerCallback(
+    NewStyleLoggerCallback, SaveVideoFirstCallback, TrackForkedTrialsMixin, CometLoggerCallback
+):
     # Copy from parent for pylance
     """CometLoggerCallback for logging Tune results to Comet.
 
@@ -233,6 +242,61 @@ class AdvCometLoggerCallback(NewStyleLoggerCallback, SaveVideoFirstCallback, Com
             return 2
         return 0
 
+    def _restart_experiment_for_forked_trial(
+        self, trial: Trial, trial_id: Optional[str], trial_name: Optional[str]
+    ) -> Experiment | OfflineExperiment | None:
+        if trial not in self._trial_experiments:
+            return None
+        self._trial_experiments[trial].end()
+        experiment_kwargs = self.experiment_kwargs.copy()
+        fork_data = parse_fork_from(trial.config[FORK_FROM])
+        if fork_data is None:
+            raise ValueError(f"Could not parse {trial.config[FORK_FROM]}")
+        # Need to modify experiment key to avoid conflicts
+        if "experiment_key" in experiment_kwargs:
+            _LOGGER.warning(
+                "Need to modify experiment key for forked trial, overwriting passed key: %s",
+                experiment_kwargs["experiment_key"],
+            )
+        experiment_kwargs["experiment_key"] = make_experiment_key(trial, fork_data)
+        # TODO: Do fake logging steps to get to the forked experiment step?
+        return self._start_experiment(trial, experiment_kwargs)
+
+    def _start_experiment(
+        self, trial: Trial, experiment_kwargs: Optional[dict] = None
+    ) -> Experiment | OfflineExperiment:
+        from comet_ml import Experiment, OfflineExperiment
+        from comet_ml.config import set_global_experiment
+
+        experiment_cls = Experiment if self.online else OfflineExperiment
+        if experiment_kwargs is None:
+            experiment_kwargs = self.experiment_kwargs.copy()
+        # Key needs to be at least 32 but not more than 50
+        experiment_kwargs.setdefault("experiment_key", make_experiment_key(trial))
+        if not (32 <= len(experiment_kwargs["experiment_key"]) <= 50):
+            _LOGGER.error(
+                "Comet experiment key '%s' is invalid. It must be between 32 and 50 characters.",
+                experiment_kwargs["experiment_key"],
+            )
+            raise ValueError("Invalid experiment key length.")
+        self._check_workspaces(trial)
+        experiment = experiment_cls(**experiment_kwargs)
+        experiment.set_filename(ENTRY_POINT)
+        if self._log_pip_packages:
+            try:
+                experiment.set_pip_packages()
+            except Exception:
+                from comet_ml.experiment import (
+                    EXPERIMENT_START_FAILED_SET_PIP_PACKAGES_ERROR,
+                )
+
+                logging.getLogger("comet_ml.experiment").exception(EXPERIMENT_START_FAILED_SET_PIP_PACKAGES_ERROR)
+        self._trial_experiments[trial] = experiment
+        # Set global experiment to None to allow for multiple experiments.
+        set_global_experiment(None)
+        self._trials_created += 1
+        return experiment
+
     def log_trial_start(self, trial: "Trial"):
         """
         Initialize an Experiment (or OfflineExperiment if self.online=False)
@@ -244,36 +308,23 @@ class AdvCometLoggerCallback(NewStyleLoggerCallback, SaveVideoFirstCallback, Com
         Overwritten method to respect ignored/refactored keys.
         nested to other keys will only have their deepest key logged.
         """
-        from comet_ml import Experiment, OfflineExperiment
-        from comet_ml.config import set_global_experiment
+        if FORK_FROM in trial.config:
+            try:
+                self.log_trial_end(trial)
+                assert self.trial_is_forked(trial)
+            except KeyError:  # forked, but not yet started, e.g. loaded from checkpoint
+                assert (_info := self.get_forked_trial_info(trial))
+                assert not _info[-1].parent_is_present
+            fork_data = parse_fork_from(trial.config[FORK_FROM])
+            assert self.get_forked_trial_info(trial)
+            if fork_data is None:
+                raise ValueError(f"Could not parse {trial.config[FORK_FROM]}")
+            fork_from, fork_step = fork_data
+            self._restart_experiment_for_forked_trial(trial, fork_from, None)
 
         if trial not in self._trial_experiments:
-            experiment_cls = Experiment if self.online else OfflineExperiment
-            experiment_kwargs = self.experiment_kwargs.copy()
-            # Key needs to be at least 32 but not more than 50
-            experiment_kwargs.setdefault("experiment_key", make_experiment_key(trial, self._trials_created))
-            if not (32 <= len(experiment_kwargs["experiment_key"]) <= 50):
-                _LOGGER.error(
-                    "Comet experiment key '%s' is invalid. It must be between 32 and 50 characters.",
-                    experiment_kwargs["experiment_key"],
-                )
-                raise ValueError("Invalid experiment key length.")
-            self._check_workspaces(trial)
-            experiment = experiment_cls(**experiment_kwargs)
-            experiment.set_filename(ENTRY_POINT)
-            if self._log_pip_packages:
-                try:
-                    experiment.set_pip_packages()
-                except Exception:
-                    from comet_ml.experiment import (
-                        EXPERIMENT_START_FAILED_SET_PIP_PACKAGES_ERROR,
-                    )
-
-                    logging.getLogger("comet_ml.experiment").exception(EXPERIMENT_START_FAILED_SET_PIP_PACKAGES_ERROR)
-            self._trial_experiments[trial] = experiment
-            # Set global experiment to None to allow for multiple experiments.
-            set_global_experiment(None)
-            self._trials_created += 1
+            experiment = self._start_experiment(trial)
+            assert trial in self._trial_experiments
         else:
             experiment = self._trial_experiments[trial]
 

@@ -75,6 +75,7 @@ class OptunaSearchWithPruner(OptunaSearch, Stopper):
             self._pruner_set = False
         self._reported_metric_this_step = False
         """Tracks if super().on_trial_result was called from __call__ (Stopper) or later on_trial_result."""
+        self._base_trial_id = None
 
     # Searcher interface:
 
@@ -134,6 +135,67 @@ class OptunaSearchWithPruner(OptunaSearch, Stopper):
             trial = self._ot_trials[trial_id]
             return True  # TODO: Can we report this to Optuna as well? as raising PruneTrial is not possible
         return False
+
+    def suggest(self, trial_id: str) -> Dict | None:
+        if self._base_trial_id is None:
+            self._base_trial_id = trial_id.rsplit("_", 1)[0]
+            trial_id = self._base_trial_id + "_00000"
+        else:
+            # discard trial id and use counter
+            new_trial_id = self._base_trial_id + f"_{len(self._ot_trials):05d}"
+            _logger.info("Discarding suggested trial_id %s for and replacing with %s", trial_id, new_trial_id)
+            trial_id = new_trial_id
+        return super().suggest(trial_id)
+
+
+try:
+    from ray.tune.experiment.config_parser import _create_trial_from_spec as _original_create_trial_from_spec
+except ImportError:
+    _original_create_trial_from_spec = None
+
+
+def _monkey_patch_trial_creation(searcher: OptunaSearch | OptunaSearchWithPruner) -> None:
+    """
+    When using a SearchAlgo trial_ids are not suffixed with a count.
+    This monkey patch adds a count to the trial_id to make it unique and compatible with
+    systems that expect unique trial_ids like comet_ml.
+    """
+    if _original_create_trial_from_spec:
+        _logger.info("Patching ray.tune.search.search_generator to yield trials in <trial_id>_<count> format.")
+        import ray.tune.search.search_generator  # noqa: PLC0415
+
+        count = 0
+
+        def patched_create_trial_from_spec(*args, **kwargs):
+            """Insert count into trial_id for it to have a <trial_id>_<count> format."""
+            if _original_create_trial_from_spec is None:
+                return None  # This should never been called then
+            trial = _original_create_trial_from_spec(*args, **kwargs)
+            if "_" in kwargs.get("trial_id", "_"):
+                return trial
+            try:
+                nonlocal count
+                if not hasattr(searcher, "_base_trial_id") or searcher._base_trial_id is None:  # pyright: ignore[reportAttributeAccessIssue]
+                    searcher._base_trial_id = kwargs.get("trial_id", trial.trial_id)  # pyright: ignore[reportAttributeAccessIssue]
+                    _logger.info(
+                        "Setting base_trial_id to %s. Will use for all trials in this experiment",
+                        searcher._base_trial_id,
+                    )  # pyright: ignore[reportAttributeAccessIssue]
+                else:
+                    _logger.info("Discarding trial id %s for trial_id with count %s", trial, searcher._base_trial_id)  # pyright: ignore[reportAttributeAccessIssue]
+                new_trial_id = f"{searcher._base_trial_id}_{count:05d}"  # pyright: ignore[reportAttributeAccessIssue]
+                trial.trial_id = new_trial_id
+                if trial.trial_name_creator:
+                    trial.custom_trial_name = trial.trial_name_creator(trial)
+                if trial.trial_dirname_creator:
+                    trial.custom_dirname = trial.trial_dirname_creator(trial)
+                count += 1
+            except Exception as e:
+                _logger.exception("Error while patching trial_id: %s")
+                raise
+            return trial
+
+        ray.tune.search.search_generator._create_trial_from_spec = patched_create_trial_from_spec  # pyright: ignore[reportPossiblyUnboundVariable, reportPrivateImportUsage]
 
 
 @overload
@@ -268,6 +330,8 @@ def create_search_algo(
             **kwargs,
         )
         stopper = None
+        _monkey_patch_trial_creation(searcher)
+        searcher._base_trial_id = None  # pyright: ignore[reportAttributeAccessIssue]
         return searcher, stopper
     if pruner is True:
         pruner = optuna.pruners.MedianPruner()
@@ -282,6 +346,7 @@ def create_search_algo(
         pruner=pruner,
     )
     stopper = searcher
+    _monkey_patch_trial_creation(searcher)
     return searcher, stopper
 
 
