@@ -83,21 +83,19 @@ ENTRY_POINT_ID: str = hashlib.blake2b(
 
 RUN_ID = (
     ENTRY_POINT_ID
-    + "x"
     + time.strftime("%y%m%d%H%M", time.localtime(RAY_UTILITIES_INITIALIZATION_TIMESTAMP))
-    + "x"
-    + hashlib.blake2b(os.urandom(8) + ENTRY_POINT_ID.encode(), digest_size=3, usedforsecurity=False).hexdigest()
-    + "v2"
+    + hashlib.blake2b(os.urandom(8) + ENTRY_POINT_ID.encode(), digest_size=2, usedforsecurity=False).hexdigest()
+    + "3"
 )
 """
 A short partly random created UUID for the current execution. Only containing numbers and letters.
-It is build as: <6 chars entry_point_id> + <datetime as yymmddHHMM> + <6 chars random> + "v" + <version char>.
-It is 6 + 10 + 6 + 2 = 24 characters long.
+It is build as: <6 chars entry_point_id> + <datetime as yymmddHHMM> + <4 chars random> + <version char in base62>.
+It is 6 + 10 + 4 + 1 = 21 characters long.
 
 It can be used to more easily identify trials that have the same entry point and were run
 during the same execution.
 
-The last character is the version of the run_id format. It is currently "2".
+The last character is the version of the run_id format. It is currently "3".
 """
 
 _COMET_OFFLINE_DIRECTORY_SUGGESTION = (

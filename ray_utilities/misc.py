@@ -13,8 +13,9 @@ import logging
 import os
 import re
 import sys
-from typing import TYPE_CHECKING, Any, Mapping, TypeVar
+from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar
 
+import base62
 from ray.experimental import tqdm_ray
 from ray.tune.error import TuneError
 from ray.tune.result_grid import ResultGrid
@@ -101,6 +102,7 @@ def parse_fork_from(fork_from: str) -> tuple[str, int | None] | None:
         or ``None`` if the step is not specified.
         Or None if the input string does not match the expected format.
     """
+    # NOTE: could also just do split("?_step=") here
     match = RE_PARSE_FORK_FROM.match(fork_from)
     if not match:
         return None
@@ -269,24 +271,48 @@ def get_trainable_name(trainable: Callable) -> str:
     return trainable.__name__
 
 
-def make_experiment_key(trial: Trial, trials_created: int) -> str:
+def make_experiment_key(trial: Trial, fork_data: Optional[tuple[str, int | None]]) -> str:
     """
     Build a unique experiment key for a trial, making use of the :attr:`RUN_ID`,
     :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`, and the number of trials created so far.
 
     It has the format::
-        {RUN_ID:x<26}xX{trial_id}X{trials_created:0>3} with all underscores replaced by "xx".
+        {RUN_ID<of 21 chars>}X{trial_id}[Ff<trial_id>S<step>] with all underscores replaced by "x"
+        and all "000" in the trials parallel count removed". The <step> is in base62 encoded and right
+        aligned to 4 characters with leading zeros.
 
     References:
         - :attr:`RUN_ID <ray_utilities.constants.RUN_ID>`: A unique identifier for the current execution.
         - :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`: The unique ID of the trial.
 
     Note:
-        The resulting key replaces underscores with "xx". For compatibility it should only contain
+        The resulting key has all underscores removed. For compatibility it should only contain
         numbers and letters.
         For comet it should be at most 50 characters long. This is not enforced here.
+
+        For comet support, to not exceed 50 characters, only 99 parallel trials are supported, e.g. <trial_id>_00099.
+        The highest supported forking step is 14_776_335.
     """
-    return f"{RUN_ID:x<26}xX{trial.trial_id}X{trials_created:0>3}".replace("_", "xx")
+    trial_base, *trial_number = trial.trial_id.split("_")
+    if len(trial_number) > 1:
+        _logger.warning(
+            "Unexpected trial_id format '%s'. Expected format '<id>_<number>'.",
+            trial.trial_id,
+        )
+    if trial_number:
+        trial_number = "X" + "".join(trial_number).replace("000", "")
+    base_key = f"{RUN_ID}X{trial_base}{trial_number}".replace("_", "")
+    if not fork_data:
+        return base_key
+    fork_from, fork_steps = fork_data
+    if fork_steps is None:
+        fork_steps = 0
+    fork_base, *fork_number = fork_from.split("_")
+    if fork_number:
+        fork_number = "X" + "".join(fork_number).replace("000", "")
+
+    fork_steps = base62.encode(fork_steps)
+    return f"{base_key}F{fork_base}{fork_number}S{fork_steps:0>4}".replace("_", "")
 
 
 def is_pbar(pbar: Iterable[_T]) -> TypeIs[tqdm_ray.tqdm | tqdm[_T]]:
