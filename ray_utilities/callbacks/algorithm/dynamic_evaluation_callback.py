@@ -81,19 +81,21 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
 
     def _set_evaluation_intervals(self, algorithm: Algorithm) -> None:
         """Sets: self._evaluation_intervals"""
+        # Add intervals that are also used during tuning
+        step_sizes = list({*self._budget["step_sizes"], *(3072, 4096, 2048 * 3)})
         self._evaluation_intervals: dict[int, int] = dict(
             zip(
-                self._budget["step_sizes"],
+                step_sizes,
                 (
                     get_dynamic_evaluation_intervals(
-                        self._budget["step_sizes"],
+                        step_sizes,
                         eval_freq=self._original_interval,
                         batch_size=algorithm.config.train_batch_size_per_learner,  # pyright: ignore[reportOptionalMemberAccess]
                         take_root=True,
                     )
                     # 0 for no evaluation
                     if self._original_interval  # pyright: ignore[reportOptionalMemberAccess]
-                    else [0] * len(self._budget["step_sizes"])
+                    else [0] * len(step_sizes)
                 ),
             )
         )
