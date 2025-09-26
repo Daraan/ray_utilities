@@ -73,6 +73,7 @@ def extract_trial_id_from_checkpoint(ckpt_path: str) -> str | None:
     Returns:
         The extracted trial ID as a string, or ``None`` if no valid ID is found
     """
+    # TODO possibly, trial id might contain _forkof_/fork_from in the future.
     match = RE_GET_TRIAL_ID.search(ckpt_path)
     # get id of run
     if match:

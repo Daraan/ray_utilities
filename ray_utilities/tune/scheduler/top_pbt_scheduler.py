@@ -26,16 +26,17 @@ from ray.train._internal.session import _FutureTrainingResult, _TrainingResult
 from ray.tune.experiment import Trial
 from ray.tune.schedulers.pbt import PopulationBasedTraining
 
-from ray_utilities.constants import PERTURBED_HPARAMS
+from ray_utilities.constants import FORK_FROM, PERTURBED_HPARAMS
 from ray_utilities.misc import build_nested_dict, flatten_mapping_with_path, get_value_by_path
 
 if TYPE_CHECKING:
-    from ray_utilities.typing.metrics import FlatLogMetricsDict
     from collections.abc import Iterable, MutableMapping
 
     from ray.tune.execution.tune_controller import TuneController
     from ray.tune.schedulers.pbt import _PBTTrialState
     from ray.tune.search.sample import Domain
+
+    from ray_utilities.typing.metrics import FlatLogMetricsDict
 
 
 logger = logging.getLogger(__name__)
@@ -205,6 +206,13 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         :class:`ray.tune.schedulers.pbt.PopulationBasedTraining`: Base PBT scheduler
         :func:`_grid_search_sample_function`: Grid search sampling utilities
     """
+
+    additional_config_keys = (
+        FORK_FROM,
+        "_top_pbt_is_in_upper_quantile",
+        "_top_pbt_perturbed",
+    )
+    """Keys inserted into the config of trials to track PBT state."""
 
     def __init__(
         self,
@@ -416,6 +424,9 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
                 state.last_checkpoint = checkpoint
 
             self._num_checkpoints += 1
+            for k in self.additional_config_keys:
+                trial.config.pop(k, None)
+            trial.config["_top_pbt_is_in_upper_quantile"] = True
         else:
             state.last_checkpoint = None  # not a top trial
 
@@ -461,6 +472,19 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
                 logger.info("[pbt]: no checkpoint for trial %s. Skip exploit for Trial %s", trial_to_clone, trial)
                 return
             self._exploit(tune_controller, trial, trial_to_clone)
+            # Mark trial as perturbed
+            for k in self.additional_config_keys:
+                trial.config.pop(k, None)
+            # Set info which trial was forked from
+            trial.config[FORK_FROM] = (
+                trial_to_clone.trial_id + f"?_step={self._trial_state[trial_to_clone].last_train_time}"
+            )
+            trial.config["_top_pbt_perturbed"] = True
+            trial.invalidate_json_state()
+        else:
+            for k in self.additional_config_keys:
+                trial.config.pop(k, None)
+            trial.config["_top_pbt_perturbed"] = False
 
     def reset_exploitations(self):
         """Reset the current exploitation assignments.

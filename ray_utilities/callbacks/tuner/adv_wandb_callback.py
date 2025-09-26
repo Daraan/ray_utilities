@@ -16,9 +16,10 @@ from ray.tune.utils import flatten_dict
 
 from ray_utilities import RUN_ID
 from ray_utilities.callbacks.tuner.new_style_logger_callback import LogMetricsDictT, NewStyleLoggerCallback
+from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
 from ray_utilities.comet import _LOGGER
-from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS
-from ray_utilities.misc import RE_GET_TRIAL_ID, make_experiment_key
+from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, FORK_FROM
+from ray_utilities.misc import extract_trial_id_from_checkpoint, make_experiment_key, parse_fork_from
 
 from ._log_result_grouping import non_metric_results
 from ._save_video_callback import SaveVideoFirstCallback
@@ -96,7 +97,9 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
         return log, config_update
 
 
-class AdvWandbLoggerCallback(NewStyleLoggerCallback, SaveVideoFirstCallback, WandbLoggerCallback):
+class AdvWandbLoggerCallback(
+    NewStyleLoggerCallback, SaveVideoFirstCallback, TrackForkedTrialsMixin, WandbLoggerCallback
+):
     AUTO_CONFIG_KEYS: ClassVar[list[str]] = list(
         {
             *WandbLoggerCallback.AUTO_CONFIG_KEYS,
@@ -189,46 +192,63 @@ class AdvWandbLoggerCallback(NewStyleLoggerCallback, SaveVideoFirstCallback, Wan
             key, sub_key = nested_key.split("/")
             if key in config:
                 config[key].pop(sub_key, None)
-        assert "num_jobs" not in config["cli_args"]
-        assert "test" not in config["cli_args"]
         fork_from = None  # new run
-        if trial.config["cli_args"].get("from_checkpoint"):
-            match = RE_GET_TRIAL_ID.search(trial.config["cli_args"]["from_checkpoint"])
-            # get id of run
-            if match is None:
-                # Deprecated:
-                # possible old format without id=
-                match = re.search(rf"(?:id=)?([a-zA-Z0-9]+_[0-9]{5})", trial.config["cli_args"]["from_checkpoint"])
-                if match is None:
+        if "cli_args" in config:
+            assert "num_jobs" not in config["cli_args"]
+            assert "test" not in config["cli_args"]
+            if trial.config["cli_args"].get("from_checkpoint"):
+                ckpt_trial_id = extract_trial_id_from_checkpoint(trial.config["cli_args"]["from_checkpoint"])
+                # get id of run
+                if ckpt_trial_id is None:
                     _logger.error(
                         "Cannot extract trial id from checkpoint name: %s. "
                         "Make sure that it has to format id=<part1>_<sample_number>",
                         trial.config["cli_args"]["from_checkpoint"],
                     )
-            else:
-                ckpt_trial_id = match.groupdict()["trial_id"]
-                # Need to change to format '<run>?<metric>=<numeric_value>'
-                # Where metric="_step"
-                # open state pickle to get iteration
-                ckpt_dir = Path(trial.config["cli_args"]["from_checkpoint"])
-                state = None
-                if (state_file := ckpt_dir / "state.pkl").exists():
-                    with open(state_file, "rb") as f:
-                        state = pickle.load(f)
-                elif (ckpt_dir / "_dict_checkpoint.pkl").exists():
-                    with open(ckpt_dir / "_dict_checkpoint.pkl", "rb") as f:
-                        state = pickle.load(f)["state"]
-                if state is None:
-                    _logger.error(
-                        "Could not find state.pkl or _dict_checkpoint.pkl in the checkpoint path. "
-                        "Cannot use fork_from with wandb"
-                    )
                 else:
-                    iteration = state["trainable"]["iteration"]
-                    fork_from = f"{ckpt_trial_id}?_step={iteration}"
+                    # Need to change to format '<run>?<metric>=<numeric_value>'
+                    # Where metric="_step"
+                    # open state pickle to get iteration
+                    ckpt_dir = Path(trial.config["cli_args"]["from_checkpoint"])
+                    state = None
+                    if (state_file := ckpt_dir / "state.pkl").exists():
+                        with open(state_file, "rb") as f:
+                            state = pickle.load(f)
+                    elif (ckpt_dir / "_dict_checkpoint.pkl").exists():
+                        with open(ckpt_dir / "_dict_checkpoint.pkl", "rb") as f:
+                            state = pickle.load(f)["state"]
+                    if state is None:
+                        _logger.error(
+                            "Could not find state.pkl or _dict_checkpoint.pkl in the checkpoint path. "
+                            "Cannot use fork_from with wandb"
+                        )
+                    else:
+                        iteration = state["trainable"]["iteration"]
+                        fork_from = f"{ckpt_trial_id}?_step={iteration}"
+        # we let take FORK_FROM a higher priority
+        if FORK_FROM in trial.config:
+            fork_data = parse_fork_from(trial.config[FORK_FROM])
+            if fork_data is None:
+                raise ValueError(f"Cannot parse FORK_FROM value: {trial.config[FORK_FROM]}")
+            fork_id, fork_step = fork_data
+            if fork_step is None:
+                raise ValueError(f"Forked step cannot be None in {trial.config[FORK_FROM]}")
+            fork_from = f"{fork_id}?_step={fork_step}"
+            # We should not have multiple ?_step= in the id
+            if trial_id:  # otherwise there is no Trial
+                # We should not have multiple ?_step= in the id, replace ?_step=
+                # TODO: is a too long id a problem for wandb?, For comet is is.
+                trial_id += f"_forkof_{fork_from}".replace("?_step=", "_step=")
+            if trial_name:
+                trial_name += f"_forkof_{fork_from}"
+        # Test for invalid chars
+        assert not trial_id or all(c not in trial_id for c in r"/ \ # ? % :"), f"Invalid character in: {trial_id}"
+        assert fork_from is None or fork_from.count("?_step=") == 1, fork_from
+        # TODO: Check if fork_from id actually exists on wandb (but if it is offline we cannot know)
+        # NOTE: We never want FORK_FROM to be in the trials.config by default.
         # --- End New Code
         wandb_init_kwargs = {
-            "id": trial_id,
+            "id": trial_id,  # change if forked? e.g. + forked_from
             "name": trial_name,
             "reinit": "default",  # bool is deprecated
             "allow_val_change": True,
@@ -240,10 +260,27 @@ class AdvWandbLoggerCallback(NewStyleLoggerCallback, SaveVideoFirstCallback, Wan
         }
         wandb_init_kwargs.update(self.kwargs)
 
-        self._start_logging_actor(trial, exclude_results, **wandb_init_kwargs)
+        if fork_from and trial in self._trial_logging_futures:
+            assert self.trial_is_forked(trial), "Expected trial to be tracked as forked trial."
+            self._restart_logging_actor(trial, **wandb_init_kwargs)
+        else:
+            # can be forked from a checkpoint
+            self._start_logging_actor(trial, exclude_results, **wandb_init_kwargs)
         if trial not in self._trial_logging_actors:
             self._trials_created += 1
         self._trials_started += 1
+
+    def _restart_logging_actor(self, trial: "Trial", **wandb_init_kwargs):
+        """Ends the current logging actor and starts a new one. Useful for resuming with a new ID / settings."""
+        self.log_trial_end(trial, failed=False)
+        _logger.info("Restarting WandB logging actor for trial %s", trial.trial_id)
+        # Wait a bit before starting the next one
+        self._cleanup_logging_actors(timeout=5, kill_on_timeout=False)
+        # Clean queue and futures else a new one will not be created
+        del self._trial_queues[trial]
+        del self._trial_logging_futures[trial]
+        del self._trial_logging_actors[trial]
+        self._start_logging_actor(trial, self._exclude_results, **wandb_init_kwargs)
 
     @staticmethod
     def preprocess_videos(metrics: LogMetricsDictT) -> LogMetricsDictT:

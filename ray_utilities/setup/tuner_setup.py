@@ -39,6 +39,7 @@ from ray_utilities.constants import (
     CLI_REPORTER_PARAMETER_COLUMNS,
     DEFAULT_EVAL_METRIC,
     EVAL_METRIC_RETURN_MEAN,
+    FORK_FROM,
     NEW_LOG_EVAL_METRIC,
 )
 from ray_utilities.misc import new_log_format_used, trial_name_creator as default_trial_name_creator
@@ -396,6 +397,9 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         else:
             param_space = self._setup.param_space
 
+        assert FORK_FROM not in param_space, (
+            f"{FORK_FROM} is not expected to be in the param_space that is passed to the Tuner by default."
+        )
         return tune.Tuner(
             trainable=trainable,  # Updated to use the modified trainable with resource requirements
             param_space=param_space,  # TODO: Likely Remove when using space of OptunaSearch
