@@ -16,7 +16,8 @@ from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 from ray_utilities.callbacks.tuner.adv_comet_callback import AdvCometLoggerCallback
 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.misc import RE_GET_TRIAL_ID
+from ray_utilities.constants import RE_PARSE_FORK_FROM
+from ray_utilities.misc import RE_GET_TRIAL_ID, parse_fork_from
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import (
     Cases,
@@ -112,6 +113,39 @@ class TestMisc(TestCase):
         self.assertEqual(match.group(1), "52e65")
         self.assertEqual(match.group("trial_id"), "52e65")
         self.assertEqual(match.groupdict(), {"trial_id": "52e65", "trial_id_part1": "52e65", "trial_number": None})
+
+    def test_re_parse_forked_from(self):
+        id1 = "52e65_00002"
+        step1 = 123
+        complete_id1 = f"{id1}?_step={step1}"
+        id2 = complete_id1  # .replace("?", "")
+        step2 = 456
+        complete_id2 = f"{id2}?_step={step2}"
+        # in practice we take care that ? is never in a trial id
+        id3 = complete_id2.replace("?", "")
+        step3 = 789
+        complete_id3 = f"{id3}?_step={step3}"
+        self.assertIsNone(RE_PARSE_FORK_FROM.search(complete_id2))  # contains ? x2
+        for test_id, expected_id, expected_step in [
+            (id1, id1, None),
+            (complete_id1, id1, step1),
+            (complete_id3, id3, step3),
+        ]:
+            with self.subTest(test_id=test_id, expected_id=expected_id, expected_step=expected_step):
+                match = RE_PARSE_FORK_FROM.search(test_id)
+                assert match is not None
+                self.assertEqual(
+                    match.groups(), (expected_id, str(expected_step) if expected_step is not None else None)
+                )
+                self.assertEqual(match.group(), test_id)
+                self.assertEqual(match.group(1), expected_id)
+                self.assertEqual(match.group("fork_id"), expected_id)
+                self.assertEqual(
+                    match.groupdict(),
+                    {"fork_id": expected_id, "fork_step": str(expected_step) if expected_step is not None else None},
+                )
+                # Check with utility function
+                self.assertEqual(parse_fork_from(test_id), (expected_id, expected_step))
 
     def test_make_divisible(self):
         a, b = random.randint(1, 1000), random.randint(1, 1000)

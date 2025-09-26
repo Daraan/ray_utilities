@@ -26,6 +26,7 @@ from ray_utilities.constants import (
     EVAL_METRIC_RETURN_MEAN,
     NEW_LOG_EVAL_METRIC,
     RAY_UTILITIES_INITIALIZATION_TIMESTAMP,
+    RE_PARSE_FORK_FROM,
     RUN_ID,
 )
 
@@ -52,6 +53,60 @@ Example:
     >>> match.group("trial_id") if match else None
     'abc123'
 """
+
+
+def extract_trial_id_from_checkpoint(ckpt_path: str) -> str | None:
+    """Extract the trial ID from a checkpoint path.
+
+    This function uses a regex pattern to extract the trial ID from a given
+    checkpoint path. The expected format is 'id=<part1>[_<trial_number>]',
+    where the trial number is optional.
+
+    Args:
+        ckpt_path: The checkpoint path string to extract the trial ID from.
+
+    Note:
+        As a fallback, the function also checks for an older format without the 'id=' prefix.
+        In this case it looks for a pattern like '<part1>_<trial_number>'.
+        Where trial_number is exactly 5 digits and part1 is at least 5 alphanumeric characters.
+
+    Returns:
+        The extracted trial ID as a string, or ``None`` if no valid ID is found
+    """
+    match = RE_GET_TRIAL_ID.search(ckpt_path)
+    # get id of run
+    if match:
+        return match.groupdict()["trial_id"]
+    # Deprecated:
+    # possible old format without id=
+    match = re.search(r"(?:id=)?(?P<trial_id>[a-zA-Z0-9]{5,}_[0-9]{5})", ckpt_path)
+    if match:
+        return match.groupdict()["trial_id"]
+    return None
+
+
+def parse_fork_from(fork_from: str) -> tuple[str, int | None] | None:
+    """Parse a forked trial identifier into its components.
+
+    This function takes a forked trial identifier string and splits it into
+    the original trial ID and the step at which the fork occurred. The expected
+    format is '<trial_id>?_step=<step>', where the step is optional.
+
+    Args:
+        fork_from: The forked trial identifier string to parse.
+            Example: "abc123?_step=10" or "abc123"
+    Returns:
+        A tuple containing the trial ID as a string and the step as an integer
+        or ``None`` if the step is not specified.
+        Or None if the input string does not match the expected format.
+    """
+    match = RE_PARSE_FORK_FROM.match(fork_from)
+    if not match:
+        return None
+    trial_id = match.group("fork_id")
+    step_str = match.group("fork_step")
+    step = int(step_str) if step_str is not None else None
+    return trial_id, step
 
 
 def trial_name_creator(trial: Trial) -> str:

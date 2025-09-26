@@ -22,6 +22,7 @@ Example:
 import hashlib
 import logging
 import os
+import re
 import sys
 import time
 import warnings
@@ -93,7 +94,7 @@ A short partly random created UUID for the current execution. Only containing nu
 It is build as: <6 chars entry_point_id> + <datetime as yymmddHHMM> + <6 chars random> + "v" + <version char>.
 It is 6 + 10 + 6 + 2 = 24 characters long.
 
-It can be used to easier identify trials that have the same entry point and were run
+It can be used to more easily identify trials that have the same entry point and were run
 during the same execution.
 
 The last character is the version of the run_id format. It is currently "2".
@@ -421,3 +422,21 @@ EPISODE_METRICS_KEYS = (
     ("agent_episode_return_mean", DEFAULT_AGENT_ID),
 )
 """Keys that are by default logged with a window by RLlib. When using"""
+
+FORK_FROM = "fork_from"
+"""
+Key in trial configs to indicate the trial id and optionally step a trial was forked from.
+
+The value should have the format ``<trial_id>?_step=<step>`` where ``?_step=<step>`` is optional,
+it can be parsed with :const:`RE_PARSE_FORK_FROM`.
+
+Note:
+    A trial should never contain the ``?`` character.
+"""
+
+RE_PARSE_FORK_FROM = re.compile(r"^(?P<fork_id>[^?]*?)(?:\?_step=(?P<fork_step>\d+))?$")
+"""
+Regex pattern to parse the value of :const:`FORK_FROM` into trial id and step.
+
+The ``fork_id`` will be everything before the first ``?``, the ``?_step=<fork_step>`` part is optional.
+"""
