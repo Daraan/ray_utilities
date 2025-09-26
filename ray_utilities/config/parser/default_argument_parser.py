@@ -642,8 +642,8 @@ class DefaultLoggingArgParser(Tap):
 
     Tip:
         If you structure a tag like ``my_tag:my_value`` or ``my_tag=my_value``
-        a repeated tag will be ignored.
-        Note that, `--tags` is parsed first and has the highest priority.
+        a repeated tag with the same base (e. g., here ``my_tag``) will be overwritten.
+        If a tag is provided in ``--tags`` it has the highest priority.
     """
 
     log_stats: LogStatsChoices = "minimal"
