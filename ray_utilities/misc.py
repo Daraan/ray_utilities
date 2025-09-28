@@ -271,15 +271,46 @@ def get_trainable_name(trainable: Callable) -> str:
     return trainable.__name__
 
 
+def _make_non_fork_experiment_key(trial: Trial) -> str:
+    trial_base, *trial_number = trial.trial_id.split("_")
+    if len(trial_number) > 1:
+        _logger.warning(
+            "Unexpected trial_id format '%s'. Expected format '<id>_<number>'.",
+            trial.trial_id,
+        )
+    if trial_number:
+        trial_number = "C" + "".join(trial_number).replace("000", "")
+    base_key = f"{RUN_ID}X{trial_base}{trial_number}".replace("_", "")
+    base_key = f"{base_key:Z<32}"
+    return base_key
+
+
+def _make_fork_experiment_key(base_key: str, fork_data: tuple[str, int | None]) -> str:
+    base_key = base_key.rstrip("Z")
+    fork_from, fork_steps = fork_data
+    if fork_steps is None:
+        fork_steps = 0
+    fork_base, *fork_number = fork_from.split("_")
+    if fork_number:
+        fork_number = "C" + "".join(fork_number).replace("000", "")
+
+    fork_steps = base62.encode(fork_steps)
+    return f"{base_key}F{fork_base}{fork_number}S{fork_steps:0>4}".replace("_", "")
+
+
 def make_experiment_key(trial: Trial, fork_data: Optional[tuple[str, int | None]] = None) -> str:
     """
     Build a unique experiment key for a trial, making use of the :attr:`RUN_ID`,
-    :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`, and the number of trials created so far.
+    :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`, and optional fork information.
 
-    It has the format::
-        {RUN_ID<of 21 chars>}X{trial_id}[Ff<trial_id>S<step>] with all underscores replaced by "x"
-        and all "000" in the trials parallel count removed". The <step> is in base62 encoded and right
-        aligned to 4 characters with leading zeros.
+    It has the format of two forms:
+        - If not forked: "<RUN_ID of 21 chars>X<trial_id>[Z* up to 32 chars in total]"
+          it is prolonged by ``Z`` to be at least 32 chars long.
+        - If forked: "<RUN_ID of 21 chars>X<trial_id>F<trial_id>S<step>"
+          The <step> is in base62 encoded and right aligned to 4 characters with leading zeros.
+
+        Both have in common that the potential underscore in the trial ID is replaced by C and all "000" in the trials
+        count part of the trial ID are removed, e.g. ``abcd0001_00005`` becomes ``abcd0001C05``.
 
     References:
         - :attr:`RUN_ID <ray_utilities.constants.RUN_ID>`: A unique identifier for the current execution.
@@ -288,31 +319,17 @@ def make_experiment_key(trial: Trial, fork_data: Optional[tuple[str, int | None]
     Note:
         The resulting key has all underscores removed. For compatibility it should only contain
         numbers and letters.
-        For comet it should be at most 50 characters long. This is not enforced here.
+        For comet it must be between 32 and 50 characters long. This is not enforced here.
 
         For comet support, to not exceed 50 characters, only 99 parallel trials are supported, e.g. <trial_id>_00099.
         The highest supported forking step is 14_776_335.
+
+        It is assumed that the trial ID contains only lowercase alphanumeric characters and underscores.
     """
-    trial_base, *trial_number = trial.trial_id.split("_")
-    if len(trial_number) > 1:
-        _logger.warning(
-            "Unexpected trial_id format '%s'. Expected format '<id>_<number>'.",
-            trial.trial_id,
-        )
-    if trial_number:
-        trial_number = "X" + "".join(trial_number).replace("000", "")
-    base_key = f"{RUN_ID}X{trial_base}{trial_number}".replace("_", "")
+    base_key = _make_non_fork_experiment_key(trial)
     if not fork_data:
         return base_key
-    fork_from, fork_steps = fork_data
-    if fork_steps is None:
-        fork_steps = 0
-    fork_base, *fork_number = fork_from.split("_")
-    if fork_number:
-        fork_number = "X" + "".join(fork_number).replace("000", "")
-
-    fork_steps = base62.encode(fork_steps)
-    return f"{base_key}F{fork_base}{fork_number}S{fork_steps:0>4}".replace("_", "")
+    return _make_fork_experiment_key(base_key, fork_data)
 
 
 def is_pbar(pbar: Iterable[_T]) -> TypeIs[tqdm_ray.tqdm | tqdm[_T]]:
