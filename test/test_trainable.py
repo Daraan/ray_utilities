@@ -17,7 +17,7 @@ from ray.tune.utils import validate_save_restore
 from ray.util.multiprocessing import Pool
 
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN, PERTURBED_HPARAMS
+from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN, FORK_FROM, PERTURBED_HPARAMS
 from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup
@@ -422,6 +422,24 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                         trainable3.restore(tmpdir)  # calls load_checkpoint
                         self.compare_trainables(trainable, trainable3, "from path", num_env_runners=num_env_runners)
                         trainable3.stop()
+            trainable.stop()
+
+    def test_fork_from_restore(self):
+        num_env_runners = 0
+        trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
+        with self.subTest(num_env_runners=num_env_runners):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                trainable.save(tmpdir)  # calls save_checkpoint
+                # make sure that args do not influence the restore
+                with patch_args(
+                    "--num_env_runners", num_env_runners,
+                    "--no_dynamic_eval_interval",
+                ):  # fmt: skip
+                    trainable3 = self.TrainableClass({FORK_FROM: "something"})
+                    self.assertIsInstance(tmpdir, str)
+                    trainable3.restore(tmpdir)  # calls load_checkpoint
+                    self.compare_trainables(trainable, trainable3, "from path", num_env_runners=num_env_runners)
+                    trainable3.stop()
             trainable.stop()
 
     @pytest.mark.env_runner_cases

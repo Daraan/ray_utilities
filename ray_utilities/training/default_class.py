@@ -46,7 +46,7 @@ from typing_extensions import Self, TypeAliasType
 from ray_utilities.callbacks.progress_bar import restore_pbar, save_pbar_state, update_pbar
 from ray_utilities.callbacks.tuner.metric_checkpointer import TUNE_RESULT_IS_A_COPY
 from ray_utilities.config.parser.default_argument_parser import LOG_STATS, LogStatsChoices
-from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, PERTURBED_HPARAMS
+from ray_utilities.constants import FORK_FROM, PERTURBED_HPARAMS
 from ray_utilities.misc import AutoInt, is_pbar
 from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.training.functional import training_step
@@ -524,7 +524,9 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         )
         # NOTE: args is a dict, self._setup.args a Namespace | Tap
         self._reward_updaters: RewardUpdaters
-        load_algorithm = "cli_args" in config and config["cli_args"].get("from_checkpoint")
+        # if FORK_FROM we assume we load the checkpoint later by an outside call.
+        load_from_checkpoint = "cli_args" in config and config["cli_args"].get("from_checkpoint")
+        load_algorithm = load_from_checkpoint or FORK_FROM in config
         self._algorithm: _AlgorithmType | None
         args, _algo_config, algorithm, self._reward_updaters = setup_trainable(
             hparams=config,
@@ -543,31 +545,34 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         self.log_stats: LogStatsChoices = args[LOG_STATS]
         # calculate total steps once
         # After components have been setup up load checkpoint if requested
-        current_step = 0
         if load_algorithm:
             self._algo_class: type[_AlgorithmType] | None = _algo_config.algo_class
+            # store args to be latter used in restore call
+            self._args_for_checkpoint = args
+            if not load_from_checkpoint:
+                # reload controlled by the outside, restore called, e.g. because of FORK_FROM
+                return
             _logger.info("At end of setup(), loading from checkpoint: %s", config["cli_args"]["from_checkpoint"])
             # calls restore from path; from_checkpoint could also be a dict here
             # algorithm is None when create_algo=False, will be set in load_checkpoint
             self.load_checkpoint(config["cli_args"]["from_checkpoint"])
             assert self._algorithm is not None
-            if self.algorithm.metrics:
-                current_step = self.algorithm.metrics.peek(
-                    (ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=None
-                )
-                if current_step is None:
-                    current_step = self.algorithm.metrics.peek(
-                        (ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=None
-                    )
-                if current_step is None:
-                    _logger.warning(
-                        "No current step found in restored algorithm metrics to re-calculate total_steps, using 0. "
-                    )
         else:
             assert algorithm is not None
             self._algorithm = algorithm
         assert self.algorithm.config
-        # Use the config from setup_trainable to calculate total steps, which handles both algorithm and non-algorithm cases
+        self._recalculate_steps_and_iterations(args)  # also called in load_checkpoint
+
+    def _recalculate_steps_and_iterations(self, args: dict[str, Any]):
+        """After the setup / load_checkpoint recalculate the total_steps & iterations until the goal."""
+        # Use the config from setup_trainable to calculate total steps
+        # which handles both algorithm and non-algorithm cases
+        assert self.algorithm
+        assert self.algorithm.metrics
+        assert self.algorithm.config
+        current_step = get_current_step(self.algorithm.metrics)
+        if current_step == 0:
+            _logger.warning("Current step found in restored algorithm metrics is 0, check if this is correct.")
         steps_to_new_goal = args["total_steps"] - current_step
         iterations_to_new_goal = (
             steps_to_new_goal // self.algorithm.config.train_batch_size_per_learner + 1
@@ -906,7 +911,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             sync_env_runner_states_after_reload(self.algorithm)
         else:
             raise ValueError(f"Checkpoint must be a dict or a path. Not {type(checkpoint)}")
-        if perturbed:  # check that perturbed has highest priority and updated the config
+        if perturbed:  # XXX: check that perturbed has highest priority and updated the config
             for k, v in perturbed.items():
                 assert getattr(self.algorithm_config, k) == v, "Expected perturbed key '%s' to be %s, but got %s" % (
                     k,
@@ -929,6 +934,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             callbacks_functions=self.algorithm.config.callbacks_on_checkpoint_loaded,  # pyright: ignore[reportArgumentType,reportOptionalMemberAccess]
             kwargs={"algorithm": self.algorithm, "metrics_logger": self.algorithm.metrics},
         )
+        self._recalculate_steps_and_iterations(self._args_for_checkpoint)
 
     # endregion
 
