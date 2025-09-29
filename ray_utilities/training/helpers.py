@@ -20,7 +20,8 @@ from ray.rllib.utils.metrics import (
     LEARNER_RESULTS,
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
-from typing_extensions import TypeAliasType
+from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
+from typing_extensions import Sentinel, TypeAliasType
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
 from ray_utilities.config import seed_environments_for_config
@@ -65,6 +66,8 @@ DefaultExperimentSetup = TypeAliasType(
 
 _AlgorithmConfigT = TypeVar("_AlgorithmConfigT", bound="AlgorithmConfig")
 
+_NOT_FOUND = Sentinel("_NOT_FOUND")
+
 
 @overload
 def episode_iterator(args: dict[str, Any], hparams: Any, *, use_pbar: Literal[False]) -> range: ...
@@ -84,8 +87,18 @@ def episode_iterator(args: dict[str, Any], hparams: dict[str, Any], *, use_pbar:
     return range(args["iterations"])
 
 
-def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict | dict[str, Any]) -> int:
+def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict | dict[str, Any] | MetricsLogger) -> int:
     # requires exact_sampling_callback to be set in the results, otherwise fallback
+    if isinstance(result, MetricsLogger):
+        # For peek do not use None as default as this triggers KeyError
+        current_step = result.peek((LEARNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=_NOT_FOUND)
+        if current_step is not _NOT_FOUND:
+            return current_step
+        current_step = result.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=_NOT_FOUND)
+        if current_step is not _NOT_FOUND:
+            return current_step
+        return result.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=0)
+
     current_step = result.get("current_step")  # likely not present
     if current_step is not None:  # LogMetricsDict
         return current_step
