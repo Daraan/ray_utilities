@@ -536,3 +536,47 @@ def build_nested_dict(paths: list[tuple[Any, ...]], values: dict[tuple[Any, ...]
             d = d.setdefault(key, {})
         d[path[-1]] = values[path]
     return nested
+
+
+def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, Any]]:
+    """Convert a flat dictionary with slash-separated keys to a nested dictionary structure.
+
+    This function transforms dictionary keys containing forward slashes into nested
+    dictionary structures, useful for organizing Ray Tune/RLlib metrics that are
+    typically logged with hierarchical key names.
+
+    Args:
+        metrics: A dictionary with potentially slash-separated keys (e.g.,
+            ``{"eval/return_mean": 100, "train/loss": 0.5}``).
+
+    Returns:
+        A nested dictionary structure where slash-separated keys become nested levels
+        (e.g., ``{"eval": {"return_mean": 100}, "train": {"loss": 0.5}}``).
+
+    Example:
+        >>> metrics = {
+        ...     "train/episode_return_mean": 150.0,
+        ...     "eval/env_runner_results/episode_return_mean": 200.0,
+        ...     "timesteps_total": 10000,
+        ... }
+        >>> nested = flat_dict_to_nested(metrics)
+        >>> nested["train"]["episode_return_mean"]
+        150.0
+        >>> nested["eval"]["env_runner_results"]["episode_return_mean"]
+        200.0
+
+    Note:
+        This is particularly useful when working with Ray Tune's result dictionaries
+        which often contain hierarchical metrics with slash-separated key names.
+    """
+    nested_metrics = metrics.copy()
+    for key_orig, v in metrics.items():
+        k = key_orig
+        subdict = nested_metrics
+        while "/" in k:
+            parent, k = k.split("/", 1)
+            subdict = subdict.setdefault(parent, {})
+        subdict[k] = v
+        if key_orig != k:
+            del nested_metrics[key_orig]
+    return nested_metrics

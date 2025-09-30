@@ -35,7 +35,9 @@ else:
     del comet_ml
 # fmt: on
 
-from ray_utilities.constants import ENTRY_POINT_ID, RUN_ID
+from ray.runtime_env import RuntimeEnv as _RunetimeEnv
+
+from ray_utilities.constants import COMET_OFFLINE_DIRECTORY, ENTRY_POINT_ID, RUN_ID
 from ray_utilities.misc import get_trainable_name, is_pbar, trial_name_creator
 from ray_utilities.nice_logger import nice_logger
 from ray_utilities.random import seed_everything
@@ -73,8 +75,9 @@ try:
 except ImportError:  # might not exist anymore in the future
     pass
 else:
-    from ray.rllib.utils.deprecation import logger as __deprecation_logger
     import logging
+
+    from ray.rllib.utils.deprecation import logger as __deprecation_logger
 
     # This suppresses a deprecation warning from RLModuleConfig
     __old_level = __deprecation_logger.getEffectiveLevel()
@@ -86,48 +89,10 @@ else:
     del RLModuleConfig
 
 
-def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, Any]]:
-    """Convert a flat dictionary with slash-separated keys to a nested dictionary structure.
-
-    This function transforms dictionary keys containing forward slashes into nested
-    dictionary structures, useful for organizing Ray Tune/RLlib metrics that are
-    typically logged with hierarchical key names.
-
-    Args:
-        metrics: A dictionary with potentially slash-separated keys (e.g.,
-            ``{"eval/return_mean": 100, "train/loss": 0.5}``).
-
-    Returns:
-        A nested dictionary structure where slash-separated keys become nested levels
-        (e.g., ``{"eval": {"return_mean": 100}, "train": {"loss": 0.5}}``).
-
-    Example:
-        >>> metrics = {
-        ...     "train/episode_return_mean": 150.0,
-        ...     "eval/env_runner_results/episode_return_mean": 200.0,
-        ...     "timesteps_total": 10000,
-        ... }
-        >>> nested = flat_dict_to_nested(metrics)
-        >>> nested["train"]["episode_return_mean"]
-        150.0
-        >>> nested["eval"]["env_runner_results"]["episode_return_mean"]
-        200.0
-
-    Note:
-        This is particularly useful when working with Ray Tune's result dictionaries
-        which often contain hierarchical metrics with slash-separated key names.
-    """
-    nested_metrics = metrics.copy()
-    for key_orig, v in metrics.items():
-        k = key_orig
-        subdict = nested_metrics
-        while "/" in k:
-            parent, k = k.split("/", 1)
-            subdict = subdict.setdefault(parent, {})
-        subdict[k] = v
-        if key_orig != k:
-            del nested_metrics[key_orig]
-    return nested_metrics
+runtime_env = _RunetimeEnv(
+    env_vars={"RAY_UTILITIES_NEW_LOG_FORMAT": "1", "COMET_OFFLINE_DIRECTORY": COMET_OFFLINE_DIRECTORY}
+)
+"""A suggestion of environment variables to set in Ray tasks and actors."""
 
 
 if not TYPE_CHECKING:

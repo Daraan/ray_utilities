@@ -5,8 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from typing_extensions import Never, NotRequired, ReadOnly, Required, TypedDict
 
-from . import ExtraItems
-from .common import BaseEnvRunnersResultsDict, BaseEvaluationResultsDict
+from .common import BaseEnvRunnersResultsDict, BaseEvaluationResultsDict, ExtraItems
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray

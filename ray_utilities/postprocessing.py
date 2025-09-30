@@ -121,7 +121,6 @@ from ray_utilities.constants import (
 from ray_utilities.misc import deep_update
 from ray_utilities.temp_dir import TEMP_DIR_PATH
 from ray_utilities.training.helpers import get_current_step, get_evaluation_results
-from ray_utilities.typing.common import VideoTypes
 from ray_utilities.typing.trainable_return import TrainableReturnData
 from ray_utilities.video.numpy_to_video import create_temp_video
 
@@ -148,6 +147,7 @@ if TYPE_CHECKING:
         EvaluationResultsDict,
         StrictAlgorithmReturnData,
     )
+    from ray_utilities.typing.common import VideoTypes
     from ray_utilities.typing.metrics import (
         AnyAutoExtendedLogMetricsDict,
         AnyLogMetricsDict,

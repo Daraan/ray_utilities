@@ -4,7 +4,7 @@ import os
 import default_arguments.PYTHON_ARGCOMPLETE_OK
 import ray
 
-from ray_utilities import run_tune
+from ray_utilities import run_tune, runtime_env
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
 from ray_utilities.misc import extend_trial_name
@@ -13,7 +13,7 @@ from ray_utilities.setup.scheduled_tuner_setup import PPOMLPWithPBTSetup
 os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
 
 if __name__ == "__main__":
-    ray.init(object_store_memory=4 * 1024**3)  # 4 GB
+    ray.init(object_store_memory=4 * 1024**3, runtime_env=runtime_env)  # 4 GB
     PPOMLPWithPBTSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
     PPOMLPWithPBTSetup.group_name = "pbt:batch_size"  # pyright: ignore
     PPOMLPWithPBTSetup.batch_size_sample_space = {"grid_search": [64, 128, 256, 512, 1024]}

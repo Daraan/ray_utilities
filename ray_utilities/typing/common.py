@@ -67,3 +67,12 @@ class BaseEvaluationResultsDict(TypedDict, total=False):
 
     evaluated_this_step: NotRequired[bool]
     """Whether evaluation was performed in this training step"""
+
+
+ExtraItems = Any  # float | int | str | bool | None | dict[str, "_ExtraItems"] | NDArray[Any] | Never
+"""type: Type alias for additional items that can be included in TypedDict structures.
+
+This flexible type allows for various data types that might be included in
+experiment results, metrics, or configuration dictionaries beyond the
+strictly typed required fields.
+"""
