@@ -543,12 +543,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         self._pbar: tqdm | range | tqdm_ray.tqdm = episode_iterator(args, config, use_pbar=self.use_pbar)
         self._iteration: int = 0
         self.log_stats: LogStatsChoices = args[LOG_STATS]
-        # calculate total steps once
         # After components have been setup up load checkpoint if requested
+        # When restore is called by a Tuner, setup was called a while ago
+        # keep args ONLY to calculate steps and iterations
+        self._args_during_setup = args
         if load_algorithm:
             self._algo_class: type[_AlgorithmType] | None = _algo_config.algo_class
             # store args to be latter used in restore call
-            self._args_for_checkpoint = args
             if not load_from_checkpoint:
                 # reload controlled by the outside, restore called, e.g. because of FORK_FROM
                 return
@@ -561,9 +562,9 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             assert algorithm is not None
             self._algorithm = algorithm
         assert self.algorithm.config
-        self._recalculate_steps_and_iterations(args)  # also called in load_checkpoint
+        self._calculate_steps_and_iterations(args)  # also called in load_checkpoint
 
-    def _recalculate_steps_and_iterations(self, args: dict[str, Any]):
+    def _calculate_steps_and_iterations(self, args: dict[str, Any]):
         """After the setup / load_checkpoint recalculate the total_steps & iterations until the goal."""
         # Use the config from setup_trainable to calculate total steps
         # which handles both algorithm and non-algorithm cases
@@ -571,8 +572,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         assert self.algorithm.metrics
         assert self.algorithm.config
         current_step = get_current_step(self.algorithm.metrics)
-        if current_step == 0:
-            _logger.warning("Current step found in restored algorithm metrics is 0, check if this is correct.")
         steps_to_new_goal = args["total_steps"] - current_step
         iterations_to_new_goal = (
             steps_to_new_goal // self.algorithm.config.train_batch_size_per_learner + 1
@@ -582,6 +581,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         if isinstance(args["iterations"], AutoInt):
             # if dynamic buffer to not recalculate total_steps
             args["iterations"] = "auto" if args["dynamic_buffer"] else iterations_to_new_goal
+            # Get before changing iterations again:
             steps_with_current_batch_size = get_total_steps(args, self.algorithm.config)
             args["iterations"] = iterations_to_new_goal
         else:
@@ -934,7 +934,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             callbacks_functions=self.algorithm.config.callbacks_on_checkpoint_loaded,  # pyright: ignore[reportArgumentType,reportOptionalMemberAccess]
             kwargs={"algorithm": self.algorithm, "metrics_logger": self.algorithm.metrics},
         )
-        self._recalculate_steps_and_iterations(self._args_for_checkpoint)
+        self._calculate_steps_and_iterations(self._args_during_setup)
 
     # endregion
 
@@ -1292,8 +1292,18 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         if self._git_repo_sha == _UNKNOWN_GIT_SHA:
             try:
                 repo = git.Repo(search_parent_directories=True)
-            except (git.InvalidGitRepositoryError, Exception) as e:
-                _logger.error("Failed to get git Repo for metadata: %s", e)
+            except (git.InvalidGitRepositoryError, Exception):
+                # For some reason defined value was not kept :/
+                _logger.warning(
+                    "_git_repo_sha was not set and current workdir is not a repository. "
+                    "Checking: os.environ['TUNE_ORIG_WORKING_DIR']"
+                )
+                try:
+                    repo = git.Repo(os.environ["TUNE_ORIG_WORKING_DIR"], search_parent_directories=True)
+                except KeyError as e:
+                    _logger.error("KeyError %s not set, cannot find git repo for metadata", e)
+                except (git.InvalidGitRepositoryError, Exception) as e:
+                    _logger.error("Failed to get git Repo for metadata: %s", e)
             else:
                 self._git_repo_sha = cast("git.types.AnyGitObject", repo.head.object).hexsha
         metadata["repo_sha"] = self._git_repo_sha
@@ -1315,6 +1325,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         try:
             if is_pbar(self._pbar):
                 self._pbar.close()
+        except:  # noqa: E722
+            pass
+        try:
+            self.cleanup()
+        except:  # noqa: E722
+            pass
+        try:
+            self.stop()
         except:  # noqa: E722
             pass
 
