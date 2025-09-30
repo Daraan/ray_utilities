@@ -6,6 +6,7 @@ import re
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
@@ -152,6 +153,19 @@ class TestMisc(TestCase):
         a_div = make_divisible(a, b)
         self.assertEqual(a_div % b, 0)
         self.assertGreaterEqual(a_div, a)
+
+    def test_experiment_key_length(self):
+        trial1 = SimpleNamespace(trial_id="abcd0000")
+        trial2 = SimpleNamespace(trial_id="abcd0000_00001")
+        from ray_utilities.misc import make_experiment_key
+
+        self.assertTrue(32 <= len(make_experiment_key(trial1)) <= 50)
+        self.assertTrue(32 <= len(make_experiment_key(trial2)) <= 50)
+        for t1 in [trial1, trial2]:
+            for t2_id in [trial1.trial_id, trial2.trial_id]:
+                for step in [None, 2_000_000]:
+                    with self.subTest(t1=t1, t2_id=t2_id, step=step):
+                        self.assertTrue(32 < len(make_experiment_key(t1, (t2_id, step))) <= 50)
 
     def test_check_valid_args_decorator(self):
         with self.assertRaisesRegex(ValueError, re.escape("Unexpected unrecognized args: ['--it', '10']")):
