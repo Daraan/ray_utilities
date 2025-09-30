@@ -20,7 +20,7 @@ from ray.experimental import tqdm_ray
 from ray.tune.error import TuneError
 from ray.tune.result_grid import ResultGrid
 from tqdm import tqdm
-from typing_extensions import Iterable, TypeIs
+from typing_extensions import Iterable, TypeIs, deprecated
 
 from ray_utilities.constants import (
     DEFAULT_EVAL_METRIC,
@@ -35,6 +35,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from ray.tune.experiment import Trial
+
+    from ray_utilities.typing import ForkFromData
 
 if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
@@ -87,6 +89,7 @@ def extract_trial_id_from_checkpoint(ckpt_path: str) -> str | None:
     return None
 
 
+@deprecated("Should use ForkFromData")
 def parse_fork_from(fork_from: str) -> tuple[str, int | None] | None:
     """Parse a forked trial identifier into its components.
 
@@ -285,20 +288,23 @@ def _make_non_fork_experiment_key(trial: Trial) -> str:
     return base_key
 
 
-def _make_fork_experiment_key(base_key: str, fork_data: tuple[str, int | None]) -> str:
+def _make_fork_experiment_key(base_key: str, fork_data: ForkFromData) -> str:
     base_key = base_key.rstrip("Z")
-    fork_from, fork_steps = fork_data
-    if fork_steps is None:
-        fork_steps = 0
-    fork_base, *fork_number = fork_from.split("_")
+    parent_id = fork_data["parent_id"]
+    # Prefer training iteration for experiment key (stable across frameworks)
+    ft = fork_data.get("parent_time")
+    # ft is a NamedTuple[time_attr, time]; only use numeric time
+    parent_iteration = ft[1] if ft[0] == "current_step" else fork_data["parent_training_iteration"]
+
+    fork_base, *fork_number = parent_id.split("_")
     if fork_number:
         fork_number = "C" + "".join(fork_number).replace("000", "")
 
-    fork_steps = base62.encode(fork_steps)
-    return f"{base_key}F{fork_base}{fork_number}S{fork_steps:0>4}".replace("_", "")
+    parent_iteration = base62.encode(parent_iteration)
+    return f"{base_key}F{fork_base}{fork_number}S{parent_iteration:0>4}".replace("_", "")
 
 
-def make_experiment_key(trial: Trial, fork_data: Optional[tuple[str, int | None]] = None) -> str:
+def make_experiment_key(trial: Trial, fork_data: Optional[ForkFromData] = None) -> str:
     """
     Build a unique experiment key for a trial, making use of the :attr:`RUN_ID`,
     :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`, and optional fork information.
@@ -317,7 +323,7 @@ def make_experiment_key(trial: Trial, fork_data: Optional[tuple[str, int | None]
         - :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`: The unique ID of the trial.
 
     Note:
-        The resulting key has all underscores removed. For compatibility it should only contain
+        The resulting key underscores replaced by C. For compatibility it should only contain
         numbers and letters.
         For comet it must be between 32 and 50 characters long. This is not enforced here.
 

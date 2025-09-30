@@ -113,6 +113,7 @@ _COMET_OFFLINE_DIRECTORY_SUGGESTION = (
 ).resolve()
 _COMET_OFFLINE_DIRECTORY_SUGGESTION_STR = str(_COMET_OFFLINE_DIRECTORY_SUGGESTION)
 
+# If we run on remote this warning will trigger; but we do not want to change the remote
 if (
     os.environ.get("COMET_OFFLINE_DIRECTORY", _COMET_OFFLINE_DIRECTORY_SUGGESTION_STR)
     != _COMET_OFFLINE_DIRECTORY_SUGGESTION_STR
@@ -426,7 +427,8 @@ FORK_FROM = "fork_from"
 Key in trial configs to indicate the trial id and optionally step a trial was forked from.
 
 The value should have the format ``<trial_id>?_step=<step>`` where ``?_step=<step>`` is optional,
-it can be parsed with :const:`RE_PARSE_FORK_FROM`.
+it can be parsed with :const:`RE_PARSE_FORK_FROM` (deprecated)
+or be a dict defined as :class:`ForkFromData`.
 
 Note:
     A trial should never contain the ``?`` character.

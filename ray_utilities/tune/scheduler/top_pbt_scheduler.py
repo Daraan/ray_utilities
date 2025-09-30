@@ -24,10 +24,12 @@ from typing import TYPE_CHECKING, Any, Callable, Container, Dict, Generic, List,
 
 from ray.train._internal.session import _FutureTrainingResult, _TrainingResult
 from ray.tune.experiment import Trial
+from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.schedulers.pbt import PopulationBasedTraining
 
 from ray_utilities.constants import FORK_FROM, PERTURBED_HPARAMS
 from ray_utilities.misc import build_nested_dict, flatten_mapping_with_path, get_value_by_path
+from ray_utilities.typing import ForkFromData, Forktime
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, MutableMapping
@@ -36,6 +38,7 @@ if TYPE_CHECKING:
     from ray.tune.schedulers.pbt import _PBTTrialState
     from ray.tune.search.sample import Domain
 
+    from ray_utilities.typing.algorithm_return import AlgorithmReturnData
     from ray_utilities.typing.metrics import FlatLogMetricsDict
 
 
@@ -44,6 +47,17 @@ _T = TypeVar("_T")
 
 
 MAX_SKIP_LIST_LENGTH = 10000
+
+
+if TYPE_CHECKING:
+    from typing import type_check_only
+
+    @type_check_only
+    class _PBTTrialState2(_PBTTrialState):
+        def __init__(self, trial: Trial):
+            super().__init__(trial)
+            self.last_training_iteration: int  # not present before on_trial_add
+            """The training iteration at which the last result was reported."""
 
 
 def _grid_search_sample_function(grid_search_space: Iterable[_T], *, repeat=True) -> Callable[[], _T]:
@@ -239,7 +253,7 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
             if hyperparam_mutations:
                 custom_explore_fn = partial(_debug_dump_new_config, mutation_keys=list(hyperparam_mutations.keys()))
         # TODO: Do we want to reload the env_seed?
-        self._trial_state: dict[Trial, _PBTTrialState]
+        self._trial_state: dict[Trial, _PBTTrialState2]  # pyright: ignore[reportIncompatibleVariableOverride]
         if hyperparam_mutations:  # either hyperparam_mutations or custom_explore_fn must be passed
             for k, v in hyperparam_mutations.items():
                 if isinstance(v, dict) and "grid_search" in v:
@@ -266,7 +280,11 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
     def on_trial_add(self, tune_controller: TuneController, trial: Trial):
         """Updates the trials config with hyperparam_mutations"""
         # Adds a new trial with config updated based on hyperparam_mutations
-        return super().on_trial_add(tune_controller, trial)
+        super().on_trial_add(tune_controller, trial)
+        if FORK_FROM in trial.config:
+            self._trial_state[trial].last_training_iteration = trial.config[FORK_FROM].get("fork_training_iteration", 0)
+        else:
+            self._trial_state[trial].last_training_iteration = 0
 
     def _quantiles(self) -> Tuple[List[Trial], List[Trial]]:
         """Returns trials in the lower and upper `quantile` of the population.
@@ -388,6 +406,9 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         they exploit to ensure balanced exploitation.
         """
         state = self._trial_state[trial]
+        # Remove any fork controlling keys from the config
+        for k in self.additional_config_keys:
+            trial.config.pop(k, None)
 
         # Create exploitation assignments if needed
         self._current_assignments = self._distribute_exploitation(lower_quantile, upper_quantile)
@@ -424,8 +445,6 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
                 state.last_checkpoint = checkpoint
 
             self._num_checkpoints += 1
-            for k in self.additional_config_keys:
-                trial.config.pop(k, None)
             trial.config["_top_pbt_is_in_upper_quantile"] = True
         else:
             state.last_checkpoint = None  # not a top trial
@@ -476,15 +495,27 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
             for k in self.additional_config_keys:
                 trial.config.pop(k, None)
             # Set info which trial was forked from
-            trial.config[FORK_FROM] = (
-                trial_to_clone.trial_id + f"?_step={self._trial_state[trial_to_clone].last_train_time}"
-            )
-            trial.config["_top_pbt_perturbed"] = True
+            fork_data: ForkFromData = {
+                "parent_id": trial_to_clone.trial_id,
+                "parent_trial": trial_to_clone,
+                "parent_training_iteration": self._trial_state[trial_to_clone].last_training_iteration,  # pyright: ignore[reportAttributeAccessIssue]
+                "parent_time": Forktime(self._time_attr, self._trial_state[trial_to_clone].last_train_time),
+                "controller": self.__class__.__name__,
+            }
+            trial.config[FORK_FROM] = fork_data
             trial.invalidate_json_state()
         else:
             for k in self.additional_config_keys:
                 trial.config.pop(k, None)
             trial.config["_top_pbt_perturbed"] = False
+
+    def _save_trial_state(
+        self, state: _PBTTrialState | _PBTTrialState2, time: int, result: AlgorithmReturnData | dict, trial: Trial
+    ):
+        score = super()._save_trial_state(state, time, cast("dict", result), trial)
+        # Save training iteration for the step for loggers like WandB / Comet
+        state.last_training_iteration = result[TRAINING_ITERATION]  # pyright: ignore[reportAttributeAccessIssue]
+        return score
 
     def reset_exploitations(self):
         """Reset the current exploitation assignments.

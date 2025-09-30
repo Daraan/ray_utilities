@@ -26,7 +26,7 @@ from ray_utilities.constants import (
     EPISODE_VIDEO_PREFIX,
     FORK_FROM,
 )
-from ray_utilities.misc import make_experiment_key, parse_fork_from
+from ray_utilities.misc import make_experiment_key
 from ray_utilities.video.numpy_to_video import numpy_to_video
 
 from ._log_result_grouping import exclude_results, non_metric_results
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
     from ray.tune.experiment import Trial
 
-    from ray_utilities.typing import CometStripedVideoFilename
+    from ray_utilities.typing import CometStripedVideoFilename, ForkFromData
     from ray_utilities.typing.metrics import AnyFlatLogMetricsDict
 
 __all__ = [
@@ -243,22 +243,29 @@ class AdvCometLoggerCallback(
         return 0
 
     def _restart_experiment_for_forked_trial(
-        self, trial: Trial, trial_id: Optional[str], trial_name: Optional[str]
-    ) -> Experiment | OfflineExperiment | None:
-        if trial not in self._trial_experiments:
-            return None
-        self._trial_experiments[trial].end()
+        self, trial: Trial, fork_data: Optional[ForkFromData] = None
+    ) -> Experiment | OfflineExperiment:
+        try:
+            self.log_trial_end(trial)
+            _LOGGER.info("Ended and restarting experiment for forked trial %s", trial)
+            assert self.trial_is_forked(trial)
+        except KeyError:  # forked, but not yet started, e.g. loaded from checkpoint
+            assert (_info := self.get_forked_trial_info(trial))
+            assert "fork_trial" not in _info[-1]
         experiment_kwargs = self.experiment_kwargs.copy()
-        fork_data = parse_fork_from(trial.config[FORK_FROM])
         if fork_data is None:
-            raise ValueError(f"Could not parse {trial.config[FORK_FROM]}")
+            fork_data = cast("ForkFromData | None", trial.config.get(FORK_FROM, None))
+        if fork_data is None:
+            raise ValueError(f"{FORK_FROM} not in trial.config {trial.config}")
         # Need to modify experiment key to avoid conflicts
         if "experiment_key" in experiment_kwargs:
             _LOGGER.warning(
                 "Need to modify experiment key for forked trial, overwriting passed key: %s",
                 experiment_kwargs["experiment_key"],
             )
-        experiment_kwargs["experiment_key"] = make_experiment_key(trial, fork_data)
+        experiment_kwargs["experiment_key"] = self.get_forked_trial_id(trial) or self.make_forked_trial_id(
+            trial, fork_data
+        )
         # TODO: Do fake logging steps to get to the forked experiment step?
         return self._start_experiment(trial, experiment_kwargs)
 
@@ -278,7 +285,11 @@ class AdvCometLoggerCallback(
                 "Comet experiment key '%s' is invalid. It must be between 32 and 50 characters.",
                 experiment_kwargs["experiment_key"],
             )
-            raise ValueError("Invalid experiment key length.")
+            raise ValueError(
+                "Invalid experiment key length: "
+                f"{len(experiment_kwargs['experiment_key'])} not in [32, 50] "
+                f"for key '{experiment_kwargs['experiment_key']}'"
+            )
         self._check_workspaces(trial)
         experiment = experiment_cls(**experiment_kwargs)
         experiment.set_filename(ENTRY_POINT)
@@ -308,28 +319,25 @@ class AdvCometLoggerCallback(
         Overwritten method to respect ignored/refactored keys.
         nested to other keys will only have their deepest key logged.
         """
+        # breakpoint()
+        trial_name = str(trial)
+        tags = self.tags
         if FORK_FROM in trial.config:
-            try:
-                self.log_trial_end(trial)
-                assert self.trial_is_forked(trial)
-            except KeyError:  # forked, but not yet started, e.g. loaded from checkpoint
-                assert (_info := self.get_forked_trial_info(trial))
-                assert not _info[-1].parent_is_present
-            fork_data = parse_fork_from(trial.config[FORK_FROM])
+            # Use ForkFromData dict; legacy strings are handled earlier in the scheduler
+            fork_data: ForkFromData = trial.config[FORK_FROM]
             assert self.get_forked_trial_info(trial)
-            if fork_data is None:
-                raise ValueError(f"Could not parse {trial.config[FORK_FROM]}")
-            fork_from, fork_step = fork_data
-            self._restart_experiment_for_forked_trial(trial, fork_from, None)
-
-        if trial not in self._trial_experiments:
+            # Restart experiment to avoid conflicts
+            experiment = self._restart_experiment_for_forked_trial(trial, fork_data)
+            trial_name = self.make_forked_trial_name(trial, fork_data)
+            tags = [*self.tags, "forked"]
+        elif trial not in self._trial_experiments:
             experiment = self._start_experiment(trial)
             assert trial in self._trial_experiments
         else:
             experiment = self._trial_experiments[trial]
 
-        experiment.set_name(str(trial))
-        experiment.add_tags(self.tags)
+        experiment.set_name(trial_name)
+        experiment.add_tags(tags)
         experiment.log_other("Created from", "Ray")
 
         # NOTE: Keys here at not flattened, cannot use "cli_args/test" as a key
@@ -355,7 +363,8 @@ class AdvCometLoggerCallback(
                 if len(config[k1]) == 0:
                     config.pop(k1)
 
-        experiment = self._trial_experiments[trial]
+        assert experiment is self._trial_experiments[trial]
+        # experiment = self._trial_experiments[trial]
         experiment.log_parameters(config)
         # Log the command line arguments
         if self._cli_args:
@@ -475,9 +484,9 @@ class AdvCometLoggerCallback(
                 _LOGGER.debug("Comet offline directory does not exist: %s", comet_offline_path)
                 return
 
-            # The zip file should contain the trial ID with _ replaced by xx
+            # The zip file should contain the trial ID with _ replaced by U
             zip_files = sorted(
-                comet_offline_path.glob(f"*{trial.trial_id.replace('_', 'xx')}*.zip"),
+                comet_offline_path.glob(f"*{trial.trial_id.replace('_', 'U')}*.zip"),
                 key=lambda p: p.stat().st_mtime,
                 reverse=True,
             )

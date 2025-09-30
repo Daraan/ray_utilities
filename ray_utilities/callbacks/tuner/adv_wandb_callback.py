@@ -6,8 +6,8 @@ import os
 import pickle
 import re
 import subprocess
-from pathlib import Path
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
 from urllib.error import HTTPError
 
@@ -19,7 +19,11 @@ from ray_utilities.callbacks.tuner.new_style_logger_callback import LogMetricsDi
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
 from ray_utilities.comet import _LOGGER
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, FORK_FROM
-from ray_utilities.misc import extract_trial_id_from_checkpoint, make_experiment_key, parse_fork_from
+from ray_utilities.misc import extract_trial_id_from_checkpoint, make_experiment_key
+
+if TYPE_CHECKING:
+    from ray_utilities.typing.metrics import AnyFlatLogMetricsDict
+    from ray_utilities.typing import ForkFromData
 
 from ._log_result_grouping import non_metric_results
 from ._save_video_callback import SaveVideoFirstCallback
@@ -39,6 +43,7 @@ except ImportError:
     pass  # wandb not installed
 else:
     from ray.air.integrations import wandb as ray_wandb
+    from wandb.errors import CommError
 
     def _is_allowed_type_patch(obj):
         """Return True if type is allowed for logging to wandb"""
@@ -53,10 +58,44 @@ _logger = logging.getLogger(__name__)
 
 
 class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
+    def run(self, retries=0):
+        try:
+            return super().run()
+        except CommError as e:  # pyright: ignore[reportPossiblyUnboundVariable]
+            # NOTE: its possible that wandb is stuck because of async logging and we never reach here :/
+            # breakpoint()
+            online = self.kwargs.get("mode", "online") == "online"
+            fork_from = self.kwargs.get("fork_from", None) is not None
+            if "fromStep is greater than the run's last step" in str(e):
+                # This can happen if the parent run is not yet fully synced.
+                if not fork_from:
+                    raise  # should only happen on forks
+                if retries >= 5:
+                    _logger.error(
+                        "WandB communication error. online mode: %s, fork_from: %s - Error: %s", online, fork_from, e
+                    )
+                    if not online:
+                        raise
+                    _logger.warning("Switching to offline mode")
+                    self.kwargs["mode"] = "offline"
+                    return super().run()
+                _logger.warning("WandB communication error, retrying after 10s: %s", e)
+                time.sleep(10)
+                return self.run(retries=retries + 1)
+            if not online:
+                _logger.exception("WandB communication error in offline mode. Cannot recover.")
+                raise
+            if fork_from:
+                _logger.error("WandB communication error when using fork_from")
+            _logger.exception("WandB communication error. Trying to switch to offline mode.")
+            self.kwargs["mode"] = "offline"
+            super().run()
+            # TODO: communicate to later upload offline run
+
     def _handle_result(self, result: dict) -> tuple[dict, dict]:
         config_update = result.get("config", {}).copy()
         log = {}
-        flat_result = flatten_dict(result, delimiter="/")
+        flat_result: AnyFlatLogMetricsDict | dict[str, Any] = flatten_dict(result, delimiter="/")
 
         for k, v in flat_result.items():
             if any(k.startswith(item + "/") or k == item for item in self._exclude):
@@ -144,7 +183,7 @@ class AdvWandbLoggerCallback(
 
     def on_trial_start(self, iteration: int, trials: list["Trial"], trial: "Trial", **info):
         super().on_trial_start(iteration, trials, trial, **info)
-        if self._trials_created <= len(trials):
+        if self._trials_created < len(trials):
             _logger.warning(
                 "Number of created trials %d does not match the number of tracked trials %d.",
                 len(trials),
@@ -154,6 +193,7 @@ class AdvWandbLoggerCallback(
         self._trials = trials  # keep them in case of a failure to access paths.
 
     def log_trial_start(self, trial: "Trial"):
+        # breakpoint()
         config = trial.config.copy()
 
         config.pop("callbacks", None)  # Remove callbacks
@@ -183,23 +223,19 @@ class AdvWandbLoggerCallback(
         config = {key: value for key, value in config.items() if key not in self.excludes}
         config["run_id"] = RUN_ID
         # replace potential _ in trial_id
-        if "_" in trial.trial_id:
-            _trial_number = int(trial.trial_id.split("_")[-1])
-            # cannot check for id as they are possibly created out of order, 00000 last, 00001 first
-        config.setdefault("experiment_key", make_experiment_key(trial, self._trials_created))
         # --- New Code --- : Remove nested keys
         for nested_key in filter(lambda x: "/" in x, self.excludes):
             key, sub_key = nested_key.split("/")
             if key in config:
                 config[key].pop(sub_key, None)
-        fork_from = None  # new run
+        fork_from = fork_id = fork_iteration = None  # new run
         if "cli_args" in config:
             assert "num_jobs" not in config["cli_args"]
             assert "test" not in config["cli_args"]
             if trial.config["cli_args"].get("from_checkpoint"):
-                ckpt_trial_id = extract_trial_id_from_checkpoint(trial.config["cli_args"]["from_checkpoint"])
+                fork_id = extract_trial_id_from_checkpoint(trial.config["cli_args"]["from_checkpoint"])
                 # get id of run
-                if ckpt_trial_id is None:
+                if fork_id is None:
                     _logger.error(
                         "Cannot extract trial id from checkpoint name: %s. "
                         "Make sure that it has to format id=<part1>_<sample_number>",
@@ -207,8 +243,7 @@ class AdvWandbLoggerCallback(
                     )
                 else:
                     # Need to change to format '<run>?<metric>=<numeric_value>'
-                    # Where metric="_step"
-                    # open state pickle to get iteration
+                    # Where metric="_step"; open state pickle to get iteration
                     ckpt_dir = Path(trial.config["cli_args"]["from_checkpoint"])
                     state = None
                     if (state_file := ckpt_dir / "state.pkl").exists():
@@ -224,27 +259,30 @@ class AdvWandbLoggerCallback(
                         )
                     else:
                         iteration = state["trainable"]["iteration"]
-                        fork_from = f"{ckpt_trial_id}?_step={iteration}"
+                        fork_from = f"{fork_id}?_step={iteration}"
+                fork_iteration = None  # NOTE: Cannot fork twice in same run; would need Checkpoint to determine step
         # we let take FORK_FROM a higher priority
         if FORK_FROM in trial.config:
-            fork_data = parse_fork_from(trial.config[FORK_FROM])
-            if fork_data is None:
-                raise ValueError(f"Cannot parse FORK_FROM value: {trial.config[FORK_FROM]}")
-            fork_id, fork_step = fork_data
-            if fork_step is None:
-                raise ValueError(f"Forked step cannot be None in {trial.config[FORK_FROM]}")
-            fork_from = f"{fork_id}?_step={fork_step}"
+            fork_data = cast("ForkFromData", trial.config[FORK_FROM])
+            fork_id = fork_data["parent_id"]
+            fork_iteration = fork_data["parent_training_iteration"]
+            fork_from = f"{fork_id}?_step={fork_iteration}"
             # We should not have multiple ?_step= in the id
-            if trial_id:  # otherwise there is no Trial
-                # We should not have multiple ?_step= in the id, replace ?_step=
-                # TODO: is a too long id a problem for wandb?, For comet is is.
-                trial_id += f"_forkof_{fork_from}".replace("?_step=", "_step=")
-            if trial_name:
-                trial_name += f"_forkof_{fork_from}"
+            trial_id = self.get_forked_trial_id(trial)
+            assert trial_id is not None, "Expected trial_id to be set on super for forked trial."
+            trial_name = self.make_forked_trial_name(trial, fork_data)
+            # Set experiment key using dict-based fork data
+            config.setdefault("experiment_key", make_experiment_key(trial, fork_data))
+        else:
+            # No fork info present in config; use non-fork key
+            config.setdefault("experiment_key", make_experiment_key(trial))
+
+        # TODO: trial_id of a forked trial might be very long
+
         # Test for invalid chars
         assert not trial_id or all(c not in trial_id for c in r"/ \ # ? % :"), f"Invalid character in: {trial_id}"
         assert fork_from is None or fork_from.count("?_step=") == 1, fork_from
-        # TODO: Check if fork_from id actually exists on wandb (but if it is offline we cannot know)
+        # FIXME: fork_from is not stable on WandB when there is no longer wait time, wandb.init likely raises error
         # NOTE: We never want FORK_FROM to be in the trials.config by default.
         # --- End New Code
         wandb_init_kwargs = {
@@ -259,15 +297,17 @@ class AdvWandbLoggerCallback(
             "fork_from": fork_from,
         }
         wandb_init_kwargs.update(self.kwargs)
+        if fork_from:
+            wandb_init_kwargs.setdefault("tags", []).append("forked")
 
+        if trial not in self._trial_logging_actors:
+            self._trials_created += 1
         if fork_from and trial in self._trial_logging_futures:
             assert self.trial_is_forked(trial), "Expected trial to be tracked as forked trial."
             self._restart_logging_actor(trial, **wandb_init_kwargs)
         else:
-            # can be forked from a checkpoint
+            # can be forked from a checkpoint, if not stopped does not start a new
             self._start_logging_actor(trial, exclude_results, **wandb_init_kwargs)
-        if trial not in self._trial_logging_actors:
-            self._trials_created += 1
         self._trials_started += 1
 
     def _restart_logging_actor(self, trial: "Trial", **wandb_init_kwargs):
@@ -277,9 +317,9 @@ class AdvWandbLoggerCallback(
         # Wait a bit before starting the next one
         self._cleanup_logging_actors(timeout=5, kill_on_timeout=False)
         # Clean queue and futures else a new one will not be created
-        del self._trial_queues[trial]
-        del self._trial_logging_futures[trial]
-        del self._trial_logging_actors[trial]
+        self._trial_queues.pop(trial, None)
+        self._trial_logging_futures.pop(trial, None)
+        self._trial_logging_actors.pop(trial, None)
         self._start_logging_actor(trial, self._exclude_results, **wandb_init_kwargs)
 
     @staticmethod
@@ -321,7 +361,7 @@ class AdvWandbLoggerCallback(
             # Wandb dir is likely not yet saved by actor, wait for it, super does not wait that long.
             self._cleanup_logging_actors(timeout=120, kill_on_timeout=False)
             _LOGGER.info("Syncing offline WandB run for trial %s", trial.trial_id)
-            # TODO: problem did the actor sync everything when we are here?
+            # NOTE: Actor should have synced everything at this point
             self._sync_offline_run_if_available(trial)
 
     def _sync_offline_run_if_available(self, trial: "Trial"):
@@ -361,7 +401,8 @@ class AdvWandbLoggerCallback(
 
             # Wandb file should be bound to the trial and not duplicated
             offline_runs = list(wandb_dir.glob("offline-run-*"))
-            if len(offline_runs) > 1:
+            if len(offline_runs) > 1 and FORK_FROM not in trial.config:
+                # This is normal when having a forked trial or it was forked in the past
                 _logger.warning("Multiple wandb offline directories found in %s: %s", wandb_dir, offline_runs)
 
             if not offline_runs:
@@ -379,15 +420,16 @@ class AdvWandbLoggerCallback(
                     ["wandb", "sync", str(run_dir)],
                     check=False,
                     text=True,
-                    timeout=1500,  # timeout 30 minutes
+                    timeout=600,  # timeout 10 minutes
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                 )
-
-            if result.returncode == 0:  # pyright: ignore[reportPossiblyUnboundVariable]
-                _logger.info("Successfully synced offline run for trial %s\n%s", trial.trial_id, result.stdout)  # pyright: ignore[reportPossiblyUnboundVariable]
-            else:
-                _logger.warning("Failed to sync offline run for trial %s: %s", trial.trial_id, result.stderr)  # pyright: ignore[reportPossiblyUnboundVariable]
+                if result.returncode == 0:
+                    _logger.info("Successfully synced offline run for trial %s\n%s", trial.trial_id, result.stdout)
+                else:
+                    _logger.warning("Failed to sync offline run for trial %s: %s", trial.trial_id, result.stderr)
+                if len(offline_runs) > 1:
+                    time.sleep(5)  # wait a bit between uploads
 
         except subprocess.TimeoutExpired:
             _logger.warning("Timeout while syncing offline run for trial %s", trial.trial_id)
