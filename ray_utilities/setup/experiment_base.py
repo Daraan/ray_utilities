@@ -1237,6 +1237,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
     def _report_wandb_upload(process: subprocess.Popen[bytes], run_dir: Optional[Path] = None, *, wait: bool = True):
         """Wait and report the output of a WandB upload process."""
         run_dir = run_dir or Path(process.args[-1])  # pyright: ignore[reportArgumentType, reportIndexIssue]
+        exit_code = 0
         if wait:
             process.wait()
         if process.stdout:
@@ -1246,6 +1247,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             if "error" in msg.lower():  # pyright: ignore[reportOperatorIssue]
                 # This likely happens when we want to upload a fork_from where the parent is not yet uploaded
                 logger.error("Error during wandb upload of offline run %s: %s", run_dir, msg)
+                exit_code = 1
         if process.returncode != 0 or process.stderr:
             stderr = process.stderr.read() if process.stderr else b""
             logger.error(
@@ -1254,6 +1256,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 process.returncode,
                 stderr.decode("utf-8"),
             )
+            exit_code = process.returncode or 1
+        return exit_code
 
     def _get_wandb_paths(self, results: Optional[ResultGrid] = None, tuner: Optional[tune.Tuner] = None) -> list[Path]:
         if results is None:
@@ -1335,8 +1339,10 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         )  # FIXME: If this is set it might upload the same directory multiple times
         if global_wandb_dir and (global_wandb_dir := Path(global_wandb_dir)).exists():
             wandb_paths.append(global_wandb_dir)
-        # FIXME: If we upload forked trials, the forked trials might not be uploaded yet,
+        # FIXME: # CRITICAL If we upload forked trials, the forked trials might not be uploaded yet,
         # that will result in an error - 404 from wandb and NOT upload the experiment.
+        # TODO: Make some dependency graph to order the uploads.
+        failed_uploads = []
         for wandb_dir in wandb_paths:
             # Find offline run directories
             offline_runs = list(wandb_dir.glob("offline-run-*"))
@@ -1358,8 +1364,11 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                         uploads_in_progress,
                     )
                     for process in uploads:
-                        self._report_wandb_upload(process)
-                        finished_uploads.add(process)
+                        exit_code = self._report_wandb_upload(process)
+                        if exit_code == 0:
+                            finished_uploads.add(process)
+                        else:
+                            failed_uploads.add(process)
                     uploads = [p for p in uploads if p not in finished_uploads]
                 logger.info("Uploading offline wandb run from: %s", run_dir)
                 process = subprocess.Popen(
