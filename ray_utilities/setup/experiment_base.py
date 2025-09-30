@@ -159,7 +159,7 @@ class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, Algor
     config_overrides: dict[str, Any]
     """Hold the current dict created by updating config_overrides"""
 
-    config_files: NotRequired[Optional[list[str | os.PathLike | Path]]]
+    config_files: NotRequired[Optional[Sequence[str | os.PathLike | Path]]]
     """
     Optional list of configuration files used during argument parsing.
     Should be present if setup / parser uses config files.
@@ -282,7 +282,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         self,
         args: Optional[Sequence[str]] = None,
         *,
-        config_files: Optional[list[str | os.PathLike | Path]] = None,
+        config_files: Optional[Sequence[str | os.PathLike | Path]] = None,
         load_args: Optional[str | os.PathLike | Path] = None,
         init_config: bool = True,
         init_param_space: bool = True,
@@ -328,7 +328,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         cfgs_from_cli = cfg_file_parser.parse_args(args, known_only=True)
         if config_files:
             logger.info("Adding config files %s to those found in args: %s", config_files, cfgs_from_cli.config_files)
-            config_files = config_files.copy()
+            config_files = list(config_files)
             config_files.extend(cfgs_from_cli.config_files)
         else:
             config_files = cfgs_from_cli.config_files  # pyright: ignore[reportAssignmentType]
@@ -417,7 +417,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     # region Argument Parsing
 
-    def create_parser(self, config_files: Optional[list[str | os.PathLike | Path]] = None) -> Parser[ParserType_co]:
+    def create_parser(self, config_files: Optional[Sequence[str | os.PathLike]] = None) -> Parser[ParserType_co]:
         self.parser = DefaultArgumentParser(allow_abbrev=False, config_files=config_files)
         if self._change_log_level is not None:
             self.parser._change_log_level = self._change_log_level
@@ -1235,13 +1235,18 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     @staticmethod
     def _report_wandb_upload(process: subprocess.Popen[bytes], run_dir: Optional[Path] = None, *, wait: bool = True):
+        """Wait and report the output of a WandB upload process."""
         run_dir = run_dir or Path(process.args[-1])  # pyright: ignore[reportArgumentType, reportIndexIssue]
         if wait:
             process.wait()
         if process.stdout:
             stdout = process.stdout.read()
-            print(stdout if isinstance(stdout, str) else stdout.decode("utf-8"))
-        if process.returncode != 0:
+            msg = stdout if isinstance(stdout, str) else stdout.decode("utf-8")
+            print(msg)
+            if "error" in msg.lower():  # pyright: ignore[reportOperatorIssue]
+                # This likely happens when we want to upload a fork_from where the parent is not yet uploaded
+                logger.error("Error during wandb upload of offline run %s: %s", run_dir, msg)
+        if process.returncode != 0 or process.stderr:
             stderr = process.stderr.read() if process.stderr else b""
             logger.error(
                 "Failed to upload wandb offline run %s with exit code %d. Output: %s",
@@ -1330,6 +1335,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         )  # FIXME: If this is set it might upload the same directory multiple times
         if global_wandb_dir and (global_wandb_dir := Path(global_wandb_dir)).exists():
             wandb_paths.append(global_wandb_dir)
+        # FIXME: If we upload forked trials, the forked trials might not be uploaded yet,
+        # that will result in an error - 404 from wandb and NOT upload the experiment.
         for wandb_dir in wandb_paths:
             # Find offline run directories
             offline_runs = list(wandb_dir.glob("offline-run-*"))
