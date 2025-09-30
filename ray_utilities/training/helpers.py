@@ -212,7 +212,7 @@ def get_args_and_config(
         args = setup.args_to_dict()
         config: ConfigType_co = setup.config.copy(copy_frozen=False)  # pyright: ignore[reportAssignmentType]
     elif setup_class:
-        args = hparams["cli_args"]
+        args = deepcopy(hparams["cli_args"])
         # TODO: this should use the parameters from the search space
         config = setup_class.config_from_args(SimpleNamespace(**args))
     else:
@@ -422,7 +422,7 @@ def setup_trainable(
 def get_total_steps(args: dict[str, Any], config: "AlgorithmConfig") -> int | None:
     return (
         args.get("total_steps", None)
-        if args["iterations"] == "auto"
+        if args["iterations"] == "auto" or args["use_exact_total_steps"]
         else (
             calculate_steps(
                 args["iterations"],
