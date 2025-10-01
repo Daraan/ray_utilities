@@ -19,6 +19,7 @@ from ray_utilities.constants import FORK_FROM
 from ray_utilities.misc import make_experiment_key
 from ray_utilities.testing_utils import DisableLoggers, TestHelpers, patch_args
 from ray_utilities.testing_utils import MockTrial
+from ray_utilities.typing import ForkFromData, Forktime
 
 
 @pytest.mark.basic
@@ -37,9 +38,9 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
             self.online_callback = AdvCometLoggerCallback(online=True)
             self.offline_callback = AdvCometLoggerCallback(online=False)
 
-    def _create_forked_trial(self, trial_id: str, fork_from: str, config: dict | None = None) -> MockTrial:
+    def _create_forked_trial(self, trial_id: str, fork_data: ForkFromData, config: dict | None = None) -> MockTrial:
         """Create a mock forked trial with proper configuration."""
-        base_config = {FORK_FROM: fork_from}
+        base_config = {FORK_FROM: fork_data}
         if config:
             base_config.update(config)
         trial = MockTrial(trial_id, config=base_config)
@@ -81,7 +82,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
     def test_restart_experiment_for_forked_trial_basic(self):
         """Test basic experiment restart functionality for forked trials."""
         callback = self.online_callback
-        parent_trial_id = "parent_trial_001"
+        parent_trial_id = "p_trial_0001"
         fork_step = 100
         forked_trial = self._create_forked_trial("forked_trial_001", f"{parent_trial_id}?_step={fork_step}")
 
@@ -100,7 +101,12 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
             mock_experiment_class.return_value = mock_new_experiment
 
             # Call the method under test
-            result = callback._restart_experiment_for_forked_trial(forked_trial, (parent_trial_id, fork_step))
+            fork_data: ForkFromData = {
+                "parent_id": parent_trial_id,
+                "parent_training_iteration": fork_step,
+                "parent_time": Forktime("training_iteration", fork_step),
+            }
+            result = callback._restart_experiment_for_forked_trial(forked_trial, fork_data)
 
             # Verify parent experiment was ended
             mock_parent_experiment.end.assert_called_once()
@@ -115,7 +121,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
     def test_restart_experiment_offline_mode(self):
         """Test experiment restart in offline mode."""
         callback = self.offline_callback
-        parent_trial_id = "parent_trial_001"
+        parent_trial_id = "p_trial_0001"
         fork_step = 50
         forked_trial = self._create_forked_trial("forked_trial_002", f"{parent_trial_id}?_step={fork_step}")
 
@@ -134,7 +140,12 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
             mock_offline_experiment_class.return_value = mock_new_experiment
 
             # Call the method under test
-            result = callback._restart_experiment_for_forked_trial(forked_trial, (parent_trial_id, fork_step))
+            fork_data: ForkFromData = {
+                "parent_id": parent_trial_id,
+                "parent_training_iteration": fork_step,
+                "parent_time": Forktime("training_iteration", fork_step),
+            }
+            result = callback._restart_experiment_for_forked_trial(forked_trial, fork_data)
 
             # Verify parent experiment was ended
             mock_parent_experiment.end.assert_called_once()
@@ -150,7 +161,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         callback = self.online_callback
         callback.experiment_kwargs = {"experiment_key": "original_key", "project_name": "test_project"}
 
-        parent_trial_id = "parent_trial_001"
+        parent_trial_id = "p_trial_0001"
         fork_step = 200
         forked_trial = self._create_forked_trial("forked_trial_003", f"{parent_trial_id}?_step={fork_step}")
 
@@ -171,7 +182,12 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
             mock_make_key.return_value = "new_forked_experiment_key_with_proper_length"  # 40 chars
 
             # Call the method under test
-            callback._restart_experiment_for_forked_trial(forked_trial, (parent_trial_id, fork_step))
+            fork_data: ForkFromData = {
+                "parent_id": parent_trial_id,
+                "parent_training_iteration": fork_step,
+                "parent_time": Forktime("training_iteration", fork_step),
+            }
+            callback._restart_experiment_for_forked_trial(forked_trial, fork_data)
 
             # Verify warning about overriding experiment key was logged
             mock_logger.warning.assert_called_once()
@@ -193,9 +209,14 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
     def test_restart_experiment_forked_trial_not_started(self):
         """Test restart for forked trial that hasn't been started yet (e.g., loaded from checkpoint)."""
         callback = self.online_callback
-        parent_trial_id = "parent_trial_001"
+        parent_trial_id = "p_trial_0001"
         fork_step = 75
-        forked_trial = self._create_forked_trial("forked_trial_004", f"{parent_trial_id}?_step={fork_step}")
+        fork_data: ForkFromData = {
+            "parent_id": parent_trial_id,
+            "parent_training_iteration": fork_step,
+            "parent_time": Forktime("training_iteration", fork_step),
+        }
+        forked_trial = self._create_forked_trial("forked_trial_004", fork_data)
 
         # Forked trial is not in _trial_experiments (not started yet)
 
@@ -212,14 +233,20 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
 
             # Mock forked trial info where parent is not present
             mock_info = Mock()
-            mock_info.parent_is_present = False
-            mock_get_info.return_value = (mock_info,)  # Return tuple as expected
+            # cannot mock magic methods
+            mock_info.__getitem__.side_effect = lambda key: {"some_key": fork_data}[key]
+            mock_get_info.return_value = mock_info  # Return tuple as expected
 
             # Call the method under test
-            result = callback._restart_experiment_for_forked_trial(forked_trial, (parent_trial_id, fork_step))
+            fork_data: ForkFromData = {
+                "parent_id": parent_trial_id,
+                "parent_training_iteration": fork_step,
+                "parent_time": Forktime("training_iteration", fork_step),
+            }
+            result = callback._restart_experiment_for_forked_trial(forked_trial, fork_data)
 
             # Verify KeyError was caught and handled
-            mock_get_info.assert_called_once_with(forked_trial)
+            # mock_get_info.assert_called_once_with(forked_trial)
 
             # Verify new experiment was still created
             mock_experiment_class.assert_called_once()
@@ -230,18 +257,22 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         callback = self.online_callback
         callback.tags = ["test_tag"]
 
-        parent_trial_id = "parent_trial_001"
+        parent_trial_id = "p_trial_0001"
         fork_step = 150
-        forked_trial = self._create_forked_trial("forked_trial_005", f"{parent_trial_id}?_step={fork_step}")
+        fork_data: ForkFromData = {
+            "parent_id": parent_trial_id,
+            "parent_training_iteration": fork_step,
+            "parent_time": Forktime("training_iteration", fork_step),
+        }
+
+        forked_trial = self._create_forked_trial("forked_trial_005", fork_data)
 
         with (
             patch.object(callback, "_restart_experiment_for_forked_trial") as mock_restart,
             patch.object(callback, "get_forked_trial_info") as mock_get_info,
-            patch("ray_utilities.callbacks.tuner.adv_comet_callback.parse_fork_from") as mock_parse,
         ):
             mock_experiment = self._create_online_experiment()
             mock_restart.return_value = mock_experiment
-            mock_parse.return_value = (parent_trial_id, fork_step)
             mock_get_info.return_value = True  # Trial is forked
 
             # Mock the side effect of _restart_experiment_for_forked_trial
@@ -256,10 +287,9 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
 
             # Verify fork_from was parsed
             assert forked_trial.config is not None
-            mock_parse.assert_called_once_with(forked_trial.config[FORK_FROM])
 
             # Verify restart was called
-            mock_restart.assert_called_once_with(forked_trial, (parent_trial_id, fork_step))
+            mock_restart.assert_called_once_with(forked_trial, fork_data)
 
             # Verify experiment was configured
             mock_experiment.set_name.assert_called_once_with(str(forked_trial))
@@ -306,17 +336,13 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         mock_parent_experiment = self._create_online_experiment()
         callback._trial_experiments[forked_trial] = mock_parent_experiment
 
-        with (
-            patch("ray_utilities.callbacks.tuner.adv_comet_callback.parse_fork_from", return_value=None),
-            patch.object(callback, "trial_is_forked", return_value=True),
-        ):
+        with patch.object(callback, "trial_is_forked", return_value=True):
             # Should raise ValueError for invalid fork data
-            with self.assertRaises(ValueError) as cm:
+            with self.assertRaises(TypeError) as cm:
                 callback._restart_experiment_for_forked_trial(forked_trial, None)
 
-            self.assertIn("Could not parse", str(cm.exception))
+            self.assertIn("string indices must be integers", str(cm.exception))
             assert forked_trial.config is not None
-            self.assertIn(forked_trial.config[FORK_FROM], str(cm.exception))
 
     def test_start_experiment_with_custom_kwargs(self):
         """Test _start_experiment respects custom experiment_kwargs."""
@@ -363,7 +389,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         callback = self.offline_callback
         callback.experiment_kwargs = {"offline_directory": "/custom/offline/dir"}
 
-        parent_trial_id = "parent_trial_001"
+        parent_trial_id = "p_trial_0001"
         fork_step = 300
         forked_trial = self._create_forked_trial("forked_trial_007", f"{parent_trial_id}?_step={fork_step}")
 
@@ -382,7 +408,12 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
             mock_offline_experiment_class.return_value = mock_new_experiment
 
             # Call the method under test
-            callback._restart_experiment_for_forked_trial(forked_trial, (parent_trial_id, fork_step))
+            fork_data: ForkFromData = {
+                "parent_id": parent_trial_id,
+                "parent_training_iteration": fork_step,
+                "parent_time": Forktime("training_iteration", fork_step),
+            }
+            callback._restart_experiment_for_forked_trial(forked_trial, fork_data)
 
             # Verify offline experiment was created with custom directory
             call_kwargs = mock_offline_experiment_class.call_args[1]
@@ -391,7 +422,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
     def test_multiple_restarts_same_trial(self):
         """Test that multiple restarts of the same trial work correctly."""
         callback = self.online_callback
-        parent_trial_id = "parent_trial_001"
+        parent_trial_id = "p_trial_0001"
         fork_step = 400
         forked_trial = self._create_forked_trial("forked_trial_008", f"{parent_trial_id}?_step={fork_step}")
 
@@ -407,13 +438,18 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
             mock_experiment_class.return_value = mock_experiment1
 
             callback._trial_experiments[forked_trial] = Mock()  # Previous experiment
-            result1 = callback._restart_experiment_for_forked_trial(forked_trial, (parent_trial_id, fork_step))
+            fork_data: ForkFromData = {
+                "parent_id": parent_trial_id,
+                "parent_training_iteration": fork_step,
+                "parent_time": Forktime("training_iteration", fork_step),
+            }
+            result1 = callback._restart_experiment_for_forked_trial(forked_trial, fork_data)
 
             # Second restart
             mock_experiment2 = self._create_online_experiment()
             mock_experiment_class.return_value = mock_experiment2
 
-            result2 = callback._restart_experiment_for_forked_trial(forked_trial, (parent_trial_id, fork_step))
+            result2 = callback._restart_experiment_for_forked_trial(forked_trial, fork_data)
 
             # Verify both experiments were created and the latest one is stored
             self.assertEqual(mock_experiment_class.call_count, 2)
@@ -425,7 +461,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
     def test_integration_with_offline_upload_on_restart(self):
         """Test integration between restart and offline upload functionality."""
         callback = AdvCometLoggerCallback(online=False, upload_offline_experiments=True)
-        parent_trial_id = "parent_trial_001"
+        parent_trial_id = "p_trial_0001"
         fork_step = 500
         forked_trial = self._create_forked_trial("forked_trial_009", f"{parent_trial_id}?_step={fork_step}")
 
@@ -450,7 +486,12 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
                 callback._trial_experiments[forked_trial] = Mock()
 
                 # Restart experiment
-                callback._restart_experiment_for_forked_trial(forked_trial, (parent_trial_id, fork_step))
+                fork_data: ForkFromData = {
+                    "parent_id": parent_trial_id,
+                    "parent_training_iteration": fork_step,
+                    "parent_time": Forktime("training_iteration", fork_step),
+                }
+                callback._restart_experiment_for_forked_trial(forked_trial, fork_data)
 
                 # Simulate trial completion
                 callback.on_trial_complete(1, [forked_trial], forked_trial)

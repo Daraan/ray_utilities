@@ -251,7 +251,7 @@ class AdvCometLoggerCallback(
             assert self.trial_is_forked(trial)
         except KeyError:  # forked, but not yet started, e.g. loaded from checkpoint
             assert (_info := self.get_forked_trial_info(trial))
-            assert "fork_trial" not in _info[-1]
+            assert "parent_trial" not in _info[-1]
         experiment_kwargs = self.experiment_kwargs.copy()
         if fork_data is None:
             fork_data = cast("ForkFromData | None", trial.config.get(FORK_FROM, None))
