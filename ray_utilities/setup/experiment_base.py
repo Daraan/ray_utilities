@@ -1260,9 +1260,15 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         return exit_code
 
     def _get_wandb_paths(self, results: Optional[ResultGrid] = None, tuner: Optional[tune.Tuner] = None) -> list[Path]:
+        """
+        Checks the results for wandb offline directories to upload.
+
+        The tuner can be provided in case no results are available, e.g. due to an error,
+        furthermore passing the tuner allows to check for missing wandb directories.
+        """
         if results is None:
             if tuner is None:
-                logger.warning("No results or tuner provided to get wandb paths, cannot get paths.")
+                logger.error("No results or tuner provided to get wandb paths, cannot get paths.")
                 return []
             try:
                 results = tuner.get_results()  # if this works below works if we have a local tuner
@@ -1281,11 +1287,14 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 logger.error("Did not get all wandb paths %d of %d", len(trial_paths), len(trials))
             return trial_paths
         result_paths = [Path(result.path) / "wandb" for result in results]  # these are in the non-temp dir
+        if tuner is None:
+            logger.warning("No tuner provided cannot check for missing wandb paths.")
+            return result_paths
         try:
             # compare paths for completeness
             trials = tuner._local_tuner.get_results()._experiment_analysis.trials  # pyright: ignore[reportOptionalMemberAccess]
             trial_paths = [Path(trial.local_path) / "wandb" for trial in trials if trial.local_path]
-        except Exception as e:
+        except Exception:
             logger.exception("Could not get trials or their paths")
         else:
             existing_in_result = sum(p.exists() for p in result_paths)
@@ -1368,7 +1377,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                         if exit_code == 0:
                             finished_uploads.add(process)
                         else:
-                            failed_uploads.add(process)
+                            failed_uploads.append(process)
                     uploads = [p for p in uploads if p not in finished_uploads]
                 logger.info("Uploading offline wandb run from: %s", run_dir)
                 process = subprocess.Popen(
