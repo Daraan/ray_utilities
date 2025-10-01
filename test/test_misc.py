@@ -30,7 +30,7 @@ from ray_utilities.testing_utils import (
     no_parallel_envs,
     patch_args,
 )
-from ray_utilities.testing_utils import _MockTrial as MockTrial
+from ray_utilities.testing_utils import MockTrial
 from ray_utilities.training.helpers import make_divisible
 
 if sys.version_info < (3, 11):

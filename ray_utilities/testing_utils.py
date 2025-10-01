@@ -2085,7 +2085,7 @@ class _MockTrialRunner:
         )
 
 
-class _MockTrial(Trial):
+class MockTrial(Trial):
     def __init__(self, i, config=None, storage=None):
         self.trainable_name = "trial_{}".format(i)
         self.trial_id = str(i)

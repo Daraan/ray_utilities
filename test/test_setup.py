@@ -6,6 +6,7 @@ import io
 import json
 import math
 import os
+import random
 import subprocess
 import tempfile
 import unittest
@@ -14,6 +15,7 @@ from ast import literal_eval
 from copy import deepcopy
 from inspect import isclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import IO, TYPE_CHECKING, Any, Final, Optional, cast
 
 import cloudpickle
@@ -32,6 +34,7 @@ from ray.rllib.utils.metrics import (
     NUM_ENV_STEPS_SAMPLED,
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
+from ray.tune.experiment import Trial
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import NUM_ENV_RUNNERS_0_1_EQUAL
 from ray_utilities.config import DefaultArgumentParser
@@ -45,10 +48,11 @@ from ray_utilities.constants import (
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
 )
 from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
-from ray_utilities.misc import is_pbar, raise_tune_errors
+from ray_utilities.misc import is_pbar, make_experiment_key, raise_tune_errors
 from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.random import seed_everything
 from ray_utilities.runfiles import run_tune
+from ray_utilities.setup._experiment_uploader import WandbUploaderMixin
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup, PPOMLPSetup
@@ -56,8 +60,8 @@ from ray_utilities.testing_utils import (
     ENV_RUNNER_CASES,
     TWO_ENV_RUNNER_CASES,
     Cases,
-    DisableGUIBreakpoints,
     InitRay,
+    MockTrial,
     SetupDefaults,
     SetupWithCheck,
     TestHelpers,
@@ -69,6 +73,7 @@ from ray_utilities.testing_utils import (
 from ray_utilities.training.default_class import DefaultTrainable, TrainableBase
 from ray_utilities.training.helpers import make_divisible
 from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultIterationStopper
+from ray_utilities.typing import ForkFromData, Forktime
 
 if TYPE_CHECKING:
     import numpy as np
@@ -591,36 +596,6 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 # Never restored
                 self.assertNotEqual(setup2.args.log_level, "WARNING")
                 self.assertEqual(setup2.args.num_jobs, DefaultArgumentParser.num_jobs)
-
-    @unittest.mock.patch.object(subprocess, "Popen", autospec=True)
-    def test_wandb_upload(self, mock_popen_class: unittest.mock.MagicMock):
-        # NOTE: This test is flaky, there are instances of no wandb folder copied
-        # Does the actor die silently?
-        self.no_pbar_updates()
-
-        class MockPopen(unittest.mock.MagicMock):
-            returncode = 1
-            stdout: IO[bytes] = io.BytesIO(b"MOCK: wandb: Syncing files...")
-            stderr: IO[bytes] | None = io.BytesIO(b"MOCK: stderr - its expected you see this message")
-
-            def poll(self) -> None:
-                return None
-
-        mocked_popen = MockPopen()
-        mock_popen_class.return_value = mocked_popen
-        # use more iterations here for it to be more likely that the files are synced.
-        with (
-            patch_args("--wandb", "offline+upload", "--num_jobs", 1, "--iterations", 5, "--batch_size", 32),
-            unittest.mock.patch("subprocess.run") as mock_run,  # upload on_trial_complete
-        ):
-            setup = AlgorithmSetup()
-            _results = run_tune(setup, raise_errors=True)
-        mocked_popen.wait.assert_called_once()
-        mock_run.assert_called_once()
-        self.assertDictEqual(
-            mock_popen_class.call_args.kwargs, {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT}
-        )
-        self.assertListEqual(mock_run.call_args.args[0][:2], ["wandb", "sync"])
 
     def test_seeded_env(self):
         with patch_args("--seed", "1234", "--num_env_runners", 2), AlgorithmSetup(init_trainable=False) as setup:
@@ -1774,6 +1749,283 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
             )
             trainable1.stop()
             trainable2.stop()
+
+
+class TestLoggerIntegration(TestHelpers):
+    @unittest.mock.patch("subprocess.Popen")
+    def test_wandb_upload(self, mock_popen_class: unittest.mock.MagicMock):
+        # NOTE: This test is flaky, there are instances of no wandb folder copied
+        # Does the actor die silently?
+        self.no_pbar_updates()
+
+        class MockPopen(unittest.mock.MagicMock):
+            returncode = 1
+            stdout: IO[bytes] = io.BytesIO(b"MOCK: wandb: Syncing files...")
+            stderr: IO[bytes] | None = io.BytesIO(b"MOCK: stderr - its expected you see this message")
+
+            def poll(self) -> None:
+                return None
+
+        mocked_popen = MockPopen()
+        mock_popen_class.return_value = mocked_popen
+        # use more iterations here for it to be more likely that the files are synced.
+        with (
+            patch_args("--wandb", "offline+upload", "--num_jobs", 1, "--iterations", 5, "--batch_size", 32),
+            unittest.mock.patch("subprocess.run") as mock_run,  # upload on_trial_complete
+        ):
+            setup = AlgorithmSetup()
+            _results = run_tune(setup, raise_errors=True)
+        mocked_popen.wait.assert_called_once()
+        mock_run.assert_called_once()
+        self.assertDictEqual(
+            mock_popen_class.call_args.kwargs, {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT}
+        )
+        self.assertListEqual(mock_run.call_args.args[0][:2], ["wandb", "sync"])
+
+    @unittest.mock.patch("subprocess.Popen")
+    def test_wandb_upload_order(self, mock_popen_class: unittest.mock.MagicMock):
+        # randomize this test
+        base_trial_ids = [Trial.generate_id() for _ in range(3)]
+        # Add parallel trial ids
+        base_trial_ids.extend(base_trial_ids[0] + "_" + f"{i:05}" for i in range(5))
+        trials = {tid: MockTrial(tid) for tid in base_trial_ids}
+        # randomize order
+        trial_id_to_trial: dict[str, MockTrial] = trials.copy()
+        random.shuffle(base_trial_ids)
+        # Fork 6 trials
+        possible_parents = base_trial_ids.copy()
+        generations = {0: possible_parents}
+        child_graph = {tid: [] for tid in possible_parents}
+        parent_lookup = dict.fromkeys(base_trial_ids, None)
+        assert possible_parents
+        for gen in range(1, 5):
+            children = []
+            possible_parents_this_generation = random.sample(possible_parents, len(possible_parents) // 2)
+            parent_trials = [trial_id_to_trial[p] for p in possible_parents_this_generation]
+            possible_child_trials = [t for t in trials.values() if t not in parent_trials]
+            self.assertGreater(len(possible_parents_this_generation), 0)
+            for _ in range(min(6, len(possible_child_trials))):
+                parent_id = random.choice(possible_parents_this_generation)
+                fork_data: ForkFromData = {
+                    "parent_id": trial_id_to_trial[parent_id].trial_id,
+                    "parent_training_iteration": gen * 10,
+                    "parent_time": Forktime("current_step", gen * 100),
+                }
+                forked_trial = possible_child_trials.pop()
+                child_id: str = make_experiment_key(forked_trial, fork_data)
+                self.assertTrue(32 <= len(child_id) <= 50)
+                trial_id_to_trial[child_id] = forked_trial
+                children.append(child_id)
+                child_graph[parent_id].append(child_id)
+                assert child_id not in child_graph
+                assert child_id not in parent_lookup
+                parent_lookup[child_id] = parent_id
+                child_graph[child_id] = []
+            generations[gen] = children
+            possible_parents.extend(children)
+        # Create dummy offline paths for each trial
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Result paths:
+            trial_paths = {tid: Path(tmpdir) / tid for tid in trials}
+
+            class MockResults(list):
+                experiment_path = tmpdir
+
+            mock_results = MockResults(SimpleNamespace(path=p.as_posix()) for p in trial_paths.values())
+            # create wandb_folders
+            track_file_contents = dict.fromkeys(trials, "trial_id, parent_id, parent_step, step_metric\n")
+            # create child dirs and tracking files
+            trial_paths: dict[str, Path]
+            for trial, children in child_graph.items():
+                base_trial = trial_id_to_trial[trial]
+                base_path = trial_paths[base_trial.trial_id]
+                for child_id in children:
+                    track_file_contents[base_trial.trial_id] += f"{child_id}, {trial}, 100, _step\n"
+                    child_path = base_path / "wandb" / f"offline-run-20250101_123030-{child_id}"
+                    child_path.mkdir(parents=True, exist_ok=True)
+                    trial_paths[child_id] = child_path
+            for base_tid in base_trial_ids:
+                base_path = trial_paths[base_tid]
+                base_run_dir = base_path / "wandb" / f"offline-run-20250101_123030-{base_tid}"
+                base_run_dir.mkdir(parents=True, exist_ok=True)
+                trial_paths[base_tid] = base_run_dir
+                if len((track := track_file_contents[base_tid]).split("\n")) > 2:
+                    # only write if base was forked once
+                    with open(base_path / "wandb_fork_from.txt", "w") as f:
+                        f.write(track)
+
+            # possible upload order, traverse child graph
+            uploader = WandbUploaderMixin()
+            mock_fork_called = False
+
+            def mock_fork_relationships(wandb_paths):
+                result = WandbUploaderMixin._parse_wandb_fork_relationships(uploader, wandb_paths)
+                self.assertDictEqual(
+                    {child: parent for child, parent in parent_lookup.items() if parent is not None},
+                    {child: parent_data[0] for child, parent_data in result.items()},
+                )
+                nonlocal mock_fork_called
+                mock_fork_called = True
+                return result
+
+            mock_graph_build_called = False
+
+            def mock_graph_build(trial_runs: list[tuple[str, Path]], fork_relationships):
+                upload_groups = WandbUploaderMixin._build_upload_dependency_graph(
+                    uploader, trial_runs, fork_relationships
+                )
+                self.assertSetEqual(set(trial_runs), set(trial_paths.items()))
+                uploaded_trials = set()
+                for group in upload_groups:
+                    for trial_id, _ in group:
+                        parent_id = parent_lookup[trial_id]
+                        if parent_id is not None:
+                            self.assertIn(
+                                parent_id, uploaded_trials, f"Parent {parent_id} of {trial_id} not uploaded first"
+                            )
+                        uploaded_trials.add(trial_id)
+                nonlocal mock_graph_build_called
+                mock_graph_build_called = True
+                return upload_groups
+
+            uploader._parse_wandb_fork_relationships = mock_fork_relationships
+            uploader._build_upload_dependency_graph = mock_graph_build
+            mock_popen_class.return_value = mock_popen_class
+            mock_popen_class.stderr = None
+            mock_popen_class.stdout = ""
+            mock_popen_class.returncode.return_value = 0
+            uploader.wandb_upload_offline_experiments(mock_results)  # pyright: ignore[reportArgumentType]
+            self.assertTrue(mock_fork_called, "wandb fork relationships mock was not called")
+            self.assertTrue(mock_graph_build_called, "wandb graph build mock was not called")
+            self.assertEqual(mock_popen_class.call_count, len(trial_id_to_trial))
+
+    def test_trial_id_parsing(self):
+        uploader = WandbUploaderMixin()
+        tempdir = Path("tmp")
+        for dirname, expected in (
+            (tid1 := Trial.generate_id(), tid1),
+            (tid2 := f"{Trial.generate_id()}_00000", tid2),
+            # (f"offline-run-{tid1}", tid1),  # not supported without a timestamp
+            # (f"offline-run-{tid2}", tid2),
+            (f"offline-run-20231225_143022-{tid1}", tid1),
+            (f"offline-run-20231225_143022-{tid2}", tid2),
+            ("offline-run-20231225_143022-trial_789-10", "trial_789-10"),
+            ("invalid-format", "invalid-format"),
+            ("PPO-experiment-456-forked", "PPO-experiment-456-forked"),
+        ):
+            run_dir = tempdir / dirname
+            trial_id = uploader._extract_trial_id_from_wandb_run(run_dir)
+            self.assertEqual(trial_id, expected, f"Failed to parse {dirname}, expected {expected}")
+
+    def _create_fork_info_file(self, wandb_dir: Path, fork_data: list[tuple[str, str, Optional[int]]]):
+        """Create a wandb_fork_from.txt file with fork relationship data."""
+        fork_file = wandb_dir / "wandb_fork_from.txt"
+        exists = fork_file.exists()
+        with fork_file.open("a" if exists else "w") as f:
+            if not exists:
+                f.write("trial_id, parent_id, parent_step, step_metric\n")
+            for trial_id, parent_id, parent_step in fork_data:
+                step_str = str(parent_step) if parent_step is not None else ""
+                f.write(f"{trial_id}, {parent_id}, {step_str}, _step\n")
+
+    def test_parse_wandb_fork_relationships_variants(self):
+        cases = [
+            {
+                "desc": "simple fork relationships",
+                "dirs": ["wandb"],
+                "fork_data": [
+                    ("child_1", "parent_1", 100),
+                    ("child_2", "parent_1", 150),
+                    ("parent_1", "root", 50),
+                ],
+                "expected": {
+                    "child_1": ("parent_1", 100),
+                    "child_2": ("parent_1", 150),
+                    "parent_1": ("root", 50),
+                },
+            },
+            {
+                "desc": "fork relationships without step numbers",
+                "dirs": ["wandb"],
+                "fork_data": [
+                    ("child_1", "parent_1", None),
+                ],
+                "expected": {
+                    "child_1": ("parent_1", None),
+                },
+            },
+            {
+                "desc": "no fork info file exists",
+                "dirs": ["wandb"],
+                "fork_data": [],
+                "expected": {},
+            },
+            {
+                "desc": "multiple wandb directories",
+                "dirs": ["wandb1", "wandb2"],
+                "fork_data": [
+                    ("child_1", "parent_1", 100),
+                    ("child_2", "parent_2", 200),
+                ],
+                "expected": {
+                    "child_1": ("parent_1", 100),
+                    "child_2": ("parent_2", 200),
+                },
+                "split": True,
+            },
+        ]
+        uploader = WandbUploaderMixin()
+        for case in cases:
+            with self.subTest(case=case["desc"]), tempfile.TemporaryDirectory() as tmpdir:
+                dirs = [Path(tmpdir) / d for d in case["dirs"]]
+                if case["fork_data"]:
+                    self._create_fork_info_file(Path(tmpdir), case["fork_data"])
+                relationships = uploader._parse_wandb_fork_relationships(dirs)
+                self.assertEqual(relationships, case["expected"])
+
+    def test_build_upload_dependency_graph_complex_tree(self):
+        """Test building dependency graph for complex fork tree."""
+        trial_runs = [
+            ("root", Path("root_run")),
+            ("parent_1", Path("parent_1_run")),
+            ("parent_2", Path("parent_2_run")),
+            ("child_1_1", Path("child_1_1_run")),
+            ("child_1_2", Path("child_1_2_run")),
+            ("child_2_1", Path("child_2_1_run")),
+            ("independent", Path("independent_run")),
+            ("grandchild", Path("grandchild_run")),
+        ]
+
+        fork_relationships = {
+            "parent_1": ("root", 100),
+            "parent_2": ("root", 150),
+            "child_1_1": ("parent_1", 200),
+            "child_1_2": ("parent_1", 250),
+            "child_2_1": ("parent_2", 300),
+            "independent": ("missing_parent", 1000),  # Should be treated as independent
+            "grandchild": ("child_1_1", 400),
+        }
+
+        uploader = WandbUploaderMixin()
+        groups = uploader._build_upload_dependency_graph(trial_runs, fork_relationships)
+
+        # Should have 4 levels
+        self.assertEqual(len(groups), 4)
+
+        # Check level structure
+        group_trial_ids = [[trial_id for trial_id, _ in group] for group in groups]
+
+        # Level 0: root
+        self.assertEqual(group_trial_ids[0], ["root", "independent"])
+
+        # Level 1: parent_1, parent_2 (parallel)
+        self.assertCountEqual(group_trial_ids[1], ["parent_1", "parent_2"])
+
+        # Level 2: child_1_1, child_1_2, child_2_1 (parallel)
+        self.assertCountEqual(group_trial_ids[2], ["child_1_1", "child_1_2", "child_2_1"])
+
+        # Level 3: grandchild
+        self.assertEqual(group_trial_ids[3], ["grandchild"])
 
 
 if __name__ == "__main__":

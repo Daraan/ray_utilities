@@ -18,7 +18,7 @@ from ray_utilities.callbacks.tuner.adv_comet_callback import AdvCometLoggerCallb
 from ray_utilities.constants import FORK_FROM
 from ray_utilities.misc import make_experiment_key
 from ray_utilities.testing_utils import DisableLoggers, TestHelpers, patch_args
-from ray_utilities.testing_utils import _MockTrial as MockTrial
+from ray_utilities.testing_utils import MockTrial
 
 
 @pytest.mark.basic

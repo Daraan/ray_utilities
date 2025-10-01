@@ -89,7 +89,6 @@ def extract_trial_id_from_checkpoint(ckpt_path: str) -> str | None:
     return None
 
 
-@deprecated("Should use ForkFromData")
 def parse_fork_from(fork_from: str) -> tuple[str, int | None] | None:
     """Parse a forked trial identifier into its components.
 
@@ -105,6 +104,7 @@ def parse_fork_from(fork_from: str) -> tuple[str, int | None] | None:
         or ``None`` if the step is not specified.
         Or None if the input string does not match the expected format.
     """
+    # Note: only used for wandb currently, possibly move there
     # NOTE: could also just do split("?_step=") here
     match = RE_PARSE_FORK_FROM.match(fork_from)
     if not match:
@@ -283,6 +283,8 @@ def _make_non_fork_experiment_key(trial: Trial) -> str:
         )
     if trial_number:
         trial_number = "C" + "".join(trial_number).replace("000", "")
+    else:  # empty list
+        trial_number = ""
     base_key = f"{RUN_ID}X{trial_base}{trial_number}".replace("_", "")
     base_key = f"{base_key:Z<32}"
     return base_key
@@ -299,6 +301,8 @@ def _make_fork_experiment_key(base_key: str, fork_data: ForkFromData) -> str:
     fork_base, *fork_number = parent_id.split("_")
     if fork_number:
         fork_number = "C" + "".join(fork_number).replace("000", "")
+    else:
+        fork_number = ""
 
     parent_iteration = base62.encode(parent_iteration)
     return f"{base_key}F{fork_base}{fork_number}S{parent_iteration:0>4}".replace("_", "")

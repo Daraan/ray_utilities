@@ -52,7 +52,7 @@ from ray_utilities.testing_utils import (
     SetupWithCheck,
     TestHelpers,
     TrainableWithChecks,
-    _MockTrial,
+    MockTrial,
     _MockTrialRunner,
     format_result_errors,
     iter_cases,
@@ -765,7 +765,7 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
         )
         runner = _MockTrialRunner(scheduler)
         for i in range(num_trials):
-            trial = _MockTrial(i, trial_config, self.storage)
+            trial = MockTrial(i, trial_config, self.storage)
             trial.init_local_path()
             # runner calls add_trial on step
             runner.add_trial(trial)  # calls ReTuner.add_trial

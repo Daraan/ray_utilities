@@ -19,7 +19,7 @@ from ray_utilities.callbacks.tuner.new_style_logger_callback import LogMetricsDi
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
 from ray_utilities.comet import _LOGGER
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, FORK_FROM
-from ray_utilities.misc import extract_trial_id_from_checkpoint, make_experiment_key
+from ray_utilities.misc import extract_trial_id_from_checkpoint, make_experiment_key, parse_fork_from
 
 if TYPE_CHECKING:
     from ray_utilities.typing.metrics import AnyFlatLogMetricsDict
@@ -59,13 +59,27 @@ _logger = logging.getLogger(__name__)
 
 class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
     def run(self, retries=0):
+        fork_from = self.kwargs.get("fork_from", None) is not None
+        if fork_from:
+            # Write info about forked trials, to know in which order to upload trials
+            info_file = Path(self._logdir) / "wandb_fork_from.txt"
+            if not info_file.exists():
+                # write header
+                info_file.write_text("trial_id, parent_id, parent_step, step_metric\n")
+            fork_data = parse_fork_from(self.kwargs["fork_from"])
+            with info_file.open("a") as f:
+                if fork_data is not None:
+                    parent_id, parent_step = fork_data
+                    f.write(f"{self.kwargs['id']}, {parent_id}, {parent_step}, _step\n")
+                else:
+                    _logger.error("Could not parse fork_from: %s", self.kwargs["fork_from"])
+                    f.write(f"{self.kwargs['id']}, {self.kwargs['fork_from']}\n")
         try:
             return super().run()
         except CommError as e:  # pyright: ignore[reportPossiblyUnboundVariable]
             # NOTE: its possible that wandb is stuck because of async logging and we never reach here :/
             # breakpoint()
             online = self.kwargs.get("mode", "online") == "online"
-            fork_from = self.kwargs.get("fork_from", None) is not None
             if "fromStep is greater than the run's last step" in str(e):
                 # This can happen if the parent run is not yet fully synced.
                 if not fork_from:
@@ -183,12 +197,6 @@ class AdvWandbLoggerCallback(
 
     def on_trial_start(self, iteration: int, trials: list["Trial"], trial: "Trial", **info):
         super().on_trial_start(iteration, trials, trial, **info)
-        if self._trials_created < len(trials):
-            _logger.warning(
-                "Number of created trials %d does not match the number of tracked trials %d.",
-                len(trials),
-                self._trials_created,
-            )
         _logger.debug("Trials created: %d, re-started: %d", self._trials_created, self._trials_started)
         self._trials = trials  # keep them in case of a failure to access paths.
 
@@ -356,6 +364,9 @@ class AdvWandbLoggerCallback(
         # Call parent method to handle normal trial completion
         super().on_trial_complete(iteration, trials, trial, **info)
 
+        # TODO: Also sync if the trial will be perturbed; but it will not reach on_trial_complete!
+        # Furthermore on_trial_complete there will be multiple folders.
+
         # If we are in offline mode, try to sync this trial's run immediately
         if "offline" in self.kwargs.get("mode", "") and self.upload_offline_experiments:
             # Wandb dir is likely not yet saved by actor, wait for it, super does not wait that long.
@@ -412,7 +423,8 @@ class AdvWandbLoggerCallback(
                 return
             # Sort by modification time and take the most recent
 
-            # likely just a single iteration
+            # when not forked likely just one item
+            # TODO: Save a file with commands to upload again in case a run fails!
             for run_dir in sorted(offline_runs, key=lambda p: p.stat().st_mtime, reverse=True):
                 # Use wandb sync command to upload the offline run
                 _logger.info("Attempting to sync offline WandB run: %s", run_dir)
@@ -424,10 +436,19 @@ class AdvWandbLoggerCallback(
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                 )
-                if result.returncode == 0:
+                if result.returncode == 0 and "error" not in result.stdout.lower():
                     _logger.info("Successfully synced offline run for trial %s\n%s", trial.trial_id, result.stdout)
+                elif "not found (<Response [404]>)" in result.stdout:
+                    _logger.error(
+                        "Could not sync run for trial %s "
+                        "(Is it a forked_run? - The parent needs to be uploaded first): %s",
+                        trial.trial_id,
+                        result.stdout,
+                    )
                 else:
-                    _logger.warning("Failed to sync offline run for trial %s: %s", trial.trial_id, result.stderr)
+                    _logger.error("Error during syncing offline run for trial %s: %s", trial.trial_id, result.stdout)
+                if result.returncode != 0 or result.stderr:
+                    _logger.error("Failed to sync offline run for trial %s: %s", trial.trial_id, result.stderr)
                 if len(offline_runs) > 1:
                     time.sleep(5)  # wait a bit between uploads
 

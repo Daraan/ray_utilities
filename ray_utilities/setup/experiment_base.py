@@ -19,7 +19,6 @@ from __future__ import annotations
 import logging
 import os
 import pickle
-import subprocess
 import sys
 import warnings
 from abc import ABC, abstractmethod
@@ -53,12 +52,11 @@ from typing_extensions import NotRequired, Self, TypedDict, TypeVar, deprecated
 from ray_utilities import RUN_ID
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
-from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
-from ray_utilities.comet import CometArchiveTracker
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.parser.default_argument_parser import ConfigFilePreParser, SupportsMetaAnnotations
 from ray_utilities.environment import create_env
-from ray_utilities.misc import RE_GET_TRIAL_ID, AutoInt, get_trainable_name
+from ray_utilities.misc import AutoInt, get_trainable_name
+from ray_utilities.setup._experiment_uploader import ExperimentUploader
 from ray_utilities.setup.tuner_setup import TunerSetup
 from ray_utilities.training.default_class import TrainableBase
 from ray_utilities.warn import (
@@ -169,7 +167,9 @@ class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, Algor
     """Optional trial name creator function for Ray Tune trials."""
 
 
-class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmType_co]):
+class ExperimentSetupBase(
+    ABC, ExperimentUploader[ParserType_co], Generic[ParserType_co, ConfigType_co, AlgorithmType_co]
+):
     """Abstract base class for Ray RLlib experiment setup and configuration.
 
     This class provides a comprehensive framework for setting up reinforcement learning
@@ -355,6 +355,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             init_trainable=init_trainable,
             parse_args=parse_args,
         )
+        ExperimentUploader.__init__(self)  # args must be setup
 
     def setup(
         self,
@@ -410,10 +411,6 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         if init_param_space:
             # relies on trainable to get its name
             self.param_space: dict[str, Any] | _MaybeNone = self.create_param_space()
-        if hasattr(self, "args") and self.args.comet:
-            self.comet_tracker = CometArchiveTracker()
-        else:
-            self.comet_tracker = None
 
     # region Argument Parsing
 
@@ -937,7 +934,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 if not loaded_config:
                     logger.info("from_checkpoint is set, but no config found in the checkpoint.")
                 base = base or loaded_config
-            base._restored_overrides = overrides  # pyright: ignore[reportOptionalMemberAccess]
+            if base:
+                base._restored_overrides = overrides
 
         config = cls._config_from_args(args, base=base)
 
@@ -1224,222 +1222,6 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
 
     # endregion
 
-    # region upload experiments
-
-    def comet_upload_offline_experiments(self):
-        """Note this does not check for args.comet"""
-        if self.comet_tracker is None:
-            logger.info("No comet tracker / args.comet defined. Will not upload offline experiments.")
-            return
-        self.comet_tracker.upload_and_move()
-
-    @staticmethod
-    def _report_wandb_upload(process: subprocess.Popen[bytes], run_dir: Optional[Path] = None, *, wait: bool = True):
-        """Wait and report the output of a WandB upload process."""
-        run_dir = run_dir or Path(process.args[-1])  # pyright: ignore[reportArgumentType, reportIndexIssue]
-        exit_code = 0
-        if wait:
-            process.wait()
-        if process.stdout:
-            stdout = process.stdout.read()
-            msg = stdout if isinstance(stdout, str) else stdout.decode("utf-8")
-            print(msg)
-            if "error" in msg.lower():  # pyright: ignore[reportOperatorIssue]
-                # This likely happens when we want to upload a fork_from where the parent is not yet uploaded
-                logger.error("Error during wandb upload of offline run %s: %s", run_dir, msg)
-                exit_code = 1
-        if process.returncode != 0 or process.stderr:
-            stderr = process.stderr.read() if process.stderr else b""
-            logger.error(
-                "Failed to upload wandb offline run %s with exit code %d. Output: %s",
-                run_dir,
-                process.returncode,
-                stderr.decode("utf-8"),
-            )
-            exit_code = process.returncode or 1
-        return exit_code
-
-    def _get_wandb_paths(self, results: Optional[ResultGrid] = None, tuner: Optional[tune.Tuner] = None) -> list[Path]:
-        """
-        Checks the results for wandb offline directories to upload.
-
-        The tuner can be provided in case no results are available, e.g. due to an error,
-        furthermore passing the tuner allows to check for missing wandb directories.
-        """
-        if results is None:
-            if tuner is None:
-                logger.error("No results or tuner provided to get wandb paths, cannot get paths.")
-                return []
-            try:
-                results = tuner.get_results()  # if this works below works if we have a local tuner
-                trials = tuner._local_tuner.get_results()._experiment_analysis.trials  # pyright: ignore[reportOptionalMemberAccess]
-            except RuntimeError as e:
-                if not tuner._local_tuner or tuner._local_tuner.get_run_config().callbacks:  # assume there is a logger
-                    raise RuntimeError("Cannot get trials") from e
-                wandb_cb = next(
-                    cb
-                    for cb in tuner._local_tuner.get_run_config().callbacks  # pyright: ignore[reportOptionalIterable]
-                    if isinstance(cb, AdvWandbLoggerCallback)
-                )  # pyright: ignore[reportOptionalIterable]
-                trials = wandb_cb._trials
-            trial_paths = [Path(trial.local_path) / "wandb" for trial in trials if trial.local_path]
-            if len(trial_paths) != len(trials):
-                logger.error("Did not get all wandb paths %d of %d", len(trial_paths), len(trials))
-            return trial_paths
-        result_paths = [Path(result.path) / "wandb" for result in results]  # these are in the non-temp dir
-        if tuner is None:
-            logger.warning("No tuner provided cannot check for missing wandb paths.")
-            return result_paths
-        try:
-            # compare paths for completeness
-            trials = tuner._local_tuner.get_results()._experiment_analysis.trials  # pyright: ignore[reportOptionalMemberAccess]
-            trial_paths = [Path(trial.local_path) / "wandb" for trial in trials if trial.local_path]
-        except Exception:
-            logger.exception("Could not get trials or their paths")
-        else:
-            existing_in_result = sum(p.exists() for p in result_paths)
-            existing_in_trial = sum(p.exists() for p in trial_paths)
-            if existing_in_result != existing_in_trial:
-                logger.error(
-                    "Count of existing trials paths did not match %d vs %d: \nResult Paths:\n%s\nTrial Paths:\n%s",
-                    existing_in_result,
-                    existing_in_trial,
-                    result_paths,
-                    trial_paths,
-                )
-            non_existing_results = [res for res in results if not (Path(res.path) / "wandb").exists()]
-            # How to get the trial id?
-            if non_existing_results:
-                not_synced_trial_ids = {
-                    match.group("trial_id")
-                    for res in non_existing_results
-                    if (match := RE_GET_TRIAL_ID.search(res.path))
-                }
-                non_synced_trials = [trial for trial in trials if trial.trial_id in not_synced_trial_ids]
-                result_paths.extend(Path(trial.local_path) / "wandb" for trial in non_synced_trials)  # pyright: ignore[reportArgumentType]
-                result_paths = list(filter(lambda p: p.exists(), result_paths))
-                logger.info("Added trial.paths to results, now having %d paths", len(result_paths))
-        return result_paths
-
-    def wandb_upload_offline_experiments(
-        self,
-        results: Optional[ResultGrid],
-        tuner: Optional[tune.Tuner] = None,
-        *,
-        wait: bool = True,
-        parallel_uploads: int = 5,
-    ) -> list[subprocess.Popen] | None:
-        """
-        Upload wandb's offline folder of the session to wandb, similar to the `wandb sync` shell command
-
-        Args:
-            results: The ResultGrid containing the results of the experiment.
-            wait: If True, waits for the upload to finish before returning.
-            parallel_uploads: Number of parallel uploads to by executing :class:`subprocess.Popen`
-        """
-        # Get the wandb offline directory
-        logger.info("Uploading wandb offline experiments...")
-        num_uploaded = 0
-        uploads: list[subprocess.Popen[bytes]] = []
-        finished_uploads: set[subprocess.Popen[bytes]] = set()
-        wandb_paths: list[Path] = self._get_wandb_paths(results, tuner)
-        global_wandb_dir = os.environ.get(
-            "WANDB_DIR", None
-        )  # FIXME: If this is set it might upload the same directory multiple times
-        if global_wandb_dir and (global_wandb_dir := Path(global_wandb_dir)).exists():
-            wandb_paths.append(global_wandb_dir)
-        # FIXME: # CRITICAL If we upload forked trials, the forked trials might not be uploaded yet,
-        # that will result in an error - 404 from wandb and NOT upload the experiment.
-        # TODO: Make some dependency graph to order the uploads.
-        failed_uploads = []
-        for wandb_dir in wandb_paths:
-            # Find offline run directories
-            offline_runs = list(wandb_dir.glob("offline-run-*"))
-            if len(offline_runs) > 1:
-                logger.warning("Multiple wandb offline directories found in %s: %s", wandb_dir, offline_runs)
-
-            if not offline_runs:
-                logger.error(
-                    "No wandb offline experiments found to upload in %s: %s. ", wandb_dir, list(wandb_dir.glob("*"))
-                )
-                continue
-            num_uploaded += len(offline_runs)
-
-            for run_dir in offline_runs:  # likely just a single iteration
-                uploads_in_progress = len(uploads) - len(finished_uploads)
-                if uploads_in_progress >= parallel_uploads:
-                    logger.info(
-                        "Waiting for %d wandb uploads to finish before starting new ones.",
-                        uploads_in_progress,
-                    )
-                    for process in uploads:
-                        exit_code = self._report_wandb_upload(process)
-                        if exit_code == 0:
-                            finished_uploads.add(process)
-                        else:
-                            failed_uploads.append(process)
-                    uploads = [p for p in uploads if p not in finished_uploads]
-                logger.info("Uploading offline wandb run from: %s", run_dir)
-                process = subprocess.Popen(
-                    ["wandb", "sync", run_dir.as_posix()],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                )
-                uploads.append(process)
-        if wait:
-            logger.info("Waiting for all wandb uploads to finish...")
-            for process in uploads:
-                self._report_wandb_upload(process)
-                finished_uploads.add(process)
-            uploads = []
-            logger.info(
-                "Uploaded all %d wandb offline runs from %s.",
-                num_uploaded,
-                results.experiment_path if results else f"local wandb fallback paths: {wandb_paths}",
-            )
-            return None
-        unfinished_uploads = uploads.copy()
-        for process in uploads:
-            if process.poll() is not None:  # report on already finished uploads
-                self._report_wandb_upload(process)
-                finished_uploads.add(process)
-                unfinished_uploads.remove(process)
-        if not unfinished_uploads:
-            logger.info("All wandb offline runs have been uploaded.")
-            return None
-        logger.info(
-            "Uploaded %d wandb offline runs from %s, %d still in progress.",
-            num_uploaded,
-            results.experiment_path if results else f"local wandb fallback paths: {wandb_paths}",
-            len(unfinished_uploads),
-        )
-        # There are still processes running
-        return unfinished_uploads
-
-    def upload_offline_experiments(self, results: Optional[ResultGrid] = None, tuner: Optional[tune.Tuner] = None):
-        unfinished_wandb_uploads = None
-        if self.args.wandb and "upload" in self.args.wandb:
-            if results is None:
-                logger.error(
-                    "Wandb upload requested, but no results provided. This will not upload any offline experiments."
-                )
-            try:  # if no results (due to a failure) get them in a more hacky way.
-                # Do not wait to start uploading to comet.
-                unfinished_wandb_uploads = self.wandb_upload_offline_experiments(results, tuner, wait=False)
-            except Exception:
-                logger.exception("Error while uploading offline experiments to WandB: %s")
-        if self.args.comet and "upload" in self.args.comet:
-            logger.info("Uploading offline experiments to Comet")
-            try:
-                self.comet_upload_offline_experiments()
-            except Exception:
-                logger.exception("Error while uploading offline experiments to Comet")
-        if unfinished_wandb_uploads:
-            for process in unfinished_wandb_uploads:
-                self._report_wandb_upload(process, wait=True)
-
-    # endregion
-
     # region callbacks
 
     @classmethod
@@ -1650,6 +1432,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         if config:
             new.config = config
         new.args = data["args"]
+
         unchecked_keys.discard("args")
         new.setup(
             None,
