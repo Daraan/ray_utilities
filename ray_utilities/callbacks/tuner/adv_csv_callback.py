@@ -109,8 +109,8 @@ class AdvCSVLoggerCallback(NewStyleLoggerCallback, TrackForkedTrialsMixin, CSVLo
             write_header_again = True  # metrics might have changed
             # Sync from checkpoint to local path
             # TODO:
-            # Which progress file to take when trial was forked? We know the file is in the parent folder of the checkpoint
-            # We can take it ONLY if there is one file, AND need to trim it to the step we are loading.
+            # Which progress file to take when trial was forked? We know the file is in the parent folder of the
+            # checkpoint. We can take it ONLY if there is one file, AND need to trim it to the step we are loading.
             parent_dir = Path(checkpoint_path).parent
             if parent_dir.exists():
                 progress_files = list(parent_dir.glob("progress*.csv"))

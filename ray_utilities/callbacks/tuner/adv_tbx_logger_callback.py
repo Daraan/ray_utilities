@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
+from ray.tune.experiment.trial import Trial
 from ray.tune.logger import TBXLoggerCallback
 
 from ray_utilities.callbacks.tuner.new_style_logger_callback import LogMetricsDictT, NewStyleLoggerCallback
@@ -13,8 +14,7 @@ from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsM
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, FORK_FROM
 
 if TYPE_CHECKING:
-    from ray.tune.experiment.trial import Trial
-
+    from ray_utilities.typing import ForkFromData
     from ray_utilities.typing.common import VideoTypes
     from ray_utilities.typing.metrics import VideoMetricsDict, _LogMetricsEvalEnvRunnersResultsDict
 
@@ -44,66 +44,127 @@ class AdvTBXLoggerCallback(NewStyleLoggerCallback, TrackForkedTrialsMixin, TBXLo
 
     _video_keys = DEFAULT_VIDEO_DICT_KEYS
 
-    def log_trial_start(self, trial: "Trial"):
-        """Start logging for a trial, handling forked trials."""
-        if trial in self._trial_writer:
-            self._trial_writer[trial].close()
+    def _make_forked_trial_subdir_name(self, trial: "Trial", fork_data: ForkFromData) -> str:
+        return f"tb-fork-{self.make_forked_trial_id(trial, fork_data)}"
 
+    def _setup_forked_trial(self, trial: "Trial", fork_data: ForkFromData):
+        """Setup trial logging, handling forked trials by creating new subdirectory."""
+        # Close current writer and clean tracks
+        self.log_trial_end(trial)
+
+        # Make sure logdir exists
         trial.init_local_path()
+        tb_subdir = self._make_forked_trial_subdir_name(trial, fork_data)
+        local_tb_path = Path(trial.local_path, tb_subdir)  # pyright: ignore[reportArgumentType]
+        local_tb_path.mkdir(parents=True, exist_ok=True)
 
-        # Check if this is a forked trial
-        is_forked = FORK_FROM in trial.config
+        # Check for parent TensorBoard data
+        if (parent_trial := fork_data.get("parent_trial")) or isinstance(
+            parent_trial := self.parent_trial_lookup.get(trial), Trial
+        ):
+            # Get parent TB directory: either root or tb-{fork_id}
+            parent_fork_id = self._current_fork_ids.get(parent_trial, None)
+            if parent_fork_id is None:
+                parent_tb_path = Path(parent_trial.local_path)  # pyright: ignore[reportArgumentType]
+            else:
+                parent_tb_path = Path(parent_trial.local_path, f"tb-{parent_fork_id}")  # pyright: ignore[reportArgumentType]
 
-        if is_forked:
-            # For forked trials, optionally copy parent's TensorBoard data
-            fork_data = trial.config[FORK_FROM]
-            parent_id = fork_data["parent_id"]
-
-            # Try to find parent trial's TensorBoard directory
-            parent_tb_path = self._find_parent_tb_dir(trial, parent_id)
-
-            if parent_tb_path and parent_tb_path.exists():
-                logger.info(
-                    "Trial %s forked from %s. Copying parent TensorBoard data from %s",
-                    trial.trial_id,
-                    parent_id,
-                    parent_tb_path,
-                )
-                # Copy all event files from parent to new trial directory
+            # Sync from parent trial to local path
+            if trial.node_ip == parent_trial.node_ip and parent_tb_path.exists():
+                # same node use shutil - copy all event files
                 try:
                     for event_file in parent_tb_path.glob("events.out.tfevents.*"):
-                        shutil.copy2(event_file, trial.local_path)
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(
-                        "Failed to copy parent TensorBoard data for trial %s: %s",
+                        shutil.copy2(event_file, local_tb_path)
+                    logger.info(
+                        "Trial %s forked from %s. Copied parent TensorBoard data from %s",
                         trial.trial_id,
-                        e,
+                        parent_trial.trial_id,
+                        parent_tb_path,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to copy parent TensorBoard data for trial %s from %s",
+                        trial.trial_id,
+                        parent_tb_path,
+                    )
+            elif trial.storage and parent_trial.storage:
+                try:
+                    # Sync parent's event files via remote storage
+                    parent_remote_tb_path = (
+                        (Path(parent_trial.path) / parent_tb_path.name).as_posix()
+                        if parent_fork_id
+                        else parent_trial.path
+                    )  # pyright: ignore[reportArgumentType]
+                    logger.debug("Syncing up parent TB files to %s", parent_remote_tb_path)
+                    parent_trial.storage.syncer.sync_up(
+                        parent_tb_path.as_posix(),
+                        parent_remote_tb_path,
+                        exclude=["*/checkpoint_*", "*.pkl", "*.csv", "*.json"],
+                    )
+                    parent_trial.storage.syncer.wait()
+                    logger.debug("Syncing down parent TB files to %s", local_tb_path.as_posix())
+                    trial.storage.syncer.sync_down(
+                        parent_remote_tb_path,
+                        local_tb_path.as_posix(),
+                        exclude=["*/checkpoint_*", "*.pkl", "*.csv", "*.json"],
+                    )
+                    trial.storage.syncer.wait()
+                except Exception:
+                    logger.exception(
+                        "Trial %s forked from %s but could not copy parent TensorBoard data from remote storage.",
+                        trial.trial_id,
+                        parent_trial.trial_id,
+                    )
+            else:
+                logger.warning(
+                    "Trial %s forked from %s but could not copy parent TensorBoard data, no storage backend.",
+                    trial.trial_id,
+                    parent_trial.trial_id,
+                )
+        elif (
+            checkpoint_path := trial.config.get("cli_args", {}).get("from_checkpoint", None)
+            or trial.config.get("from_checkpoint", None)
+        ) is not None:
+            # loading from checkpoint
+            # Sync from checkpoint to local path
+            # TODO: Handle checkpoint case for TensorBoard
+            parent_dir = Path(checkpoint_path).parent
+            if parent_dir.exists():
+                try:
+                    for event_file in parent_dir.glob("**/events.out.tfevents.*"):
+                        shutil.copy2(event_file, local_tb_path)
+                    logger.info("(TODO) Copied TensorBoard files from checkpoint, but may not be complete.")
+                except Exception:
+                    logger.exception(
+                        "Trial %s forked but could not copy TensorBoard data from checkpoint.",
+                        trial.trial_id,
                     )
             else:
                 logger.info(
-                    "Trial %s forked from %s. Parent TensorBoard data not found, starting fresh.",
+                    "Trial %s forked from checkpoint but parent directory not found, starting fresh.",
                     trial.trial_id,
-                    parent_id,
                 )
 
-        # Create new writer for this trial
-        self._trial_writer[trial] = self._summary_writer_cls(trial.local_path, flush_secs=30)
+        if not any(local_tb_path.glob("events.out.tfevents.*")):
+            logger.warning(
+                "Trial %s forked but found no TensorBoard event files for parent, starting fresh in: %s",
+                trial.trial_id,
+                local_tb_path,
+            )
+
+        # Create new writer for this trial in the forked subdirectory
+        self._trial_writer[trial] = self._summary_writer_cls(local_tb_path.as_posix(), flush_secs=30)
         self._trial_result[trial] = {}
 
-    def _find_parent_tb_dir(self, trial: "Trial", parent_id: str) -> Path | None:
-        """Find the TensorBoard directory of the parent trial.
+    def on_trial_result(self, iteration: int, trials: list[Trial], trial: Trial, result, **info):
+        self._trials = trials
+        return super().on_trial_result(iteration, trials, trial, result, **info)
 
-        Searches in the trial's experiment directory for a trial with matching ID.
-        """
-        try:
-            experiment_path = Path(trial.local_path).parent
-            # Look for parent trial directory
-            for trial_dir in experiment_path.iterdir():
-                if trial_dir.is_dir() and parent_id in trial_dir.name:
-                    return trial_dir
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Error finding parent TensorBoard dir for trial %s: %s", trial.trial_id, e)
-        return None
+    def log_trial_start(self, trial: Trial):
+        if trial in self._trial_writer and FORK_FROM in trial.config:
+            assert self.should_restart_logging(trial)
+            self._setup_forked_trial(trial, trial.config[FORK_FROM])
+        return super().log_trial_start(trial)
 
     @staticmethod
     def preprocess_videos(result: LogMetricsDictT) -> LogMetricsDictT:
