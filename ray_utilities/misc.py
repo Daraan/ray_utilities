@@ -304,8 +304,12 @@ def _make_fork_experiment_key(base_key: str, fork_data: ForkFromData) -> str:
     else:
         fork_number = ""
 
-    parent_iteration = base62.encode(parent_iteration)
-    return f"{base_key}F{fork_base}{fork_number}S{parent_iteration:0>4}".replace("_", "")
+    if parent_iteration is None:
+        iteration_data = "NONE"  # rare chance that NONE is actually encoded
+        _logger.warning("parent_iteration is None, using 'NONE' in experiment key.")
+    else:
+        iteration_data = base62.encode(parent_iteration)
+    return f"{base_key}F{fork_base}{fork_number}S{iteration_data:0>4}".replace("_", "")
 
 
 def make_experiment_key(trial: Trial, fork_data: Optional[ForkFromData] = None) -> str:

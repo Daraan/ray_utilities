@@ -7,6 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, cast
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +24,7 @@ from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import (
     Cases,
     DisableLoggers,
+    MockTrial,
     TestHelpers,
     check_args,
     iter_cases,
@@ -30,8 +32,11 @@ from ray_utilities.testing_utils import (
     no_parallel_envs,
     patch_args,
 )
-from ray_utilities.testing_utils import MockTrial
 from ray_utilities.training.helpers import make_divisible
+
+if TYPE_CHECKING:
+    from ray_utilities.typing import Forktime
+    from ray_utilities.typing import ForkFromData
 
 if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
@@ -165,7 +170,21 @@ class TestMisc(TestCase):
             for t2_id in [trial1.trial_id, trial2.trial_id]:
                 for step in [None, 2_000_000]:
                     with self.subTest(t1=t1, t2_id=t2_id, step=step):
-                        self.assertTrue(32 < len(make_experiment_key(t1, (t2_id, step))) <= 50)
+                        fork_data: ForkFromData = {
+                            "parent_id": t2_id,
+                            "parent_training_iteration": step,
+                            "parent_time": cast("Forktime", ("training_iteration", step)),
+                        }
+                        self.assertTrue(
+                            32
+                            < len(
+                                make_experiment_key(
+                                    t1,  # pyright: ignore[reportArgumentType]
+                                    fork_data,
+                                )
+                            )
+                            <= 50
+                        )
 
     def test_check_valid_args_decorator(self):
         with self.assertRaisesRegex(ValueError, re.escape("Unexpected unrecognized args: ['--it', '10']")):
