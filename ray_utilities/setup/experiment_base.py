@@ -1360,27 +1360,45 @@ class ExperimentSetupBase(
                     # sync missing config files without the need of the Syncing callback.
                     ctx: RayRuntimeContext = ray.get_runtime_context()
 
-                    actor: TrainableBase | Any = ctx.worker.actors[ctx.worker.actor_id]
-                    if actor._storage:
-                        for file in map(Path, not_existing_files):
-                            if file.is_absolute():
-                                dest = file.relative_to(Path(os.environ["TUNE_ORIG_WORKING_DIR"])).as_posix()
-                                source = file.as_posix()
-                            else:
-                                dest = file.as_posix()
-                                source = (Path(os.environ["TUNE_ORIG_WORKING_DIR"]) / file).as_posix()
-                            actor._storage.syncer.sync_down(remote_dir=source, local_dir=dest)
-                            # FIXME: Is one wait enough when there are multiple files?
-                            try:
-                                actor._storage.syncer.wait()
-                            except FileNotFoundError as e:
-                                logger.error("Could not sync missing config files: %s", e)
-                            else:
-                                synced_files.append(dest)
-                    else:
+                    # WARNING: The following accesses Ray's internal runtime context and worker state,
+                    # which may change between Ray versions. This code is known to work with Ray >=2.49.0.
+                    # If you upgrade Ray and encounter errors here, check for changes in Ray's internal API.
+                    try:
+                        actor: TrainableBase | Any = ctx.worker.actors[ctx.worker.actor_id]
+                        storage = getattr(actor, "_storage", None)
+                        if TYPE_CHECKING:
+                            storage = actor._storage
+                        if storage:
+                            for file in map(Path, not_existing_files):
+                                if file.is_absolute():
+                                    dest = file.relative_to(Path(os.environ["TUNE_ORIG_WORKING_DIR"])).as_posix()
+                                    source = file.as_posix()
+                                else:
+                                    dest = file.as_posix()
+                                    source = (Path(os.environ["TUNE_ORIG_WORKING_DIR"]) / file).as_posix()
+                                storage.syncer.sync_down(remote_dir=source, local_dir=dest)
+                                # FIXME: Is one wait enough when there are multiple files?
+                                try:
+                                    storage.syncer.wait()
+                                except FileNotFoundError as e:
+                                    logger.error("Could not sync missing config files: %s", e)
+                                else:
+                                    synced_files.append(dest)
+                        else:
+                            logger.error(
+                                "Config files %s do not exist and cannot be restored because no storage is configured.",
+                                not_existing_files,
+                            )
+                            # TODO: possibly create empty files so that parser does not fail
+                    except (AttributeError, KeyError) as e:
                         logger.error(
-                            "Config files %s do not exist and cannot be restored because no storage is configured. ",
-                            not_existing_files,
+                            "Failed to access Ray's internal worker state to restore config files. "
+                            "This may be due to a Ray version incompatibility. Error: %s",
+                            e,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Unexpected error while restoring missing config files %s.", not_existing_files
                         )
                         # TODO: possibly create empty files so that parser does not fail
                 except Exception:
