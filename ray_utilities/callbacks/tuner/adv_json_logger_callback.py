@@ -7,11 +7,9 @@ Note:
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ray.air.constants import EXPR_RESULT_FILE
-from ray.tune.experiment.trial import Trial
 from ray.tune.logger import JsonLoggerCallback
 
 from ray_utilities.callbacks.tuner._file_logger_fork_mixin import FileLoggerForkMixin
@@ -19,6 +17,10 @@ from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLogg
 from ray_utilities.postprocessing import remove_videos
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
+    from ray.tune.experiment.trial import Trial
+
     from ray_utilities.typing.metrics import AnyLogMetricsDict
 
 
@@ -66,3 +68,7 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, JsonLog
             trial,
             remove_videos(result),
         )
+
+
+if TYPE_CHECKING:  # Check ABC
+    AdvJsonLoggerCallback()

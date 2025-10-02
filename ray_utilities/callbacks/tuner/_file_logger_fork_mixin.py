@@ -6,7 +6,7 @@ import logging
 import shutil
 from abc import abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TextIO
 
 from ray.tune.experiment.trial import Trial
 
@@ -69,6 +69,9 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
             local_file_path: Path where the file should be
         """
         ...
+
+    _trial_files: dict[Trial, TextIO]
+    """Mapping of trials to their open file handles or paths. Used to track if trial is actively logged"""
 
     def _make_forked_trial_file_name(self, trial: Trial, fork_data: ForkFromData | str) -> str:
         """Create the file name for a forked trial.
@@ -140,7 +143,6 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
                     exclude=["*/checkpoint_*", "*.pkl", "events.out.tfevents.*"],
                 )
                 trial.storage.syncer.wait()
-                return True
             except Exception:
                 logger.exception(
                     "Trial %s forked from %s but could not copy parent %s data from remote storage.",
@@ -149,6 +151,8 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
                     self._get_file_extension().upper(),
                 )
                 return False
+            else:
+                return True
 
         # No storage backend available
         logger.warning(
@@ -245,7 +249,8 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
         return super().on_trial_result(iteration, trials, trial, result, **info)
 
     def log_trial_start(self, trial: Trial):
-        if trial in self._trial_files and FORK_FROM in trial.config:  # type: ignore[attr-defined]
+        if trial in self._trial_files and FORK_FROM in trial.config:
             assert self.should_restart_logging(trial)
+        if FORK_FROM in trial.config:
             self._setup_forked_trial(trial, trial.config[FORK_FROM])
         return super().log_trial_start(trial)

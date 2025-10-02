@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import logging
-import shutil
-from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
-from ray.tune.experiment.trial import Trial
 from ray.tune.logger import TBXLoggerCallback
 
 from ray_utilities.callbacks.tuner.new_style_logger_callback import LogMetricsDictT, NewStyleLoggerCallback
@@ -14,6 +11,8 @@ from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsM
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, FORK_FROM
 
 if TYPE_CHECKING:
+    from ray.tune.experiment.trial import Trial
+
     from ray_utilities.typing import ForkFromData
     from ray_utilities.typing.common import VideoTypes
     from ray_utilities.typing.metrics import VideoMetricsDict, _LogMetricsEvalEnvRunnersResultsDict
@@ -62,13 +61,10 @@ class AdvTBXLoggerCallback(NewStyleLoggerCallback, TrackForkedTrialsMixin, TBXLo
         )
         self._trial_result[trial] = {}
 
-    def on_trial_result(self, iteration: int, trials: list[Trial], trial: Trial, result, **info):
-        self._trials = trials
-        return super().on_trial_result(iteration, trials, trial, result, **info)
-
     def log_trial_start(self, trial: Trial):
         if trial in self._trial_writer and FORK_FROM in trial.config:
             assert self.should_restart_logging(trial)
+        if FORK_FROM in trial.config:
             self._setup_forked_trial(trial, trial.config[FORK_FROM])
         return super().log_trial_start(trial)
 
@@ -117,3 +113,7 @@ class AdvTBXLoggerCallback(NewStyleLoggerCallback, TrackForkedTrialsMixin, TBXLo
             trial,
             self.preprocess_videos(result),
         )
+
+
+if TYPE_CHECKING:  # Check ABC
+    AdvTBXLoggerCallback()
