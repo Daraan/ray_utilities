@@ -206,6 +206,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
                 "--batch_size", batch_size2,
                 "--comment", "B",
                 "--from_checkpoint", tmpdir,
+                "--num_envs_per_env_runner", 1,
             ):  # fmt: skip
                 with AlgorithmSetup(init_trainable=False) as setup2:
                     setup2.config.training(

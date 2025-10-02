@@ -93,7 +93,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         with (
             patch("comet_ml.Experiment") as mock_experiment_class,
             patch("comet_ml.config.set_global_experiment"),
-            patch.object(callback, "trial_is_forked", return_value=True),
+            patch.object(callback, "is_trial_forked", return_value=True),
             patch.object(callback, "_check_workspaces", return_value=0),
             patch("ray_utilities.callbacks.tuner.adv_comet_callback.make_experiment_key", return_value="b" * 32),
         ):
@@ -132,7 +132,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         with (
             patch("comet_ml.OfflineExperiment") as mock_offline_experiment_class,
             patch("comet_ml.config.set_global_experiment"),
-            patch.object(callback, "trial_is_forked", return_value=True),
+            patch.object(callback, "is_trial_forked", return_value=True),
             patch.object(callback, "_check_workspaces", return_value=0),
             patch("ray_utilities.callbacks.tuner.adv_comet_callback.make_experiment_key", return_value="c" * 32),
         ):
@@ -172,7 +172,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         with (
             patch("comet_ml.Experiment") as mock_experiment_class,
             patch("comet_ml.config.set_global_experiment"),
-            patch.object(callback, "trial_is_forked", return_value=True),
+            patch.object(callback, "is_trial_forked", return_value=True),
             patch("ray_utilities.callbacks.tuner.adv_comet_callback.make_experiment_key") as mock_make_key,
             patch("ray_utilities.callbacks.tuner.adv_comet_callback._LOGGER") as mock_logger,
             patch.object(callback, "_check_workspaces", return_value=0),
@@ -336,7 +336,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         mock_parent_experiment = self._create_online_experiment()
         callback._trial_experiments[forked_trial] = mock_parent_experiment
 
-        with patch.object(callback, "trial_is_forked", return_value=True):
+        with patch.object(callback, "is_trial_forked", return_value=True):
             # Should raise ValueError for invalid fork data
             with self.assertRaises(TypeError) as cm:
                 callback._restart_experiment_for_forked_trial(forked_trial, None)
@@ -400,7 +400,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         with (
             patch("comet_ml.OfflineExperiment") as mock_offline_experiment_class,
             patch("comet_ml.config.set_global_experiment"),
-            patch.object(callback, "trial_is_forked", return_value=True),
+            patch.object(callback, "is_trial_forked", return_value=True),
             patch.object(callback, "_check_workspaces", return_value=0),
             patch("ray_utilities.callbacks.tuner.adv_comet_callback.make_experiment_key", return_value="g" * 40),
         ):
@@ -429,7 +429,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         with (
             patch("comet_ml.Experiment") as mock_experiment_class,
             patch("comet_ml.config.set_global_experiment"),
-            patch.object(callback, "trial_is_forked", return_value=True),
+            patch.object(callback, "is_trial_forked", return_value=True),
             patch.object(callback, "_check_workspaces", return_value=0),
             patch("ray_utilities.callbacks.tuner.adv_comet_callback.make_experiment_key", return_value="h" * 40),
         ):
@@ -473,7 +473,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
             with (
                 patch("comet_ml.OfflineExperiment") as mock_offline_experiment_class,
                 patch("comet_ml.config.set_global_experiment"),
-                patch.object(callback, "trial_is_forked", return_value=True),
+                patch.object(callback, "is_trial_forked", return_value=True),
                 patch("ray_utilities.callbacks.tuner.adv_comet_callback.COMET_OFFLINE_DIRECTORY", tmpdir),
                 patch.object(callback, "_upload_offline_experiment_if_available") as mock_upload,
                 patch.object(callback, "_check_workspaces", return_value=0),
@@ -526,7 +526,7 @@ class TestCometRestartEdgeCases(DisableLoggers, TestHelpers):
         with (
             patch("comet_ml.Experiment") as mock_experiment_class,
             patch("comet_ml.config.set_global_experiment"),
-            patch.object(callback, "trial_is_forked", return_value=True),
+            patch.object(callback, "is_trial_forked", return_value=True),
             patch.object(callback, "_check_workspaces", return_value=0),
         ):
             mock_new_exp_1 = Mock()

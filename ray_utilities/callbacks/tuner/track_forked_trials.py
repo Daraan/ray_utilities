@@ -37,7 +37,7 @@ class ForkedTrialInfo(NamedTuple):
 class TrackForkedTrialsMixin(LoggerCallback):
     """
     Provides:
-    - :meth:`trial_is_forked` to check whether a trial was forked from another trial
+    - :meth:`is_trial_forked` to check whether a trial was forked from another trial
     - :meth:`get_forked_trial_info` to get information about the parent trials
       a trial was forked from.
     - `_forked_trials` attribute to track forked trials.

@@ -42,7 +42,7 @@ DEFAULT_TUNER_CALLBACKS_RENDER: list[type["Callback"]] = [
 DEFAULT_ADV_TUNER_CALLBACKS = DEFAULT_TUNER_CALLBACKS_RENDER.copy()
 """
 List of advanced tuner callbacks to use if the advanced variants should be used.
-Recommended when using shedulers working with :const:`FORK_FROM`.
+Recommended when using schedulers working with :const:`FORK_FROM`.
 
 A copy of :obj:`DEFAULT_TUNER_CALLBACKS_RENDER`.
 """

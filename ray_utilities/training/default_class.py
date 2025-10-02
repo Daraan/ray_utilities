@@ -520,7 +520,20 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         _logger.info(
             "args %s are:\n %s",
             "(in config)" if "cli_args" in config else "(on setup)",
-            pformat(config.get("cli_args", {k: v for k, v in vars(self._setup.args).items() if not callable(v)})),
+            pformat(
+                config.get(
+                    "cli_args",
+                    {
+                        k: v
+                        for k, v in (
+                            self._setup.args.as_dict()
+                            if hasattr(self._setup.args, "as_dict")
+                            else vars(self._setup.args)
+                        ).items()
+                        if not callable(v)
+                    },
+                )
+            ),
         )
         # NOTE: args is a dict, self._setup.args a Namespace | Tap
         self._reward_updaters: RewardUpdaters
@@ -589,7 +602,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
         # iterations was passed by user; do not overwrite
         # adjust total_steps instead
-        if steps_with_current_batch_size is not None:
+        if steps_with_current_batch_size is not None and not args["use_exact_total_steps"]:
             total_steps = steps_with_current_batch_size + current_step
         else:
             total_steps = args.get("total_steps", None)
