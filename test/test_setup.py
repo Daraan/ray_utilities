@@ -233,10 +233,10 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             with (
                 patch_args(
                     "--tune", param,
-                    "--num_jobs", "4",
                     "--total_steps", "10",
                     "-it", "2",
                     "--num_samples", "16",
+                    "--env_seeding_strategy", "constant",
                 )  # ,
                 # self.assertNoLogs(logger, level="WARNING"),
             ):  # fmt: skip
@@ -252,6 +252,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     grid = []
 
                 def fake_trainable(params, param=param):
+                    print("Fake callable trainable called with params:", params)
                     return {
                         "current_step": 0,
                         "evaluation/env_runners/episode_return_mean": 42,
