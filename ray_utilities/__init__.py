@@ -90,7 +90,11 @@ else:
 
 
 runtime_env = _RunetimeEnv(
-    env_vars={"RAY_UTILITIES_NEW_LOG_FORMAT": "1", "COMET_OFFLINE_DIRECTORY": COMET_OFFLINE_DIRECTORY}
+    env_vars={
+        "RAY_UTILITIES_NEW_LOG_FORMAT": "1",
+        "COMET_OFFLINE_DIRECTORY": COMET_OFFLINE_DIRECTORY,
+        "RAY_UTILITIES_SET_COMET_DIR": "0",  # do not warn on remote
+    }
 )
 """A suggestion of environment variables to set in Ray tasks and actors."""
 
