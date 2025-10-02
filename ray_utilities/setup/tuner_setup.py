@@ -81,7 +81,9 @@ class _TunerSetupBase(Protocol):
         self, callbacks: list[tune.Callback] | list[train.UserCallback]
     ) -> tune.RunConfig | RunConfigV1 | train.RunConfig: ...
 
-    def create_tuner(self) -> tune.Tuner: ...
+    def create_tuner(self) -> tune.Tuner:
+        """Create and return a configured Ray Tune Tuner instance."""
+        ...
 
 
 class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
@@ -377,7 +379,16 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             for k, v in param_space.items()
         }
 
-    def create_tuner(self) -> tune.Tuner:
+    def create_tuner(self, *, adv_loggers: Optional[bool] = None) -> tune.Tuner:
+        """
+        Create and return a configured Ray Tune Tuner instance.
+
+        Args:
+            adv_loggers: Whether to include advanced variants of the standard CSV, TBX, JSON loggers.
+                If ``None``, will be set to ``True`` if :attr:`~DefaultArgumentParser.render_mode` is set in ``args`` of
+                the setup.
+                Its recommended to use ``True`` when using schedulers working with ``FORK_FROM``.
+        """
         resource_requirements = PPO.default_resource_request(self._setup.config)
         resource_requirements = cast(
             "PlacementGroupFactory", resource_requirements
@@ -404,5 +415,5 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             trainable=trainable,  # Updated to use the modified trainable with resource requirements
             param_space=param_space,  # TODO: Likely Remove when using space of OptunaSearch
             tune_config=tune_config,
-            run_config=self.create_run_config(self.create_callbacks()),
+            run_config=self.create_run_config(self.create_callbacks(adv_loggers=adv_loggers)),
         )

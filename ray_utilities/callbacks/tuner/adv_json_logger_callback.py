@@ -11,7 +11,8 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ray.tune.logger import JsonLoggerCallback, EXPR_RESULT_FILE
+from ray.tune.logger import JsonLoggerCallback
+from ray.air.constants import EXPR_RESULT_FILE
 
 from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin

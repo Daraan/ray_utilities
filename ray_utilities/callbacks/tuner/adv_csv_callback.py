@@ -11,7 +11,8 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ray.tune.logger import EXPR_PROGRESS_FILE, CSVLoggerCallback
+from ray.air.constants import EXPR_PROGRESS_FILE
+from ray.tune.logger import CSVLoggerCallback
 
 from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin

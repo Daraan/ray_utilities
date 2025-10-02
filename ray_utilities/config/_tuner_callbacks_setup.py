@@ -30,7 +30,8 @@ if TYPE_CHECKING:
 
 class _TunerCallbackSetupBase(ABC):
     @abstractmethod
-    def create_callbacks(self) -> list[Callback]: ...
+    def create_callbacks(self) -> list[Callback]:
+        """Create a list of initialized callbacks for the tuner."""
 
 
 __all__ = [
@@ -210,8 +211,19 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         logger.debug("COMET_API_KEY not in environment variables, trying to load from ~/.comet_api_key.env")
         return load_dotenv(Path("~/.comet_api_key.env").expanduser())
 
-    def create_callbacks(self) -> list[Callback]:
-        callbacks: list[Callback] = create_tuner_callbacks(render=bool(self._setup.args.render_mode))
+    def create_callbacks(self, *, adv_loggers: bool | None = None) -> list[Callback]:
+        """
+        Create a list of initialized callbacks for the tuner.
+
+        Args:
+            adv_loggers: Whether to include advanced variants of the standard CSV, TBX, JSON loggers.
+                If ``None``, will be set to ``True`` if :attr:`~DefaultArgumentParser.render_mode` is set in ``args`` of
+                the setup.
+                Its recommended to use ``True`` when using schedulers working with ``FORK_FROM``.
+        """
+        if adv_loggers is None:
+            adv_loggers = bool(self._setup.args.render_mode)
+        callbacks: list[Callback] = create_tuner_callbacks(adv_loggers=adv_loggers)
         if self._setup.args.wandb or self._setup.args.test:
             callbacks.append(self.create_wandb_logger())
             logger.info("Created WanbB logger" if self._setup.args.wandb else "Created WandB logger - for testing")

@@ -103,15 +103,17 @@ class PBTTunerSetup(ScheduledTunerSetup["PPOMLPWithPBTSetup"]):
     def create_scheduler(self) -> schedulers.TrialScheduler:
         return self._setup.args.to_scheduler()
 
-    def create_callbacks(self) -> list[Callback]:
-        callbacks = super().create_callbacks()
+    def create_callbacks(self, *, adv_loggers: bool | None = True) -> list[Callback]:
+        callbacks = super().create_callbacks(adv_loggers=adv_loggers)
         callbacks.append(SyncConfigFilesCallback())
         return callbacks
 
 
 class PPOMLPWithPBTSetup(PPOMLPSetup["MLPArgumentParser"]):
     def create_tuner(self) -> tune.Tuner:
-        return PBTTunerSetup(setup=self, eval_metric=self.args.metric, eval_metric_order=self.args.mode).create_tuner()
+        return PBTTunerSetup(setup=self, eval_metric=self.args.metric, eval_metric_order=self.args.mode).create_tuner(
+            adv_loggers=True
+        )
 
 
 # endregion
