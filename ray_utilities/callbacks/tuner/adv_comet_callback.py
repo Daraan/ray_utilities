@@ -248,7 +248,7 @@ class AdvCometLoggerCallback(
         try:
             self.log_trial_end(trial)
             _LOGGER.info("Ended and restarting experiment for forked trial %s", trial)
-            assert self.trial_is_forked(trial)
+            assert self.is_trial_forked(trial)
         except KeyError:  # forked, but not yet started, e.g. loaded from checkpoint
             assert (_info := self.get_forked_trial_info(trial))
             assert "parent_trial" not in _info[-1]

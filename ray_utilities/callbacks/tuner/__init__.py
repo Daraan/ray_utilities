@@ -26,7 +26,7 @@ __all__ = [
 
 DEFAULT_TUNER_CALLBACKS_NO_RENDER: list[type["Callback"]] = []
 """
-Default callbacks to use when not needing render_mode
+Default callbacks to use when neither needing render_mode nor advanced loggers.
 
 Note:
     AdvCometLoggerCallback is not included
@@ -39,8 +39,16 @@ DEFAULT_TUNER_CALLBACKS_RENDER: list[type["Callback"]] = [
 ]
 """Default callbacks to use when needing render_mode"""
 
+DEFAULT_ADV_TUNER_CALLBACKS = DEFAULT_TUNER_CALLBACKS_RENDER.copy()
+"""
+List of advanced tuner callbacks to use if the advanced variants should be used.
+Recommended when using shedulers working with :const:`FORK_FROM`.
 
-def create_tuner_callbacks(*, render: bool) -> list["Callback"]:
-    if render:
-        return [cb() for cb in DEFAULT_TUNER_CALLBACKS_RENDER]
+A copy of :obj:`DEFAULT_TUNER_CALLBACKS_RENDER`.
+"""
+
+
+def create_tuner_callbacks(*, adv_loggers: bool) -> list["Callback"]:
+    if adv_loggers:
+        return [cb() for cb in DEFAULT_ADV_TUNER_CALLBACKS]
     return [cb() for cb in DEFAULT_TUNER_CALLBACKS_NO_RENDER]

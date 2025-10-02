@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import List, NamedTuple
+from typing import NamedTuple
 
 from ray.tune.experiment.trial import Trial
 from ray.tune.logger import LoggerCallback
@@ -46,18 +46,40 @@ class TrackForkedTrialsMixin(LoggerCallback):
     for this to work.
     """
 
+    _call_super_log_trial_start = True
+    """
+    In some cases we do not want to call log_trial_start function of the logger base class
+    as it might unset some file handles or dict entries.
+    Setting this value to False will not call super() after this mixin's log_trial_start.
+    The value is reset to True after calling log_trial_start of this class.
+    """
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._forked_trials: defaultdict[Trial, list[ForkFromData]] = defaultdict(list)
         self._current_fork_ids: dict[Trial, str] = {}
         """fork_id of currently running forked trials"""
 
-    def trial_is_forked(self, trial: Trial) -> bool:
+        self._currently_not_forked_trials: set[Trial] = set()
+        """
+        Trials that are (re-)started but are *currently* not forked.
+
+        That is a trial that when started does not have FORK_FROM in its config,
+        it might have been forked before.
+        For loggers it means that the logging should continue without creating a new log.
+        """
+
+        self.parent_trial_lookup: dict[Trial, Trial | str | None] = {}
+        """Mapping of trials to their parent trials, if known."""
+
+    def is_trial_forked(self, trial: Trial) -> bool:
         """Whether the given trial was forked from another trial."""
         if trial in self._forked_trials or trial in self._current_fork_ids:
             assert trial in self._current_fork_ids
             assert trial in self._forked_trials
+            assert trial in self.parent_trial_lookup
             return True
+        assert self.parent_trial_lookup.get(trial) is None
         return False
 
     def get_forked_trial_info(self, trial: Trial) -> list[ForkFromData]:
@@ -101,7 +123,19 @@ class TrackForkedTrialsMixin(LoggerCallback):
         """Get the forked_id of a trial, if it was already added."""
         return self._current_fork_ids.get(trial, None)
 
-    def on_trial_start(self, iteration: int, trials: List[Trial], trial: Trial, **info):
+    def should_restart_logging(self, trial: Trial) -> bool:
+        """
+        Whether logging should be restarted for the given trial.
+
+        Returns True if the trial was forked during log start.
+        Returns False if the trial does start for the first time or
+        if the trial is currently not forked (i.e. does continue logging).
+        """
+        return trial not in self._currently_not_forked_trials
+
+    def on_trial_start(self, iteration: int, trials: list[Trial], trial: Trial, **info):
+        # Might already have a parent, has None, or will be set below
+        self.parent_trial_lookup.setdefault(trial, None)
         # TODO: Is the trials list cleared when a trial ends? Probably not.
         if "cli_args" in trial.config and (checkpoint := trial.config["cli_args"].get("from_checkpoint")):
             # If the trial was started from a checkpoint, we can try to extract
@@ -112,7 +146,7 @@ class TrackForkedTrialsMixin(LoggerCallback):
                 # This might be more reliable than FORK_FROM in config,
                 # because that one might be missing if the user manually
                 # started a new trial from a checkpoint.
-                if not self.trial_is_forked(trial):
+                if not self.is_trial_forked(trial):
                     self._forked_trials[trial] = []
                 # need to load the checkpoint first too see more information
                 self._forked_trials[trial].append(
@@ -121,6 +155,7 @@ class TrackForkedTrialsMixin(LoggerCallback):
                         "controller": "from_checkpoint",
                     }
                 )
+                self.parent_trial_lookup[trial] = extracted_id
                 _logger.info("Trial %s was started from checkpoint of trial %s", trial.trial_id, extracted_id)
             self.add_forked_trial_id(trial, fork_data=None)
         if FORK_FROM in trial.config:
@@ -132,8 +167,12 @@ class TrackForkedTrialsMixin(LoggerCallback):
             parent_trial = next((t for t in trials if t.trial_id == parent_trial_id), None)
             if parent_trial is not None:
                 fork_data["parent_trial"] = parent_trial
+                self.parent_trial_lookup[trial] = parent_trial
+            else:
+                self.parent_trial_lookup[trial] = parent_trial_id
             self._forked_trials[trial].append(fork_data)
             self.add_forked_trial_id(trial, fork_data=fork_data)
+            self._currently_not_forked_trials.discard(trial)
             _logger.info(
                 "Trial %s was forked from %s, fork_id of this trial %s, parent data: %s",
                 trial.trial_id,
@@ -141,9 +180,31 @@ class TrackForkedTrialsMixin(LoggerCallback):
                 self.get_forked_trial_id(trial),
                 fork_data,
             )
+        else:
+            # trial does continue and is NOT forked
+            self._currently_not_forked_trials.add(trial)
+
         # calls log_trial_start
         super().on_trial_start(iteration, trials, trial, **info)
 
-    def on_trial_complete(self, iteration: int, trials: List[Trial], trial: Trial, **info):
+    def log_trial_start(self, trial: Trial):
+        if self._call_super_log_trial_start:
+            # XXX: Cleanup
+            trial_file_before = getattr(self, "_trial_files", {}).get(trial, None)
+            super().log_trial_start(trial)
+            trial_file_after = getattr(self, "_trial_files", {}).get(trial, None)
+            if trial_file_before is not None and (
+                getattr(trial_file_before, "name", None) != getattr(trial_file_after, "name", None)
+            ):
+                _logger.error(
+                    "log_trial_start of %s changed the file handle of trial %s unexpectedly from %s to %s",
+                    self.__class__.__name__,
+                    trial.trial_id,
+                    getattr(trial_file_before, "name", None),
+                    getattr(trial_file_after, "name", None),
+                )
+        self._call_super_log_trial_start = True
+
+    def on_trial_complete(self, iteration: int, trials: list[Trial], trial: Trial, **info):
         super().on_trial_complete(iteration, trials, trial, **info)
         self._current_fork_ids.pop(trial, None)

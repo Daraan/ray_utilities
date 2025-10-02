@@ -45,7 +45,6 @@ class SyncConfigFilesCallback(Callback):
     """
 
     def __init__(self):
-        """Initialize the sync config files callback."""
         super().__init__()
         self._synced_trials: set[str] = set()
 

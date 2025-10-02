@@ -311,7 +311,7 @@ class AdvWandbLoggerCallback(
         if trial not in self._trial_logging_actors:
             self._trials_created += 1
         if fork_from and trial in self._trial_logging_futures:
-            assert self.trial_is_forked(trial), "Expected trial to be tracked as forked trial."
+            assert self.is_trial_forked(trial), "Expected trial to be tracked as forked trial."
             self._restart_logging_actor(trial, **wandb_init_kwargs)
         else:
             # can be forked from a checkpoint, if not stopped does not start a new
