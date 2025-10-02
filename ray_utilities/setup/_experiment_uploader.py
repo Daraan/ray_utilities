@@ -31,7 +31,7 @@ ParserType_co = TypeVar("ParserType_co", bound="DefaultArgumentParser", covarian
 
 NamespaceType: TypeAlias = "argparse.Namespace | ParserType_co"  # Generic, formerly union with , prefer duck-type
 
-_AttributeNotFound = Sentinel("_AttributeNotFound")
+_ATTRIBUTE_NOT_FOUND = Sentinel("_ATTRIBUTE_NOT_FOUND")
 
 
 class CometUploaderMixin(Generic[ParserType_co]):
@@ -39,11 +39,12 @@ class CometUploaderMixin(Generic[ParserType_co]):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        setup_args: NamespaceType[ParserType_co] | _AttributeNotFound = getattr(self, "args", _AttributeNotFound)  # pyright: ignore[reportInvalidTypeForm]
-        # XXX: For now check that we always have args
-        assert setup_args not in (None, _AttributeNotFound), "args must be setup before initializing CometUploaderMixin"
-        if setup_args is _AttributeNotFound:
-            logger.warning("No args attribute found, cannot initialize comet tracker.")
+        setup_args: NamespaceType[ParserType_co] | _ATTRIBUTE_NOT_FOUND = getattr(self, "args", _ATTRIBUTE_NOT_FOUND)
+        if setup_args is _ATTRIBUTE_NOT_FOUND:
+            logger.info(
+                "No args attribute found, likely due to `parse_args=False`, "
+                "cannot initialize comet tracker. Need to be setup later manually if desired."
+            )
             self.comet_tracker = None
         elif setup_args.comet:
             self.comet_tracker = CometArchiveTracker()
@@ -53,7 +54,13 @@ class CometUploaderMixin(Generic[ParserType_co]):
     def comet_upload_offline_experiments(self):
         """Note this does not check for args.comet"""
         if self.comet_tracker is None:
-            logger.info("No comet tracker / args.comet defined. Will not upload offline experiments.")
+            if not hasattr(self, "args") or str(self.args.comet).lower() in ("false", "none", "0"):  # pyright: ignore[reportAttributeAccessIssue]
+                logger.debug("No comet tracker / args.comet defined. Will not upload offline experiments.")
+            else:
+                logger.warning(
+                    "No comet tracker setup but args.comet=%s. Cannot upload experiments. Upload them manually instead.",
+                    self.args.comet,  # pyright: ignore[reportAttributeAccessIssue]
+                )
             return
         self.comet_tracker.upload_and_move()
 
@@ -329,8 +336,6 @@ class WandbUploaderMixin:
         # Extract from directory name pattern like "offline-run-20240101_123456-trial_id" or "run-20240101_123456-trial_id"
         run_name = run_dir.name
 
-        if "offline-run-e1485e66" in run_name:
-            breakpoint()
         # Match pattern: [offline-]run-YYYYMMDD_hhmmss-<trial_id>
         if run_name.startswith(("offline-run-", "run-")):
             # Find the last dash which should separate the timestamp from trial_id

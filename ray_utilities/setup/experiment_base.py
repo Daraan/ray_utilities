@@ -52,6 +52,7 @@ from typing_extensions import NotRequired, Self, TypedDict, TypeVar, deprecated
 from ray_utilities import RUN_ID
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
+from ray_utilities.comet import CometArchiveTracker
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.parser.default_argument_parser import ConfigFilePreParser, SupportsMetaAnnotations
 from ray_utilities.environment import create_env
@@ -1432,7 +1433,6 @@ class ExperimentSetupBase(
         if config:
             new.config = config
         new.args = data["args"]
-
         unchecked_keys.discard("args")
         new.setup(
             None,
@@ -1441,6 +1441,9 @@ class ExperimentSetupBase(
             init_trainable=init_trainable,
             init_config=init_config,
         )
+        if new.args.comet and not new.comet_tracker:
+            new.comet_tracker = CometArchiveTracker()
+            logger.info("CometArchiveTracker setup")
         if unchecked_keys:  # possibly a subclass has more keys
             logger.info(
                 "Some keys in the state were not used: %s.",
