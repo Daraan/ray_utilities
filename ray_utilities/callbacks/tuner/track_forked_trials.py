@@ -46,6 +46,14 @@ class TrackForkedTrialsMixin(LoggerCallback):
     for this to work.
     """
 
+    _call_super_log_trial_start = True
+    """
+    In some cases we do not want to call log_trial_start function of the logger base class
+    as it might unset some file handles or dict entries.
+    Setting this value to False will not call super() after this mixin's log_trial_start.
+    The value is reset to True after calling log_trial_start of this class.
+    """
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._forked_trials: defaultdict[Trial, list[ForkFromData]] = defaultdict(list)
@@ -64,12 +72,14 @@ class TrackForkedTrialsMixin(LoggerCallback):
         self.parent_trial_lookup: dict[Trial, Trial | str | None] = {}
         """Mapping of trials to their parent trials, if known."""
 
-    def trial_is_forked(self, trial: Trial) -> bool:
+    def is_trial_forked(self, trial: Trial) -> bool:
         """Whether the given trial was forked from another trial."""
         if trial in self._forked_trials or trial in self._current_fork_ids:
             assert trial in self._current_fork_ids
             assert trial in self._forked_trials
+            assert trial in self.parent_trial_lookup
             return True
+        assert self.parent_trial_lookup.get(trial) is None
         return False
 
     def get_forked_trial_info(self, trial: Trial) -> list[ForkFromData]:
@@ -136,7 +146,7 @@ class TrackForkedTrialsMixin(LoggerCallback):
                 # This might be more reliable than FORK_FROM in config,
                 # because that one might be missing if the user manually
                 # started a new trial from a checkpoint.
-                if not self.trial_is_forked(trial):
+                if not self.is_trial_forked(trial):
                     self._forked_trials[trial] = []
                 # need to load the checkpoint first too see more information
                 self._forked_trials[trial].append(
@@ -176,6 +186,17 @@ class TrackForkedTrialsMixin(LoggerCallback):
 
         # calls log_trial_start
         super().on_trial_start(iteration, trials, trial, **info)
+
+    def log_trial_start(self, trial: Trial):
+        if self._call_super_log_trial_start:
+            # XXX: Cleanup
+            trial_file_before = getattr(self, "_trial_files", {}).get(trial, None)
+            super().log_trial_start(trial)
+            trial_file_after = getattr(self, "_trial_files", {}).get(trial, None)
+            assert trial_file_before == trial_file_after or (
+                getattr(trial_file_before, "name", None) == getattr(trial_file_after, "name", None)
+            )
+        self._call_super_log_trial_start = True
 
     def on_trial_complete(self, iteration: int, trials: list[Trial], trial: Trial, **info):
         super().on_trial_complete(iteration, trials, trial, **info)

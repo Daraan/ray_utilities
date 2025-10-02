@@ -244,10 +244,6 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
         # Set up the file handle
         self._setup_file_handle(trial, local_file_path)
 
-    def on_trial_result(self, iteration: int, trials: list[Trial], trial: Trial, result, **info):
-        self._trials = trials
-        return super().on_trial_result(iteration, trials, trial, result, **info)
-
     def log_trial_start(self, trial: Trial):
         if trial in self._trial_files and FORK_FROM in trial.config:
             assert self.should_restart_logging(trial)
