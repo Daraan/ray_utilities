@@ -193,9 +193,16 @@ class TrackForkedTrialsMixin(LoggerCallback):
             trial_file_before = getattr(self, "_trial_files", {}).get(trial, None)
             super().log_trial_start(trial)
             trial_file_after = getattr(self, "_trial_files", {}).get(trial, None)
-            assert (trial_file_before is None and trial_file_after is None) or (
-                getattr(trial_file_before, "name", None) == getattr(trial_file_after, "name", None)
-            )
+            if trial_file_before is not None and (
+                getattr(trial_file_before, "name", None) != getattr(trial_file_after, "name", None)
+            ):
+                _logger.error(
+                    "log_trial_start of %s changed the file handle of trial %s unexpectedly from %s to %s",
+                    self.__class__.__name__,
+                    trial.trial_id,
+                    getattr(trial_file_before, "name", None),
+                    getattr(trial_file_after, "name", None),
+                )
         self._call_super_log_trial_start = True
 
     def on_trial_complete(self, iteration: int, trials: list[Trial], trial: Trial, **info):

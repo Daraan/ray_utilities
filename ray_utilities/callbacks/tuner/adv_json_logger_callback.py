@@ -38,7 +38,7 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, JsonLog
     configurations are updated. Experiments must be executed with the
     JsonLoggerCallback to be compatible with the ExperimentAnalysis tool.
 
-    This updated class does not log videos stored in the DEFAULT_VIDEO_KEYS.
+    This updated class does not log videos stored in the :const:`DEFAULT_VIDEO_DICT_KEYS`.
 
     When a trial is forked (has ``FORK_FROM`` in config), creates a new JSON file
     and optionally copies data from the parent trial.

@@ -30,15 +30,11 @@ logger = logging.getLogger(__name__)
 class AdvCSVLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, CSVLoggerCallback):
     """Logs trial results in CSV format.
 
-    Also writes to a results file and param.json file when results or
-    configurations are updated. Experiments must be executed with the
-    JsonLoggerCallback to be compatible with the ExperimentAnalysis tool.
-
-    Prevents logging of videos (keys in `DEFAULT_VIDEO_KEYS`) even if they are present
+    Prevents logging of videos (keys in :const:`DEFAULT_VIDEO_DICT_KEYS`) even if they are present
     at the first iteration.
 
     When a trial is forked (has ``FORK_FROM`` in config), creates a new CSV file
-    and optionally copies data from the parent trial.
+    and tries to copy the data from the parent trial.
     """
 
     def _get_file_extension(self) -> str:
@@ -54,15 +50,16 @@ class AdvCSVLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, CSVLogge
         """Open the CSV file handle and set CSV-specific state."""
         self._trial_csv[trial] = None  # need to set key # pyright: ignore[reportArgumentType]
         if local_file_path.exists():
-            self._trial_files[trial] = local_file_path.open("at")
             # Check if header needs to be written
             write_header_again = local_file_path.stat().st_size == 0
             # Note: metrics might have changed when loading from checkpoint
             if trial.config.get("cli_args", {}).get("from_checkpoint") or trial.config.get("from_checkpoint"):
                 write_header_again = True
             self._trial_continue[trial] = not write_header_again
-        else:
+        else:  # For now this is not called as we enter after a sync from parent
+            self._restore_from_remote(local_file_path.name, trial)
             self._trial_continue[trial] = False
+        self._trial_files[trial] = local_file_path.open("at")
 
     def _handle_missing_parent_file(self, trial: Trial, local_file_path: Path) -> None:
         """Handle missing parent file for CSV logger."""

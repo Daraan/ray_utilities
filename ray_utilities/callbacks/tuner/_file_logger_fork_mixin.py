@@ -143,7 +143,7 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
                     exclude=["*/checkpoint_*", "*.pkl", "events.out.tfevents.*"],
                 )
                 trial.storage.syncer.wait()
-            except Exception:
+            except (RuntimeError, OSError, Exception):
                 logger.exception(
                     "Trial %s forked from %s but could not copy parent %s data from remote storage.",
                     trial.trial_id,
