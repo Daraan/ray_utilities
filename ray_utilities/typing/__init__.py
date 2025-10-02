@@ -137,6 +137,9 @@ class ForkFromData(TypedDict):
         as itself could be forked at some time.
     """
 
+    parent_fork_id: NotRequired[str]
+    """If available, the fork_id of the parent trial, if it was forked itself"""
+
     fork_id_this_trial: NotRequired[str]
     """The fork_id this trial will get. It is constructed from the other fields."""
 
