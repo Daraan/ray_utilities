@@ -42,8 +42,9 @@ class AdvCSVLoggerCallback(NewStyleLoggerCallback, TrackForkedTrialsMixin, CSVLo
     and optionally copies data from the parent trial.
     """
 
-    def _make_forked_trial_file_name(self, trial: "Trial", fork_data: ForkFromData) -> str:
-        return f"progress-fork-{self.make_forked_trial_id(trial, fork_data)}.csv"
+    def _make_forked_trial_file_name(self, trial: "Trial", fork_data: ForkFromData | str) -> str:
+        fork_info = fork_data if isinstance(fork_data, str) else self.make_forked_trial_id(trial, fork_data)
+        return f"progress-fork-{fork_info}.csv"
 
     def _setup_forked_trial(self, trial: "Trial", fork_data: ForkFromData):
         """Setup trial logging, handling forked trials by creating new files."""
@@ -64,7 +65,11 @@ class AdvCSVLoggerCallback(NewStyleLoggerCallback, TrackForkedTrialsMixin, CSVLo
             # is EXPR_PROGRESS_FILE is parent is not a fork
             # else it is progress-{fork_id}.csv
             parent_fork_id = self._current_fork_ids.get(parent_trial, None)
-            parent_file_name = EXPR_PROGRESS_FILE if parent_fork_id is None else f"progress-{parent_fork_id}.csv"
+            parent_file_name = (
+                EXPR_PROGRESS_FILE
+                if parent_fork_id is None
+                else self._make_forked_trial_file_name(parent_trial, parent_fork_id)
+            )
             # Sync from parent trial to local path
             # but we also do not want to overwrite progress.csv
             parent_local_file_path = Path(parent_trial.local_path, parent_file_name)  # pyright: ignore[reportArgumentType]
@@ -78,14 +83,14 @@ class AdvCSVLoggerCallback(NewStyleLoggerCallback, TrackForkedTrialsMixin, CSVLo
                     parent_trial.storage.syncer.sync_up(
                         parent_local_file_path.as_posix(),
                         parent_remote_file_path,
-                        exclude=["*/checkpoint_*", "*.pkl", "events.out.tfevents.*", "*.json"],
+                        exclude=["*/checkpoint_*", "*.pkl", "events.out.tfevents.*", "*.csv"],
                     )
                     parent_trial.storage.syncer.wait()
                     logger.debug("Syncing down parent CSV file to %s", local_file_path.as_posix())
                     trial.storage.syncer.sync_down(
                         parent_remote_file_path,
                         local_file_path.as_posix(),
-                        exclude=["*/checkpoint_*", "*.pkl", "events.out.tfevents.*", "*.json"],
+                        exclude=["*/checkpoint_*", "*.pkl", "events.out.tfevents.*", "*.csv"],
                     )
                     trial.storage.syncer.wait()
                 except Exception:

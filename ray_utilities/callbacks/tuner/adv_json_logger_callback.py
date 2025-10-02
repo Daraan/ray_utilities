@@ -41,8 +41,9 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, TrackForkedTrialsMixin, Json
     and optionally copies data from the parent trial.
     """
 
-    def _make_forked_trial_file_name(self, trial: "Trial", fork_data: ForkFromData) -> str:
-        return f"result-fork-{self.make_forked_trial_id(trial, fork_data)}.json"
+    def _make_forked_trial_file_name(self, trial: "Trial", fork_data: ForkFromData | str) -> str:
+        fork_info = fork_data if isinstance(fork_data, str) else self.make_forked_trial_id(trial, fork_data)
+        return f"result-fork-{fork_info}.json"
 
     def _setup_forked_trial(self, trial: "Trial", fork_data: ForkFromData):
         """Setup trial logging, handling forked trials by creating new files."""
@@ -65,7 +66,11 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, TrackForkedTrialsMixin, Json
             # is EXPR_RESULT_FILE if parent is not a fork
             # else it is result-{fork_id}.json
             parent_fork_id = self._current_fork_ids.get(parent_trial, None)
-            parent_file_name = EXPR_RESULT_FILE if parent_fork_id is None else f"result-{parent_fork_id}.json"
+            parent_file_name = (
+                EXPR_RESULT_FILE
+                if parent_fork_id is None
+                else self._make_forked_trial_file_name(parent_trial, parent_fork_id)
+            )
             # Sync from parent trial to local path
             # but we also do not want to overwrite result.json
             parent_local_file_path = Path(parent_trial.local_path, parent_file_name)  # pyright: ignore[reportArgumentType]
