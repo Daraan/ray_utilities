@@ -163,7 +163,12 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
 
         parent_trial_id = "p_trial_0001"
         fork_step = 200
-        forked_trial = self._create_forked_trial("forked_trial_003", f"{parent_trial_id}?_step={fork_step}")
+        fork_data: ForkFromData = {
+            "parent_id": parent_trial_id,
+            "parent_training_iteration": fork_step,
+            "parent_time": Forktime("training_iteration", fork_step),
+        }
+        forked_trial = self._create_forked_trial("forked_trial_003", fork_data)
 
         # Create mock parent experiment
         mock_parent_experiment = self._create_online_experiment()
@@ -173,7 +178,9 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
             patch("comet_ml.Experiment") as mock_experiment_class,
             patch("comet_ml.config.set_global_experiment"),
             patch.object(callback, "is_trial_forked", return_value=True),
-            patch("ray_utilities.callbacks.tuner.adv_comet_callback.make_experiment_key") as mock_make_key,
+            patch(
+                "ray_utilities.callbacks.tuner.adv_comet_callback.AdvCometLoggerCallback.make_forked_trial_id"
+            ) as mock_make_key,
             patch("ray_utilities.callbacks.tuner.adv_comet_callback._LOGGER") as mock_logger,
             patch.object(callback, "_check_workspaces", return_value=0),
         ):
@@ -195,11 +202,9 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
 
             # Verify make_experiment_key was called with correct parameters
             # It's called twice: once for fork data and once in _start_experiment
-            self.assertEqual(mock_make_key.call_count, 2)
-            # First call should be with fork data
-            mock_make_key.assert_any_call(forked_trial, (parent_trial_id, fork_step))
-            # Second call should be with just the trial (in _start_experiment as setdefault)
-            mock_make_key.assert_any_call(forked_trial)
+            self.assertEqual(mock_make_key.call_count, 1)
+            # Should be called with trial and fork_data
+            mock_make_key.assert_called_with(forked_trial, fork_data)
 
             # Verify new experiment was created with modified key
             call_kwargs = mock_experiment_class.call_args[1]
@@ -232,9 +237,12 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
             mock_experiment_class.return_value = mock_new_experiment
 
             # Mock forked trial info where parent is not present
-            mock_info = Mock()
+            class MockWithGet(Mock):
+                def __getitem__(self, key):
+                    return {-1: fork_data}[key]
+
+            mock_info = MockWithGet()
             # cannot mock magic methods
-            mock_info.__getitem__.side_effect = lambda key: {"some_key": fork_data}[key]
             mock_get_info.return_value = mock_info  # Return tuple as expected
 
             # Call the method under test
@@ -265,7 +273,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
             "parent_time": Forktime("training_iteration", fork_step),
         }
 
-        forked_trial = self._create_forked_trial("forked_trial_005", fork_data)
+        forked_trial = self._create_forked_trial("2", fork_data)
 
         with (
             patch.object(callback, "_restart_experiment_for_forked_trial") as mock_restart,
@@ -292,8 +300,10 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
             mock_restart.assert_called_once_with(forked_trial, fork_data)
 
             # Verify experiment was configured
-            mock_experiment.set_name.assert_called_once_with(str(forked_trial))
-            mock_experiment.add_tags.assert_called_once_with(["test_tag"])
+            mock_experiment.set_name.assert_called_once_with(
+                f"{forked_trial!s}_forkof_{parent_trial_id}_training_iteration={fork_step}"
+            )
+            mock_experiment.add_tags.assert_called_once_with(["test_tag", "forked"])
             # Verify both log_other calls: "Created from" and command line args
             self.assertEqual(mock_experiment.log_other.call_count, 2)
             mock_experiment.log_other.assert_any_call("Created from", "Ray")

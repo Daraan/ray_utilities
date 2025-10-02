@@ -90,7 +90,8 @@ class TrackForkedTrialsMixin(LoggerCallback):
         """
         return self._forked_trials.get(trial, [])
 
-    def make_forked_trial_name(self, trial: Trial, fork_data: ForkFromData) -> str:
+    @staticmethod
+    def make_forked_trial_name(trial: Trial, fork_data: ForkFromData) -> str:
         trial_name = str(trial)
         parent_id = fork_data["parent_id"]
         ft = fork_data.get("parent_time", None)
