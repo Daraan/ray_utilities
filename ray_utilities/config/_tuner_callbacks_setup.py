@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 class _TunerCallbackSetupBase(ABC):
     @abstractmethod
-    def create_callbacks(self) -> list[Callback]:
+    def create_callbacks(self, *args, **kwargs) -> list[Callback]:
         """Create a list of initialized callbacks for the tuner."""
 
 

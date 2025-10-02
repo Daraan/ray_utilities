@@ -81,7 +81,7 @@ class _TunerSetupBase(Protocol):
         self, callbacks: list[tune.Callback] | list[train.UserCallback]
     ) -> tune.RunConfig | RunConfigV1 | train.RunConfig: ...
 
-    def create_tuner(self) -> tune.Tuner:
+    def create_tuner(self, *args, **kwargs) -> tune.Tuner:
         """Create and return a configured Ray Tune Tuner instance."""
         ...
 
