@@ -949,7 +949,7 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
                 self.c = config["c"]
 
             def step(self):
-                time.sleep(0.33)
+                time.sleep(1)
                 self.iter += 1
                 return {"mean_accuracy": (self.a - self.iter) * self.b, "a": self.a, "b": self.b, "c": self.c}
 
@@ -1041,6 +1041,7 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
 class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
     # Some tests taken from ray's testing suite
 
+    @pytest.mark.length(speed="medium")
     def test_run_tune_with_top_trial_scheduler(self):
         original_exploit = TopPBTTrialScheduler._exploit
         perturbation_interval = 100
@@ -1089,14 +1090,14 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             nonlocal num_exploits
             num_exploits += 1
             print("Exploit number", num_exploits, "called at step", self._trial_state[trial].last_train_time)
-            if self._trial_state[trial].last_train_time % perturbation_interval != 0:
+            if self._trial_state[trial].last_perturbation_time % perturbation_interval != 0:
                 # We can end up here due to a race condition as Trial pause reached too slow and another step was taken
                 # ignore most of the asserts but check that we did not end up here more than once.
                 nonlocal race_conditions
                 race_conditions += 1
                 logger.warning(
                     "Exploit called at step %s not at perturbation interval for trial. Likely due to race condition.",
-                    self._trial_state[trial].last_train_time,
+                    self._trial_state[trial].last_perturbation_time,
                 )
             else:
                 current_step = self._trial_state[trial].last_train_time
@@ -1154,7 +1155,7 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
                         f"Step: {self._current_step} batch_size={self.algorithm_config.train_batch_size_per_learner} "
                         f"result={result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN]}"
                     )
-                time.sleep(1)  # Avoid race conditions by pause being too slow.
+                time.sleep(2)  # Avoid race conditions by pause being too slow.
                 return result  # pyright: ignore[reportReturnType]
 
         ray_pbt_logger.setLevel(logging.DEBUG)
