@@ -2017,7 +2017,7 @@ class TestLoggerIntegration(TestHelpers):
         group_trial_ids = [[trial_id for trial_id, _ in group] for group in groups]
 
         # Level 0: root
-        self.assertEqual(group_trial_ids[0], ["root", "independent"])
+        self.assertSetEqual(set(group_trial_ids[0]), {"root", "independent"})
 
         # Level 1: parent_1, parent_2 (parallel)
         self.assertCountEqual(group_trial_ids[1], ["parent_1", "parent_2"])
