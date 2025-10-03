@@ -92,6 +92,8 @@ jobs:
         # Split tests because of deadlock
         # Test all others excluded by tests below
         pytest -k "not test_trainable" -m "not basic and not length(speed='fast')" -v -x --fast
+      env:
+        COMET_API_KEY: ${{ secrets.COMET_API_KEY }}
 
   test-tuner-and-trainable:
     name: Test trainable and Tuner (fast)
