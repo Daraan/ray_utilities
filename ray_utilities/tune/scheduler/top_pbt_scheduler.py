@@ -295,12 +295,12 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         All trials outside the top quantile are considered in the lower quantile,
         meaning they will exploit the top-performing trials.
         """
-        trials = []
+        trials: list[Trial] = []
         for trial, state in self._trial_state.items():
             logger.debug("Trial %s, state %s", trial, state)
             if trial.is_finished():
                 logger.debug("Trial %s is finished", trial)
-            if state.last_score is not None and not trial.is_finished():
+            if state.last_score is not None and not math.isnan(state.last_score) and not trial.is_finished():
                 trials.append(trial)
 
         # Sort trials by score (in appropriate order based on mode)

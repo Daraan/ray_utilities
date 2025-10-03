@@ -8,6 +8,7 @@ import tempfile
 import time
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
+import unittest
 
 import numpy as np
 import pytest
@@ -1201,3 +1202,92 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             self.assertEqual(num_exploits, max(batch_sizes) * (3 - 1) // perturbation_interval * 2)
             # Check that at most one race condition happened
             self.assertLessEqual(race_conditions, 1)
+
+
+class DummyTrial:
+    def __init__(self, trial_id, config=None, *, finished=False):
+        self.trial_id = trial_id
+        self._finished = finished
+        self.config = config if config is not None else {}
+
+    def is_finished(self):
+        return self._finished
+
+
+class DummyState:
+    def __init__(self, last_score):
+        self.last_score = last_score
+
+
+class PBTQuantileNaNTest(unittest.TestCase):
+    def test_nan_last_score_in_quantiles(self):
+        # Create three trials: one with nan, two with valid scores
+        t1 = DummyTrial("t1")
+        t2 = DummyTrial("t2")
+        t3 = DummyTrial("t3")
+        # Patch _trial_state with dummy states
+        max_states = {
+            t1: DummyState(last_score=20.0),
+            t2: DummyState(last_score=float("nan")),
+            t3: DummyState(last_score=10.0),
+        }
+        min_states = {
+            t3: DummyState(last_score=10.0),
+            t2: DummyState(last_score=float("nan")),
+            t1: DummyState(last_score=20.0),
+        }
+
+        for scheduler_class in [ReTuneScheduler, TopPBTTrialScheduler]:
+            with self.subTest(scheduler_class=scheduler_class.__name__):
+                max_scheduler = scheduler_class(
+                    metric="reward",
+                    mode="max",
+                    hyperparam_mutations={"lr": [1e-3, 1e-4]},
+                    # use > 0.5 to not user super()._quantile
+                    quantile_fraction=0.51 if scheduler_class is ReTuneScheduler else 0.5,
+                )
+                max_scheduler._trial_state = max_states
+                for t, state in max_states.items():
+                    max_scheduler._save_trial_state(
+                        state, 100, {"reward": state.last_score, TRAINING_ITERATION: 100}, t
+                    )
+                min_scheduler = scheduler_class(
+                    metric="reward",
+                    mode="min",
+                    hyperparam_mutations={"lr": [1e-3, 1e-4]},
+                    quantile_fraction=0.51 if scheduler_class is ReTuneScheduler else 0.5,
+                )
+                min_scheduler._trial_state = min_states  # pyright: ignore[reportAttributeAccessIssue]
+                for t, state in min_states.items():
+                    min_scheduler._save_trial_state(
+                        state,
+                        100,
+                        {"reward": state.last_score, TRAINING_ITERATION: 100},
+                        t,  # pyright: ignore[reportArgumentType]
+                    )
+
+                # Should not raise, but nan disrupts sorting
+                max_bottom, max_top = max_scheduler._quantiles()
+                max_other_trials = [t for t in max_scheduler._trial_state if t not in max_bottom + max_top]
+                max_ordered_results = [
+                    max_scheduler._trial_state[t].last_score for t in [*max_bottom, *max_other_trials, *max_top]
+                ]
+                print(max_ordered_results)
+                # [20, nan, 10]
+                min_bottom, min_top = min_scheduler._quantiles()
+                min_other_trials = [t for t in min_scheduler._trial_state if t not in min_bottom + min_top]
+                min_ordered_results = [
+                    min_scheduler._trial_state[t].last_score for t in [*min_bottom, *min_other_trials, *min_top]
+                ]
+                # The trial with nan should be handled gracefully (e.g., always last)
+
+                assert t1 in max_top
+                assert t3 in max_bottom
+                assert t1 in min_bottom
+                assert t3 in min_top
+                assert 20 == max_ordered_results[-1]
+                assert 10 == abs(min_ordered_results[-1]), min_ordered_results
+
+
+if __name__ == "__main__":
+    unittest.main()
