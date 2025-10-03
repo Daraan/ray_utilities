@@ -126,18 +126,17 @@ class GetGlobalStepMixin:
         """Assumes metrics_logger.stats is not empty and contains necessary keys."""
         # other possible keys are num_module_steps_sampled_lifetime/default_policy
         # or num_agent_steps_sampled_lifetime/default_agent
-        if LEARNER_RESULTS in metrics_logger.stats:
-            gs = metrics_logger.stats[LEARNER_RESULTS][ALL_MODULES][
-                NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
-            ].peek()  # NOTE: Custom key
-        else:
+        # look for our custom keys
+        gs = metrics_logger.peek((LEARNER_RESULTS, ALL_MODULES, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=-1)
+        if gs == -1:  # alternative custom key
             gs = metrics_logger.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=-1)
         if gs == -1:
             assert metrics_logger.peek("training_iteration", default=0) == 0
             gs = 0
+        # For now to not fall back to rllib key to reveal errors.
         # gs = metrics_logger.stats[ENV_RUNNERS][NUM_ENV_STEPS_SAMPLED_LIFETIME"].peek()
         # logger.debug("Global step %s", gs)
-        return gs
+        return int(gs)
 
 
 class StepCounterMixin(GetGlobalStepMixin):

@@ -6,6 +6,8 @@ on:
       - '*'  # Run on every tag created
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   build:
     name: Build distribution
@@ -13,9 +15,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: '3.x'
 
@@ -34,6 +38,7 @@ jobs:
           name: python-package-distributions
           path: dist/
   publish:
+    name: Publish to TestPyPI
     needs:
       - build
     runs-on: ubuntu-latest

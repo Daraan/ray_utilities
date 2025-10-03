@@ -34,18 +34,34 @@ from __future__ import annotations
 
 import inspect
 import logging
-from typing import Any, Dict, Literal, Optional, overload
+from functools import partial
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, cast, overload
 
-import optuna
 from ray import tune
+from ray.tune.search import sample
+from ray.tune.search.concurrency_limiter import ConcurrencyLimiter
 from ray.tune.search.optuna import OptunaSearch
 from ray.tune.stopper import Stopper
 from ray.tune.utils import flatten_dict
-from ray.tune.search import sample
 
-from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
+from ray_utilities.constants import (
+    DEFAULT_EVAL_METRIC,
+    EVAL_METRIC_RETURN_MEAN,
+    NEW_LOG_EVAL_METRIC,
+)
+from ray_utilities.misc import new_log_format_used
+
+try:
+    import optuna
+except ModuleNotFoundError:
+    if TYPE_CHECKING:
+        import optuna
+    else:
+        optuna = cast("Any", ModuleNotFoundError)
 
 _logger = logging.getLogger(__name__)
+
+_original_limiter_on_trial_complete = ConcurrencyLimiter.on_trial_complete
 
 
 class OptunaSearchWithPruner(OptunaSearch, Stopper):
@@ -63,6 +79,7 @@ class OptunaSearchWithPruner(OptunaSearch, Stopper):
             self._pruner_set = False
         self._reported_metric_this_step = False
         """Tracks if super().on_trial_result was called from __call__ (Stopper) or later on_trial_result."""
+        self._base_trial_id = None
 
     # Searcher interface:
 
@@ -110,7 +127,8 @@ class OptunaSearchWithPruner(OptunaSearch, Stopper):
             self._reported_metric_this_step = False  # TODO could set this to current iteration
             _logger.debug(
                 "KeyError in Stopper OptunaSearchWithPruner.__call__: %s. "
-                "Likely the tracked metric is not present before the first evaluation.",
+                "Likely the tracked metric is not present before the first evaluation. "
+                "or this class is used as a stopper without using it as a searcher at the same time.",
                 e,
             )
             return False
@@ -122,13 +140,127 @@ class OptunaSearchWithPruner(OptunaSearch, Stopper):
             return True  # TODO: Can we report this to Optuna as well? as raising PruneTrial is not possible
         return False
 
+    def suggest(self, trial_id: str) -> Dict | None:
+        if self._base_trial_id is None:
+            self._base_trial_id = trial_id.rsplit("_", 1)[0]
+            trial_id = self._base_trial_id + "_00000"
+        else:
+            # discard trial id and use counter
+            new_trial_id = self._base_trial_id + f"_{len(self._ot_trials):05d}"
+            _logger.info("Discarding suggested trial_id %s for and replacing with %s", trial_id, new_trial_id)
+            trial_id = new_trial_id
+        return super().suggest(trial_id)
+
+
+try:
+    from ray.tune.experiment.config_parser import _create_trial_from_spec as _original_create_trial_from_spec
+except ImportError:
+    _original_create_trial_from_spec = None
+
+
+_patched_trial_mappings_new_to_old: dict[str, str] = {}
+_patched_trial_mappings_old_to_new: dict[str, str] = {}
+
+
+# need to be able to pickle this function
+def _patch_searcher_on_trial_complete(
+    org_function,
+    trial_id: str,
+    result: Optional[Dict] = None,
+    error: bool = False,
+    *args,
+    **kwargs,  # noqa: FBT001, FBT002
+) -> None:
+    if trial_id in _patched_trial_mappings_old_to_new:
+        try:
+            org_function(_patched_trial_mappings_old_to_new[trial_id], result, error, *args, **kwargs)
+        except KeyError:
+            pass
+        else:
+            return
+    org_function(trial_id, result, error, *args, **kwargs)
+
+
+def patch_limiter_on_trial_complete(
+    self: ConcurrencyLimiter,
+    trial_id: str,
+    result: Optional[Dict] = None,
+    error: bool = False,
+    *args,
+    **kwargs,  # noqa: FBT001, FBT002
+):
+    if (
+        trial_id not in self.live_trials
+        and (swapped_trial_id := _patched_trial_mappings_new_to_old.get(trial_id, None)) is not None
+    ):
+        trial_id = swapped_trial_id  # exchange back to original trial_id
+    return _original_limiter_on_trial_complete(self, trial_id, result, error, *args, **kwargs)
+
+
+def _monkey_patch_trial_creation(searcher: OptunaSearch | OptunaSearchWithPruner) -> None:
+    """
+    When using a SearchAlgo trial_ids are not suffixed with a count.
+    This monkey patch adds a count to the trial_id to make it unique and compatible with
+    systems that expect unique trial_ids like comet_ml.
+    """
+    if _original_create_trial_from_spec:
+        _logger.info("Patching ray.tune.search.search_generator to yield trials in <trial_id>_<count> format.")
+        import ray.tune.search.search_generator  # noqa: PLC0415
+
+        count = 0
+
+        def patched_create_trial_from_spec(*args, **kwargs):
+            """Insert count into trial_id for it to have a <trial_id>_<count> format."""
+            if _original_create_trial_from_spec is None:
+                return None  # This should never been called then
+            trial = _original_create_trial_from_spec(*args, **kwargs)
+            if "_" in kwargs.get("trial_id", "_"):
+                return trial
+            try:
+                nonlocal count
+                if not hasattr(searcher, "_base_trial_id") or searcher._base_trial_id is None:  # pyright: ignore[reportAttributeAccessIssue]
+                    searcher._base_trial_id = kwargs.get("trial_id", trial.trial_id)  # pyright: ignore[reportAttributeAccessIssue]
+                    _logger.info(
+                        "Setting base_trial_id to %s. Will use for all trials in this experiment",
+                        searcher._base_trial_id,  # pyright: ignore[reportAttributeAccessIssue]
+                    )
+                else:
+                    _logger.info(
+                        "Discarding trial id %s for trial_id with count %s_<some_count>",
+                        trial.trial_id,
+                        searcher._base_trial_id,  # pyright: ignore[reportAttributeAccessIssue]
+                    )
+                new_trial_id = f"{searcher._base_trial_id}_{count:05d}"  # pyright: ignore[reportAttributeAccessIssue]
+                _patched_trial_mappings_new_to_old[new_trial_id] = trial.trial_id
+                _patched_trial_mappings_old_to_new[trial.trial_id] = new_trial_id
+                trial.trial_id = new_trial_id
+                if trial.trial_name_creator:
+                    trial.custom_trial_name = trial.trial_name_creator(trial)
+                if trial.trial_dirname_creator:
+                    trial.custom_dirname = trial.trial_dirname_creator(trial)
+                count += 1
+            except Exception as e:
+                _logger.exception("Error while patching trial_id: %s")
+                raise
+            return trial
+
+        ray.tune.search.search_generator._create_trial_from_spec = patched_create_trial_from_spec  # pyright: ignore[reportPossiblyUnboundVariable, reportPrivateImportUsage]
+
+    # patch_trial_cleanup
+    if ConcurrencyLimiter.on_trial_complete == _original_limiter_on_trial_complete:
+        ConcurrencyLimiter.on_trial_complete = patch_limiter_on_trial_complete
+
+    # But searcher needs updated id again
+    original_searcher_complete = searcher.on_trial_complete
+    searcher.on_trial_complete = partial(_patch_searcher_on_trial_complete, original_searcher_complete)
+
 
 @overload
 def create_search_algo(
     study_name: str,
     *,
     hparams: Optional[dict[str, Any | dict[Literal["grid_search"], Any]]],
-    metric=EVAL_METRIC_RETURN_MEAN,  # flattened key
+    metric: str = EVAL_METRIC_RETURN_MEAN,  # flattened key
     mode: str | list[str] | None = "max",
     initial_params: Optional[list[dict[str, Any]]] = None,
     storage: Optional[optuna.storages.BaseStorage] = None,
@@ -144,7 +276,7 @@ def create_search_algo(
     study_name: str,
     *,
     hparams: Optional[dict[str, Any | dict[Literal["grid_search"], Any]]],
-    metric=EVAL_METRIC_RETURN_MEAN,  # flattened key
+    metric: str = EVAL_METRIC_RETURN_MEAN,  # flattened key
     mode: str | list[str] | None = "max",
     initial_params: Optional[list[dict[str, Any]]] = None,
     storage: Optional[optuna.storages.BaseStorage] = None,
@@ -159,7 +291,7 @@ def create_search_algo(
     study_name: str,
     *,
     hparams: Optional[dict[str, Any | dict[Literal["grid_search"], Any]]],
-    metric=EVAL_METRIC_RETURN_MEAN,  # flattened key
+    metric: Optional[str | DEFAULT_EVAL_METRIC] = EVAL_METRIC_RETURN_MEAN,  # flattened key
     mode: str | list[str] | None = "max",
     initial_params: Optional[list[dict[str, Any]]] = None,
     storage: Optional[optuna.storages.BaseStorage] = None,
@@ -212,6 +344,8 @@ def create_search_algo(
             Otherwise the default of ray's `OptunaSearch` is used.
         kwargs: Forwarded to OptunaSearch, for example `evaluated_rewards`.
     """
+    if metric is DEFAULT_EVAL_METRIC:
+        metric = NEW_LOG_EVAL_METRIC if new_log_format_used() else EVAL_METRIC_RETURN_MEAN
     grid_values = {}
     if hparams:
         grid_values = {k: v["grid_search"] for k, v in hparams.items() if isinstance(v, dict) and "grid_search" in v}
@@ -253,6 +387,8 @@ def create_search_algo(
             **kwargs,
         )
         stopper = None
+        _monkey_patch_trial_creation(searcher)
+        searcher._base_trial_id = None  # pyright: ignore[reportAttributeAccessIssue]
         return searcher, stopper
     if pruner is True:
         pruner = optuna.pruners.MedianPruner()
@@ -267,6 +403,7 @@ def create_search_algo(
         pruner=pruner,
     )
     stopper = searcher
+    _monkey_patch_trial_creation(searcher)
     return searcher, stopper
 
 

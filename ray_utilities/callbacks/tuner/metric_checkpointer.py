@@ -38,7 +38,7 @@ See Also:
 # todo: do not derive from RLlibCallback when tuner checkpoint is actually working.
 # Need workaround to set `SHOULD_CHECKPOINT` in the actual result dict and not on a copy of
 # on_trial_result
-@deprecated("Do not use as long as tune passes only a copy of the result dict.")
+@deprecated("Do not use as long as tune passes only a copy of the result dict.", stacklevel=2)
 class MetricCheckpointer(Callback):
     """Callbacks that adds ``SHOULD_CHECKPOINT`` to results if a metric condition is met."""
 
@@ -81,15 +81,6 @@ class MetricCheckpointer(Callback):
                     else ""
                 ),
             )
-        # else:
-        #    _logger.debug(
-        #        "Not checkpointing trial %s at iteration %s, step %d with: metric '%s' = %s",
-        #        trial.trial_id if trial else "",
-        #        iteration,
-        #        current_step,
-        #        self.metric_name,
-        #        result.get(self.metric_name, None),
-        #    )
 
     @override(Callback)
     def on_trial_result(
@@ -118,7 +109,7 @@ class MetricCheckpointer(Callback):
         )
 
 
-@deprecated("Do not use as long as tune passes only a copy of the result dict.")
+@deprecated("Do not use as long as tune passes only a copy of the result dict.", stacklevel=2)
 class StepCheckpointer(MetricCheckpointer):  # type: ignore
     """Checkpoints trials based on a specific metric condition."""
 

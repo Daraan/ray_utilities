@@ -5,7 +5,7 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "ray_utilities"
-version = "0.4.0"
+version = "0.5.0"
 readme = "README.md"
 description = "Utilities for Ray RLlib and related workflows. Includes experiment setup, callbacks, and JAX model utilities."
 license = { file = "LICENSE" }
@@ -13,14 +13,14 @@ requires-python = ">=3.9"
 authors = [
   { name = "Daniel Sperber", email = "daniel.sperber@gmail.com" }
 ]
-classifiers = [
-  "Programming Language :: Python :: 3",
-  "License :: OSI Approved :: MIT License",
-  "Operating System :: OS Independent",
-  "Intended Audience :: Developers",
-  "Intended Audience :: Science/Research",
-  "Topic :: Scientific/Engineering :: Artificial Intelligence",
-]
+  classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  ]
 dependencies = [
   "ray[tune,rllib]",
   "typed-argument-parser",
@@ -35,6 +35,8 @@ dependencies = [
   "optuna",  # remove later -> optional
   "jax",  # remove later -> optional
   "exceptiongroup; python_version < '3.11'",
+  "pybase62==1.0.0",
+  "typing_extensions >= 4.13",
 ]
 [project.optional-dependencies]
 test = [
@@ -58,6 +60,9 @@ jax = [
   "flax",
   "optax",
   "chex",
+]
+argcomplete = [
+  "argcomplete",
 ]
 
 [tool.black]
@@ -110,7 +115,7 @@ select = [
   "PLR",
   "PLR0402", # import A.B as B; from A import B
   "PLR2044", # empty comment
-  "PLW", 
+  "PLW",
   "PYI",
   "Q003", "Q004",
   "RET",
@@ -165,11 +170,13 @@ extend-generics = [
     "ray_utilities.setup.ppo_mlp_setup.MLPSetup",
     "ray_utilities.setup.ppo_mlp_setup.PPOMLPSetup",
 ]
+allowed-unused-imports = ["hvplot.pandas", "default_arguments.PYTHON_ARGCOMPLETE_OK"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 # during dev/refactoring phase make sure not to import from downstream packages
 "SYMPOL".msg = "Import from downstream packages; missing refactoring."
 "rllib_port".msg = "Import from downstream packages; missing refactoring."
+"docs".msg = "Importing from docs is not allowed."
 
 [tool.ruff.lint.per-file-ignores]
 "test/**/*.py" = ["ARG", "D"]
@@ -187,6 +194,8 @@ ignorelist = ["copyright"]
 split_on_trailing_comma = true
 include_trailing_comma = true
 profile = "black"
+known_third_party = ["default_arguments"] # This is a a lie, default_arguments should be at the top as it applies mocking
+line_length = 120
 
 [tool.pyright]
 reportDeprecated = "warning"

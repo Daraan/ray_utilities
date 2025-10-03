@@ -171,4 +171,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Project related files
 model_architecture.json
+comments.md
+
+/wandb

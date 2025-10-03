@@ -32,9 +32,12 @@ permissions:
 jobs:
 
   test-standard-and-non-tuner-fast:
+    name: Test standard and non-tuner (fast)
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
     - name: Python setup and install
       uses: ./.github/actions/cached-python-setup
       with:
@@ -59,10 +62,14 @@ jobs:
         pytest -k "not test_trainable" -m "not basic and length(speed='fast')" -v -x --fast
       env:
         COMET_API_KEY: ${{ secrets.COMET_API_KEY }}
+
   test-standard-medium-length:
+    name: Test standard (medium length)
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
     - name: Python setup and install
       uses: ./.github/actions/cached-python-setup
       with:
@@ -85,11 +92,16 @@ jobs:
         # Split tests because of deadlock
         # Test all others excluded by tests below
         pytest -k "not test_trainable" -m "not basic and not length(speed='fast')" -v -x --fast
-  
+      env:
+        COMET_API_KEY: ${{ secrets.COMET_API_KEY }}
+
   test-tuner-and-trainable:
+    name: Test trainable and Tuner (fast)
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
     - name: Python setup and install
       uses: ./.github/actions/cached-python-setup
       with:
@@ -105,10 +117,14 @@ jobs:
       run: |
         source .venv/bin/activate
         pytest test/test_trainable.py::TestClassCheckpointing::test_tuner_checkpointing -v --fast --timeout_method=thread
-  test-multiple-envrunners:
+
+  test-multiple-envrunners-1:
+    name: Test trainable multiple EnvRunners 1-2 / 3
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
     - name: Python setup and install
       uses: ./.github/actions/cached-python-setup
       with:
@@ -121,16 +137,34 @@ jobs:
     - name: Test trainable multiple EnvRunners metric restore 2/3 (might deadlock)
       run: |
         source .venv/bin/activate
-        pytest test/test_setup.py::TestMetricsRestored::test_with_tuner --mp-only 
+        pytest test/test_setup.py::TestMetricsRestored::test_with_tuner --mp-only
+
+  test-multiple-envrunners-2:
+    name: Test trainable multiple EnvRunners with Tuner 3/3
+    runs-on: ubuntu-latest
+    # Start this a bit later to avoid all jobs starting at once
+    needs: test-tuner-and-trainable
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+    - name: Python setup and install
+      uses: ./.github/actions/cached-python-setup
+      with:
+        python-version: '3.10'
+        use-pip-cache: false
     - name: Test trainable multiple EnvRunners with Tuner 3/3 (might deadlock)
       run: |
         source .venv/bin/activate
         pytest test/test_trainable.py::TestClassCheckpointing::test_tuner_checkpointing -v --mp-only --timeout_method=thread
-  
+
   pyright_minimal:
+    name: Pyright minimal
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Python setup and install
         uses: ./.github/actions/cached-python-setup
         with:

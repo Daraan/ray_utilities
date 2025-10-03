@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar
 from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
-from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.misc import raise_tune_errors
 from ray_utilities.random import seed_everything
 from ray_utilities.training.default_class import TrainableBase
@@ -51,6 +51,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _SetupT = TypeVar("_SetupT", bound="ExperimentSetupBase[DefaultArgumentParser, AlgorithmConfig, Algorithm]")
+"""A TypeVar for ExperimentSetupBase with specific type parameters."""
 
 
 def _run_without_tuner(
@@ -92,8 +93,9 @@ def _run_without_tuner(
                 break
         from ray_utilities.postprocessing import create_log_metrics  # noqa: PLC0415, circular import
 
-        result["config"].setdefault("_train_batch_size_per_learner", setup.config.train_batch_size_per_learner)
-        return create_log_metrics(result, log_stats=setup.args)
+        if "config" in result:
+            result["config"].setdefault("_train_batch_size_per_learner", setup.config.train_batch_size_per_learner)
+        return create_log_metrics(result, log_stats=setup.args.log_stats)
     if test_mode_func:
         return test_mode_func(trainable, setup)
     return trainable(setup.sample_params())

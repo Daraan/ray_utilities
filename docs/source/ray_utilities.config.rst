@@ -12,22 +12,6 @@ ray\_utilities.config.create\_algorithm module
    :undoc-members:
    :show-inheritance:
 
-ray\_utilities.config.mlp\_argument\_parser module
---------------------------------------------------
-
-.. automodule:: ray_utilities.config.mlp_argument_parser
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-ray\_utilities.config.typed\_argument\_parser module
-----------------------------------------------------
-
-.. automodule:: ray_utilities.config.typed_argument_parser
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 Module contents
 ---------------
 
@@ -35,4 +19,3 @@ Module contents
    :members:
    :undoc-members:
    :show-inheritance:
-   :noindex:

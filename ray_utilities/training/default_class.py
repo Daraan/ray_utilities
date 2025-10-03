@@ -45,8 +45,8 @@ from typing_extensions import Self, TypeAliasType
 
 from ray_utilities.callbacks.progress_bar import restore_pbar, save_pbar_state, update_pbar
 from ray_utilities.callbacks.tuner.metric_checkpointer import TUNE_RESULT_IS_A_COPY
-from ray_utilities.config.typed_argument_parser import LOG_STATS, LogStatsChoices
-from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, PERTURBED_HPARAMS
+from ray_utilities.config.parser.default_argument_parser import LOG_STATS, LogStatsChoices
+from ray_utilities.constants import FORK_FROM, PERTURBED_HPARAMS
 from ray_utilities.misc import AutoInt, is_pbar
 from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.training.functional import training_step
@@ -80,8 +80,7 @@ if TYPE_CHECKING:
     from ray_utilities.callbacks.progress_bar import RangeState, RayTqdmState, TqdmState
     from ray_utilities.config import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import ExperimentSetupBase, SetupCheckpointDict
-    from ray_utilities.typing import LogMetricsDict
-    from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict
+    from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict, LogMetricsDict
 
 
 _logger = logging.getLogger(__name__)
@@ -139,19 +138,6 @@ class TrainableStateDict(TypedDict):
     This TypedDict defines the complete state structure that can be saved
     and restored for a trainable algorithm, including the algorithm itself,
     its configuration, progress tracking information, and metadata.
-
-    Attributes:
-        trainable: The state obtained by :meth:`ray.tune.Trainable.get_state`.
-        algorithm: Optional algorithm state (may not be saved if algorithm
-            handles its own checkpointing).
-        algorithm_config: Serialized algorithm configuration state.
-        algorithm_overrides: Optional configuration overrides applied to the algorithm.
-        iteration: Current training iteration number.
-        pbar_state: Progress bar state for restoration of progress tracking.
-        reward_updaters: Dictionary mapping reward types to their historical values.
-        setup: Experiment setup checkpoint data.
-        current_step: Current environment step count.
-        git_sha: Optional SHA hash of the current git commit for reproducibility.
     """
 
     trainable: StateDict
@@ -229,12 +215,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         ``_ParserType``: Type of the argument parser (extends Tap)
         ``_ConfigType``: Type of the algorithm configuration
         ``_AlgorithmType``: Type of the RL algorithm
-
-    Attributes:
-        setup_class: The experiment setup class to use for this trainable.
-            Must be set via the :meth:`define` class method.
-        discrete_eval: Whether to use discrete evaluation episodes.
-        use_pbar: Whether to show progress bars during training.
 
     Checkpoint and Restoration Flow::
 
@@ -409,16 +389,16 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         """
         # Change log level:
         # When remote set log level or project here
-
-        run_context: RuntimeContext = get_runtime_context()
-        if run_context.get_actor_name() is not None:  # we are remote
-            log_level = (
-                config.get("log_level", config.get("cli_args", {}).get("log_level", self._log_level))
-                if config
-                else self._log_level
-            )
-            if log_level is not None:
-                set_project_log_level(logging.getLogger(__name__.split(".")[0]), log_level)
+        if ray.is_initialized():
+            run_context: RuntimeContext = get_runtime_context()
+            if run_context.get_actor_name() is not None:  # we are remote
+                log_level = (
+                    config.get("log_level", config.get("cli_args", {}).get("log_level", self._log_level))
+                    if config
+                    else self._log_level
+                )
+                if log_level is not None:
+                    set_project_log_level(logging.getLogger(__name__.split(".")[0]), log_level)
 
         self._algorithm = None
         self._algorithm_overrides = algorithm_overrides
@@ -536,15 +516,30 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # TODO: Possible unset setup._config to not confuse configs (or remove setup totally?)
         # use args = config["cli_args"] # XXX
 
-        _logger.debug("Sys argv during Trainable.setup(): %s", sys.argv)
+        # _logger.debug("Sys argv during Trainable.setup(): %s", sys.argv)
         _logger.info(
             "args %s are:\n %s",
             "(in config)" if "cli_args" in config else "(on setup)",
-            pformat(config.get("cli_args", {k: v for k, v in vars(self._setup.args).items() if not callable(v)})),
+            pformat(
+                config.get(
+                    "cli_args",
+                    {
+                        k: v
+                        for k, v in (
+                            self._setup.args.as_dict()
+                            if hasattr(self._setup.args, "as_dict")
+                            else vars(self._setup.args)
+                        ).items()
+                        if not callable(v)
+                    },
+                )
+            ),
         )
         # NOTE: args is a dict, self._setup.args a Namespace | Tap
         self._reward_updaters: RewardUpdaters
-        load_algorithm = "cli_args" in config and config["cli_args"].get("from_checkpoint")
+        # if FORK_FROM we assume we load the checkpoint later by an outside call.
+        load_from_checkpoint = "cli_args" in config and config["cli_args"].get("from_checkpoint")
+        load_algorithm = load_from_checkpoint or FORK_FROM in config
         self._algorithm: _AlgorithmType | None
         args, _algo_config, algorithm, self._reward_updaters = setup_trainable(
             hparams=config,
@@ -561,33 +556,35 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         self._pbar: tqdm | range | tqdm_ray.tqdm = episode_iterator(args, config, use_pbar=self.use_pbar)
         self._iteration: int = 0
         self.log_stats: LogStatsChoices = args[LOG_STATS]
-        # calculate total steps once
         # After components have been setup up load checkpoint if requested
-        current_step = 0
+        # When restore is called by a Tuner, setup was called a while ago
+        # keep args ONLY to calculate steps and iterations
+        self._args_during_setup = args
         if load_algorithm:
             self._algo_class: type[_AlgorithmType] | None = _algo_config.algo_class
+            # store args to be latter used in restore call
+            if not load_from_checkpoint:
+                # reload controlled by the outside, restore called, e.g. because of FORK_FROM
+                return
             _logger.info("At end of setup(), loading from checkpoint: %s", config["cli_args"]["from_checkpoint"])
             # calls restore from path; from_checkpoint could also be a dict here
             # algorithm is None when create_algo=False, will be set in load_checkpoint
             self.load_checkpoint(config["cli_args"]["from_checkpoint"])
             assert self._algorithm is not None
-            if self.algorithm.metrics:
-                current_step = self.algorithm.metrics.peek(
-                    (ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=None
-                )
-                if current_step is None:
-                    current_step = self.algorithm.metrics.peek(
-                        (ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=None
-                    )
-                if current_step is None:
-                    _logger.warning(
-                        "No current step found in restored algorithm metrics to re-calculate total_steps, using 0. "
-                    )
         else:
             assert algorithm is not None
             self._algorithm = algorithm
         assert self.algorithm.config
-        # Use the config from setup_trainable to calculate total steps, which handles both algorithm and non-algorithm cases
+        self._calculate_steps_and_iterations(args)  # also called in load_checkpoint
+
+    def _calculate_steps_and_iterations(self, args: dict[str, Any]):
+        """After the setup / load_checkpoint recalculate the total_steps & iterations until the goal."""
+        # Use the config from setup_trainable to calculate total steps
+        # which handles both algorithm and non-algorithm cases
+        assert self.algorithm
+        assert self.algorithm.metrics
+        assert self.algorithm.config
+        current_step = get_current_step(self.algorithm.metrics)
         steps_to_new_goal = args["total_steps"] - current_step
         iterations_to_new_goal = (
             steps_to_new_goal // self.algorithm.config.train_batch_size_per_learner + 1
@@ -597,6 +594,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         if isinstance(args["iterations"], AutoInt):
             # if dynamic buffer to not recalculate total_steps
             args["iterations"] = "auto" if args["dynamic_buffer"] else iterations_to_new_goal
+            # Get before changing iterations again:
             steps_with_current_batch_size = get_total_steps(args, self.algorithm.config)
             args["iterations"] = iterations_to_new_goal
         else:
@@ -604,7 +602,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
         # iterations was passed by user; do not overwrite
         # adjust total_steps instead
-        if steps_with_current_batch_size is not None:
+        if steps_with_current_batch_size is not None and not args["use_exact_total_steps"]:
             total_steps = steps_with_current_batch_size + current_step
         else:
             total_steps = args.get("total_steps", None)
@@ -675,7 +673,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             Does not check if learners need to be recreated.
             Assumes num_learners does not change.
         """
-        if self.algorithm is None:
+        if self._algorithm is None:
             return None
         call_setup_again = False
         env_runners_need_update = (
@@ -830,7 +828,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         if isinstance(checkpoint, dict):
             keys_to_process = set(checkpoint.keys())  # Sanity check if processed all keys
 
-            # from_checkpoint calls restore_from_path which calls set state
+            # from_checkpoint calls restore_from_path which calls set_state
             # if checkpoint["algorithm_checkpoint_dir"] is a tempdir (e.g. from tune, this is wrong)
             # However, self.set_state should have take care of algorithm already even if checkpoint dir is missing
             if os.path.exists(checkpoint["algorithm_checkpoint_dir"]):
@@ -926,7 +924,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             sync_env_runner_states_after_reload(self.algorithm)
         else:
             raise ValueError(f"Checkpoint must be a dict or a path. Not {type(checkpoint)}")
-        if perturbed:  # check that perturbed has highest priority and updated the config
+        if perturbed:  # XXX: check that perturbed has highest priority and updated the config
             for k, v in perturbed.items():
                 assert getattr(self.algorithm_config, k) == v, "Expected perturbed key '%s' to be %s, but got %s" % (
                     k,
@@ -949,6 +947,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             callbacks_functions=self.algorithm.config.callbacks_on_checkpoint_loaded,  # pyright: ignore[reportArgumentType,reportOptionalMemberAccess]
             kwargs={"algorithm": self.algorithm, "metrics_logger": self.algorithm.metrics},
         )
+        self._calculate_steps_and_iterations(self._args_during_setup)
 
     # endregion
 
@@ -1099,7 +1098,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     ray.__version__,
                 )
         keys_to_process.remove("trainable")
-        self._current_step = state["current_step"]
+        self._current_step = int(state["current_step"])
         keys_to_process.remove("current_step")
 
         self._iteration = state["iteration"]
@@ -1306,8 +1305,18 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         if self._git_repo_sha == _UNKNOWN_GIT_SHA:
             try:
                 repo = git.Repo(search_parent_directories=True)
-            except (git.InvalidGitRepositoryError, Exception) as e:
-                _logger.error("Failed to get git Repo for metadata: %s", e)
+            except (git.InvalidGitRepositoryError, Exception):
+                # For some reason defined value was not kept :/
+                _logger.warning(
+                    "_git_repo_sha was not set and current workdir is not a repository. "
+                    "Checking: os.environ['TUNE_ORIG_WORKING_DIR']"
+                )
+                try:
+                    repo = git.Repo(os.environ["TUNE_ORIG_WORKING_DIR"], search_parent_directories=True)
+                except KeyError as e:
+                    _logger.error("KeyError %s not set, cannot find git repo for metadata", e)
+                except (git.InvalidGitRepositoryError, Exception) as e:
+                    _logger.error("Failed to get git Repo for metadata: %s", e)
             else:
                 self._git_repo_sha = cast("git.types.AnyGitObject", repo.head.object).hexsha
         metadata["repo_sha"] = self._git_repo_sha
@@ -1329,6 +1338,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         try:
             if is_pbar(self._pbar):
                 self._pbar.close()
+        except:  # noqa: E722
+            pass
+        try:
+            self.cleanup()
+        except:  # noqa: E722
+            pass
+        try:
+            self.stop()
         except:  # noqa: E722
             pass
 

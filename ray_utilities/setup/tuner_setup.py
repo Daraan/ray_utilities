@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, Optional, Protocol, cast, overload
 
 from ray import train, tune
 from ray.rllib.algorithms.ppo import PPO
@@ -33,28 +33,28 @@ from ray.tune.search.optuna import OptunaSearch
 from ray.tune.stopper import CombinedStopper, FunctionStopper
 from typing_extensions import TypeVar
 
-from ray_utilities import run_id
 from ray_utilities.callbacks.tuner.metric_checkpointer import TUNE_RESULT_IS_A_COPY, StepCheckpointer
 from ray_utilities.config._tuner_callbacks_setup import TunerCallbackSetup
 from ray_utilities.constants import (
     CLI_REPORTER_PARAMETER_COLUMNS,
+    DEFAULT_EVAL_METRIC,
     EVAL_METRIC_RETURN_MEAN,
+    FORK_FROM,
+    NEW_LOG_EVAL_METRIC,
 )
-from ray_utilities.misc import trial_name_creator as default_trial_name_creator
+from ray_utilities.misc import new_log_format_used, trial_name_creator as default_trial_name_creator
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner, create_search_algo
 from ray_utilities.training.helpers import get_current_step
-from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
 from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultIterationStopper
 
 if TYPE_CHECKING:
     from ray.air.config import RunConfig as RunConfigV1
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
-    from ray.tune import schedulers
     from ray.tune.execution.placement_groups import PlacementGroupFactory
     from ray.tune.experiment import Trial
     from ray.tune.stopper import Stopper
 
-    from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+    from ray_utilities.config import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import ExperimentSetupBase
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
 
@@ -63,10 +63,9 @@ __all__ = [
     "TunerSetup",
 ]
 
-
-ConfigTypeT = TypeVar("ConfigTypeT", bound="AlgorithmConfig")
-ParserTypeT = TypeVar("ParserTypeT", bound="DefaultArgumentParser")
-_AlgorithmType_co = TypeVar("_AlgorithmType_co", bound="Algorithm", covariant=True)
+SetupType_co = TypeVar(
+    "SetupType_co", bound="ExperimentSetupBase[DefaultArgumentParser, AlgorithmConfig, Algorithm]", covariant=True
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +81,12 @@ class _TunerSetupBase(Protocol):
         self, callbacks: list[tune.Callback] | list[train.UserCallback]
     ) -> tune.RunConfig | RunConfigV1 | train.RunConfig: ...
 
-    def create_tuner(self) -> tune.Tuner: ...
+    def create_tuner(self, *args, **kwargs) -> tune.Tuner:
+        """Create and return a configured Ray Tune Tuner instance."""
+        ...
 
 
-class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
+class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
     """Configuration and management class for Ray Tune hyperparameter optimization.
 
     This class provides a comprehensive interface for setting up and running
@@ -139,17 +140,19 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
 
     def __init__(
         self,
-        eval_metric: str = EVAL_METRIC_RETURN_MEAN,
+        eval_metric: str | DEFAULT_EVAL_METRIC = EVAL_METRIC_RETURN_MEAN,
         eval_metric_order: Literal["max", "min"] = "max",
         *,
-        setup: ExperimentSetupBase[ParserTypeT, ConfigTypeT, _AlgorithmType_co],
+        setup: SetupType_co,  # ExperimentSetupBase[ParserTypeT, ConfigTypeT, _AlgorithmType_co],
         extra_tags: Optional[list[str]] = None,
         add_iteration_stopper: bool | None = None,
         trial_name_creator: Optional[Callable[[Trial], str]] = None,
     ):
+        if eval_metric is DEFAULT_EVAL_METRIC:
+            eval_metric = NEW_LOG_EVAL_METRIC if new_log_format_used() else EVAL_METRIC_RETURN_MEAN
         self.eval_metric: str = eval_metric
         self.eval_metric_order: Literal["max", "min"] = eval_metric_order
-        self._setup = setup
+        self._setup: SetupType_co = setup
         self.add_iteration_stopper = add_iteration_stopper
         if trial_name_creator is not None:
             self.trial_name_creator = trial_name_creator
@@ -346,7 +349,9 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             # to disable set TUNE_DISABLE_AUTO_CALLBACK_LOGGERS environment variable to "1"
             callbacks=callbacks,  # type: ignore[reportArgumentType] # Ray New Train Interface!
             # Use fail_fast for during debugging/testing to stop all experiments
-            failure_config=FailureConfig(fail_fast=self._setup.args.test),
+            failure_config=FailureConfig(
+                fail_fast=self._setup.args.test, max_failures=0 if self._setup.args.test else 2
+            ),
             checkpoint_config=CheckpointConfig(
                 num_to_keep=self._setup.args.num_to_keep,
                 checkpoint_score_order="max",
@@ -374,7 +379,16 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
             for k, v in param_space.items()
         }
 
-    def create_tuner(self) -> tune.Tuner:
+    def create_tuner(self, *, adv_loggers: Optional[bool] = None) -> tune.Tuner:
+        """
+        Create and return a configured Ray Tune Tuner instance.
+
+        Args:
+            adv_loggers: Whether to include advanced variants of the standard CSV, TBX, JSON loggers.
+                If ``None``, will be set to ``True`` if :attr:`~DefaultArgumentParser.render_mode` is set in ``args`` of
+                the setup.
+                Its recommended to use ``True`` when using schedulers working with ``FORK_FROM``.
+        """
         resource_requirements = PPO.default_resource_request(self._setup.config)
         resource_requirements = cast(
             "PlacementGroupFactory", resource_requirements
@@ -394,26 +408,12 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase):
         else:
             param_space = self._setup.param_space
 
+        assert FORK_FROM not in param_space, (
+            f"{FORK_FROM} is not expected to be in the param_space that is passed to the Tuner by default."
+        )
         return tune.Tuner(
             trainable=trainable,  # Updated to use the modified trainable with resource requirements
             param_space=param_space,  # TODO: Likely Remove when using space of OptunaSearch
             tune_config=tune_config,
-            run_config=self.create_run_config(self.create_callbacks()),
+            run_config=self.create_run_config(self.create_callbacks(adv_loggers=adv_loggers)),
         )
-
-
-class ScheduledTunerSetup(TunerSetup):
-    def create_scheduler(self) -> schedulers.TrialScheduler:
-        return ReTuneScheduler(
-            perturbation_interval=2048 * 3,  # FIXME: Hardcoded defaults
-            resample_probability=1.0,
-            hyperparam_mutations={"train_batch_size_per_learner": {"grid_search": [256, 512, 1024, 2048]}},
-            mode=None,  # filled in by Tuner
-            metric=None,  # filled in by Tuner
-            synch=True,
-        )
-
-    def create_tune_config(self) -> tune.TuneConfig:
-        tune_config = super().create_tune_config()
-        tune_config.scheduler = self.create_scheduler()
-        return tune_config

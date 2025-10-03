@@ -10,23 +10,36 @@ from __future__ import annotations
 import datetime
 import functools
 import logging
+import os
 import re
 import sys
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar
 
-if sys.version_info < (3, 11):
-    from exceptiongroup import ExceptionGroup
+import base62
 from ray.experimental import tqdm_ray
+from ray.tune.error import TuneError
 from ray.tune.result_grid import ResultGrid
 from tqdm import tqdm
 from typing_extensions import Iterable, TypeIs
 
-from ray_utilities.constants import RAY_UTILITIES_INITIALIZATION_TIMESTAMP
+from ray_utilities.constants import (
+    DEFAULT_EVAL_METRIC,
+    EVAL_METRIC_RETURN_MEAN,
+    NEW_LOG_EVAL_METRIC,
+    RAY_UTILITIES_INITIALIZATION_TIMESTAMP,
+    RE_PARSE_FORK_FROM,
+    RUN_ID,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from ray.tune.experiment import Trial
+
+    from ray_utilities.typing import ForkFromData
+
+if sys.version_info < (3, 11):
+    from exceptiongroup import ExceptionGroup
 
 _T = TypeVar("_T")
 
@@ -43,6 +56,63 @@ Example:
     >>> match.group("trial_id") if match else None
     'abc123'
 """
+
+
+def extract_trial_id_from_checkpoint(ckpt_path: str) -> str | None:
+    """Extract the trial ID from a checkpoint path.
+
+    This function uses a regex pattern to extract the trial ID from a given
+    checkpoint path. The expected format is 'id=<part1>[_<trial_number>]',
+    where the trial number is optional.
+
+    Args:
+        ckpt_path: The checkpoint path string to extract the trial ID from.
+
+    Note:
+        As a fallback, the function also checks for an older format without the 'id=' prefix.
+        In this case it looks for a pattern like '<part1>_<trial_number>'.
+        Where trial_number is exactly 5 digits and part1 is at least 5 alphanumeric characters.
+
+    Returns:
+        The extracted trial ID as a string, or ``None`` if no valid ID is found
+    """
+    # TODO possibly, trial id might contain _forkof_/fork_from in the future.
+    match = RE_GET_TRIAL_ID.search(ckpt_path)
+    # get id of run
+    if match:
+        return match.groupdict()["trial_id"]
+    # Deprecated:
+    # possible old format without id=
+    match = re.search(r"(?:id=)?(?P<trial_id>[a-zA-Z0-9]{5,}_[0-9]{5})", ckpt_path)
+    if match:
+        return match.groupdict()["trial_id"]
+    return None
+
+
+def parse_fork_from(fork_from: str) -> tuple[str, int | None] | None:
+    """Parse a forked trial identifier into its components.
+
+    This function takes a forked trial identifier string and splits it into
+    the original trial ID and the step at which the fork occurred. The expected
+    format is '<trial_id>?_step=<step>', where the step is optional.
+
+    Args:
+        fork_from: The forked trial identifier string to parse.
+            Example: "abc123?_step=10" or "abc123"
+    Returns:
+        A tuple containing the trial ID as a string and the step as an integer
+        or ``None`` if the step is not specified.
+        Or None if the input string does not match the expected format.
+    """
+    # Note: only used for wandb currently, possibly move there
+    # NOTE: could also just do split("?_step=") here
+    match = RE_PARSE_FORK_FROM.match(fork_from)
+    if not match:
+        return None
+    trial_id = match.group("fork_id")
+    step_str = match.group("fork_step")
+    step = int(step_str) if step_str is not None else None
+    return trial_id, step
 
 
 def trial_name_creator(trial: Trial) -> str:
@@ -204,6 +274,80 @@ def get_trainable_name(trainable: Callable) -> str:
     return trainable.__name__
 
 
+def _make_non_fork_experiment_key(trial: Trial) -> str:
+    trial_base, *trial_number = trial.trial_id.split("_")
+    if len(trial_number) > 1:
+        _logger.warning(
+            "Unexpected trial_id format '%s'. Expected format '<id>_<number>'.",
+            trial.trial_id,
+        )
+    if trial_number:
+        trial_number = "C" + "".join(trial_number).replace("000", "")
+    else:  # empty list
+        trial_number = ""
+    base_key = f"{RUN_ID}X{trial_base}{trial_number}".replace("_", "")
+    # Pad at the end with Z to be at least 32 characters long.
+    # Use uppercase letters as trial_id is lowercase alphanumeric only.
+    base_key = f"{base_key:Z<32}"
+    return base_key
+
+
+def _make_fork_experiment_key(base_key: str, fork_data: ForkFromData) -> str:
+    base_key = base_key.rstrip("Z")
+    parent_id = fork_data["parent_id"]
+    # Prefer training iteration for experiment key (stable across frameworks)
+    ft = fork_data.get("parent_time")
+    # ft is a NamedTuple[time_attr, time]; only use numeric time
+    parent_iteration = ft[1] if ft[0] == "current_step" else fork_data["parent_training_iteration"]
+
+    fork_base, *fork_number = parent_id.split("_")
+    if fork_number:
+        fork_number = "C" + "".join(fork_number).replace("000", "")
+    else:
+        fork_number = ""
+
+    if parent_iteration is None:
+        iteration_data = "NONE"  # rare chance that NONE is actually encoded
+        _logger.warning("parent_iteration is None, using 'NONE' in experiment key.")
+    else:
+        iteration_data = base62.encode(parent_iteration)
+    return f"{base_key}F{fork_base}{fork_number}S{iteration_data:0>4}".replace("_", "")
+
+
+def make_experiment_key(trial: Trial, fork_data: Optional[ForkFromData] = None) -> str:
+    """
+    Build a unique experiment key for a trial, making use of the :attr:`RUN_ID`,
+    :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`, and optional fork information.
+
+    It has the format of two forms:
+        - If not forked: "<RUN_ID of 21 chars>X<trial_id>[Z* up to 32 chars in total]"
+          it is prolonged by ``Z`` to be at least 32 chars long.
+        - If forked: "<RUN_ID of 21 chars>X<trial_id>F<trial_id>S<step>"
+          The <step> is in base62 encoded and right aligned to 4 characters with leading zeros.
+
+        Both have in common that the potential underscore in the trial ID is replaced by C and all "000" in the trials
+        count part of the trial ID are removed, e.g. ``abcd0001_00005`` becomes ``abcd0001C05``.
+
+    References:
+        - :attr:`RUN_ID <ray_utilities.constants.RUN_ID>`: A unique identifier for the current execution.
+        - :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`: The unique ID of the trial.
+
+    Note:
+        The resulting key underscores replaced by C. For compatibility it should only contain
+        numbers and letters.
+        For comet it must be between 32 and 50 characters long. This is not enforced here.
+
+        For comet support, to not exceed 50 characters, only 99 parallel trials are supported, e.g. <trial_id>_00099.
+        The highest supported forking step is 14_776_335.
+
+        It is assumed that the trial ID contains only lowercase alphanumeric characters and underscores.
+    """
+    base_key = _make_non_fork_experiment_key(trial)
+    if not fork_data:
+        return base_key
+    return _make_fork_experiment_key(base_key, fork_data)
+
+
 def is_pbar(pbar: Iterable[_T]) -> TypeIs[tqdm_ray.tqdm | tqdm[_T]]:
     """Type guard to check if an iterable is a tqdm progress bar.
 
@@ -289,6 +433,11 @@ def raise_tune_errors(result: ResultGrid | Sequence[Exception], msg: str = "Erro
     if isinstance(result, ResultGrid):
         if not result.errors:
             return
+        for i, error in enumerate(result.errors):
+            if not isinstance(error, BaseException):
+                _logger.debug("Error %d is not an exception: %s", i, error)
+                exception = TuneError("Error(s) occurred:\n" + str(error))
+                result.errors[i] = exception
         if len(result.errors) == 1:
             raise result.errors[0]
         errors = result.errors
@@ -313,3 +462,137 @@ class AutoInt(int):
         >>> isinstance(value, AutoInt)  # True
         >>> value + 10  # 52
     """
+
+
+_new_log_format_used: bool | None = None
+
+
+def new_log_format_used() -> bool:
+    """Check if the new log format is enabled via environment variable.
+
+    This function checks the environment variable
+    :envvar:`RAY_UTILITIES_NEW_LOG_FORMAT` to determine if the new logging format
+    should be used. The new format changes how metrics are structured in logs that are,
+    for example, sent to WandB or Comet ML.
+
+    Returns:
+        ``True`` if the environment variable is set to a truthy value (not "0", "false", or "off"),
+        ``False`` otherwise.
+
+    Note:
+        The result is cached after the first call.
+    """
+    global _new_log_format_used  # noqa: PLW0603
+    if _new_log_format_used is not None:
+        return _new_log_format_used
+    _new_log_format_used = "RAY_UTILITIES_NEW_LOG_FORMAT" in os.environ and os.environ[
+        "RAY_UTILITIES_NEW_LOG_FORMAT"
+    ].lower() not in (
+        "0",
+        "false",
+        "off",
+    )
+    return _new_log_format_used
+
+
+def resolve_default_eval_metric(eval_metric: str | DEFAULT_EVAL_METRIC | None = None) -> str:
+    """Resolve the default evaluation metric based on log format.
+
+    This function determines the evaluation metric key to use
+    based on whether the new log format is enabled. If the provided
+    `eval_metric` is ``None``, it defaults to either
+    :attr:`EVAL_METRIC_RETURN_MEAN <ray_utilities.constants.EVAL_METRIC_RETURN_MEAN>` or
+    :attr:`NEW_LOG_EVAL_METRIC <ray_utilities.constants.NEW_LOG_EVAL_METRIC>` depending on
+    the log format.
+
+    Args:
+        eval_metric: The evaluation metric key to resolve, or ``None`` to use the default.
+
+    Returns:
+        The resolved evaluation metric key as a string.
+
+    Attention:
+        This function is intended to be used with loggers like the WandB or Comet logger
+        where the log metrics are changed for better human interpretation and not
+        for other callbacks where the original metric keys are expected.
+    """
+    if eval_metric is not DEFAULT_EVAL_METRIC and eval_metric is not None:
+        return eval_metric
+    if new_log_format_used():
+        return NEW_LOG_EVAL_METRIC
+    return EVAL_METRIC_RETURN_MEAN
+
+
+def get_value_by_path(tree_dict: Mapping[Any, Any], path: tuple[Any, ...]) -> Any:
+    """Extract value from nested dict using a tuple path."""
+    value = tree_dict
+    for key in path:
+        value = value[key]
+    return value
+
+
+def flatten_mapping_with_path(d, path=()) -> list[tuple[tuple[Any, ...], Any]]:
+    """Similar to :func:`tree.flatten_with_path` but only for mappings."""
+    items = []
+    if isinstance(d, Mapping):
+        for k, v in d.items():
+            items.extend(flatten_mapping_with_path(v, (*path, k)))
+    else:
+        items.append((path, d))
+    return items
+
+
+# Build a nested dict with lists at the leaves
+def build_nested_dict(paths: list[tuple[Any, ...]], values: dict[tuple[Any, ...], list]) -> dict:
+    """Build a nested dict from paths and corresponding values."""
+    nested = {}
+    for path in paths:
+        d = nested
+        for key in path[:-1]:
+            d = d.setdefault(key, {})
+        d[path[-1]] = values[path]
+    return nested
+
+
+def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, Any]]:
+    """Convert a flat dictionary with slash-separated keys to a nested dictionary structure.
+
+    This function transforms dictionary keys containing forward slashes into nested
+    dictionary structures, useful for organizing Ray Tune/RLlib metrics that are
+    typically logged with hierarchical key names.
+
+    Args:
+        metrics: A dictionary with potentially slash-separated keys (e.g.,
+            ``{"eval/return_mean": 100, "train/loss": 0.5}``).
+
+    Returns:
+        A nested dictionary structure where slash-separated keys become nested levels
+        (e.g., ``{"eval": {"return_mean": 100}, "train": {"loss": 0.5}}``).
+
+    Example:
+        >>> metrics = {
+        ...     "train/episode_return_mean": 150.0,
+        ...     "eval/env_runner_results/episode_return_mean": 200.0,
+        ...     "timesteps_total": 10000,
+        ... }
+        >>> nested = flat_dict_to_nested(metrics)
+        >>> nested["train"]["episode_return_mean"]
+        150.0
+        >>> nested["eval"]["env_runner_results"]["episode_return_mean"]
+        200.0
+
+    Note:
+        This is particularly useful when working with Ray Tune's result dictionaries
+        which often contain hierarchical metrics with slash-separated key names.
+    """
+    nested_metrics = metrics.copy()
+    for key_orig, v in metrics.items():
+        k = key_orig
+        subdict = nested_metrics
+        while "/" in k:
+            parent, k = k.split("/", 1)
+            subdict = subdict.setdefault(parent, {})
+        subdict[k] = v
+        if key_orig != k:
+            del nested_metrics[key_orig]
+    return nested_metrics

@@ -5,7 +5,7 @@ from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
 from tap import Tap
 import tree
 
-from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+from ray_utilities.config import DefaultArgumentParser
 
 try:
     from frozenlist import FrozenList  # pyright: ignore[reportAssignmentType]

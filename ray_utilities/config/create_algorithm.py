@@ -57,7 +57,7 @@ if TYPE_CHECKING:
     from ray.rllib.core.learner import Learner
     from ray.rllib.core.models.catalog import Catalog
 
-    from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+    from ray_utilities.config import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import NamespaceType
     from ray_utilities.typing.generic_rl_module import CatalogWithConfig, RLModuleWithConfig
 

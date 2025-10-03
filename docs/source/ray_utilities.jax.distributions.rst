@@ -24,6 +24,7 @@ ray\_utilities.jax.distributions.jax\_distributions module
 ----------------------------------------------------------
 
 .. automodule:: ray_utilities.jax.distributions.jax_distributions
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -35,4 +36,3 @@ Module contents
    :members:
    :undoc-members:
    :show-inheritance:
-   :noindex:

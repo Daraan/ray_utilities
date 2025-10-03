@@ -22,7 +22,7 @@ Setup Framework
 
 .. automodule:: ray_utilities.setup
    :no-index:
-   :members: 
+   :members:
    :undoc-members:
 
 Connectors

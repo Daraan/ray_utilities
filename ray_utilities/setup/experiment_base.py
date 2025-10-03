@@ -19,7 +19,6 @@ from __future__ import annotations
 import logging
 import os
 import pickle
-import subprocess
 import sys
 import warnings
 from abc import ABC, abstractmethod
@@ -50,16 +49,15 @@ from ray.rllib.core.rl_module import MultiRLModuleSpec
 from tap.tap import Tap
 from typing_extensions import NotRequired, Self, TypedDict, TypeVar, deprecated
 
-from ray_utilities import run_id
+from ray_utilities import RUN_ID
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
-from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 from ray_utilities.comet import CometArchiveTracker
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.config.typed_argument_parser import ConfigFilePreParser, SupportsMetaAnnotations
-from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
+from ray_utilities.config.parser.default_argument_parser import ConfigFilePreParser, SupportsMetaAnnotations
 from ray_utilities.environment import create_env
-from ray_utilities.misc import RE_GET_TRIAL_ID, AutoInt, get_trainable_name
+from ray_utilities.misc import AutoInt, get_trainable_name
+from ray_utilities.setup._experiment_uploader import ExperimentUploader
 from ray_utilities.setup.tuner_setup import TunerSetup
 from ray_utilities.training.default_class import TrainableBase
 from ray_utilities.warn import (
@@ -77,6 +75,7 @@ if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
     from ray.rllib.utils.typing import EnvType
+    from ray.runtime_context import RuntimeContext as RayRuntimeContext
     from ray.tune.experiment import Trial as TuneTrial
     from ray.tune.result_grid import ResultGrid
 
@@ -155,14 +154,23 @@ class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, Algor
     When ``True``, the config should be initialized from the args and the stored
     ``config`` field should be ignored and remain unset.
     """
+
     config_overrides: dict[str, Any]
     """Hold the current dict created by updating config_overrides"""
+
+    config_files: NotRequired[Optional[Sequence[str | os.PathLike | Path]]]
+    """
+    Optional list of configuration files used during argument parsing.
+    Should be present if setup / parser uses config files.
+    """
 
     trial_name_creator: NotRequired[Optional[Callable[[TuneTrial], str]]]
     """Optional trial name creator function for Ray Tune trials."""
 
 
-class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmType_co]):
+class ExperimentSetupBase(
+    ABC, ExperimentUploader[ParserType_co], Generic[ParserType_co, ConfigType_co, AlgorithmType_co]
+):
     """Abstract base class for Ray RLlib experiment setup and configuration.
 
     This class provides a comprehensive framework for setting up reinforcement learning
@@ -275,13 +283,14 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         self,
         args: Optional[Sequence[str]] = None,
         *,
-        config_files: Optional[list[str | os.PathLike]] = None,
-        load_args: Optional[str | os.PathLike] = None,
+        config_files: Optional[Sequence[str | os.PathLike | Path]] = None,
+        load_args: Optional[str | os.PathLike | Path] = None,
         init_config: bool = True,
         init_param_space: bool = True,
         init_trainable: bool = True,
         parse_args: bool = True,
         trial_name_creator: Optional[Callable[[TuneTrial], str]] = None,
+        change_log_level: Optional[bool] = True,
     ):
         """
         Initializes the experiment base class with optional argument parsing and setup.
@@ -300,6 +309,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             parse_args : Whether to parse the provided arguments. Defaults to True.
             trial_name_creator: trial_name_creator function for :class:`ray.tune.Trial` objects
                 when using :class:`ray.tune.Tuner`.
+            change_log_level: If the parser supports it change the log level of the project with
+                :func:`change_log_level`, if not none sets the `_change_log_level` of the parser.
 
         Note:
             When the setup creates a trainable that is a class, the config is frozen to
@@ -317,8 +328,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         cfg_file_parser = ConfigFilePreParser()
         cfgs_from_cli = cfg_file_parser.parse_args(args, known_only=True)
         if config_files:
-            logger.info("Adding config files %s to those found in args: %s", config_files, cfgs_from_cli)
-            config_files = config_files.copy()
+            logger.info("Adding config files %s to those found in args: %s", config_files, cfgs_from_cli.config_files)
+            config_files = list(config_files)
             config_files.extend(cfgs_from_cli.config_files)
         else:
             config_files = cfgs_from_cli.config_files  # pyright: ignore[reportAssignmentType]
@@ -327,6 +338,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         self._config_files = config_files
         self._load_args = load_args
         self._tune_trial_name_creator = trial_name_creator
+        self._change_log_level = change_log_level
         self.parser: Parser[ParserType_co]
         self.parser = self.create_parser(config_files)
         if load_args:
@@ -344,6 +356,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             init_trainable=init_trainable,
             parse_args=parse_args,
         )
+        ExperimentUploader.__init__(self)  # args must be setup
 
     def setup(
         self,
@@ -399,15 +412,13 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         if init_param_space:
             # relies on trainable to get its name
             self.param_space: dict[str, Any] | _MaybeNone = self.create_param_space()
-        if hasattr(self, "args") and self.args.comet:
-            self.comet_tracker = CometArchiveTracker()
-        else:
-            self.comet_tracker = None
 
     # region Argument Parsing
 
-    def create_parser(self, config_files: Optional[list[str | os.PathLike]] = None) -> Parser[ParserType_co]:
+    def create_parser(self, config_files: Optional[Sequence[str | os.PathLike]] = None) -> Parser[ParserType_co]:
         self.parser = DefaultArgumentParser(allow_abbrev=False, config_files=config_files)
+        if self._change_log_level is not None:
+            self.parser._change_log_level = self._change_log_level
         return self.parser
 
     def postprocess_args(self, args: NamespaceType[ParserType_co]) -> NamespaceType[ParserType_co]:
@@ -449,6 +460,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             state: dict[str, Any] = pickle.load(f)
         # Create a patched parser with the old values as default values
         new_parser = self.create_parser()
+        if hasattr(new_parser, "_change_log_level"):
+            new_parser._change_log_level = False  # pyright: ignore[reportAttributeAccessIssue]
         self.parser = new_parser
         restored_args: dict[str, Any] = vars(state["setup"]["args"])
         for action in new_parser._actions:
@@ -584,17 +597,19 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 )
                 continue
             extra_tags[i] = subst
-        extra_tags.append(f"run_id:{run_id}")
+        extra_tags.append(f"run_id:{RUN_ID}")
         return list(filter(None, extra_tags))
 
     def create_tags(self, extra_tags: Sequence[str] | None = None) -> list[str]:
         if not hasattr(self.args, "tags"):
             logger.info("Parsed arguments have not attribute tags.")
             return self._parse_extra_tags(extra_tags)
-        return [
-            *self.args.tags,
-            *self._parse_extra_tags(extra_tags),
-        ]
+        return DefaultArgumentParser.organize_subtags(
+            [
+                *self.args.tags,
+                *self._parse_extra_tags(extra_tags),
+            ]
+        )
 
     # endregion
     # region hparams
@@ -696,7 +711,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             "trainable_name": self.get_trainable_name(),  # "UNDEFINED" is called before create_trainable
         }
         # If not logged in choice will not be reported in the CLI interface
-        param_space = {k: tune.choice([v]) for k, v in param_space.items()}
+        # Comment out to not display in CLI
+        # param_space = {k: tune.choice([v]) for k, v in param_space.items()}
         if self.args.env_seeding_strategy == "same":
             # Fixed or same random selected seed
             # NOTE: This might not be used by create_algorithm_config.
@@ -713,12 +729,15 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         # Other args not shown in the CLI
         # Log CLI args as hyperparameters
         param_space["cli_args"] = self.clean_args_to_hparams(self.args)
-        param_space["run_id"] = run_id
-        param_space["experiment_id"] = run_id
+        param_space["run_id"] = RUN_ID
+        param_space["experiment_id"] = RUN_ID
         param_space["experiment_name"] = self.project_name
         param_space["experiment_group"] = self.group_name
         self.param_space = param_space
         del self._dynamic_parameters_to_tune
+        if self._config_files:
+            # Store config files for trial to sync when using a scheduler or remote node.
+            param_space["_config_files"] = self._config_files
         return param_space
 
     # endregion
@@ -916,7 +935,8 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 if not loaded_config:
                     logger.info("from_checkpoint is set, but no config found in the checkpoint.")
                 base = base or loaded_config
-            base._restored_overrides = overrides  # pyright: ignore[reportOptionalMemberAccess]
+            if base:
+                base._restored_overrides = overrides
 
         config = cls._config_from_args(args, base=base)
 
@@ -1195,201 +1215,11 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         """
         return TunerSetup(
             setup=self,
-            eval_metric=EVAL_METRIC_RETURN_MEAN,
-            eval_metric_order="max",
+            eval_metric=self.args.metric,
+            eval_metric_order=self.args.mode,
             add_iteration_stopper=self._tuner_add_iteration_stopper(),
             trial_name_creator=self._tune_trial_name_creator,
         ).create_tuner()
-
-    # endregion
-
-    # region upload experiments
-
-    def comet_upload_offline_experiments(self):
-        """Note this does not check for args.comet"""
-        if self.comet_tracker is None:
-            logger.info("No comet tracker / args.comet defined. Will not upload offline experiments.")
-            return
-        self.comet_tracker.upload_and_move()
-
-    @staticmethod
-    def _report_wandb_upload(process: subprocess.Popen[bytes], run_dir: Optional[Path] = None, *, wait: bool = True):
-        run_dir = run_dir or Path(process.args[-1])  # pyright: ignore[reportArgumentType, reportIndexIssue]
-        if wait:
-            process.wait()
-        if process.stdout:
-            stdout = process.stdout.read()
-            print(stdout if isinstance(stdout, str) else stdout.decode("utf-8"))
-        if process.returncode != 0:
-            stderr = process.stderr.read() if process.stderr else b""
-            logger.error(
-                "Failed to upload wandb offline run %s with exit code %d. Output: %s",
-                run_dir,
-                process.returncode,
-                stderr.decode("utf-8"),
-            )
-
-    def _get_wandb_paths(self, results: Optional[ResultGrid] = None, tuner: Optional[tune.Tuner] = None) -> list[Path]:
-        if results is None:
-            if tuner is None:
-                logger.warning("No results or tuner provided to get wandb paths, cannot get paths.")
-                return []
-            try:
-                results = tuner.get_results()  # if this works below works if we have a local tuner
-                trials = tuner._local_tuner.get_results()._experiment_analysis.trials  # pyright: ignore[reportOptionalMemberAccess]
-            except RuntimeError as e:
-                if not tuner._local_tuner or tuner._local_tuner.get_run_config().callbacks:  # assume there is a logger
-                    raise RuntimeError("Cannot get trials") from e
-                wandb_cb = next(
-                    cb
-                    for cb in tuner._local_tuner.get_run_config().callbacks  # pyright: ignore[reportOptionalIterable]
-                    if isinstance(cb, AdvWandbLoggerCallback)
-                )  # pyright: ignore[reportOptionalIterable]
-                trials = wandb_cb._trials
-            trial_paths = [Path(trial.local_path) / "wandb" for trial in trials if trial.local_path]
-            if len(trial_paths) != len(trials):
-                logger.error("Did not get all wandb paths %d of %d", len(trial_paths), len(trials))
-            return trial_paths
-        result_paths = [Path(result.path) / "wandb" for result in results]  # these are in the non-temp dir
-        try:
-            # compare paths for completeness
-            trials = tuner._local_tuner.get_results()._experiment_analysis.trials  # pyright: ignore[reportOptionalMemberAccess]
-            trial_paths = [Path(trial.local_path) / "wandb" for trial in trials if trial.local_path]
-        except Exception as e:
-            logger.exception("Could not get trials or their paths")
-        else:
-            existing_in_result = sum(p.exists() for p in result_paths)
-            existing_in_trial = sum(p.exists() for p in trial_paths)
-            if existing_in_result != existing_in_trial:
-                logger.error(
-                    "Count of existing trials paths did not match %d vs %d: \nResult Paths:\n%s\nTrial Paths:\n%s",
-                    existing_in_result,
-                    existing_in_trial,
-                    result_paths,
-                    trial_paths,
-                )
-            non_existing_results = [res for res in results if not (Path(res.path) / "wandb").exists()]
-            # How to get the trial id?
-            if non_existing_results:
-                not_synced_trial_ids = {
-                    match.group("trial_id")
-                    for res in non_existing_results
-                    if (match := RE_GET_TRIAL_ID.search(res.path))
-                }
-                non_synced_trials = [trial for trial in trials if trial.trial_id in not_synced_trial_ids]
-                result_paths.extend(Path(trial.local_path) / "wandb" for trial in non_synced_trials)  # pyright: ignore[reportArgumentType]
-                result_paths = list(filter(lambda p: p.exists(), result_paths))
-                logger.info("Added trial.paths to results, now having %d paths", len(result_paths))
-        return result_paths
-
-    def wandb_upload_offline_experiments(
-        self,
-        results: Optional[ResultGrid],
-        tuner: Optional[tune.Tuner] = None,
-        *,
-        wait: bool = True,
-        parallel_uploads: int = 5,
-    ) -> list[subprocess.Popen] | None:
-        """
-        Upload wandb's offline folder of the session to wandb, similar to the `wandb sync` shell command
-
-        Args:
-            results: The ResultGrid containing the results of the experiment.
-            wait: If True, waits for the upload to finish before returning.
-            parallel_uploads: Number of parallel uploads to by executing :class:`subprocess.Popen`
-        """
-        # Get the wandb offline directory
-        logger.info("Uploading wandb offline experiments...")
-        num_uploaded = 0
-        uploads: list[subprocess.Popen[bytes]] = []
-        finished_uploads: set[subprocess.Popen[bytes]] = set()
-        wandb_paths: list[Path] = self._get_wandb_paths(results, tuner)
-        global_wandb_dir = os.environ.get(
-            "WANDB_DIR", None
-        )  # FIXME: If this is set it might upload the same directory multiple times
-        if global_wandb_dir and (global_wandb_dir := Path(global_wandb_dir)).exists():
-            wandb_paths.append(global_wandb_dir)
-        for wandb_dir in wandb_paths:
-            # Find offline run directories
-            offline_runs = list(wandb_dir.glob("offline-run-*"))
-            if len(offline_runs) > 1:
-                logger.warning("Multiple wandb offline directories found in %s: %s", wandb_dir, offline_runs)
-
-            if not offline_runs:
-                logger.error(
-                    "No wandb offline experiments found to upload in %s: %s. ", wandb_dir, list(wandb_dir.glob("*"))
-                )
-                continue
-            num_uploaded += len(offline_runs)
-
-            for run_dir in offline_runs:  # likely just a single iteration
-                uploads_in_progress = len(uploads) - len(finished_uploads)
-                if uploads_in_progress >= parallel_uploads:
-                    logger.info(
-                        "Waiting for %d wandb uploads to finish before starting new ones.",
-                        uploads_in_progress,
-                    )
-                    for process in uploads:
-                        self._report_wandb_upload(process)
-                        finished_uploads.add(process)
-                    uploads = [p for p in uploads if p not in finished_uploads]
-                logger.info("Uploading offline wandb run from: %s", run_dir)
-                process = subprocess.Popen(
-                    ["wandb", "sync", run_dir.as_posix()],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                )
-                uploads.append(process)
-        if wait:
-            logger.info("Waiting for all wandb uploads to finish...")
-            for process in uploads:
-                self._report_wandb_upload(process)
-                finished_uploads.add(process)
-            uploads = []
-            logger.info(
-                "Uploaded all %d wandb offline runs from %s.",
-                num_uploaded,
-                results.experiment_path if results else f"local wandb fallback paths: {wandb_paths}",
-            )
-            return None
-        unfinished_uploads = uploads.copy()
-        for process in uploads:
-            if process.poll() is not None:  # report on already finished uploads
-                self._report_wandb_upload(process)
-                finished_uploads.add(process)
-                unfinished_uploads.remove(process)
-        if not unfinished_uploads:
-            logger.info("All wandb offline runs have been uploaded.")
-            return None
-        logger.info(
-            "Uploaded %d wandb offline runs from %s, %d still in progress.",
-            num_uploaded,
-            results.experiment_path if results else f"local wandb fallback paths: {wandb_paths}",
-            len(unfinished_uploads),
-        )
-        # There are still processes running
-        return unfinished_uploads
-
-    def upload_offline_experiments(self, results: Optional[ResultGrid] = None, tuner: Optional[tune.Tuner] = None):
-        unfinished_wandb_uploads = None
-        if self.args.wandb and "upload" in self.args.wandb:
-            if results is None:
-                logger.error(
-                    "Wandb upload requested, but no results provided. This will not upload any offline experiments."
-                )
-            try:  # if no results (due to a failure) get them in a more hacky way
-                unfinished_wandb_uploads = self.wandb_upload_offline_experiments(results, tuner)
-            except Exception:
-                logger.exception("Error while uploading offline experiments to WandB: %s")
-        if self.args.comet and "upload" in self.args.comet:
-            logger.info("Uploading offline experiments to Comet")
-            try:
-                self.comet_upload_offline_experiments()
-            except Exception:
-                logger.exception("Error while uploading offline experiments to Comet")
-        if unfinished_wandb_uploads:
-            for process in unfinished_wandb_uploads:
-                self._report_wandb_upload(process, wait=True)
 
     # endregion
 
@@ -1472,6 +1302,7 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             "args": cast("ParserType_co", SimpleNamespace(**self.args_to_dict())),
             "config": self.config,
             "config_overrides": self.config_overrides(),
+            "config_files": self._config_files,
             "__init_config__": True,
             # Allows to recreate the config based on args
             "param_space": getattr(self, "param_space", {"__params_not_created__": True}),
@@ -1488,9 +1319,21 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
         load_class: bool = False,
         init_trainable: bool = True,
         init_config: Optional[bool] = None,
+        load_config_files: bool = True,
     ) -> Self:
+        """
+        Args:
+            init_config: If True, the config will be re-initialized from args after loading the state.
+                If False, the config from the state will be used. If None (default), the config will be
+                re-initialized if the stored __init_config__ is True in the state or if no config was saved.
+            load_config_files: By default updates to config files are respected and loaded,
+                this might change the loaded config. Set to False to not load the config files
+                and just use the args/config from the state.
+        """
         # TODO: Why not a classmethod again?
+        unchecked_keys = set(data.keys())
         saved_class = data.get("setup_class", cls)
+        unchecked_keys.discard("setup_class")
         setup_class = saved_class if load_class else cls
         if saved_class is not cls:
             logger.warning(
@@ -1505,23 +1348,94 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 stacklevel=2,
             )
         setup_class = cast("type[Self]", setup_class)
+
+        # Handle config file restoration
+        config_files_to_use = None
+
+        if load_config_files and (original_config_files := data.get("config_files")):
+            not_existing_files = [file for file in map(Path, original_config_files) if not file.exists()]
+            if not_existing_files:
+                synced_files = []
+                try:
+                    # sync missing config files without the need of the Syncing callback.
+                    ctx: RayRuntimeContext = ray.get_runtime_context()
+
+                    # WARNING: The following accesses Ray's internal runtime context and worker state,
+                    # which may change between Ray versions. This code is known to work with Ray >=2.49.0.
+                    # If you upgrade Ray and encounter errors here, check for changes in Ray's internal API.
+                    try:
+                        actor: TrainableBase | Any = ctx.worker.actors[ctx.worker.actor_id]
+                        storage = getattr(actor, "_storage", None)
+                        if TYPE_CHECKING:
+                            storage = actor._storage
+                        if storage:
+                            for file in map(Path, not_existing_files):
+                                if file.is_absolute():
+                                    dest = file.relative_to(Path(os.environ["TUNE_ORIG_WORKING_DIR"])).as_posix()
+                                    source = file.as_posix()
+                                else:
+                                    dest = file.as_posix()
+                                    source = (Path(os.environ["TUNE_ORIG_WORKING_DIR"]) / file).as_posix()
+                                storage.syncer.sync_down(remote_dir=source, local_dir=dest)
+                                # FIXME: Is one wait enough when there are multiple files?
+                                try:
+                                    storage.syncer.wait()
+                                except FileNotFoundError as e:
+                                    logger.error("Could not sync missing config files: %s", e)
+                                else:
+                                    synced_files.append(dest)
+                        else:
+                            logger.error(
+                                "Config files %s do not exist and cannot be restored because no storage is configured.",
+                                not_existing_files,
+                            )
+                            # TODO: possibly create empty files so that parser does not fail
+                    except (AttributeError, KeyError) as e:
+                        logger.error(
+                            "Failed to access Ray's internal worker state to restore config files. "
+                            "This may be due to a Ray version incompatibility. Error: %s",
+                            e,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Unexpected error while restoring missing config files %s.", not_existing_files
+                        )
+                        # TODO: possibly create empty files so that parser does not fail
+                except Exception:
+                    logger.exception("Could not restore missing config files %s.", not_existing_files)
+                config_files_to_use = [
+                    file for file in map(Path, original_config_files) if file not in not_existing_files
+                ]
+                config_files_to_use.extend(synced_files)
+            else:
+                config_files_to_use = original_config_files
+
         new = setup_class(
             init_config=False,
             init_param_space=False,
             init_trainable=False,
             parse_args=False,
             trial_name_creator=data.get("trial_name_creator"),
+            config_files=config_files_to_use,
         )
+        unchecked_keys.discard("trial_name_creator")
+        unchecked_keys.discard("config_files")
+
         new.config_overrides(**data.get("config_overrides", {}))
         config: ConfigType_co | Literal[False] = data.get("config", False)
+        unchecked_keys.discard("config_overrides")
+        unchecked_keys.discard("config")
+
         new.param_space = data["param_space"]
         if init_config is None and data["__init_config__"] and config:
-            # TODO: error needs overhaul
             logger.warning(
-                "Having __init_config__=True in the state while also passing config ignores the saved config object."
-                " You can control the behavior and disable this warning by setting init_config=True/False "
-                "in the from_saved method."
+                "Having __init_config__=True in the state while also restoring a config ignores "
+                "the restored config object. You can control the behavior and disable this warning "
+                "by setting init_config=True/False in the :meth:`from_saved` method. "
+                "Or, by removing/changing the keys of the state dict before calling this function."
             )
+        unchecked_keys.remove("param_space")
+
         init_config = data["__init_config__"] or not bool(config) if init_config is None else init_config
         if init_config:
             logger.info("Re-initializing config from args after state was loaded", stacklevel=2)
@@ -1532,9 +1446,12 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
                 "This may lead to unexpected behavior if the args do not match the config.",
                 stacklevel=2,
             )
+        unchecked_keys.remove("__init_config__")
+
         if config:
             new.config = config
         new.args = data["args"]
+        unchecked_keys.discard("args")
         new.setup(
             None,
             parse_args=False,
@@ -1542,6 +1459,14 @@ class ExperimentSetupBase(ABC, Generic[ParserType_co, ConfigType_co, AlgorithmTy
             init_trainable=init_trainable,
             init_config=init_config,
         )
+        if new.args.comet and not new.comet_tracker:
+            new.comet_tracker = CometArchiveTracker()
+            logger.info("CometArchiveTracker setup")
+        if unchecked_keys:  # possibly a subclass has more keys
+            logger.info(
+                "Some keys in the state were not used: %s.",
+                unchecked_keys,
+            )
         return new
 
     # endregion

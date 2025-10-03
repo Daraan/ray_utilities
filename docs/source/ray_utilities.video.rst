@@ -17,7 +17,6 @@ Module contents
 ---------------
 
 .. automodule:: ray_utilities.video
-   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:

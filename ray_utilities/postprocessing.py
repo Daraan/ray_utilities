@@ -51,13 +51,14 @@ See Also:
     :mod:`ray_utilities.video.numpy_to_video`: Video file creation utilities
     :mod:`ray_utilities.constants`: Metric key constants and video configurations
 """
+# pyright: enableExperimentalFeatures=true
+# ruff: noqa: PLC0415  # imports at top level of file; safe import time if not needed.
 
 from __future__ import annotations
 
-# pyright: enableExperimentalFeatures=true
-# ruff: noqa: PLC0415  # imports at top level of file; safe import time if not needed.
 import logging
 import math
+from copy import deepcopy
 from functools import wraps
 from typing import (
     TYPE_CHECKING,
@@ -68,13 +69,16 @@ from typing import (
     ParamSpec,
     TypedDict,
     TypeGuard,
+    cast,
     overload,
 )
 
 import numpy as np
 from ray.air.integrations.comet import CometLoggerCallback
+from ray.rllib.core import DEFAULT_AGENT_ID, DEFAULT_MODULE_ID
 from ray.rllib.utils.metrics import (
     ALL_MODULES,  # pyright: ignore[reportPrivateImportUsage]
+    CONNECTOR_PIPELINE_TIMER,
     # CONNECTOR_TIMERS,  # subkey of env_to_module_connector
     ENV_RESET_TIMER,
     ENV_RUNNER_RESULTS,
@@ -92,8 +96,14 @@ from ray.rllib.utils.metrics import (
     LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_OUT,
     LEARNER_RESULTS,
     MODULE_TO_ENV_CONNECTOR,
+    NUM_AGENT_STEPS_SAMPLED,
+    NUM_AGENT_STEPS_SAMPLED_LIFETIME,
+    NUM_ENV_STEPS_SAMPLED,
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
     NUM_ENV_STEPS_TRAINED_LIFETIME,
+    NUM_MODULE_STEPS_SAMPLED,
+    NUM_MODULE_STEPS_SAMPLED_LIFETIME,
+    NUM_MODULE_STEPS_TRAINED,
     RLMODULE_INFERENCE_TIMER,
     SAMPLE_TIMER,  # OldAPI
     TIME_BETWEEN_SAMPLING,
@@ -104,24 +114,53 @@ from typing_extensions import TypeVar
 
 from ray_utilities.constants import (
     DEFAULT_VIDEO_DICT_KEYS,
+    ENVIRONMENT_RESULTS,
     EPISODE_BEST_VIDEO,
     EPISODE_WORST_VIDEO,
 )
 from ray_utilities.misc import deep_update
 from ray_utilities.temp_dir import TEMP_DIR_PATH
-from ray_utilities.training.helpers import get_current_step
+from ray_utilities.training.helpers import get_current_step, get_evaluation_results
 from ray_utilities.typing.trainable_return import TrainableReturnData
 from ray_utilities.video.numpy_to_video import create_temp_video
 
+try:
+    from wandb import Video  # pyright: ignore[reportMissingImports]
+except ModuleNotFoundError:
+    if TYPE_CHECKING:
+        from wandb import Video  # pyright: ignore[reportMissingImports]
+    else:
+
+        class Video:  # need a type for isinstance
+            pass
+
+
 if TYPE_CHECKING:
+    from collections import deque as Deque
     from collections.abc import Sequence
 
     from typing_extensions import TypeForm
 
-    from ray_utilities.config.typed_argument_parser import LogStatsChoices
-    from ray_utilities.typing import LogMetricsDict, StrictAlgorithmReturnData
-    from ray_utilities.typing.algorithm_return import EvaluationResultsDict
-    from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict
+    from ray_utilities.config.parser.default_argument_parser import LogStatsChoices
+    from ray_utilities.typing.algorithm_return import (
+        EvalEnvRunnersResultsDict,
+        EvaluationResultsDict,
+        StrictAlgorithmReturnData,
+    )
+    from ray_utilities.typing.common import VideoTypes
+    from ray_utilities.typing.metrics import (
+        AnyAutoExtendedLogMetricsDict,
+        AnyLogMetricsDict,
+        LogMetricsDict,
+        NewLogMetricsDict,
+        VideoMetricsDict,
+        _LogMetricsEnvRunnersResultsDict,
+        _LogMetricsEvalEnvRunnersResultsDict,
+        _LogMetricsEvaluationResultsDict,
+        _LogMetricsEvaluationResultsWithoutDiscreteDict,
+        _NewLogMetricsEvaluationResultsDict,
+        _NewLogMetricsEvaluationResultsWithoutDiscreteDict,
+    )
 
 __all__ = ["RESULTS_TO_KEEP", "filter_metrics"]
 
@@ -165,8 +204,8 @@ See Also:
     :class:`ray.air.integrations.comet.CometLoggerCallback`: Defines additional required keys
 """
 
-RESULTS_TO_REMOVE = {"fault_tolerance", "num_agent_steps_sampled_lifetime", "learners", "timers"}
-"""set[str]: Top-level result keys to remove during metric cleaning.
+RESULTS_TO_REMOVE = {"fault_tolerance", NUM_AGENT_STEPS_SAMPLED_LIFETIME, LEARNER_RESULTS, TIMERS}
+"""set[str]: Top-level result keys to remove when calling :func:`remove_unwanted_metrics`.
 
 These keys contain internal Ray RLlib state or verbose debugging information that
 is typically not needed for experiment analysis and logging. Removing them keeps
@@ -181,7 +220,12 @@ _T = TypeVar("_T")
 _TD = TypeVar("_TD", bound=TypedDict, default="TrainableReturnData")  # pyright: ignore[reportInvalidTypeForm]
 _P = ParamSpec("_P")
 
-_MetricDict = TypeVar("_MetricDict", "AutoExtendedLogMetricsDict", "LogMetricsDict")
+
+_MetricDict = TypeVar("_MetricDict", "AnyAutoExtendedLogMetricsDict", "AnyLogMetricsDict")
+"""Any LogMetricsDict or extensions thereof."""
+
+_LogT = TypeVar("_LogT", bound="dict[str, dict[str, Any | dict[str, Any]]] | LogMetricsDict")
+"""A nested dict structure or LogMetricsDict - not in the new layout."""
 
 _logger = logging.getLogger(__name__)
 
@@ -337,14 +381,14 @@ def remove_videos(metrics: _MetricDict) -> _MetricDict: ...
 
 
 @overload
-def remove_videos(metrics: dict[Any, Any]) -> dict: ...
+def remove_videos(metrics: dict[Any, Any]) -> dict[Any, Any]: ...
 
 
 # Caching not needed yet, this is especially for the json logger
 # @cached(cache=FIFOCache(maxsize=1), key=cachetools.keys.methodkey, info=True)
 def remove_videos(
-    metrics: dict[Any, Any] | LogMetricsDict,
-) -> dict | LogMetricsDict:
+    metrics: dict[str, Any] | AnyLogMetricsDict,
+) -> dict[str, Any] | AnyLogMetricsDict:
     """
     Removes video keys from the metrics
 
@@ -374,7 +418,7 @@ def remove_videos(
 
 
 def save_videos(
-    metrics: LogMetricsDict | AutoExtendedLogMetricsDict,
+    metrics: AnyLogMetricsDict | AnyAutoExtendedLogMetricsDict | StrictAlgorithmReturnData,
     dir=TEMP_DIR_PATH,
 ) -> None:
     """
@@ -383,39 +427,45 @@ def save_videos(
 
         Note that tensorboard uses gifs. WandB and Comet support multiple formats.
     """
-    if EVALUATION_RESULTS not in metrics:
+    eval_dict = get_evaluation_results(metrics)
+    if eval_dict is None:
         return
-    eval_dict = metrics[EVALUATION_RESULTS]
-    discrete_results = eval_dict.get("discrete", None)
-    video_dicts = (
-        [eval_dict[ENV_RUNNER_RESULTS], discrete_results[ENV_RUNNER_RESULTS]]
-        if discrete_results
-        else [eval_dict[ENV_RUNNER_RESULTS]]
+    discrete_results = cast(
+        "_NewLogMetricsEvaluationResultsWithoutDiscreteDict | _LogMetricsEvaluationResultsWithoutDiscreteDict | None",
+        eval_dict.get("discrete", None),
     )
+    if discrete_results and ENV_RUNNER_RESULTS in discrete_results:
+        discrete_results = discrete_results[ENV_RUNNER_RESULTS]
+    video_dicts: list[
+        EvalEnvRunnersResultsDict | _LogMetricsEvalEnvRunnersResultsDict | _NewLogMetricsEvaluationResultsDict
+    ] = [eval_dict, discrete_results] if discrete_results else [eval_dict]
+    video_value: VideoTypes.LogVideoTypes | VideoMetricsDict | None
     for video_dict in video_dicts:
         for key in (EPISODE_BEST_VIDEO, EPISODE_WORST_VIDEO):
             if (
-                key in video_dict
+                (video_value := video_dict.get(key, None))
                 # skip if we already have a video path
-                and "video_path" not in video_dict[key]  # pyright: ignore[reportTypedDictNotRequiredAccess]
+                and not isinstance(video_value, Video)
+                and "video_path" not in video_value
             ):
-                value = video_dict[key]  # pyright: ignore[reportTypedDictNotRequiredAccess]
                 if (
-                    isinstance(value, dict)
-                    and not value.get("video_path", False)
-                    and not isinstance(value["video"], str)
+                    isinstance(video_value, dict)
+                    and not video_value.get("video_path", False)
+                    and not isinstance(video_value["video"], (str, Video))
                 ):
                     # Set VideoPath
-                    value["video_path"] = create_temp_video(value["video"], dir=dir)
-                elif not isinstance(value, (str, dict)):
-                    if isinstance(value, list) and len(value) == 0:
+                    video_value["video_path"] = create_temp_video(video_value["video"], dir=dir)
+                elif not isinstance(video_value, (str, dict)):
+                    if isinstance(video_value, list) and len(video_value) == 0:
                         _logger.warning("Empty video list %s - skipping to save video", key)
                         continue
                     # No VideoMetricsDict present and not yet a video
                     _logger.warning(
                         "Overwritting video with path. Consider moving the video to a subkey %s : {'video': video}", key
                     )
-                    video_dict[key] = create_temp_video(value, dir=dir)
+                    assert key in video_dict
+                    # Assign video to log dict (no list of numpy array anymore)
+                    video_dict[key] = create_temp_video(video_value, dir=dir)  # pyright: ignore[reportGeneralTypeIssues]
                 # else already str or VideoMetricsDict with a str
 
 
@@ -464,6 +514,33 @@ def _old_strip_metadata_from_flat_metrics(result: dict[str, Any]) -> dict[str, A
     return result
 
 
+def log_metrics_to_new_layout(metrics: LogMetricsDict) -> NewLogMetricsDict:
+    """
+    Changes:
+        env_runners -> training
+        evaluation.env_runners -> evaluation
+
+        if only "__all_modules__" and "default_policy" are present in learners,
+        merges them.
+    """
+    new_metrics = deepcopy(metrics)  # pyright: ignore[reportAssignmentType]
+    new_metrics["training"] = cast("_LogMetricsEnvRunnersResultsDict", new_metrics.pop(ENV_RUNNER_RESULTS, {}))  # pyright: ignore[reportGeneralTypeIssues]
+    if "current_step" in new_metrics:
+        new_metrics.pop(NUM_ENV_STEPS_SAMPLED_LIFETIME, None)  # superseeded by current_step
+    if EVALUATION_RESULTS in new_metrics:
+        new_eval = new_metrics[EVALUATION_RESULTS]
+        new_eval.update(new_eval.pop(ENV_RUNNER_RESULTS, {}))  # pyright: ignore[reportArgumentType, reportCallIssue]
+        if "discrete" in new_eval:
+            new_eval["discrete"] = new_eval["discrete"]
+            new_eval["discrete"].update(new_eval["discrete"].pop(ENV_RUNNER_RESULTS, {}))
+    if LEARNER_RESULTS in new_metrics and {ALL_MODULES, DEFAULT_MODULE_ID} == set(new_metrics[LEARNER_RESULTS].keys()):
+        # merge the two
+        merged = new_metrics[LEARNER_RESULTS][ALL_MODULES]
+        merged.update(new_metrics[LEARNER_RESULTS][DEFAULT_MODULE_ID])
+        new_metrics[LEARNER_RESULTS] = merged
+    return cast("NewLogMetricsDict", new_metrics)
+
+
 def create_log_metrics(
     result: StrictAlgorithmReturnData,
     *,
@@ -494,6 +571,10 @@ def create_log_metrics(
     else:
         eval_mean = float("nan")
         disc_eval_mean = float("nan")
+    environment_results = result[ENV_RUNNER_RESULTS].get(ENVIRONMENT_RESULTS, {})
+    if environment_results:  # turn to a list
+        s_seq: Deque = environment_results["seeds"]["seed_sequence"]
+        environment_results["seeds"]["seed_sequence"] = list(s_seq)
 
     current_step = get_current_step(result)
     metrics: LogMetricsDict = {
@@ -532,14 +613,15 @@ def create_log_metrics(
         ):
             metrics[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_BEST_VIDEO] = {
                 "video": evaluation_videos_best,
-                "reward": result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MAX],
+                # if we have a video but no max reward, use the mean as the guaranteed metric present
+                "reward": result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(EPISODE_RETURN_MAX, eval_mean),
             }
         if evaluation_videos_worst := result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(
             EPISODE_WORST_VIDEO,
         ):
             metrics[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_WORST_VIDEO] = {
                 "video": evaluation_videos_worst,
-                "reward": result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MIN],
+                "reward": result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(EPISODE_RETURN_MIN, eval_mean),
             }
         if discrete_evaluation_results := result[EVALUATION_RESULTS].get("discrete"):
             if discrete_evaluation_videos_best := discrete_evaluation_results[ENV_RUNNER_RESULTS].get(
@@ -547,14 +629,14 @@ def create_log_metrics(
             ):
                 metrics[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS][EPISODE_BEST_VIDEO] = {  # pyright: ignore[reportTypedDictNotRequiredAccess]
                     "video": discrete_evaluation_videos_best,
-                    "reward": discrete_evaluation_results[ENV_RUNNER_RESULTS][EPISODE_RETURN_MAX],
+                    "reward": discrete_evaluation_results[ENV_RUNNER_RESULTS].get(EPISODE_RETURN_MAX, disc_eval_mean),
                 }  # fmt: skip
             if discrete_evaluation_videos_worst := discrete_evaluation_results[ENV_RUNNER_RESULTS].get(
                 EPISODE_WORST_VIDEO
             ):
                 metrics[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS][EPISODE_WORST_VIDEO] = {  # pyright: ignore[reportTypedDictNotRequiredAccess]
                     "video": discrete_evaluation_videos_worst,
-                    "reward": discrete_evaluation_results[ENV_RUNNER_RESULTS][EPISODE_RETURN_MIN],
+                    "reward": discrete_evaluation_results[ENV_RUNNER_RESULTS].get(EPISODE_RETURN_MIN, disc_eval_mean),
                 }  # fmt: skip
             if discrete_evaluation_videos_best:
                 check_if_video(discrete_evaluation_videos_best, "discrete" + EPISODE_BEST_VIDEO)
@@ -567,8 +649,26 @@ def create_log_metrics(
         if save_video:
             save_videos(metrics)
     if log_stats == "minimal":
+        if not math.isnan(eval_mean) and EVALUATION_RESULTS in result:
+            # Add min/max
+            for key in (EPISODE_RETURN_MIN, EPISODE_RETURN_MAX):
+                if (
+                    eval_min_max := result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(key, None)
+                ) is not None and eval_min_max != eval_mean:
+                    metrics[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][key] = eval_min_max
+            if discrete_eval and "discrete" in result[EVALUATION_RESULTS]:
+                disc_eval_results = result[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS]  # pyright: ignore[reportTypedDictNotRequiredAccess]
+                for key in (EPISODE_RETURN_MIN, EPISODE_RETURN_MAX):
+                    if (
+                        eval_min_max := disc_eval_results.get(key, None)
+                    ) is not None and eval_min_max != disc_eval_mean:
+                        metrics[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS][key] = eval_min_max  # pyright: ignore[reportTypedDictNotRequiredAccess]
+        # reorganize some keys to align with other log_stats
+        metrics = _reorganize_timer_logs(metrics)  # pyright: ignore[reportArgumentType, reportAssignmentType]
+        metrics.pop(TIMERS, None)
+        _remove_less_interesting_keys(metrics)
         return metrics
-    merged_result = deep_update(result, metrics)  # type: ignore[return-value]
+    merged_result: LogMetricsDict = deep_update(result, metrics)  # type: ignore[return-value]
     # clean videos
     if EVALUATION_RESULTS in result:
         if not evaluation_videos_best:  # pyright: ignore[reportPossiblyUnboundVariable]
@@ -604,11 +704,9 @@ def create_log_metrics(
             "num_env_steps_sampled_lifetime",  # superseded by current_step
         ):
             merged_result.pop(k)
-        merged_result[TIMERS].pop("time_since_restore")
 
     merged_result.pop("fault_tolerance")
-    merged_result.pop("env_runner_group")
-    merged_result.pop(NUM_ENV_STEPS_SAMPLED_LIFETIME + "_throughput", None)
+    merged_result.pop(NUM_ENV_STEPS_SAMPLED_LIFETIME + "_throughput", None)  # Lifetime key has same information
     # merged_result[ENV_RUNNER_RESULTS].pop("num_healthy_workers", )
     # merged_result[ENV_RUNNER_RESULTS].pop("num_remote_worker_restarts", None)
     merged_result[ENV_RUNNER_RESULTS].pop(ENV_TO_MODULE_SUM_EPISODES_LENGTH_IN)
@@ -625,26 +723,34 @@ def create_log_metrics(
     # most currently equivalent to timers+learners
     if "timers" not in log_stats and log_stats != "most":  # timers and timers+learners
         merged_result.pop(TIMERS)
+    elif "timers" not in log_stats:
+        _remove_less_interesting_timers(merged_result)
+
     if "learners" not in log_stats and log_stats != "most":  # learners and timers+learners
         merged_result.pop("learners", None)
-    else:
+    elif "learners" not in log_stats and LEARNER_RESULTS in merged_result:
         merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_IN)
         merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_OUT)
         merged_result[LEARNER_RESULTS][ALL_MODULES].pop(NUM_ENV_STEPS_TRAINED_LIFETIME + "_throughput")
+        merged_result[LEARNER_RESULTS][ALL_MODULES].pop(NUM_MODULE_STEPS_TRAINED + "_throughput")
+    _remove_less_interesting_keys(merged_result)
     return merged_result  # type: ignore[return-value]
 
 
-def _reorganize_connector_logs(results: dict[str, dict[str, Any | dict[str, Any]]]):
+def _reorganize_connector_logs(results: _LogT) -> _LogT:
     """Move timer results listed in env_runner to the timers key"""
+    results.setdefault(TIMERS, {})
+    assert TIMERS in results
     results[TIMERS][ENV_TO_MODULE_CONNECTOR] = results[ENV_RUNNER_RESULTS].pop(ENV_TO_MODULE_CONNECTOR)
     results[TIMERS][MODULE_TO_ENV_CONNECTOR] = results[ENV_RUNNER_RESULTS].pop(MODULE_TO_ENV_CONNECTOR)
     results[TIMERS][RLMODULE_INFERENCE_TIMER] = results[ENV_RUNNER_RESULTS].pop(RLMODULE_INFERENCE_TIMER)
     results[TIMERS][ENV_RESET_TIMER] = results[ENV_RUNNER_RESULTS].pop(ENV_RESET_TIMER)
     results[TIMERS][ENV_STEP_TIMER] = results[ENV_RUNNER_RESULTS].pop(ENV_STEP_TIMER)
-    results[TIMERS][LEARNER_CONNECTOR] = results[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR)
-    results[TIMERS][LEARNER_CONNECTOR].update(results[TIMERS][LEARNER_CONNECTOR].pop(TIMERS))
+    if LEARNER_RESULTS in results:
+        results[TIMERS][LEARNER_CONNECTOR] = results[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR)
+    results[TIMERS][LEARNER_CONNECTOR].update(results[TIMERS][LEARNER_CONNECTOR].pop(TIMERS))  # pyright: ignore[reportAttributeAccessIssue]
     if EVALUATION_RESULTS in results and results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(ENV_TO_MODULE_CONNECTOR):
-        evaluation_timers: dict[str, Any] = results[TIMERS].setdefault(EVALUATION_RESULTS, {})
+        evaluation_timers: dict[str, Any] = results[TIMERS].setdefault(EVALUATION_RESULTS, {})  # pyright: ignore[reportAssignmentType]
         evaluation_timers[ENV_TO_MODULE_CONNECTOR] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(
             ENV_TO_MODULE_CONNECTOR
         )
@@ -659,42 +765,147 @@ def _reorganize_connector_logs(results: dict[str, dict[str, Any | dict[str, Any]
     return results
 
 
-def _reorganize_timer_logs(results: dict[str, dict[str, Any | dict[str, Any]]]):
-    results[TIMERS]["time_since_restore"] = results.pop("time_since_restore")
-    # Keep always
-    # results[TIMERS]["time_total_s"] = results.pop("time_total_s")
-    # results[TIMERS]["time_this_iter_s"] = results["time_this_iter_s"] # autofilled
+def _reorganize_timer_logs(results: _LogT) -> _LogT:
+    results.setdefault(TIMERS, {})
+    assert TIMERS in results
+    for key in ("time_since_restore", "time_total_s"):
+        if key in results:
+            results[TIMERS][key] = results.pop(key)
+    if "time_this_iter_s" in results:
+        results[TIMERS]["time_this_iter_s"] = results["time_this_iter_s"]  # autofilled
     results[TIMERS].setdefault(ENV_RUNNER_RESULTS, {})
     # if sample amount is very low, e.g. during debugging, _done_episodes_for_metrics is empty
     # this results in keys missings for episodes
-    results[TIMERS][ENV_RUNNER_RESULTS][EPISODE_DURATION_SEC_MEAN] = results[ENV_RUNNER_RESULTS].pop(
-        EPISODE_DURATION_SEC_MEAN, float("nan")
-    )
-    try:
-        results[TIMERS][ENV_RUNNER_RESULTS][TIME_BETWEEN_SAMPLING] = results[ENV_RUNNER_RESULTS].pop(
-            TIME_BETWEEN_SAMPLING
-        )
-    except KeyError:
-        pass  # second step onward
-    results[TIMERS][ENV_RUNNER_RESULTS][SAMPLE_TIMER] = results[ENV_RUNNER_RESULTS].pop(SAMPLE_TIMER)
+    for key in (EPISODE_DURATION_SEC_MEAN, TIME_BETWEEN_SAMPLING, SAMPLE_TIMER):
+        if key in results[ENV_RUNNER_RESULTS]:
+            results[TIMERS][ENV_RUNNER_RESULTS][key] = results[ENV_RUNNER_RESULTS].pop(key)
     if EVALUATION_RESULTS in results and len(results[EVALUATION_RESULTS]) > 1:
         evaluation_timers: dict[str, Any] = results[TIMERS].setdefault(EVALUATION_RESULTS, {})
         assert EVALUATION_RESULTS not in evaluation_timers
         evaluation_timers[ENV_RUNNER_RESULTS] = {}
-        evaluation_timers[ENV_RUNNER_RESULTS][EPISODE_DURATION_SEC_MEAN] = results[EVALUATION_RESULTS][
-            ENV_RUNNER_RESULTS
-        ].pop(EPISODE_DURATION_SEC_MEAN, float("nan"))
-        # step 2+; else only mean=nan
-        evaluation_timers[ENV_RUNNER_RESULTS][SAMPLE_TIMER] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(
-            SAMPLE_TIMER
-        )
-        try:
-            evaluation_timers[ENV_RUNNER_RESULTS][TIME_BETWEEN_SAMPLING] = results[EVALUATION_RESULTS][
-                ENV_RUNNER_RESULTS
-            ].pop(TIME_BETWEEN_SAMPLING)
-        except KeyError:
-            pass  # second evaluation onward
+        # NOTE: Earlier we kept EPISODE_DURATION_SEC_MEAN at nan for first step
+        for key in (EPISODE_DURATION_SEC_MEAN, TIME_BETWEEN_SAMPLING, SAMPLE_TIMER):
+            if key in results[ENV_RUNNER_RESULTS]:
+                evaluation_timers[ENV_RUNNER_RESULTS][key] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(key)
+        if not evaluation_timers[ENV_RUNNER_RESULTS]:
+            results[TIMERS].pop(EVALUATION_RESULTS)
+    if not results[TIMERS][ENV_RUNNER_RESULTS]:
+        results[TIMERS].pop(ENV_RUNNER_RESULTS)
+    if not results[TIMERS]:
+        results.pop(TIMERS)
     return results
+
+
+def _remove_small_values(d: dict[Any, Any], threshold: float = 1e-4) -> dict[Any, Any]:
+    """
+    Recursively remove all key-value pairs from a nested dictionary where the value is a float
+    and less than the given threshold.
+
+    Args:
+        d: The dictionary to process.
+        threshold: The minimum value to keep.
+
+    Returns:
+        A new dictionary with small float values removed.
+    """
+    result = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            nested = _remove_small_values(v, threshold)
+            if nested:
+                result[k] = nested
+        elif isinstance(v, float):
+            if abs(v) >= threshold:
+                result[k] = v
+        else:
+            result[k] = v
+    return result
+
+
+def _remove_less_interesting_timers(metrics: dict[str, Any] | LogMetricsDict, remove_below=1e-4) -> None:
+    # Assume reorganized
+    if TIMERS not in metrics:
+        return
+    clean_metrics = [metrics[TIMERS]]
+    if EVALUATION_RESULTS in metrics[TIMERS]:
+        clean_metrics.append(metrics[TIMERS][EVALUATION_RESULTS])
+
+    timer_dict: dict[str, dict]
+    for timer_dict in clean_metrics:
+        for key in (ENV_TO_MODULE_CONNECTOR, MODULE_TO_ENV_CONNECTOR):
+            try:
+                pipeline_timer = timer_dict[key][CONNECTOR_PIPELINE_TIMER]
+            except KeyError as e:
+                _logger.warning("Cannot access %s in %s: %s", CONNECTOR_PIPELINE_TIMER, key, e)
+                continue
+            timer_dict[key].clear()
+            timer_dict[key][CONNECTOR_PIPELINE_TIMER] = pipeline_timer
+
+    learner_connector_timer = metrics[TIMERS][LEARNER_CONNECTOR][CONNECTOR_PIPELINE_TIMER]
+    remove_masked_samples_timer = metrics[TIMERS][LEARNER_CONNECTOR].get("remove_masked_samples_connector", None)
+    metrics[TIMERS][LEARNER_CONNECTOR].clear()
+    metrics[TIMERS][LEARNER_CONNECTOR][CONNECTOR_PIPELINE_TIMER] = learner_connector_timer
+    if remove_masked_samples_timer:
+        metrics[TIMERS][LEARNER_CONNECTOR]["remove_masked_samples_connector"] = remove_masked_samples_timer
+    metrics[TIMERS] = _remove_small_values(metrics[TIMERS], threshold=remove_below)
+
+
+def _remove_less_interesting_keys(metrics: LogMetricsDict | _LogMetricsEvaluationResultsDict) -> None:
+    """Remove some duplicated and less interesting keys."""
+    metrics.pop("env_runner_group", None)  # just env_runner_group/actor_manager_num_outstanding_async_reqs
+    if metrics.get("num_training_step_calls_per_iteration", 0) == 1:
+        metrics.pop("num_training_step_calls_per_iteration", None)
+
+    env_runner_results = metrics.get(ENV_RUNNER_RESULTS, None)
+    if env_runner_results:
+        for env_key, mod_key, id_key in (
+            (NUM_ENV_STEPS_SAMPLED, NUM_MODULE_STEPS_SAMPLED, DEFAULT_MODULE_ID),
+            (NUM_ENV_STEPS_SAMPLED_LIFETIME, NUM_MODULE_STEPS_SAMPLED_LIFETIME, DEFAULT_MODULE_ID),
+            (NUM_ENV_STEPS_SAMPLED_LIFETIME, NUM_AGENT_STEPS_SAMPLED_LIFETIME, DEFAULT_AGENT_ID),
+            (NUM_ENV_STEPS_SAMPLED, NUM_AGENT_STEPS_SAMPLED, DEFAULT_AGENT_ID),
+        ):
+            if (
+                env_key in env_runner_results
+                and mod_key in env_runner_results
+                and len(env_runner_results[mod_key]) == 1
+                and env_runner_results[mod_key][id_key] == env_runner_results[env_key]
+            ):
+                env_runner_results.pop(mod_key)
+        for metric_key, id_key in (
+            ("module_episode_return_mean", DEFAULT_MODULE_ID),
+            ("agent_episode_return_mean", DEFAULT_AGENT_ID),
+        ):
+            if (
+                metric_key in env_runner_results
+                and len(env_runner_results[metric_key]) == 1
+                and math.isclose(
+                    env_runner_results[metric_key].get(id_key, 0.0),
+                    env_runner_results[EPISODE_RETURN_MEAN],
+                )
+            ):
+                env_runner_results.pop(metric_key)
+    if (evaluation_results := metrics.get(EVALUATION_RESULTS, None)) and len(
+        evaluation_results[ENV_RUNNER_RESULTS]
+    ) > 1:
+        _remove_less_interesting_keys(evaluation_results)
+    learner_results = metrics.get(LEARNER_RESULTS, None)
+    if learner_results:
+        # remove __all_modules if duplicated
+        modules: dict[str, dict[str, Any]] = {
+            k: v for k, v in learner_results.items() if isinstance(v, dict)
+        }  # best guess
+        for module_id, module_results in modules.items():
+            if module_id == ALL_MODULES or not isinstance(module_id, dict):
+                continue
+            for key in module_results.keys():
+                if key in learner_results[ALL_MODULES] and (
+                    module_results[key] == learner_results[ALL_MODULES][key]
+                    or (
+                        key.endswith("_throughput")
+                        and math.isclose(module_results[key], learner_results[ALL_MODULES][key], abs_tol=0.2)
+                    )
+                ):
+                    module_results.pop(key, None)
 
 
 def verify_keys(metrics: Mapping[Any, Any], typ: type[_TD], *, test_optional: bool = True) -> TypeGuard[_TD]:

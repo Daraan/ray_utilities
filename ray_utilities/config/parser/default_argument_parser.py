@@ -12,15 +12,23 @@ from __future__ import annotations
 
 # pyright: enableExperimentalFeatures=true
 import argparse
-from ast import literal_eval
 import logging
 import sys
+from ast import literal_eval
 from contextlib import contextmanager
-from typing import Any, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Optional, TypeVar
+
+try:
+    import argcomplete
+
+    ARGCOMPLETE_AVAILABLE = True
+except ImportError:
+    ARGCOMPLETE_AVAILABLE = False
 
 from tap import Tap
 from typing_extensions import Annotated, Literal, Sentinel, get_args, get_origin, get_type_hints
 
+from ray_utilities.config.parser.pbt_scheduler_parser import PopulationBasedTrainingParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, split_timestep_budget
 from ray_utilities.misc import AutoInt
 from ray_utilities.nice_logger import set_project_log_level
@@ -29,6 +37,9 @@ from ray_utilities.warn import (
     warn_if_batch_size_not_divisible,
     warn_if_minibatch_size_not_divisible,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -621,8 +632,25 @@ class DefaultLoggingArgParser(Tap):
     comet: NeverRestore[NotAModelParameter[AcceptsBoolAsString[OnlineLoggingOption]]] = False
     comment: Optional[str] = None
     tags: NotAModelParameter[list[str]] = []  # noqa: RUF012
+    """
+    Variadic argument to add tags to the experiment
+
+    Tip:
+        A second way to add tags is via a ``--tag:my_tag`` argument which can be used multiple times.
+        Those tags are useful when combining tags from different sources, e.g. a config file.
+        But, for this to work you must use ``known_only=True`` in :meth:`tap.Tap.parse_args`.
+
+    Tip:
+        If you structure a tag like ``my_tag:my_value`` or ``my_tag=my_value``
+        a repeated tag with the same base (e. g., here ``my_tag``) will be overwritten.
+        If a tag is provided in ``--tags`` it has the highest priority.
+    """
+
     log_stats: LogStatsChoices = "minimal"
     """Log all metrics and do not reduce them to the most important ones"""
+
+    _change_log_level = True
+    """Whether to apply :func:`set_project_log_level` in :meth:`process_args`."""
 
     @classmethod
     def _get_safe_str_patches(cls):
@@ -679,9 +707,57 @@ class DefaultLoggingArgParser(Tap):
             "--" + LOG_STATS, nargs="?", const="more", default="minimal", choices=get_args(LogStatsChoices)
         )
 
+    def _add_extra_tags(self):
+        if self.extra_args:
+            extra_to_remove = []
+            tags_to_add = []
+            for arg in self.extra_args:
+                if arg.startswith("--tag:"):
+                    tag = arg.split(":", 1)[1]
+                    if tag not in self.tags:
+                        tags_to_add.append(tag)
+                    extra_to_remove.append(arg)
+            if extra_to_remove:
+                self.extra_args = [arg for arg in self.extra_args if arg not in extra_to_remove]
+            if self.tags:
+                tags_to_add.extend(self.tags)
+            self.tags = tags_to_add
+
+    @staticmethod
+    def organize_subtags(tags: Iterable[str]) -> list[str]:
+        """Ensure that for tag:value or tag=val, only the last occurrence per key is kept.
+        'key' and 'key:' are allowed both to be present; but 'key:' and 'key=' are considered duplicates.
+        """
+        tag_map: dict[str, str] = {}
+        tags = list(tags)
+        for tag in tags:
+            if ":" in tag:
+                key = tag.split(":", 1)[0] + ":"
+                normalized_key = key[:-1]
+            elif "=" in tag:
+                key = tag.split("=", 1)[0] + "="
+                normalized_key = key[:-1]
+            else:
+                key = tag
+                normalized_key = None  # plain key, not normalized
+
+            if normalized_key is not None:
+                tag_map.pop(f"{normalized_key}:", None)  # remove 'key:' if exists
+                tag_map.pop(f"{normalized_key}=", None)  # remove 'key=' if exists
+                tag_map[key] = tag  # set new with : or =
+            else:
+                # allow both 'key' and 'key:' to be present
+                tag_map[tag] = tag
+        if tag_map:
+            tags = list(tag_map.values())
+        return tags
+
     def process_args(self) -> None:
+        self._add_extra_tags()
+        self.tags = self.organize_subtags(self.tags)
         super().process_args()
-        set_project_log_level(logging.getLogger("ray_utilities"), self.log_level)
+        if self._change_log_level:
+            set_project_log_level(logging.getLogger("ray_utilities"), self.log_level)
 
 
 class DefaultExtraArgs(Tap):
@@ -711,7 +787,7 @@ class CheckpointConfigArgumentParser(Tap):
         return super().process_args()
 
 
-class OptionalExtensionsArgs(RLlibArgumentParser):
+class OptionalExtensionsArgs(RLlibArgumentParser, PopulationBasedTrainingParser):
     dynamic_buffer: AlwaysRestore[bool] = False
     """Use DynamicBufferCallback. Increases env steps sampled and batch size"""
 
@@ -847,3 +923,30 @@ class DefaultArgumentParser(
     def configure(self) -> None:
         self.allow_abbrev = False
         super().configure()
+
+    @classmethod
+    def enable_completion(cls) -> None:
+        """Enable shell completion for this parser using argcomplete.
+
+        This method should be called before parsing arguments if shell completion
+        is desired. To activate in your shell, you need to run:
+
+        ```bash
+        pip install argcomplete
+        eval "$(register-python-argcomplete your_script.py)"
+        ```
+
+        Or for all Python scripts:
+        ```bash
+        eval "$(register-python-argcomplete python)"
+        ```
+        """
+        if ARGCOMPLETE_AVAILABLE:
+            # Create a temporary parser instance to get the argparse object
+            temp_parser = cls()
+            temp_parser.parse_args([])
+            # Apply argcomplete to the underlying argparse parser
+            argcomplete.autocomplete(temp_parser)  # pyright: ignore[reportPossiblyUnboundVariable]
+            logger.debug("Shell completion enabled with argcomplete")
+        else:
+            logger.warning("argcomplete not available. Install with 'pip install argcomplete' for shell completion.")

@@ -1,8 +1,14 @@
 {
-  "typeCheckingMode": "off",
-  "extraPaths": ["ray_utilities"],
-  "include": ["ray_utilities"],
-  "exclude": ["test", "ray_utilities/jax"],
-  "reportCallIssue": "error",
-  "root": "ray_utilities"
+  "exclude": [
+    "test",
+    "ray_utilities/jax"
+  ],
+  "extraPaths": [
+    "ray_utilities"
+  ],
+  "include": [
+    "ray_utilities"
+  ],
+  "root": "ray_utilities",
+  "typeCheckingMode": "off"
 }

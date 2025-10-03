@@ -21,47 +21,47 @@ See Also:
     :mod:`typing_extensions`: Extended typing capabilities
 """
 
-import importlib.metadata
+from __future__ import annotations
+
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping
+from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping, NamedTuple
 
 import typing_extensions
-from packaging.version import Version
-from typing_extensions import TypeAliasType, TypeVar
+from typing_extensions import NotRequired, TypeAliasType, TypedDict, TypeVar
 
-if TYPE_CHECKING:
-    import gymnasium as gym
-    from gymnasium.envs.registration import EnvSpec as _EnvSpec
-    from gymnax.environments import environment as environment_gymnax
-    from ray.rllib.algorithms import Algorithm, AlgorithmConfig
-    import ray.tune
-
-_PEP_728_AVAILABLE = getattr(typing_extensions, "_PEP_728_IMPLEMENTED", False) or Version(
-    importlib.metadata.version("typing-extensions")
-) >= Version("4.13")
-
-ExtraItems = Any  # float | int | str | bool | None | dict[str, "_ExtraItems"] | NDArray[Any] | Never
-"""type: Type alias for additional items that can be included in TypedDict structures.
-
-This flexible type allows for various data types that might be included in
-experiment results, metrics, or configuration dictionaries beyond the
-strictly typed required fields.
-"""
-
-# Below requires _PEP_728_AVAILABLE
-# ruff: noqa: E402
-from .algorithm_return import AlgorithmReturnData, StrictAlgorithmReturnData
+from .algorithm_return import (
+    AlgorithmReturnData,
+    EnvRunnersResultsDict,
+    EvaluationResultsDict,
+    StrictAlgorithmReturnData,
+)
+from .common import (
+    BaseEnvRunnersResultsDict,
+    BaseEvaluationResultsDict,
+    VideoTypes,
+)
 from .metrics import FlatLogMetricsDict, LogMetricsDict
 from .trainable_return import RewardsDict, RewardUpdaters, TrainableReturnData
 
-if typing_extensions.TYPE_CHECKING:
+if TYPE_CHECKING:
+    import gymnasium as gym
+    import ray.tune
+    from gymnasium.envs.registration import EnvSpec as _EnvSpec
+    from gymnax.environments import environment as environment_gymnax
+    from ray.rllib.algorithms import Algorithm, AlgorithmConfig
+    from ray.tune.experiment import Trial
     from ray.tune.search.sample import Domain
 
     from ray_utilities.setup.experiment_base import ExperimentSetupBase
 
+
 __all__ = [
     "AlgorithmReturnData",
+    "BaseEnvRunnersResultsDict",
+    "BaseEvaluationResultsDict",
     "CometStripedVideoFilename",
+    "EnvRunnersResultsDict",
+    "EvaluationResultsDict",
     "FlatLogMetricsDict",
     "FunctionalTrainable",
     "LogMetricsDict",
@@ -70,6 +70,7 @@ __all__ = [
     "StrictAlgorithmReturnData",
     "TestModeCallable",
     "TrainableReturnData",
+    "VideoTypes",
 ]
 
 
@@ -103,3 +104,44 @@ ParameterSpace = TypeAliasType(
 """Describes a tune.Domain or grid_search for a parameter sampling by tune"""
 
 StopperType = TypeAliasType("StopperType", "Mapping | ray.tune.Stopper | Callable[[str, Mapping], bool] | None")
+
+
+class Forktime(NamedTuple):
+    time_attr: str
+    """String to describe what the :attr:`time` tracks, e.g. ``training_iteration`` or ``current_step``"""
+    time: int | float
+    """Current time of the fork, tracked in :attr:`time_attr` units"""
+
+
+class ForkFromData(TypedDict):
+    parent_id: str
+    """Trial id of the run to fork"""
+
+    parent_training_iteration: int
+    """Training iteration the fork is at. This is needed for example for WandB's fork_from feature"""
+
+    parent_time: Forktime
+    """
+    Current time the fork is at.
+
+    First element of the :class:`Forktime` is a string that describes the unit,
+    second the numerical value of the time
+    """
+
+    parent_trial: NotRequired[Trial]
+    """
+    If available, the actual Trial object of the run to fork
+
+    Attention:
+        The trial might be modified during the tuning process
+        as itself could be forked at some time.
+    """
+
+    parent_fork_id: NotRequired[str]
+    """If available, the fork_id of the parent trial, if it was forked itself"""
+
+    fork_id_this_trial: NotRequired[str]
+    """The fork_id this trial will get. It is constructed from the other fields."""
+
+    controller: NotRequired[str | Any]
+    """A field to inform who decided the forking, e.g. scheduler name"""

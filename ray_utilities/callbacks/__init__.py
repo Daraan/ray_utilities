@@ -20,10 +20,7 @@ if TYPE_CHECKING:
 
     from tap import Tap
 
-__all__ = [
-    "LOG_IGNORE_ARGS",
-    "remove_ignored_args",
-]
+__all__ = ["LOG_IGNORE_ARGS", "remove_ignored_args"]
 
 _K = TypeVar("_K")
 _V = TypeVar("_V")

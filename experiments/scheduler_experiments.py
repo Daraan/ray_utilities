@@ -1,23 +1,21 @@
 #!/usr/bin/env python3
 """Experimental scheduler tests"""
 
-from ray.tune.tuner import Tuner
+import os
 
-from ray_utilities import run_tune
-from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
-from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
-from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
-from ray_utilities.setup.tuner_setup import ScheduledTunerSetup
+import default_arguments.PYTHON_ARGCOMPLETE_OK
+import ray
+
+from ray_utilities import run_tune, runtime_env
+from ray_utilities.config import DefaultArgumentParser
+from ray_utilities.setup.scheduled_tuner_setup import PPOMLPWithReTuneSetup
+
+os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
 
 if __name__ == "__main__":
-    PPOMLPSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
-    PPOMLPSetup.group_name = "test-scheduler"  # pyright: ignore
-
-    class SchedulerSetup(PPOMLPSetup):
-        def create_tuner(self) -> Tuner:
-            return ScheduledTunerSetup(
-                setup=self, eval_metric=EVAL_METRIC_RETURN_MEAN, eval_metric_order="max"
-            ).create_tuner()
+    ray.init(object_store_memory=4 * 1024**3, runtime_env=runtime_env)  # 4 GB
+    PPOMLPWithReTuneSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
+    PPOMLPWithReTuneSetup.group_name = "test-scheduler"  # pyright: ignore
 
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
@@ -38,7 +36,9 @@ if __name__ == "__main__":
         "--test",
         "--total_steps", 20_000
     ):  # fmt: skip
-        setup = SchedulerSetup(config_files=["experiments/default.cfg"])  # Replace with your own setup class
+        setup = PPOMLPWithReTuneSetup(
+            config_files=["experiments/models/mlp/default.cfg"]
+        )  # Replace with your own setup class
         results = run_tune(setup)
 
         # TODO: Should not restore seed

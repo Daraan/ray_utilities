@@ -16,7 +16,6 @@ ray\_utilities.connectors.debug\_connector module
 -------------------------------------------------
 
 .. automodule:: ray_utilities.connectors.debug_connector
-   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -25,7 +24,6 @@ ray\_utilities.connectors.dummy\_connector module
 -------------------------------------------------
 
 .. automodule:: ray_utilities.connectors.dummy_connector
-   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -50,7 +48,6 @@ Module contents
 ---------------
 
 .. automodule:: ray_utilities.connectors
-   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:

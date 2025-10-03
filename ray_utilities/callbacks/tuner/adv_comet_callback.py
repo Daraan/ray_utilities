@@ -8,25 +8,36 @@ import os
 import sys
 import tempfile
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Iterable, List, Literal, Optional, cast
 
 from ray.air.integrations.comet import CometLoggerCallback
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
-from ray.tune.experiment import Trial
 from ray.tune.utils import flatten_dict
 
-from ray_utilities import run_id
 from ray_utilities.callbacks.tuner._save_video_callback import SaveVideoFirstCallback
-from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, EPISODE_VIDEO_PREFIX
+from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback
+from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
+from ray_utilities.comet import CometArchiveTracker
+from ray_utilities.constants import (
+    COMET_OFFLINE_DIRECTORY,
+    DEFAULT_VIDEO_DICT_KEYS,
+    ENTRY_POINT,
+    EPISODE_VIDEO_PREFIX,
+    FORK_FROM,
+)
+from ray_utilities.misc import make_experiment_key
 from ray_utilities.video.numpy_to_video import numpy_to_video
+
+from ._log_result_grouping import exclude_results, non_metric_results
 
 if TYPE_CHECKING:
     from comet_ml import Experiment, OfflineExperiment
     from numpy.typing import NDArray
-    from ray.tune.experiment.trial import Trial
+    from ray.tune.experiment import Trial
 
-    from ray_utilities.typing import CometStripedVideoFilename, FlatLogMetricsDict
-    from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict
+    from ray_utilities.typing import CometStripedVideoFilename, ForkFromData
+    from ray_utilities.typing.metrics import AnyFlatLogMetricsDict
 
 __all__ = [
     "AdvCometLoggerCallback",
@@ -35,7 +46,9 @@ __all__ = [
 _LOGGER = logging.getLogger(__name__)
 
 
-class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
+class AdvCometLoggerCallback(
+    NewStyleLoggerCallback, SaveVideoFirstCallback, TrackForkedTrialsMixin, CometLoggerCallback
+):
     # Copy from parent for pylance
     """CometLoggerCallback for logging Tune results to Comet.
 
@@ -96,32 +109,25 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
 
     _trial_experiments: dict[Trial, Experiment | OfflineExperiment]
 
-    _exclude_results: ClassVar[list[str]] = [
-        *CometLoggerCallback._exclude_results,  # noqa: SLF001
-        "cli_args/test",
-        "evaluation/discrete/env_runners/episode_videos_best/video_path",
-        "evaluation/discrete/env_runners/episode_videos_worst/video_path",
-        "evaluation/env_runners/episode_videos_best/video_path",
-        "evaluation/env_runners/episode_videos_worst/video_path",
-    ]
+    _exclude_results: ClassVar[list[str]] = list(
+        {
+            *CometLoggerCallback._exclude_results,  # noqa: SLF001
+            *exclude_results,
+            "evaluation/discrete/env_runners/episode_videos_best/video_path",
+            "evaluation/discrete/env_runners/episode_videos_worst/video_path",
+            "evaluation/env_runners/episode_videos_best/video_path",
+            "evaluation/env_runners/episode_videos_worst/video_path",
+        }
+    )
     """Metrics that are not logged"""
 
-    _other_results: ClassVar[list[str]] = [
-        *CometLoggerCallback._other_results,
-        "comment",
-        "cli_args/comment",
-        "run_id",
-        "env_runners/environments/seeds",
-        "evaluation/env_runners/environments/seeds",
-        "experiment_name",
-        "experiment_group",
-        "experiment_key",
-    ]
+    _other_results: ClassVar[list[str]] = list({*CometLoggerCallback._other_results, *non_metric_results})
 
     def __init__(
         self,
         *,
         online: bool = True,
+        upload_offline_experiments: bool = False,
         tags: Optional[List[str]] = None,
         save_checkpoints: bool = False,
         # Note: maybe want to log these in an algorithm debugger
@@ -152,17 +158,19 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
                 constructor for comet_ml.Experiment (or OfflineExperiment if
                 online=False).
         """
+        if not experiment_kwargs.get("disabled", False):
+            Path(COMET_OFFLINE_DIRECTORY).mkdir(parents=True, exist_ok=True)
         super().__init__(online=online, tags=tags, save_checkpoints=save_checkpoints, **experiment_kwargs)  # pyright: ignore[reportArgumentType]
 
         # Join video keys for flat dict access
         self._video_keys = video_keys
         """Video keys in their tuple form; probably without /video and /reward suffix"""
-        joined_keys = ["/".join(keys) for keys in video_keys]
+        joined_video_keys = ["/".join(keys) for keys in video_keys]
         # Videos are stored as dict with "video" and "reward" keys
-        self._flat_video_lookup_keys = [k + "/video" if not k.endswith("/video") else k for k in joined_keys]
+        self._flat_video_lookup_keys = [k + "/video" if not k.endswith("/video") else k for k in joined_video_keys]
         """Contains only /video keys"""
         self._flat_video_keys = self._flat_video_lookup_keys + [
-            k + "/reward" if not k.endswith("/reward") else k for k in joined_keys
+            k + "/reward" if not k.endswith("/reward") else k for k in joined_video_keys
         ]
         """Contains /video and /reward keys"""
 
@@ -194,6 +202,8 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
 
         self._trials_created = 0
         self._logged_architectures = set()
+        self.upload_offline_experiments = upload_offline_experiments
+        """If True, offline experiments will be uploaded on trial completion."""
 
     def _check_workspaces(self, trial: Trial) -> Literal[0, 1, 2]:
         """
@@ -226,10 +236,77 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
                 workspace,
                 workspaces,
             )
-            time.sleep(5)
+            if workspace != "TESTING":  # ignore error when testing
+                time.sleep(5)
             self.experiment_kwargs["workspace"] = None
             return 2
         return 0
+
+    def _restart_experiment_for_forked_trial(
+        self, trial: Trial, fork_data: Optional[ForkFromData] = None
+    ) -> Experiment | OfflineExperiment:
+        try:
+            self.log_trial_end(trial)
+            _LOGGER.info("Ended and restarting experiment for forked trial %s", trial)
+            assert self.is_trial_forked(trial)
+        except KeyError:  # forked, but not yet started, e.g. loaded from checkpoint
+            assert (_info := self.get_forked_trial_info(trial))
+            assert "parent_trial" not in _info[-1]
+        experiment_kwargs = self.experiment_kwargs.copy()
+        if fork_data is None:
+            fork_data = cast("ForkFromData | None", trial.config.get(FORK_FROM, None))
+        if fork_data is None:
+            raise ValueError(f"{FORK_FROM} not in trial.config {trial.config}")
+        # Need to modify experiment key to avoid conflicts
+        if "experiment_key" in experiment_kwargs:
+            _LOGGER.warning(
+                "Need to modify experiment key for forked trial, overwriting passed key: %s",
+                experiment_kwargs["experiment_key"],
+            )
+        experiment_kwargs["experiment_key"] = self.get_forked_trial_id(trial) or self.make_forked_trial_id(
+            trial, fork_data
+        )
+        # TODO: Do fake logging steps to get to the forked experiment step?
+        return self._start_experiment(trial, experiment_kwargs)
+
+    def _start_experiment(
+        self, trial: Trial, experiment_kwargs: Optional[dict] = None
+    ) -> Experiment | OfflineExperiment:
+        from comet_ml import Experiment, OfflineExperiment
+        from comet_ml.config import set_global_experiment
+
+        experiment_cls = Experiment if self.online else OfflineExperiment
+        if experiment_kwargs is None:
+            experiment_kwargs = self.experiment_kwargs.copy()
+        # Key needs to be at least 32 but not more than 50
+        experiment_kwargs.setdefault("experiment_key", make_experiment_key(trial))
+        if not (32 <= len(experiment_kwargs["experiment_key"]) <= 50):
+            _LOGGER.error(
+                "Comet experiment key '%s' is invalid. It must be between 32 and 50 characters.",
+                experiment_kwargs["experiment_key"],
+            )
+            raise ValueError(
+                "Invalid experiment key length: "
+                f"{len(experiment_kwargs['experiment_key'])} not in [32, 50] "
+                f"for key '{experiment_kwargs['experiment_key']}'"
+            )
+        self._check_workspaces(trial)
+        experiment = experiment_cls(**experiment_kwargs)
+        experiment.set_filename(ENTRY_POINT)
+        if self._log_pip_packages:
+            try:
+                experiment.set_pip_packages()
+            except Exception:
+                from comet_ml.experiment import (
+                    EXPERIMENT_START_FAILED_SET_PIP_PACKAGES_ERROR,
+                )
+
+                logging.getLogger("comet_ml.experiment").exception(EXPERIMENT_START_FAILED_SET_PIP_PACKAGES_ERROR)
+        self._trial_experiments[trial] = experiment
+        # Set global experiment to None to allow for multiple experiments.
+        set_global_experiment(None)
+        self._trials_created += 1
+        return experiment
 
     def log_trial_start(self, trial: "Trial"):
         """
@@ -242,37 +319,25 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         Overwritten method to respect ignored/refactored keys.
         nested to other keys will only have their deepest key logged.
         """
-        from comet_ml import Experiment, OfflineExperiment
-        from comet_ml.config import set_global_experiment
-
-        if trial not in self._trial_experiments:
-            experiment_cls = Experiment if self.online else OfflineExperiment
-            experiment_kwargs = self.experiment_kwargs.copy()
-            # Key needs to be at least 32 but not more than 50
-            experiment_kwargs["experiment_key"] = (
-                f"{run_id:0<18}xXx{trial.trial_id}xXx{self._trials_created:0>4}".replace("_", "xXx")
-            )
-            assert 32 <= len(experiment_kwargs["experiment_key"]) <= 50, len(experiment_kwargs["experiment_key"])
-            self._check_workspaces(trial)
-            experiment = experiment_cls(**experiment_kwargs)
-            if self._log_pip_packages:
-                try:
-                    experiment.set_pip_packages()
-                except Exception:
-                    from comet_ml.experiment import (
-                        EXPERIMENT_START_FAILED_SET_PIP_PACKAGES_ERROR,
-                    )
-
-                    logging.getLogger("comet_ml.experiment").exception(EXPERIMENT_START_FAILED_SET_PIP_PACKAGES_ERROR)
-            self._trial_experiments[trial] = experiment
-            # Set global experiment to None to allow for multiple experiments.
-            set_global_experiment(None)
-            self._trials_created += 1
+        # breakpoint()
+        trial_name = str(trial)
+        tags = self.tags
+        if FORK_FROM in trial.config:
+            # Use ForkFromData dict; legacy strings are handled earlier in the scheduler
+            fork_data: ForkFromData = trial.config[FORK_FROM]
+            assert self.get_forked_trial_info(trial)
+            # Restart experiment to avoid conflicts
+            experiment = self._restart_experiment_for_forked_trial(trial, fork_data)
+            trial_name = self.make_forked_trial_name(trial, fork_data)
+            tags = [*self.tags, "forked"]
+        elif trial not in self._trial_experiments:
+            experiment = self._start_experiment(trial)
+            assert trial in self._trial_experiments
         else:
             experiment = self._trial_experiments[trial]
 
-        experiment.set_name(str(trial))
-        experiment.add_tags(self.tags)
+        experiment.set_name(trial_name)
+        experiment.add_tags(tags)
         experiment.log_other("Created from", "Ray")
 
         # NOTE: Keys here at not flattened, cannot use "cli_args/test" as a key
@@ -298,7 +363,8 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
                 if len(config[k1]) == 0:
                     config.pop(k1)
 
-        experiment = self._trial_experiments[trial]
+        assert experiment is self._trial_experiments[trial]
+        # experiment = self._trial_experiments[trial]
         experiment.log_parameters(config)
         # Log the command line arguments
         if self._cli_args:
@@ -311,10 +377,15 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         if to_other:
             experiment.log_others(to_other)
 
-    def log_trial_result(self, iteration: int, trial: Trial, result: dict | AutoExtendedLogMetricsDict):
+    def log_trial_result(  # pyright: ignore[reportIncompatibleMethodOverride]
+        self,
+        iteration: int,
+        trial: Trial,
+        result,
+    ):
         step: int = result["training_iteration"]  # maybe result.get(TIMESTEPS_TOTAL) or result[TRAINING_ITERATION]
         # Will be flattened in super anyway
-        flat_result: FlatLogMetricsDict = flatten_dict(result, delimiter="/")  # type: ignore[arg-type]
+        flat_result: AnyFlatLogMetricsDict = flatten_dict(result, delimiter="/")  # pyright: ignore[reportArgumentType, reportAssignmentType]
         del result  # avoid using it by mistake
 
         videos: dict[str, NDArray | float | str] = {k: v for k in self._flat_video_keys if (v := flat_result.get(k))}
@@ -344,7 +415,7 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
         # Cannot remove this
         log_result["training_iteration"] = step
         # Log normal metrics and parameters
-        super().log_trial_result(iteration, trial, log_result)
+        super().log_trial_result(iteration, trial, log_result)  # pyright: ignore[reportArgumentType]
         # Log model architecture
         if trial not in self._logged_architectures and "model_architecture.json" in os.listdir(trial.path):
             if trial.path is not None:
@@ -394,3 +465,69 @@ class AdvCometLoggerCallback(SaveVideoFirstCallback, CometLoggerCallback):
                             metadata=metadata,
                         )
             experiment.log_other("hasVideo", value=True)
+
+    def on_trial_complete(self, iteration: int, trials: list["Trial"], trial: "Trial", **info):
+        """Called when a trial has completed. Triggers upload for offline experiments."""
+        # Call parent method to handle normal trial completion
+        super().on_trial_complete(iteration, trials, trial, **info)
+
+        # If we are in offline mode, try to upload this trial's experiment immediately
+        if not self.online and self.upload_offline_experiments:
+            self._upload_offline_experiment_if_available(trial)
+
+    def _upload_offline_experiment_if_available(self, trial: "Trial"):
+        """Upload offline experiment for the given trial if it exists."""
+        try:
+            # Look for the experiment archive that was just created for this trial
+            comet_offline_path = Path(COMET_OFFLINE_DIRECTORY)
+            if not comet_offline_path.exists():
+                _LOGGER.debug("Comet offline directory does not exist: %s", comet_offline_path)
+                return
+
+            # The zip file should contain the trial ID with _ replaced by U
+            zip_files = sorted(
+                comet_offline_path.glob(f"*{trial.trial_id.replace('_', 'U')}*.zip"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if len(zip_files) > 1:
+                _LOGGER.warning(
+                    "Multiple offline experiment archives found for trial %s, using the most recent one: %s",
+                    trial.trial_id,
+                    zip_files,
+                )
+            elif len(zip_files) == 0:  # otherwise get all and pick the latest
+                _LOGGER.warning(
+                    "Could not find an offline experiment that contained the trial ID %s in %s. "
+                    "Picking latest .zip file",
+                    trial.trial_id,
+                    comet_offline_path,
+                )
+                zip_files = sorted(comet_offline_path.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
+                if trial.config.get("experiment_id"):
+                    # check that experiment_id at least matches
+                    zip_files_experiment = [f for f in zip_files if trial.config["experiment_id"] in f.name]
+                    if zip_files_experiment:
+                        zip_files = zip_files_experiment
+                    else:
+                        _LOGGER.warning(
+                            "Could also not find an offline experiment that contained the experiment ID %s. "
+                            "Picking latest .zip file",
+                            trial.config["experiment_id"],
+                        )
+
+            if not zip_files:
+                _LOGGER.debug("No offline experiment archives found for upload")
+                return
+
+            # Upload the most recent archive (likely from this trial)
+            # Use a custom tracker to upload only the latest experiment
+            latest_archive = zip_files[0]
+            _LOGGER.info("Attempting to upload comet offline experiment: %s", latest_archive)
+
+            tracker = CometArchiveTracker(track=[latest_archive], auto=False)
+            tracker.upload_and_move()
+
+        except (OSError, ImportError):
+            _LOGGER.exception("Failed to upload offline experiment for trial %s", trial.trial_id)
+            raise

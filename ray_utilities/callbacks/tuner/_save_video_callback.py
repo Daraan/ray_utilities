@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ray.tune.logger import LoggerCallback
 
@@ -13,8 +13,6 @@ from ray_utilities.postprocessing import save_videos
 if TYPE_CHECKING:
     from ray.tune.experiment.trial import Trial
 
-    from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict
-
 
 class SaveVideoFirstCallback(LoggerCallback):
     def on_trial_result(
@@ -22,7 +20,7 @@ class SaveVideoFirstCallback(LoggerCallback):
         iteration: int,
         trials: list["Trial"],
         trial: "Trial",
-        result: dict | AutoExtendedLogMetricsDict,
+        result: dict[str, Any],
         **info,
     ):
         """Called after receiving a result from a trial.

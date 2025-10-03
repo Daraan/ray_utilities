@@ -32,7 +32,7 @@ from ray import tune
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS, EPISODE_RETURN_MEAN, EVALUATION_RESULTS
 
 from ray_utilities.callbacks.progress_bar import update_pbar
-from ray_utilities.config.typed_argument_parser import LOG_STATS
+from ray_utilities.config.parser.default_argument_parser import LOG_STATS
 from ray_utilities.constants import EVALUATED_THIS_STEP
 from ray_utilities.misc import is_pbar
 from ray_utilities.postprocessing import create_log_metrics, filter_metrics
@@ -51,7 +51,7 @@ if TYPE_CHECKING:
 
     from ray.rllib.algorithms import Algorithm
 
-    from ray_utilities.config.typed_argument_parser import LogStatsChoices
+    from ray_utilities.config.parser.default_argument_parser import LogStatsChoices
     from ray_utilities.typing import (
         LogMetricsDict,
         RewardsDict,

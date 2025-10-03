@@ -236,8 +236,7 @@ class ReTuneScheduler(PopulationBasedTraining):
             self._checkpoint_or_exploit(trial, tune_controller, upper_quantile, lower_quantile)
             return self.NOOP if trial.status == Trial.PAUSED else decision
 
-        # calls
-        self._checkpoint_or_exploit  # current_step (- last perturbation time) < self._perturbation_interval
+        # calls self._checkpoint_or_exploit  # current_step (- last perturbation time) < self._perturbation_interval
         return super().on_trial_result(tune_controller, trial, result)
 
     def _quantiles(self) -> Tuple[List[Trial], List[Trial]]:
@@ -254,10 +253,10 @@ class ReTuneScheduler(PopulationBasedTraining):
             logger.debug("Trial %s, state %s", trial, state)
             if trial.is_finished():
                 logger.debug("Trial %s is finished", trial)
-            if state.last_score is not None and not trial.is_finished():
+            if state.last_score is not None and not math.isnan(state.last_score) and not trial.is_finished():
                 trials.append(trial)
         # called after trial_save -> last_score is not None
-        trials.sort(key=lambda t: self._trial_state[t].last_score or 0.0)
+        trials.sort(key=lambda t: self._trial_state[t].last_score)
 
         if len(trials) <= 1:
             return [], []

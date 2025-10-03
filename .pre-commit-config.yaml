@@ -8,7 +8,7 @@ repos:
       name: ruff clean whitespace
       args: [
               "--fix",
-              "--select", "C4,FA102,F821,ISC,PIE794,PIE796,PIE8,TC004,W,YTT"
+              "--select", "C4,FA102,F821,ISC,PIE794,PIE796,PIE8,TC004,W,YTT,RUF022",
             ]
     - id: ruff-check
       args: [
@@ -17,3 +17,32 @@ repos:
     # Run the formatter.
     - id: ruff-format
       args: ["-v"]
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v5.0.0
+  hooks:
+    - id: check-ast
+    - id: trailing-whitespace
+    - id: end-of-file-fixer
+    - id: check-yaml
+    - id: check-toml
+    - id: check-json
+    - id: pretty-format-json
+    - id: check-merge-conflict
+    - id: check-case-conflict
+    - id: mixed-line-ending
+    - id: name-tests-test
+      args: [--fix=lf]
+    - id: check-illegal-windows-names
+- repo: https://github.com/sphinx-contrib/sphinx-lint
+  rev: v1.0.0
+  hooks:
+    - id: sphinx-lint
+      args: [docs]
+- repo: https://github.com/rhysd/actionlint
+  rev: v1.7.7
+  hooks:
+    - id: actionlint
+- repo: https://github.com/woodruffw/zizmor-pre-commit
+  rev: v1.13.0
+  hooks:
+    - id: zizmor

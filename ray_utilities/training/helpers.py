@@ -20,7 +20,8 @@ from ray.rllib.utils.metrics import (
     LEARNER_RESULTS,
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
-from typing_extensions import TypeAliasType
+from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
+from typing_extensions import Sentinel, TypeAliasType
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
 from ray_utilities.config import seed_environments_for_config
@@ -41,13 +42,20 @@ if TYPE_CHECKING:
     from ray.rllib.env.multi_agent_env_runner import MultiAgentEnvRunner
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
 
-    from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+    from ray_utilities.config import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
     from ray_utilities.typing import (
         RewardUpdaters,
         StrictAlgorithmReturnData,
     )
-    from ray_utilities.typing.metrics import LogMetricsDict
+    from ray_utilities.typing.algorithm_return import EvalEnvRunnersResultsDict
+    from ray_utilities.typing.metrics import (
+        AnyLogMetricsDict,
+        LogMetricsDict,
+        _LogMetricsEnvRunnersResultsDict,
+        _LogMetricsEvalEnvRunnersResultsDict,
+        _NewLogMetricsEvaluationResultsDict,
+    )
     from ray_utilities.typing.trainable_return import RewardUpdater
 
 logger = logging.getLogger(__name__)
@@ -57,6 +65,8 @@ DefaultExperimentSetup = TypeAliasType(
 )
 
 _AlgorithmConfigT = TypeVar("_AlgorithmConfigT", bound="AlgorithmConfig")
+
+_NOT_FOUND = Sentinel("_NOT_FOUND")
 
 
 @overload
@@ -77,18 +87,31 @@ def episode_iterator(args: dict[str, Any], hparams: dict[str, Any], *, use_pbar:
     return range(args["iterations"])
 
 
-def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict) -> int:
+def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict | dict[str, Any] | MetricsLogger) -> int:
     # requires exact_sampling_callback to be set in the results, otherwise fallback
-    current_step = result.get("current_step")
+    if isinstance(result, MetricsLogger):
+        # For peek do not use None as default as this triggers KeyError
+        current_step = result.peek((LEARNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=_NOT_FOUND)
+        if current_step is not _NOT_FOUND:
+            return current_step
+        current_step = result.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=_NOT_FOUND)
+        if current_step is not _NOT_FOUND:
+            return current_step
+        return result.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=0)
+
+    current_step = result.get("current_step")  # likely not present
     if current_step is not None:  # LogMetricsDict
         return current_step
     result = cast("StrictAlgorithmReturnData", result)
-    current_step = result[LEARNER_RESULTS][ALL_MODULES].get(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)
-    if current_step is not None:
-        return current_step
+    if LEARNER_RESULTS in result:
+        current_step = result[LEARNER_RESULTS][ALL_MODULES].get(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)
+        if current_step is not None:
+            return current_step
     # try metric logged on env runner; else defaults to NUM_ENV_STEPS_SAMPLED_LIFETIME
-    return result[ENV_RUNNER_RESULTS].get(
-        NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]
+    return int(
+        result[ENV_RUNNER_RESULTS].get(
+            NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]
+        )
     )
 
 
@@ -189,7 +212,7 @@ def get_args_and_config(
         args = setup.args_to_dict()
         config: ConfigType_co = setup.config.copy(copy_frozen=False)  # pyright: ignore[reportAssignmentType]
     elif setup_class:
-        args = hparams["cli_args"]
+        args = deepcopy(hparams["cli_args"])
         # TODO: this should use the parameters from the search space
         config = setup_class.config_from_args(SimpleNamespace(**args))
     else:
@@ -399,7 +422,7 @@ def setup_trainable(
 def get_total_steps(args: dict[str, Any], config: "AlgorithmConfig") -> int | None:
     return (
         args.get("total_steps", None)
-        if args["iterations"] == "auto"
+        if args["iterations"] == "auto" or args["use_exact_total_steps"]
         else (
             calculate_steps(
                 args["iterations"],
@@ -619,3 +642,28 @@ def is_algorithm_callback_added(config: AlgorithmConfig, callback_class: type[RL
         or (isinstance(config.callbacks_class, type) and issubclass(config.callbacks_class, callback_class))
         or (isinstance(config.callbacks_class, (list, tuple)) and callback_class in config.callbacks_class)
     )
+
+
+def get_training_results(
+    result: StrictAlgorithmReturnData | AnyLogMetricsDict | dict[str, Any],
+) -> _LogMetricsEnvRunnersResultsDict:
+    """
+    Returns the training / env_runner results from the given result dict.
+
+    This method is agnostic to RAY_UTILITIES_NEW_LOG_METRICS and works with both
+    new and rllib metrics structure
+    """
+    if "training" in result:
+        return result["training"]
+    return result[ENV_RUNNER_RESULTS]
+
+
+def get_evaluation_results(
+    result: StrictAlgorithmReturnData | AnyLogMetricsDict | dict[str, Any],
+) -> None | EvalEnvRunnersResultsDict | _LogMetricsEvalEnvRunnersResultsDict | _NewLogMetricsEvaluationResultsDict:
+    if EVALUATION_RESULTS not in result:
+        return None
+    eval_results = result[EVALUATION_RESULTS]
+    if ENV_RUNNER_RESULTS in eval_results:
+        return eval_results[ENV_RUNNER_RESULTS]
+    return eval_results

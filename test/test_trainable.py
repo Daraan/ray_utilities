@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 from copy import deepcopy
+from test._mp_trainable import remote_process
 from typing import TYPE_CHECKING, cast
 from unittest import mock, skip
 
@@ -15,8 +16,8 @@ from ray.rllib.utils.metrics import EVALUATION_RESULTS
 from ray.tune.utils import validate_save_restore
 from ray.util.multiprocessing import Pool
 
-from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
-from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN, PERTURBED_HPARAMS
+from ray_utilities.config import DefaultArgumentParser
+from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN, FORK_FROM, PERTURBED_HPARAMS
 from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup
@@ -34,7 +35,6 @@ from ray_utilities.testing_utils import (
 )
 from ray_utilities.training.default_class import DefaultTrainable
 from ray_utilities.training.helpers import make_divisible
-from test._mp_trainable import remote_process
 
 try:
     from ray.train._internal.session import _TrainingResult
@@ -206,6 +206,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
                 "--batch_size", batch_size2,
                 "--comment", "B",
                 "--from_checkpoint", tmpdir,
+                "--num_envs_per_env_runner", 1,
             ):  # fmt: skip
                 with AlgorithmSetup(init_trainable=False) as setup2:
                     setup2.config.training(
@@ -424,6 +425,24 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                         trainable3.stop()
             trainable.stop()
 
+    def test_fork_from_restore(self):
+        num_env_runners = 0
+        trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
+        with self.subTest(num_env_runners=num_env_runners):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                trainable.save(tmpdir)  # calls save_checkpoint
+                # make sure that args do not influence the restore
+                with patch_args(
+                    "--num_env_runners", num_env_runners,
+                    "--no_dynamic_eval_interval",
+                ):  # fmt: skip
+                    trainable3 = self.TrainableClass({FORK_FROM: "something"})
+                    self.assertIsInstance(tmpdir, str)
+                    trainable3.restore(tmpdir)  # calls load_checkpoint
+                    self.compare_trainables(trainable, trainable3, "from path", num_env_runners=num_env_runners)
+                    trainable3.stop()
+            trainable.stop()
+
     @pytest.mark.env_runner_cases
     @pytest.mark.basic
     @Cases([0])
@@ -593,6 +612,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     @Cases(ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
     def test_restore_multiprocessing(self, cases):
+        self._disable_save_model_architecture_callback_added.stop()  # remote is not mocked
         for num_env_runners in iter_cases(cases):
             with tempfile.TemporaryDirectory() as tmpdir:
                 # pool works

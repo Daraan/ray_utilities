@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback, make_seeded_env_callback
 
-from .typed_argument_parser import DefaultArgumentParser
+from .parser.default_argument_parser import DefaultArgumentParser
 
 if TYPE_CHECKING:
     from typing import Any, Callable

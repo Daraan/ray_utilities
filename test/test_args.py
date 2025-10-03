@@ -16,12 +16,13 @@ from ray_utilities.callbacks.algorithm.dynamic_buffer_callback import DynamicBuf
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
 from ray_utilities.callbacks.algorithm.exact_sampling_callback import exact_sampling_callback
 from ray_utilities.callbacks.algorithm.reset_episode_metrics import reset_episode_metrics_each_iteration
-from ray_utilities.config.typed_argument_parser import DefaultArgumentParser, LogStatsChoices
+from ray_utilities.config.parser.default_argument_parser import DefaultArgumentParser, LogStatsChoices
 from ray_utilities.connectors.remove_masked_samples_connector import RemoveMaskedSamplesConnector
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, split_timestep_budget
 from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import PPOTorchLearnerWithGradientAccumulation
 from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
+from ray_utilities.setup.ppo_mlp_setup import MLPSetup
 from ray_utilities.testing_utils import DisableLoggers, SetupLowRes, SetupWithEnv, mock_trainable_algorithm, patch_args
 from ray_utilities.training.helpers import is_algorithm_callback_added
 
@@ -166,7 +167,10 @@ class TestExtensionsAdded(SetupWithEnv, SetupLowRes, DisableLoggers):
         for config in (setup.config, trainable.algorithm_config):
             with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
                 self.assertTrue(is_algorithm_callback_added(config, DynamicGradientAccumulation))
-                self.assertTrue(issubclass(config.learner_class, PPOTorchLearnerWithGradientAccumulation))
+                self.assertTrue(
+                    issubclass(config.learner_class, PPOTorchLearnerWithGradientAccumulation),
+                    "Expected learner_class to be a subclass of PPOTorchLearnerWithGradientAccumulation when --dynamic_batch is set.",
+                )
         trainable.stop()
 
     @patch_args()
@@ -239,14 +243,13 @@ class TestProcessing(unittest.TestCase):
         for choice in get_args(LogStatsChoices):
             with self.subTest(f"Testing log_stats with choice: {choice}"):
                 with patch_args(
-                    "--log_stats",
-                    choice,
-                    "--minibatch_size",
-                    "8",
-                    "--batch_size",
-                    "8",
-                ):
-                    with AlgorithmSetup(init_trainable=False) as setup:
+                    "--log_stats", choice,
+                    "--minibatch_size", "8",
+                    "--batch_size", "8",
+                    "--fcnet_hiddens", "[1]",
+                    "--num_envs_per_env_runner", "1",
+                ):  # fmt: skip
+                    with MLPSetup(init_trainable=False) as setup:
                         setup.config.num_epochs = 1
                     self.assertEqual(setup.args.log_stats, choice)
                     if isclass(setup.trainable):
@@ -329,22 +332,26 @@ class TestProcessing(unittest.TestCase):
     def test_class_patch_args(self):
         with patch_args():  # Highest priority
             # Default values
-            self.assertListEqual(sys.argv[1:], ["-a", "no_actor_provided_by_patch_args", "--log_level", "DEBUG"])
+            self.assertListEqual(sys.argv[1:], ["-a", "no_actor_by_patch", "--log_level", "DEBUG"])
             with DefaultArgumentParser.patch_args():
-                self.assertListEqual(sys.argv[1:], ["-a", "no_actor_provided_by_patch_args", "--log_level", "DEBUG"])
+                # The order of arguments might be changed by patch_args
+                self.assertTrue(
+                    sys.argv[1:] == ["-a", "no_actor_by_patch", "--log_level", "DEBUG"]
+                    or sys.argv[1:] == ["--log_level", "DEBUG", "-a", "no_actor_by_patch"]
+                )
                 args = DefaultArgumentParser().parse_args()
                 self.assertEqual(args.comet, False)
-                self.assertEqual(args.agent_type, "no_actor_provided_by_patch_args")
+                self.assertEqual(args.agent_type, "no_actor_by_patch")
                 self.assertEqual(args.log_level, "DEBUG")
 
         with patch_args(log_level=None):  # Highest priority
             # Default values
-            self.assertListEqual(sys.argv[1:], ["-a", "no_actor_provided_by_patch_args"])
+            self.assertListEqual(sys.argv[1:], ["-a", "no_actor_by_patch"])
             with DefaultArgumentParser.patch_args():
-                self.assertListEqual(sys.argv[1:], ["-a", "no_actor_provided_by_patch_args"])
+                self.assertListEqual(sys.argv[1:], ["-a", "no_actor_by_patch"])
                 args = DefaultArgumentParser().parse_args()
                 self.assertEqual(args.comet, False)
-                self.assertEqual(args.agent_type, "no_actor_provided_by_patch_args")
+                self.assertEqual(args.agent_type, "no_actor_by_patch")
                 self.assertEqual(args.log_level, "INFO")  # Default value
 
         with patch_args("--comet"):  # Highest priority
@@ -434,3 +441,56 @@ class TestProcessing(unittest.TestCase):
             self.assertIs(args.use_exact_total_steps, False)
             self.assertIs(args.wandb, False)
             self.assertIs(args.tune, False)
+
+
+class TestTagArgumentProcessing(unittest.TestCase):
+    @patch_args("--tag:foo")
+    def test_add_extra_tag(self):
+        parser = DefaultArgumentParser().parse_args(known_only=True)
+        self.assertEqual(len(parser.extra_args), 0)
+        self.assertIn("foo", parser.tags)
+        self.assertNotIn("--tag:foo", parser.extra_args)
+
+    @patch_args("--tag:foo", "--tag:bar", "--tags", "baz")
+    def test_add_multiple_extra_tags(self):
+        parser = DefaultArgumentParser().parse_args(known_only=True)
+        self.assertEqual(len(parser.extra_args), 0)
+        self.assertIn("foo", parser.tags)
+        self.assertIn("bar", parser.tags)
+        self.assertIn("baz", parser.tags)
+
+    @patch_args("--tag:foo:1", "--tag:foo:2", "--tag:bar:3")
+    def test_remove_duplicated_subtags_colon(self):
+        parser = DefaultArgumentParser().parse_args(known_only=True)
+        self.assertEqual(len(parser.extra_args), 0)
+        self.assertIn("foo:2", parser.tags)
+        self.assertIn("bar:3", parser.tags)
+        self.assertSetEqual({"bar:3", "foo:2"}, set(parser.tags))
+
+    @patch_args("--tag:foo=2", "--tag:bar=3", "--tags", "foo=1", "--tag:foo=3")
+    def test_remove_duplicated_subtags_equal(self):
+        parser = DefaultArgumentParser().parse_args(known_only=True)
+        self.assertEqual(len(parser.extra_args), 0)
+        self.assertIn("foo=1", parser.tags)
+        self.assertIn("bar=3", parser.tags)
+        self.assertSetEqual({"bar=3", "foo=1"}, set(parser.tags))
+
+    @patch_args("--tag:foo:1", "--tag:foo:2", "--tag:foo", "--tag:foo=3", "--tag:foo:4")
+    def test_tags_priority(self):
+        parser = DefaultArgumentParser().parse_args(known_only=True)
+        self.assertEqual(len(parser.extra_args), 0)
+        # Only one foo: or foo= should remain
+        self.assertListEqual(parser.tags, ["foo", "foo:4"])
+
+    @patch_args("foo:1", "--tag:foo", "--tag:foo:2")
+    def test_invalid_tag_format(self):
+        stderr_out = io.StringIO()
+        with self.assertRaises(SystemExit), redirect_stderr(stderr_out):
+            DefaultArgumentParser().parse_args(known_only=False)
+        parser = DefaultArgumentParser().parse_args(known_only=True)
+        self.assertListEqual(["foo", "foo:2"], parser.tags)
+        self.assertIn("foo:1", parser.extra_args)
+
+
+if __name__ == "__main__":
+    unittest.main()

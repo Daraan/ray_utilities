@@ -9,7 +9,7 @@ inputs:
   install-args:
     description: 'Arguments to pass to pip install'
     required: false
-    default: .[test] pyright
+    default: '.[test]'
   use-pip-cache:
     description: 'Whether to use pip cache'
     required: false
@@ -35,12 +35,14 @@ runs:
     - name: Check and handle cache hit
       shell: bash
       run: |
-        if [ "${{ steps.cache-venv.outputs.cache-hit }}" == "true" ]; then
+        if [ "${STEPS_CACHE_VENV_OUTPUTS_CACHE_HIT}" == "true" ]; then
           echo "Cache hit on venv, skipping the rest of the jobs."
           exit 0
         else
           echo "No cache hit on venv, proceeding with the setup."
         fi
+      env:
+        STEPS_CACHE_VENV_OUTPUTS_CACHE_HIT: ${{ steps.cache-venv.outputs.cache-hit }}
     - name: Set up Python (with pip cache)
       if: ${{ inputs.use-pip-cache == 'true' && steps.cache-venv.outputs.cache-hit != 'true'}}
       id: setup-pip-cached
@@ -60,13 +62,16 @@ runs:
       if: ${{ inputs.use-pip-cache == 'true' && steps.cache-venv.outputs.cache-hit != 'true'}}
       shell: bash
       run: |
-        if [ "${{ inputs.use-pip-cache }}" == "true" ]; then
-          if [ -z "${{ steps.setup-pip-cached.outputs.cache-hit }}" ]; then
+        if [ "${INPUTS_USE_PIP_CACHE}" == "true" ]; then
+          if [ -z "${STEPS_SETUP_PIP_CACHED_OUTPUTS_CACHE_HIT}" ]; then
             echo "Cache hit for pip false"
           else
-            echo "Cache hit for pip ${{ steps.setup-pip-cached.outputs.cache-hit }}"
+            echo "Cache hit for pip ${STEPS_SETUP_PIP_CACHED_OUTPUTS_CACHE_HIT}"
           fi
         fi
+      env:
+        INPUTS_USE_PIP_CACHE: ${{ inputs.use-pip-cache }}
+        STEPS_SETUP_PIP_CACHED_OUTPUTS_CACHE_HIT: ${{ steps.setup-pip-cached.outputs.cache-hit }}
     - name: Set up virtualenv
       if: ${{ steps.cache-venv.outputs.cache-hit != 'true' }}
       shell: bash
@@ -77,4 +82,6 @@ runs:
       run: |
         source .venv/bin/activate
         pip install -U pip
-        pip install ${{ inputs.install-args }}
+        pip install "${INPUTS_INSTALL_ARGS}" pyright
+      env:
+        INPUTS_INSTALL_ARGS: ${{ inputs.install-args }}

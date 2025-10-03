@@ -46,7 +46,7 @@ import math
 from typing import TYPE_CHECKING, Any, Optional, TypedDict, overload
 
 from ray.experimental import tqdm_ray
-from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS, EPISODE_RETURN_MEAN
+from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS, EPISODE_RETURN_MEAN, EVALUATION_RESULTS
 from tqdm import tqdm
 from typing_extensions import NotRequired
 
@@ -168,15 +168,30 @@ def update_pbar(
     total_steps: Optional[int] = None,
 ):
     """Updates the progress bar with the latest training and evaluation metrics."""
+    eval_constructed = False
     if metrics is not None and result is not None and rewards is not None:
         train_results = {
             "mean": metrics[ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN],
             "max": result[ENV_RUNNER_RESULTS].get("episode_return_max", float("nan")),
             "roll": rewards["running_reward"],
         }
+    if (
+        eval_results is None
+        and rewards is not None
+        and (
+            (metrics and (eval_runner_results := metrics.get(EVALUATION_RESULTS, None)))
+            or (result and (eval_runner_results := result.get(EVALUATION_RESULTS, None)))
+        )
+    ):
+        eval_results = {
+            "mean": eval_runner_results[ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN],
+            "roll": rewards["running_eval_reward"],
+        }
+        eval_constructed = True
     if rewards:
         if eval_results is not None:
-            logger.warning("Both eval_results and rewards are provided. Using eval_results for evaluation metrics.")
+            if not eval_constructed:
+                logger.warning("Both eval_results and rewards are provided. Using eval_results for evaluation metrics.")
         else:
             eval_results = {
                 "mean": rewards["eval_mean"],

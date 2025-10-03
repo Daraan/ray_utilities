@@ -21,6 +21,7 @@ See Also:
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 
 import colorlog
 from typing_extensions import Sentinel
@@ -156,3 +157,14 @@ def set_project_log_level(
                 lg.exception("Failed to set level with this logger")
                 # be conservative: ignore any logger that can't be adjusted
                 continue
+
+
+@contextmanager
+def change_log_level(logger: logging.Logger, new_level: logging._Level):
+    """Context manager to temporarily change a logger's level."""
+    old_level = logger.getEffectiveLevel()
+    logger.setLevel(new_level)
+    try:
+        yield
+    finally:
+        logger.setLevel(old_level)

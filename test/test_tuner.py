@@ -5,8 +5,10 @@ import os
 import pickle
 import random
 import tempfile
-from collections.abc import Iterable, Mapping
+import time
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
+import unittest
 
 import numpy as np
 import pytest
@@ -21,6 +23,7 @@ from ray.train._internal.storage import StorageContext
 from ray.tune import CheckpointConfig
 from ray.tune.experiment import Trial
 from ray.tune.result import SHOULD_CHECKPOINT, TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
+from ray.tune.schedulers.pbt import logger as ray_pbt_logger
 from ray.tune.search.optuna import OptunaSearch
 from ray.tune.stopper import CombinedStopper
 from ray.tune.stopper.maximum_iteration import MaximumIterationStopper
@@ -28,19 +31,20 @@ from ray.tune.utils.mock_trainable import MOCK_TRAINABLE_NAME, register_mock_tra
 
 from ray_utilities.callbacks.algorithm import exact_sampling_callback
 from ray_utilities.callbacks.tuner.metric_checkpointer import StepCheckpointer  # pyright: ignore[reportDeprecated]
-from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.constants import (
     EVAL_METRIC_RETURN_MEAN,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
 )
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations
-from ray_utilities.misc import raise_tune_errors
+from ray_utilities.misc import is_pbar, raise_tune_errors
 from ray_utilities.runfiles import run_tune
 from ray_utilities.setup import optuna_setup
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup
+from ray_utilities.setup.scheduled_tuner_setup import PPOMLPWithPBTSetup
 from ray_utilities.testing_utils import (
     ENV_RUNNER_CASES,
     Cases,
@@ -49,22 +53,25 @@ from ray_utilities.testing_utils import (
     SetupWithCheck,
     TestHelpers,
     TrainableWithChecks,
-    _MockTrial,
+    MockTrial,
     _MockTrialRunner,
     format_result_errors,
     iter_cases,
     mock_result,
-    no_parallel_envs,
     patch_args,
 )
 from ray_utilities.training.default_class import DefaultTrainable
 from ray_utilities.training.helpers import make_divisible
 from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
+from ray_utilities.tune.scheduler.top_pbt_scheduler import CyclicMutation, TopPBTTrialScheduler
 
 if TYPE_CHECKING:
+    from ray.tune.execution.tune_controller import TuneController
+
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
     from ray_utilities.typing.metrics import LogMetricsDict
     from ray_utilities.typing.trainable_return import TrainableReturnData
+
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +90,10 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             self.assertIsInstance(tuner._local_tuner._tune_config.search_alg, OptunaSearch)
             # verify metrics key
             assert tuner._local_tuner._tune_config.search_alg
-            self.assertEqual(tuner._local_tuner._tune_config.search_alg.metric, EVAL_METRIC_RETURN_MEAN)
+            self.assertEqual(
+                tuner._local_tuner._tune_config.search_alg.metric,
+                EVAL_METRIC_RETURN_MEAN,
+            )
         with patch_args("--num_samples", "1"):
             setup2 = AlgorithmSetup()
             self.assertFalse(setup2.args.optimize_config)
@@ -161,17 +171,12 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     def test_run_tune_function(self):
         batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
         with patch_args(
-            "--num_samples",
-            "3",
-            "--num_jobs",
-            "3",
-            "--batch_size",
-            batch_size,
-            "--iterations",
-            "3",
-            "--fcnet_hiddens",
-            "[4]",
-        ):
+            "--num_samples", "3",
+            "--num_jobs", "3",
+            "--batch_size", batch_size,
+            "--iterations", "3",
+            "--fcnet_hiddens", "[4]",
+        ):  # fmt: skip
             with MLPSetup(init_trainable=False) as setup:
                 setup.config.training(num_epochs=2, minibatch_size=batch_size)
                 setup.config.evaluation(evaluation_interval=1)  # else eval metric not in dict
@@ -198,7 +203,6 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             "--checkpoint_frequency", batch_size * 2,
             "--fcnet_hiddens", "[4]",
         ):  # fmt: skip
-            # FIXME: new default steps does not align with other tests!
             setup = MLPSetup()
             # Workaround for NOT working StepCheckpointer as it works on a copy of the result dict.
             # AlgoStepCheckpointer is not added, hardcoded checkpointing!
@@ -274,22 +278,13 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
 
             return storage
 
-        checkpoint_now_implemented = None
-
         class CheckpointCallback(Callback):
             num_checkpoints = 0
 
             def on_trial_result(self, iteration, trials, trial: Trial, result, **info):
-                nonlocal checkpoint_now_implemented
                 # Checkpoint every two iterations
                 if result[TRAINING_ITERATION] % 2 == 0:
                     self.num_checkpoints += 1
-                    try:
-                        trial.checkpoint_now()
-                    except AttributeError:
-                        checkpoint_now_implemented = False
-                    else:
-                        checkpoint_now_implemented = True
 
         with tempfile.TemporaryDirectory() as local_dir:
             storage = mock_storage_context(storage_path=local_dir)
@@ -316,10 +311,6 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 runner.step()
 
             assert callback.num_checkpoints == 3
-            # assert checkpoint_now_implemented  # custom patch
-            if checkpoint_now_implemented:
-                assert trial.storage
-                assert sum(item.startswith("checkpoint_") for item in os.listdir(trial.storage.trial_fs_path)) == 3
 
 
 @pytest.mark.tuner
@@ -336,11 +327,13 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
         ):  # fmt: skip
             setup = MLPSetup()
         tuner = setup.create_tuner()
-        tuner._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
-            checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
-            checkpoint_score_order="max",
-            checkpoint_frequency=2,  # Save every two iterations
-            # NOTE: num_keep does not appear to work here
+        tuner._local_tuner.get_run_config().checkpoint_config = (  # pyright: ignore[reportOptionalMemberAccess]
+            tune.CheckpointConfig(
+                checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
+                checkpoint_score_order="max",
+                checkpoint_frequency=2,  # Save every two iterations
+                # NOTE: num_keep does not appear to work here
+            )
         )
         results = tuner.fit()
         raise_tune_errors(results)
@@ -368,6 +361,8 @@ class TestTunerCheckpointing(InitRay, TestHelpers, DisableLoggers):
                         def step(self):
                             result = super().step()
                             result[SHOULD_CHECKPOINT] = True
+                            if is_pbar(self._pbar):
+                                self._pbar.update(1)
                             return result
 
                         def save_checkpoint(self, checkpoint_dir: str):
@@ -443,7 +438,8 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 ):  # fmt: skip
                     setup1.config.env_runners(num_env_runners=num_env_runners)
                 tuner1 = setup1.create_tuner()
-                tuner1._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
+                assert tuner1._local_tuner
+                tuner1._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(
                     checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
                     checkpoint_score_order="max",
                     checkpoint_frequency=1,
@@ -514,7 +510,8 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 trainable2_local.stop()
 
                 tuner2 = setup2.create_tuner()
-                tuner2._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
+                assert tuner2._local_tuner
+                tuner2._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(
                     checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
                     checkpoint_score_order="max",
                     checkpoint_frequency=1,
@@ -577,7 +574,8 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     with AlgorithmSetup() as setup1:
                         setup1.config.env_runners(num_env_runners=num_env_runners)
                 tuner1 = setup1.create_tuner()
-                tuner1._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
+                assert tuner1._local_tuner
+                tuner1._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(
                     checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
                     checkpoint_score_order="max",
                     checkpoint_frequency=1,
@@ -613,7 +611,8 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 assert setup2.config.num_envs_per_env_runner is not None
                 self.assertTrue(all(s % setup2.config.num_envs_per_env_runner == 0 for s in SAMPLE_SPACE))
                 tuner2 = setup2.create_tuner()
-                tuner2._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(  # pyright: ignore[reportOptionalMemberAccess]
+                assert tuner2._local_tuner
+                tuner2._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(
                     checkpoint_score_attribute=EVAL_METRIC_RETURN_MEAN,
                     checkpoint_score_order="max",
                     checkpoint_frequency=1,
@@ -767,7 +766,7 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
         )
         runner = _MockTrialRunner(scheduler)
         for i in range(num_trials):
-            trial = _MockTrial(i, trial_config, self.storage)
+            trial = MockTrial(i, trial_config, self.storage)
             trial.init_local_path()
             # runner calls add_trial on step
             runner.add_trial(trial)  # calls ReTuner.add_trial
@@ -939,7 +938,9 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
         # taken from ray's testing suite
         # self.enable_loggers()
 
-        os.environ["TUNE_GLOBAL_CHECKPOINT_S"] = "500"  # timeout for save checkpoint
+        os.environ["TUNE_GLOBAL_CHECKPOINT_S"] = "500"  # timeout for save checkpoint debugging
+        # suppress warnings about excessive checkpoint syncs
+        os.environ["TUNE_WARN_EXCESSIVE_EXPERIMENT_CHECKPOINT_SYNC_THRESHOLD_S"] = "0.25"
 
         class MockTrainable(tune.Trainable):
             def setup(self, config):
@@ -949,20 +950,17 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
                 self.c = config["c"]
 
             def step(self):
+                time.sleep(1)
                 self.iter += 1
                 return {"mean_accuracy": (self.a - self.iter) * self.b, "a": self.a, "b": self.b, "c": self.c}
 
             def save_checkpoint(self, checkpoint_dir):
-                # breakpoint()
-                # remote_breakpoint()
                 checkpoint_path = os.path.join(checkpoint_dir, "model.mock")
                 with open(checkpoint_path, "wb") as fp:
                     pickle.dump((self.a, self.b, self.iter), fp)
 
             def load_checkpoint(self, checkpoint: str):  # pyright: ignore[reportIncompatibleMethodOverride]
                 # NOTE: loading a checkpoint changes training_iteration when synch=False
-                # breakpoint()
-                # remote_breakpoint()
                 checkpoint_path = os.path.join(checkpoint, "model.mock")
                 with open(checkpoint_path, "rb") as fp:
                     self.a, self.b, self.iter = pickle.load(fp)
@@ -1019,12 +1017,13 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
         # in the end all should have the same hyperparameters of trial_3:
         # Trial 4 (40-3) * 0.8 = 29.6
         # Trial 3 (30-3) * 1.1 = 29.7
-        trial2 = results.trials[2]
-        assert trial2.checkpoint
-        with open(os.path.join(trial2.checkpoint.path, "model.mock"), "rb") as fp:
-            trial2_ckpt = pickle.load(fp)
+        trial3 = results.trials[2]
+        assert trial3.checkpoint
+        with open(os.path.join(trial3.checkpoint.path, "model.mock"), "rb") as fp:
+            trial3_ckpt = pickle.load(fp)
+        # assert all configs are equal in the end
         for trial in results.trials[1:]:
-            self.assertDictEqual(trial.config, trial2.config)
+            self.assertDictEqual(trial.config, trial3.config)
         for i, trial in enumerate(results.trials):
             if i != 3:
                 self.assertEqual(trial.metric_analysis["a"]["min"], param_a._params[i])
@@ -1034,7 +1033,261 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
             self.assertEqual(trial.metric_analysis["b"]["last"], 1.1)
             assert trial.checkpoint
             with open(os.path.join(trial.checkpoint.path, "model.mock"), "rb") as fp:
-                self.assertEqual(trial2_ckpt, pickle.load(fp))
+                self.assertEqual(trial3_ckpt, pickle.load(fp))
             if i != 2:
                 with open(os.path.join(trial.checkpoint.path[:-1] + "0", "model.mock"), "rb") as fp:
-                    self.assertNotEqual(trial2_ckpt, pickle.load(fp))
+                    self.assertNotEqual(trial3_ckpt, pickle.load(fp))
+
+
+class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
+    # Some tests taken from ray's testing suite
+
+    @pytest.mark.length(speed="medium")
+    def test_run_tune_with_top_trial_scheduler(self):
+        original_exploit = TopPBTTrialScheduler._exploit
+        perturbation_interval = 100
+        best_step_size_idx = 0
+        best_value_idx = 1
+        batch_sizes = (25, 50, 100)
+
+        num_exploits = 0
+
+        fake_results: dict[int, dict[int, float]] = {
+            batch_sizes[0]: {
+                v: v // batch_sizes[0] for v in range(batch_sizes[0], 401, batch_sizes[0])
+            },  # 1, 2, ..., 8
+            # exploit this:
+            batch_sizes[1]: {
+                v: v // batch_sizes[1] + 20 for v in range(batch_sizes[1], 401, batch_sizes[1])
+            },  # 21, 22, ..., 24
+            batch_sizes[2]: {v: v // batch_sizes[2] + 5 for v in range(batch_sizes[2], 401, batch_sizes[2])},  # 6, 7
+        }
+        best_step_size = batch_sizes[1]
+        best_step_size_for_step = {}
+        for batch_size, values in fake_results.items():
+            for step, step_value in values.items():
+                if step % perturbation_interval != 0:
+                    # not at perturbation interval
+                    continue
+                if step not in best_step_size_for_step or best_step_size_for_step[step][1] < step_value:
+                    best_step_size_for_step[step] = (batch_size, step_value)
+        # TODO: Currently 100 is always best, change later to 50 (this would mean) @ 200, the 50 steps is better.
+        assert all(
+            v > not_best_v
+            for v in fake_results[best_step_size].values()
+            for not_best_k, not_best_values in fake_results.items()
+            if not_best_k != best_step_size
+            for not_best_v in not_best_values.values()
+        )
+
+        race_conditions = 0
+
+        def test_exploit_function(
+            self: TopPBTTrialScheduler, tune_controller: TuneController, trial: Trial, trial_to_clone: Trial
+        ) -> None:
+            # check that best_step_size is used
+            # NOTE: trial.last_result has NOT been updated for the LAST (non-best) trial
+            # ALSO: If after perturbation and loading a checkpoint it is also off
+            nonlocal num_exploits
+            num_exploits += 1
+            print("Exploit number", num_exploits, "called at step", self._trial_state[trial].last_train_time)
+            if self._trial_state[trial].last_perturbation_time % perturbation_interval != 0:
+                # We can end up here due to a race condition as Trial pause reached too slow and another step was taken
+                # ignore most of the asserts but check that we did not end up here more than once.
+                nonlocal race_conditions
+                race_conditions += 1
+                logger.warning(
+                    "Exploit called at step %s not at perturbation interval for trial. Likely due to race condition.",
+                    self._trial_state[trial].last_perturbation_time,
+                )
+            else:
+                current_step = self._trial_state[trial].last_train_time
+                # When a trial is loaded, it can make a step
+                # assert current_step % perturbation_interval == 0
+                assert (
+                    self._trial_state[trial].last_score
+                    == fake_results[trial.config["train_batch_size_per_learner"]][current_step]
+                )
+                assert current_step == self._trial_state[trial].last_perturbation_time
+                assert (
+                    best_step_size_for_step[current_step][best_step_size_idx]
+                    == trial_to_clone.config["train_batch_size_per_learner"]
+                    == batch_sizes[1]
+                )
+                # check that value is the expected value
+                # trial_to_clone.last_result should already be updated.
+                assert (
+                    trial_to_clone.last_result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN]
+                    == best_step_size_for_step[current_step][best_value_idx]
+                )
+                # call original exploit function
+            original_exploit(self, tune_controller, trial, trial_to_clone)
+            # TODO: Check updated trial
+            # Do not perturb to best trials
+            assert trial.config["train_batch_size_per_learner"] != batch_sizes[1]
+
+        TopPBTTrialScheduler._exploit = test_exploit_function
+
+        class CheckTrainableForTop(TrainableWithChecks):
+            debug_step = False
+
+            def step(self) -> LogMetricsDict:
+                self._current_step += self.algorithm_config.train_batch_size_per_learner
+                result = {ENV_RUNNER_RESULTS: {}, EVALUATION_RESULTS: {ENV_RUNNER_RESULTS: {}}}
+                result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME] = self._current_step
+                result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER] = (
+                    self.algorithm_config.train_batch_size_per_learner
+                )
+                result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME] = self._current_step + 2
+                result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN] = fake_results[
+                    self.algorithm_config.train_batch_size_per_learner
+                ][self._current_step]
+                result["_checking_class_"] = "CheckTrainableForTop"  # pyright: ignore[reportGeneralTypeIssues]
+                logger.info(
+                    "Batch size: %s, step %s, result: %s",
+                    self.algorithm_config.train_batch_size_per_learner,
+                    self._current_step,
+                    result,
+                )
+                result["current_step"] = self._current_step
+                if is_pbar(self._pbar):
+                    self._pbar.update(1)
+                    self._pbar.set_description(
+                        f"Step: {self._current_step} batch_size={self.algorithm_config.train_batch_size_per_learner} "
+                        f"result={result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN]}"
+                    )
+                time.sleep(2)  # Avoid race conditions by pause being too slow.
+                return result  # pyright: ignore[reportReturnType]
+
+        ray_pbt_logger.setLevel(logging.DEBUG)
+        with patch_args(
+            # main args for this experiment
+            "--tune", "batch_size",
+            # Meta / less influential arguments for the experiment.
+            # NOTE: Num samples is multiplides by grid_search values. So effectively num_samples=3
+            "--num_samples", 1,
+            "--num_jobs", 3,
+            "--max_step_size", max(batch_sizes) * 2,
+            "--min_step_size", min(batch_sizes),
+            "--minibatch_size", min(batch_sizes),
+            "--env_seeding_strategy", "same",
+            # constant
+            "--seed", "42",
+            "--log_level", "DEBUG",
+            "--log_stats", "most",
+            "--perturbation_interval", perturbation_interval,
+            "--total_steps", max(batch_sizes) * 3,
+            "--use_exact_total_steps",
+            "--no_dynamic_eval_interval",
+            "--fcnet_hiddens", "[4]",
+            "--num_envs_per_env_runner", 5,
+            "--test",
+        ):  # fmt: skip
+            Setup = SetupWithCheck(CheckTrainableForTop, PPOMLPWithPBTSetup)
+            Setup.batch_size_sample_space = {"grid_search": batch_sizes}  # start values?
+            setup = Setup(
+                config_files=["experiments/models/mlp/default.cfg"],
+                # TODO: Trials are reused, trial name might be wrong then
+            )
+
+            setup.args.set_hyperparam_mutations(
+                {"train_batch_size_per_learner": CyclicMutation(Setup.batch_size_sample_space["grid_search"])}
+            )
+            results = run_tune(setup)
+            print("Num exploits:", num_exploits)
+            raise_tune_errors(results)  # pyright: ignore[reportArgumentType]
+            self.assertTrue(all(result.metrics["_checking_class_"] == "CheckTrainableForTop" for result in results))  # pyright: ignore[reportOptionalSubscript, reportAttributeAccessIssue]
+            # At final step (if batch_size % perturbation_interval) there is no exploitation
+            # There should be (3-1) x 2 = 4 exploitations
+            self.assertEqual(num_exploits, max(batch_sizes) * (3 - 1) // perturbation_interval * 2)
+            # Check that at most one race condition happened
+            self.assertLessEqual(race_conditions, 1)
+
+
+class DummyTrial:
+    def __init__(self, trial_id, config=None, *, finished=False):
+        self.trial_id = trial_id
+        self._finished = finished
+        self.config = config if config is not None else {}
+
+    def is_finished(self):
+        return self._finished
+
+
+class DummyState:
+    def __init__(self, last_score):
+        self.last_score = last_score
+
+
+class PBTQuantileNaNTest(unittest.TestCase):
+    def test_nan_last_score_in_quantiles(self):
+        # Create three trials: one with nan, two with valid scores
+        t1 = DummyTrial("t1")
+        t2 = DummyTrial("t2")
+        t3 = DummyTrial("t3")
+        # Patch _trial_state with dummy states
+        max_states = {
+            t1: DummyState(last_score=20.0),
+            t2: DummyState(last_score=float("nan")),
+            t3: DummyState(last_score=10.0),
+        }
+        min_states = {
+            t3: DummyState(last_score=10.0),
+            t2: DummyState(last_score=float("nan")),
+            t1: DummyState(last_score=20.0),
+        }
+
+        for scheduler_class in [ReTuneScheduler, TopPBTTrialScheduler]:
+            with self.subTest(scheduler_class=scheduler_class.__name__):
+                max_scheduler = scheduler_class(
+                    metric="reward",
+                    mode="max",
+                    hyperparam_mutations={"lr": [1e-3, 1e-4]},
+                    # use > 0.5 to not user super()._quantile
+                    quantile_fraction=0.51 if scheduler_class is ReTuneScheduler else 0.5,
+                )
+                max_scheduler._trial_state = max_states
+                for t, state in max_states.items():
+                    max_scheduler._save_trial_state(
+                        state, 100, {"reward": state.last_score, TRAINING_ITERATION: 100}, t
+                    )
+                min_scheduler = scheduler_class(
+                    metric="reward",
+                    mode="min",
+                    hyperparam_mutations={"lr": [1e-3, 1e-4]},
+                    quantile_fraction=0.51 if scheduler_class is ReTuneScheduler else 0.5,
+                )
+                min_scheduler._trial_state = min_states  # pyright: ignore[reportAttributeAccessIssue]
+                for t, state in min_states.items():
+                    min_scheduler._save_trial_state(
+                        state,
+                        100,
+                        {"reward": state.last_score, TRAINING_ITERATION: 100},
+                        t,  # pyright: ignore[reportArgumentType]
+                    )
+
+                # Should not raise, but nan disrupts sorting
+                max_bottom, max_top = max_scheduler._quantiles()
+                max_other_trials = [t for t in max_scheduler._trial_state if t not in max_bottom + max_top]
+                max_ordered_results = [
+                    max_scheduler._trial_state[t].last_score for t in [*max_bottom, *max_other_trials, *max_top]
+                ]
+                print(max_ordered_results)
+                # [20, nan, 10]
+                min_bottom, min_top = min_scheduler._quantiles()
+                min_other_trials = [t for t in min_scheduler._trial_state if t not in min_bottom + min_top]
+                min_ordered_results = [
+                    min_scheduler._trial_state[t].last_score for t in [*min_bottom, *min_other_trials, *min_top]
+                ]
+                # The trial with nan should be handled gracefully (e.g., always last)
+
+                assert t1 in max_top
+                assert t3 in max_bottom
+                assert t1 in min_bottom
+                assert t3 in min_top
+                assert 20 == max_ordered_results[-1]
+                assert 10 == abs(min_ordered_results[-1]), min_ordered_results
+
+
+if __name__ == "__main__":
+    unittest.main()

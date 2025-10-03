@@ -46,6 +46,14 @@ ray\_utilities.setup.ppo\_mlp\_setup module
    :undoc-members:
    :show-inheritance:
 
+ray\_utilities.setup.scheduled\_tuner\_setup module
+---------------------------------------------------
+
+.. automodule:: ray_utilities.setup.scheduled_tuner_setup
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 ray\_utilities.setup.tuner\_setup module
 ----------------------------------------
 

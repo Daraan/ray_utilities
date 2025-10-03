@@ -55,7 +55,6 @@ class JaxLearner(Learner):
         - PPO algorithm support with JAX backends
 
     Attributes:
-        framework: Set to "jax" to indicate the backend framework.
         config: The PPO configuration object.
         _accumulate_gradients_every_initial: Number of batches to accumulate
             gradients over before applying updates.
@@ -71,6 +70,7 @@ class JaxLearner(Learner):
     """
 
     framework = "jax"
+    """Set to "jax" to indicate the backend framework. Possibly needs to be changed for rllib compatibility."""
 
     def __init__(
         self,

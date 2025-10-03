@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, NamedTuple
 import torch
 
 from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradientAccumulation
-from ray_utilities.config.typed_argument_parser import DefaultArgumentParser
+from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.learners import mix_learners
 from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import PPOTorchLearnerWithGradientAccumulation
 from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner

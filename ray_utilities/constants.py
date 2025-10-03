@@ -17,12 +17,11 @@ Example:
     ...     # Use new Ray API features
     ...     pass
 """
+# pyright: enableExperimentalFeatures=true
 
-import hashlib
-import os
-import sys
-import time
-from pathlib import Path
+import logging
+import re
+from typing import Final
 
 import gymnasium as gym
 import ray
@@ -40,119 +39,28 @@ from ray.rllib.utils.metrics import (
     EPISODE_RETURN_MIN,
     EVALUATION_RESULTS,
 )
+from typing_extensions import Sentinel
 
-_COMET_OFFFLINE_DIRECTORY_SUGGESTION = (Path("../") / "outputs" / ".cometml-runs").resolve()
-_COMET_OFFFLINE_DIRECTORY_SUGGESTION_STR = str(_COMET_OFFFLINE_DIRECTORY_SUGGESTION)
-
-if (
-    os.environ.get("COMET_OFFLINE_DIRECTORY", _COMET_OFFFLINE_DIRECTORY_SUGGESTION_STR)
-    != _COMET_OFFFLINE_DIRECTORY_SUGGESTION_STR
-):
-    import logging
-
-    logging.getLogger(__name__).warning(
-        "COMET_OFFLINE_DIRECTORY already set to: %s", os.environ.get("COMET_OFFLINE_DIRECTORY")
-    )
-
-os.environ["COMET_OFFLINE_DIRECTORY"] = COMET_OFFLINE_DIRECTORY = _COMET_OFFFLINE_DIRECTORY_SUGGESTION_STR
-"""str: Directory path for storing offline Comet ML experiments.
-
-This directory is where Comet ML stores experiment archives when running in offline mode.
-The default location is ``../outputs/.cometml-runs`` relative to the current working directory.
-Can be overridden by setting the ``COMET_OFFLINE_DIRECTORY`` environment variable.
-
-See Also:
-    :class:`ray_utilities.comet.CometArchiveTracker`: For managing offline experiments
-"""
-
-# Evaluation and Training Metric Keys
-EVAL_METRIC_RETURN_MEAN = EVALUATION_RESULTS + "/" + ENV_RUNNER_RESULTS + "/" + EPISODE_RETURN_MEAN
-"""str: Standard path for evaluation episode return mean metric.
-
-This metric key path follows Ray RLlib's hierarchical result structure:
-``evaluation/env_runner_results/episode_return_mean``
-"""
-
-DISC_EVAL_METRIC_RETURN_MEAN = EVALUATION_RESULTS + "/discrete/" + ENV_RUNNER_RESULTS + "/" + EPISODE_RETURN_MEAN
-"""str: Path for discrete evaluation episode return mean metric.
-
-Used when discrete evaluation is enabled alongside standard evaluation:
-``evaluation/discrete/env_runner_results/episode_return_mean``
-"""
-
-TRAIN_METRIC_RETURN_MEAN = ENV_RUNNER_RESULTS + "/" + EPISODE_RETURN_MEAN
-"""str: Standard path for training episode return mean metric.
-
-Training metric path: ``env_runner_results/episode_return_mean``
-"""
-
-# Video Recording Constants
-EPISODE_VIDEO_PREFIX = "episode_videos_"
-"""str: Prefix used for all episode video metric keys."""
-
-EPISODE_BEST_VIDEO = "episode_videos_best"
-"""str: Key for best episode video recordings."""
-
-EPISODE_WORST_VIDEO = "episode_videos_worst"
-"""str: Key for worst episode video recordings."""
-
-EVALUATION_BEST_VIDEO_KEYS = (EVALUATION_RESULTS, ENV_RUNNER_RESULTS, EPISODE_BEST_VIDEO)
-EVALUATION_WORST_VIDEO_KEYS = (EVALUATION_RESULTS, ENV_RUNNER_RESULTS, EPISODE_WORST_VIDEO)
-DISCRETE_EVALUATION_BEST_VIDEO_KEYS = (EVALUATION_RESULTS, "discrete", ENV_RUNNER_RESULTS, EPISODE_BEST_VIDEO)
-DISCRETE_EVALUATION_WORST_VIDEO_KEYS = (EVALUATION_RESULTS, "discrete", ENV_RUNNER_RESULTS, EPISODE_WORST_VIDEO)
-
-EVALUATION_BEST_VIDEO = "/".join(EVALUATION_BEST_VIDEO_KEYS)
-EVALUATION_WORST_VIDEO = "/".join(EVALUATION_WORST_VIDEO_KEYS)
-DISCRETE_EVALUATION_BEST_VIDEO = "/".join(DISCRETE_EVALUATION_BEST_VIDEO_KEYS)
-DISCRETE_EVALUATION_WORST_VIDEO = "/".join(DISCRETE_EVALUATION_WORST_VIDEO_KEYS)
-
-DEFAULT_VIDEO_DICT_KEYS = (
-    EVALUATION_BEST_VIDEO_KEYS,
-    EVALUATION_WORST_VIDEO_KEYS,
-    DISCRETE_EVALUATION_BEST_VIDEO_KEYS,
-    DISCRETE_EVALUATION_WORST_VIDEO_KEYS,
+from ._runtime_constants import (
+    COMET_OFFLINE_DIRECTORY,
+    ENTRY_POINT,
+    ENTRY_POINT_ID,
+    RAY_UTILITIES_INITIALIZATION_TIMESTAMP,
+    RUN_ID,
 )
-"""tuple[tuple[str, ...], ...]: Collection of video key tuples for default video logging.
 
-This contains the hierarchical key paths for all default video types that can be logged
-during evaluation. Each tuple represents a path through the nested result dictionary.
+__all__ = []
+__all__ += [
+    "COMET_OFFLINE_DIRECTORY",
+    "ENTRY_POINT",
+    "ENTRY_POINT_ID",
+    "RAY_UTILITIES_INITIALIZATION_TIMESTAMP",
+    "RUN_ID",
+]
 
-Note:
-    The video data might be a dictionary containing both ``"video"`` and ``"reward"`` keys
-    rather than just the raw video array.
+_logger = logging.getLogger(__name__)
 
-See Also:
-    :data:`DEFAULT_VIDEO_DICT_KEYS_FLATTENED`: String versions of these keys
-"""
-
-DEFAULT_VIDEO_DICT_KEYS_FLATTENED = (
-    EVALUATION_BEST_VIDEO,
-    EVALUATION_WORST_VIDEO,
-    DISCRETE_EVALUATION_BEST_VIDEO,
-    DISCRETE_EVALUATION_WORST_VIDEO,
-)
-"""tuple[str, ...]: Flattened string keys for default video logging.
-
-These are the slash-separated string versions of the video keys for use in flat
-dictionaries or when the nested structure has been flattened.
-
-Note:
-    The video data might be a dictionary containing both ``"video"`` and ``"reward"`` keys
-    rather than just the raw video array.
-
-See Also:
-    :data:`DEFAULT_VIDEO_DICT_KEYS`: Tuple versions of these keys for nested access
-"""
-
-assert all(EPISODE_VIDEO_PREFIX in key for key in DEFAULT_VIDEO_DICT_KEYS_FLATTENED)
-
-EVALUATED_THIS_STEP = "evaluated_this_step"
-"""str: Boolean metric key to indicate evaluation was performed this training step.
-
-When logged with ``reduce_on_results=True``, this metric tracks whether evaluation
-was actually run during a particular training iteration, which is useful for
-conditional processing of evaluation results.
-"""
+# region runtime constants
 
 # Version Compatibility Flags
 RAY_VERSION = parse_version(ray.__version__)
@@ -182,20 +90,6 @@ Version 0.26 was the first official Gymnasium release after the transition from 
 This flag is used to handle compatibility between legacy Gym and modern Gymnasium.
 """
 
-RAY_UTILITIES_INITIALIZATION_TIMESTAMP = time.time()
-"""float: Unix timestamp of when the Ray Utilities package was first imported.
-
-Useful for tracking package initialization time and calculating elapsed time since import.
-"""
-
-# CLI and Reporting Configuration
-CLI_REPORTER_PARAMETER_COLUMNS = ["algo", "module", "model_config"]
-"""list[str]: Default parameter columns to display in CLI progress reports.
-
-These parameter keys from the search space will be shown in Ray Tune's command-line
-progress reporter for easier experiment monitoring.
-"""
-
 RAY_NEW_API_STACK_ENABLED = RAY_VERSION >= Version("2.40.0")
 """bool: True if Ray's new API stack is available (Ray >= 2.40.0).
 
@@ -206,6 +100,190 @@ code paths for new vs. legacy API usage.
 See Also:
     `Ray RLlib New API Stack Migration Guide
     <https://docs.ray.io/en/latest/rllib/new-api-stack-migration-guide.html>`_
+"""
+
+# endregion
+
+RAY_UTILITIES_NEW_LOG_FORMAT: Final[str] = "RAY_UTILITIES_NEW_LOG_FORMAT"
+"""
+Environment variable key to enable new log format if found in :py:obj:`os.environ`.
+
+Note:
+    The new logging format is used in downstream loggers, e.g. for WandB or Comet ML.
+    other callbacks and logs are not affected and should not check for the new format.
+"""
+
+TRAINING = "training"
+"""For the rllib layout use ENV_RUNNER_RESULTS instead of "training"."""
+
+# Evaluation and Training Metric Keys
+EVAL_METRIC_RETURN_MEAN = EVALUATION_RESULTS + "/" + ENV_RUNNER_RESULTS + "/" + EPISODE_RETURN_MEAN
+"""str: Standard path for evaluation episode return mean metric.
+
+This metric key path follows Ray RLlib's hierarchical result structure:
+``evaluation/env_runner_results/episode_return_mean``
+"""
+
+NEW_LOG_EVAL_METRIC = EVALUATION_RESULTS + "/" + EPISODE_RETURN_MEAN
+"""Metric key used in loggers when new log format is used."""
+
+DISC_EVAL_METRIC_RETURN_MEAN = EVALUATION_RESULTS + "/discrete/" + ENV_RUNNER_RESULTS + "/" + EPISODE_RETURN_MEAN
+"""str: Path for discrete evaluation episode return mean metric.
+
+Used when discrete evaluation is enabled alongside standard evaluation:
+``evaluation/discrete/env_runner_results/episode_return_mean``
+"""
+
+NEW_LOG_DISC_EVAL_METRIC = EVALUATION_RESULTS + "/discrete/" + EPISODE_RETURN_MEAN
+"""Metric key used in loggers when new log format is used and discrete evaluation is enabled."""
+
+TRAIN_METRIC_RETURN_MEAN = ENV_RUNNER_RESULTS + "/" + EPISODE_RETURN_MEAN
+"""str: Standard path for training episode return mean metric.
+
+Training metric path: ``env_runner_results/episode_return_mean``
+"""
+
+NEW_LOG_TRAIN_METRIC = TRAINING + "/" + EPISODE_RETURN_MEAN
+"""Metric key used in loggers when new log format is used and training is enabled."""
+
+DEFAULT_EVAL_METRIC = Sentinel("DEFAULT_EVAL_METRIC")
+"""typing.Sentinel value
+
+Default evaluation metric sentinel value to be replaced with actual metric key
+depending on wether the new log format is used or not (variable RAY_UTILITIES_NEW_LOG_FORMAT is set),
+also possibly depending on wether discrete evaluation is enabled or not.
+
+The correct metric key should be retrieved by:
+
+.. code-block:: python
+
+    if metric is DEFAULT_EVAL_METRIC:
+        metric = NEW_LOG_EVAL_METRIC if new_log_format_used() else EVAL_METRIC_RETURN_MEAN
+"""
+
+ENVIRONMENT_RESULTS = "environments"
+"""
+Metric key for environment-specific results in Trainable results.
+
+See Also:
+    :class:`SeededEnvsCallback`
+"""
+
+# Video Recording Constants
+EPISODE_VIDEO_PREFIX = "episode_videos_"
+"""str: Prefix used for all episode video metric keys."""
+
+EPISODE_BEST_VIDEO = "episode_videos_best"
+"""str: Key for best episode video recordings."""
+
+EPISODE_WORST_VIDEO = "episode_videos_worst"
+"""str: Key for worst episode video recordings."""
+
+EVALUATION_BEST_VIDEO_KEYS = (EVALUATION_RESULTS, ENV_RUNNER_RESULTS, EPISODE_BEST_VIDEO)
+EVALUATION_WORST_VIDEO_KEYS = (EVALUATION_RESULTS, ENV_RUNNER_RESULTS, EPISODE_WORST_VIDEO)
+DISCRETE_EVALUATION_BEST_VIDEO_KEYS = (EVALUATION_RESULTS, "discrete", ENV_RUNNER_RESULTS, EPISODE_BEST_VIDEO)
+DISCRETE_EVALUATION_WORST_VIDEO_KEYS = (EVALUATION_RESULTS, "discrete", ENV_RUNNER_RESULTS, EPISODE_WORST_VIDEO)
+
+EVALUATION_BEST_VIDEO = "/".join(EVALUATION_BEST_VIDEO_KEYS)
+EVALUATION_WORST_VIDEO = "/".join(EVALUATION_WORST_VIDEO_KEYS)
+DISCRETE_EVALUATION_BEST_VIDEO = "/".join(DISCRETE_EVALUATION_BEST_VIDEO_KEYS)
+DISCRETE_EVALUATION_WORST_VIDEO = "/".join(DISCRETE_EVALUATION_WORST_VIDEO_KEYS)
+
+# region: new layout for log metrics
+
+# NEW variants: omit ENV_RUNNER_RESULTS for evaluation, substitute ENV_RUNNER_RESULTS with "training" for training
+EVALUATION_BEST_VIDEO_KEYS_NEW = (EVALUATION_RESULTS, EPISODE_BEST_VIDEO)
+EVALUATION_WORST_VIDEO_KEYS_NEW = (EVALUATION_RESULTS, EPISODE_WORST_VIDEO)
+DISCRETE_EVALUATION_BEST_VIDEO_KEYS_NEW = (EVALUATION_RESULTS, "discrete", EPISODE_BEST_VIDEO)
+DISCRETE_EVALUATION_WORST_VIDEO_KEYS_NEW = (EVALUATION_RESULTS, "discrete", EPISODE_WORST_VIDEO)
+
+EVALUATION_BEST_VIDEO_NEW = "/".join(EVALUATION_BEST_VIDEO_KEYS_NEW)
+EVALUATION_WORST_VIDEO_NEW = "/".join(EVALUATION_WORST_VIDEO_KEYS_NEW)
+DISCRETE_EVALUATION_BEST_VIDEO_NEW = "/".join(DISCRETE_EVALUATION_BEST_VIDEO_KEYS_NEW)
+DISCRETE_EVALUATION_WORST_VIDEO_NEW = "/".join(DISCRETE_EVALUATION_WORST_VIDEO_KEYS_NEW)
+
+# NEW variants for video dict keys (evaluation omits ENV_RUNNER_RESULTS, training uses "training")
+DEFAULT_VIDEO_DICT_KEYS_NEW = (
+    EVALUATION_BEST_VIDEO_KEYS_NEW,
+    EVALUATION_WORST_VIDEO_KEYS_NEW,
+    DISCRETE_EVALUATION_BEST_VIDEO_KEYS_NEW,
+    DISCRETE_EVALUATION_WORST_VIDEO_KEYS_NEW,
+)
+"""tuple[tuple[str, ...], ...]: Collection of new-style video key tuples for logging.
+
+Evaluation keys omit ENV_RUNNER_RESULTS, training keys use "training" instead.
+"""
+
+DEFAULT_VIDEO_DICT_KEYS_FLATTENED_NEW = (
+    EVALUATION_BEST_VIDEO_NEW,
+    EVALUATION_WORST_VIDEO_NEW,
+    DISCRETE_EVALUATION_BEST_VIDEO_NEW,
+    DISCRETE_EVALUATION_WORST_VIDEO_NEW,
+)
+"""tuple[str, ...]: Flattened string keys for new-style video logging.
+
+Evaluation keys omit ENV_RUNNER_RESULTS, training keys use "training" instead.
+"""
+
+# endregion
+
+DEFAULT_VIDEO_DICT_KEYS = (
+    *DEFAULT_VIDEO_DICT_KEYS_NEW,
+    EVALUATION_BEST_VIDEO_KEYS,
+    EVALUATION_WORST_VIDEO_KEYS,
+    DISCRETE_EVALUATION_BEST_VIDEO_KEYS,
+    DISCRETE_EVALUATION_WORST_VIDEO_KEYS,
+)
+"""tuple[tuple[str, ...], ...]: Collection of video key tuples for default video logging.
+
+This contains the hierarchical key paths for all default video types that can be logged
+during evaluation. Each tuple represents a path through the nested result dictionary.
+
+Note:
+    The video data might be a dictionary containing both ``"video"`` and ``"reward"`` keys
+    rather than just the raw video array.
+
+See Also:
+    :data:`DEFAULT_VIDEO_DICT_KEYS_FLATTENED`: String versions of these keys
+"""
+
+DEFAULT_VIDEO_DICT_KEYS_FLATTENED = (
+    *DEFAULT_VIDEO_DICT_KEYS_FLATTENED_NEW,
+    EVALUATION_BEST_VIDEO,
+    EVALUATION_WORST_VIDEO,
+    DISCRETE_EVALUATION_BEST_VIDEO,
+    DISCRETE_EVALUATION_WORST_VIDEO,
+)
+"""tuple[str, ...]: Flattened string keys for default video logging.
+
+These are the slash-separated string versions of the video keys for use in flat
+dictionaries or when the nested structure has been flattened.
+
+Note:
+    The video data might be a dictionary containing both ``"video"`` and ``"reward"`` keys
+    rather than just the raw video array.
+
+See Also:
+    :data:`DEFAULT_VIDEO_DICT_KEYS`: Tuple versions of these keys for nested access
+"""
+
+assert all(EPISODE_VIDEO_PREFIX in key for key in DEFAULT_VIDEO_DICT_KEYS_FLATTENED)
+
+EVALUATED_THIS_STEP = "evaluated_this_step"
+"""str: Boolean metric key to indicate evaluation was performed this training step.
+
+When logged with ``reduce_on_results=True``, this metric tracks whether evaluation
+was actually run during a particular training iteration, which is useful for
+conditional processing of evaluation results.
+"""
+
+
+# CLI and Reporting Configuration
+CLI_REPORTER_PARAMETER_COLUMNS = ["algo", "module", "model_config"]
+"""list[str]: Default parameter columns to display in CLI progress reports.
+
+These parameter keys from the search space will be shown in Ray Tune's command-line
+progress reporter for easier experiment monitoring.
 """
 
 # Sampling and Training Metrics
@@ -248,25 +326,6 @@ Note:
     not be set manually in experiment configurations.
 """
 
-# Constant for one execution
-
-entry_point_id = hashlib.blake2b(
-    os.path.basename(sys.argv[0]).encode(), digest_size=3, usedforsecurity=False
-).hexdigest()
-"""Hash of the entry point script's filename, i.e. sys.argv[0]'s basename"""
-
-run_id = (
-    entry_point_id
-    + "xXXXXx"
-    + hashlib.blake2b(os.urandom(8) + entry_point_id.encode(), digest_size=3, usedforsecurity=False).hexdigest()
-)
-"""
-A short randomly created UUID for the current execution.
-It is build as: entry_point_id + "xXXXXx" + random and is 3 * 6 = 18 characters long.
-
-It can be used to easier identify trials that have the same entry point and were run
-during the same execution
-"""
 EPISODE_METRICS_KEYS = (
     EPISODE_DURATION_SEC_MEAN,
     EPISODE_LEN_MAX,
@@ -279,3 +338,22 @@ EPISODE_METRICS_KEYS = (
     ("agent_episode_return_mean", DEFAULT_AGENT_ID),
 )
 """Keys that are by default logged with a window by RLlib. When using"""
+
+FORK_FROM = "fork_from"
+"""
+Key in trial configs to indicate the trial id and optionally step a trial was forked from.
+
+The value should have the format ``<trial_id>?_step=<step>`` where ``?_step=<step>`` is optional,
+it can be parsed with :const:`RE_PARSE_FORK_FROM` (deprecated)
+or be a dict defined as :class:`ForkFromData`.
+
+Note:
+    A trial should never contain the ``?`` character.
+"""
+
+RE_PARSE_FORK_FROM = re.compile(r"^(?P<fork_id>[^?]*?)(?:\?_step=(?P<fork_step>\d+))?$")
+"""
+Regex pattern to parse the value of :const:`FORK_FROM` into trial id and step.
+
+The ``fork_id`` will be everything before the first ``?``, the ``?_step=<fork_step>`` part is optional.
+"""

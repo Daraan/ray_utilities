@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional
 import numpy as np
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
 
+from ray_utilities.constants import ENVIRONMENT_RESULTS
+
 try:
     from ray.tune.callback import _CallbackMeta
 except ImportError:
@@ -53,17 +55,16 @@ class _SeededEnvCallbackMeta(_CallbackMeta):  # pyright: ignore[reportGeneralTyp
 
 class SeedEnvsCallback(DefaultCallbacks):
     """
-    Attributes:
-        env_seed: A common seed that is used for all workers and vector indices.
-            If None, the environment will not be seeded. Rendering this callback useless.
-
     Use make_seeded_env_callback(None) for pure randomness.
     Use make_seeded_env_callback(fixed_seed) to create reproducible runs.
     make_seeded_env_callback(0) is equivalent to using this class directly.
     """
 
     env_seed: ClassVar[int | None] = 0
-    """If None env will not be seeded"""
+    """A common seed that is used for all workers and vector indices.
+
+    If None, the environment will not be seeded. Making this callback a no-op.
+    """
 
     __logged_env_seed_none = False
 
@@ -146,7 +147,7 @@ class SeedEnvsCallback(DefaultCallbacks):
         if metrics_logger:
             # HACK: Set clear_on_reduce=True and remove window again when https://github.com/ray-project/ray/issues/54324 is solved  # noqa: E501
             metrics_logger.log_value(
-                ("environments", "seeds", "seed_sequence"),
+                (ENVIRONMENT_RESULTS, "seeds", "seed_sequence"),
                 list(map(int, log_seeds.tolist())),  # assure int and not numpy int
                 clear_on_reduce=False,
                 reduce=None,

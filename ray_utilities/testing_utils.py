@@ -32,7 +32,7 @@ import unittest
 import unittest.util
 from collections import deque
 from collections.abc import Iterator, Mapping
-from contextlib import ContextDecorator, contextmanager, nullcontext
+from contextlib import ContextDecorator, nullcontext
 from copy import deepcopy
 from functools import partial, wraps
 from types import MappingProxyType
@@ -95,11 +95,13 @@ from typing_extensions import Final, NotRequired, Required, Sentinel, TypeAliasT
 
 import ray_utilities.callbacks.algorithm.model_config_saver_callback
 import ray_utilities.config.create_algorithm
+from ray_utilities import runtime_env
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.config.mlp_argument_parser import MLPArgumentParser
-from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
+from ray_utilities.config.parser.mlp_argument_parser import MLPArgumentParser
+from ray_utilities.constants import ENVIRONMENT_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.dynamic_config.dynamic_buffer_update import logger as dynamic_buffer_logger
-from ray_utilities.misc import raise_tune_errors
+from ray_utilities.misc import is_pbar, raise_tune_errors
+from ray_utilities.nice_logger import change_log_level
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger as experiment_base_logger
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup, PPOMLPSetup
@@ -398,7 +400,7 @@ def patch_args(
     """
     old_args = sys.argv[1:]
     actor_args = (
-        ("-a", "no_actor_provided_by_patch_args")
+        ("-a", "no_actor_by_patch")
         if (
             "-a" not in args
             and "--agent_type" not in args
@@ -455,17 +457,24 @@ def get_leafpath_value(leaf: "LeafType"):
     return getattr(leaf, "name", getattr(leaf, "key", getattr(leaf, "idx", _NOT_FOUND)))
 
 
+def _noop_callback_replacement(*a, **k):  # noqa: ARG001
+    return None
+
+
 class DisableLoggers(unittest.TestCase):
     """Disable loggers for tests, so they do not interfere with the output."""
 
     def enable_loggers(self):
         """Enable loggers after disabling them in setUp."""
+        self._mock_env.stop()
         self._disable_tune_loggers.stop()
         self._disable_file_loggers.stop()
         self._disable_file_loggers2.stop()
-        self._mock_env.stop()
+        self._disable_save_model_architecture_callback_added.stop()
+        self._disable_save_model_architecture_module.stop()
 
     def setUp(self):
+        super().setUp()
         self._mock_env = mock.patch.dict("os.environ", {"TUNE_DISABLE_AUTO_CALLBACK_LOGGERS": "1"})
         self._mock_env.start()
         self._disable_tune_loggers = mock.patch("ray_utilities.callbacks.tuner.create_tuner_callbacks", return_value=[])
@@ -475,7 +484,16 @@ class DisableLoggers(unittest.TestCase):
         self._disable_file_loggers2 = mock.patch.object(ray.tune.logger.unified, "DEFAULT_LOGGERS", ())
         """Disable local copy used by UnifiedLogger"""
         self._disable_file_loggers2.start()
-        super().setUp()
+        self._disable_save_model_architecture_module = mock.patch(
+            "ray_utilities.callbacks.algorithm.model_config_saver_callback"
+        )
+
+        self._disable_save_model_architecture_callback_added = mock.patch(
+            "ray_utilities.config.create_algorithm.save_model_config_and_architecture",
+            new=_noop_callback_replacement,
+        )
+        self._disable_save_model_architecture_callback_added.start()
+        self._disable_save_model_architecture_module.start()
 
     def tearDown(self):
         self.enable_loggers()
@@ -486,11 +504,16 @@ class InitRay(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Initialize Ray for the test class."""
+        # TODO: Possibly also test without runtime env to check errors, especially comet related
         if not ray.is_initialized():
+            # NOTE: might have already been started (in surprising ways) by another test
+            # e.g. EnvRunnerGroup creation. In that case runtime_env is NOT applied!
             ray.init(
                 include_dashboard=False,
                 ignore_reinit_error=True,
                 num_cpus=cls._num_cpus,
+                object_store_memory=1024**3 // 2,  # 512MB
+                runtime_env=runtime_env,
             )
         super().setUpClass()
 
@@ -549,7 +572,43 @@ class TestHelpers(unittest.TestCase):
     # region setups
     _fast_model_fcnet_hiddens: int = 1
 
+    @classmethod
+    def _disable_ray_auto_init(cls):
+        cls._pop_auto_connect = False
+        cls._auto_init_hook = None
+        if "RAY_ENABLE_AUTO_CONNECT" not in os.environ:
+            os.environ["RAY_ENABLE_AUTO_CONNECT"] = "0"
+            cls._pop_auto_connect = True
+            try:
+                import ray._private.auto_init_hook  # noqa: PLC0415
+
+                cls._auto_init_hook = ray._private.auto_init_hook
+            except ImportError:
+                pass
+            else:
+                ray._private.auto_init_hook.enable_auto_connect = False
+
+    @classmethod
+    def _enable_ray_auto_init(cls):
+        """NOTE: This is a classmethod, should only be called on classSetup/tearDownClass."""
+        if cls._pop_auto_connect:
+            os.environ.pop("RAY_ENABLE_AUTO_CONNECT", None)
+        if cls._auto_init_hook is not None:
+            cls._auto_init_hook.enable_auto_connect = True
+
+    @classmethod
+    def setUpClass(cls):
+        cls._disable_ray_auto_init()
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._enable_ray_auto_init()
+        super().tearDownClass()
+
     def setUp(self):
+        # Do not initialize ray if we do not have to
+        super().setUp()
         AlgorithmSetup.PROJECT = "TESTING"
         os.environ["WANDB_API_KEY"] = "test"
         assert TrainableBase.cls_model_config is None
@@ -559,16 +618,15 @@ class TestHelpers(unittest.TestCase):
             {"fcnet_hiddens": [self._fast_model_fcnet_hiddens], "head_fcnet_hiddens": []},
         )
         self.mock_reduced_model.start()
-        super().setUp()
         self._env_seed_rng = random.Random(111)
         atexit.register(self._clean_output_dir)
 
     def tearDown(self):
+        super().tearDown()
         TrainableBase.cls_model_config = None
         self.mock_reduced_model.stop()
         for trainable in self._created_trainables:
             trainable.stop()
-        super().tearDown()
 
     @staticmethod
     def _clean_output_dir():
@@ -586,9 +644,13 @@ class TestHelpers(unittest.TestCase):
             with (
                 change_log_level(experiment_base_logger, logging.ERROR),
                 change_log_level(tuner_setup_logger, logging.ERROR),
+                mock.patch("logging.getLogger") as mock_get_logger,  # not log or adjust
             ):
+                mock_get_logger.return_value.name.split.return_value = ["Nothing"]
                 run_config = TunerSetup(
-                    setup=AlgorithmSetup(init_config=False, init_trainable=False, init_param_space=False)
+                    setup=AlgorithmSetup(
+                        init_config=False, init_trainable=False, init_param_space=False, change_log_level=False
+                    )
                 ).create_run_config([])
             if run_config.storage_path is None:
                 return
@@ -598,8 +660,6 @@ class TestHelpers(unittest.TestCase):
                 logger.info("Removing testing storage path: %s", storage_path)
 
                 shutil.rmtree(storage_path.as_posix(), ignore_errors=True)
-            else:
-                logger.debug("Testing storage path does not exist: %s", storage_path)
         except OSError:
             logger.exception("Failed to remove testing storage path")
         except Exception:
@@ -826,11 +886,11 @@ class TestHelpers(unittest.TestCase):
             msg=(msg or "") + f" NaN values differ: {metrics_0}\n!=\n{metrics_1} {msg}",
         )
         # not nans
-        if "environments" in metrics_0:
+        if ENVIRONMENT_RESULTS in metrics_0:
             metrics_0 = deepcopy(metrics_0)
             metrics_1 = deepcopy(metrics_1)
-            seeds_data0: dict[str, Iterable[int]] = metrics_0["environments"]["seeds"]
-            seeds_data1: dict[str, Iterable[int]] = metrics_1["environments"]["seeds"]
+            seeds_data0: dict[str, Iterable[int]] = metrics_0[ENVIRONMENT_RESULTS]["seeds"]
+            seeds_data1: dict[str, Iterable[int]] = metrics_1[ENVIRONMENT_RESULTS]["seeds"]
             seq0 = list(seeds_data0.pop("seed_sequence"))  # A
             seq1 = list(seeds_data1.pop("seed_sequence"))  # A B
             seeds0 = set(seq0)
@@ -1470,6 +1530,10 @@ class TestHelpers(unittest.TestCase):
             elif "trial_name_creator" in setup_data1 or "trial_name_creator" in setup_data2:
                 self.fail("One of the trainables has a trial_name_creator, the other does not.")
             keys.remove("trial_name_creator")
+
+            self.assertListEqual(setup_data1.get("config_files") or [], setup_data2.get("config_files") or [])
+            keys.remove("config_files")
+
             self.assertEqual(len(keys), 0, f"Unchecked keys: {keys}")  # checked all params
             self.compare_param_space(param_space1, param_space2)  # pyright: ignore[reportArgumentType]
 
@@ -1686,6 +1750,18 @@ class SetupLowRes(TestHelpers):
         _create_low_res_setup: Creates a setup with minimal resources.
     """
 
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # need ray when EnvRunnerGroups are created
+        if not ray.is_initialized():
+            ray.init(num_cpus=1, log_to_driver=False, include_dashboard=False, object_store_memory=1024**3 // 4)
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        ray.shutdown()
+
     def _create_low_res_setup(self, *args_for_patch, init_trainable=True, **kwargs):
         with (
             change_log_level(experiment_base_logger, logging.ERROR),
@@ -1716,15 +1792,16 @@ class SetupDefaults(SetupLowRes, SetupWithEnv, TestHelpers, DisableLoggers):
     def setUp(self):
         super().setUp()
 
-        self._DEFAULT_CONFIG_DICT: MappingProxyType[str, Any] = MappingProxyType(
-            DefaultArgumentParser().parse_args().as_dict()
-        )
         self._DEFAULT_NAMESPACE = DefaultArgumentParser()
+        self._DEFAULT_NAMESPACE._change_log_level = False
+        self._DEFAULT_CONFIG_DICT: MappingProxyType[str, Any] = MappingProxyType(
+            self._DEFAULT_NAMESPACE.parse_args().as_dict()
+        )
         with (
             change_log_level(experiment_base_logger, logging.ERROR),
             change_log_level(dynamic_buffer_logger, logging.ERROR),
         ):
-            self._DEFAULT_SETUP = AlgorithmSetup(init_trainable=False)
+            self._DEFAULT_SETUP = AlgorithmSetup(init_trainable=False, change_log_level=False)
             self._DEFAULT_SETUP.create_trainable()
         self._INPUT_LENGTH = self._env.observation_space.shape[0]  # pyright: ignore[reportOptionalSubscript]
         self._DEFAULT_INPUT = jnp.arange(self._INPUT_LENGTH * 2).reshape((2, self._INPUT_LENGTH))
@@ -1793,6 +1870,7 @@ def remote_breakpoint(port=5678):
         Make sure to start the debug server before connecting.
     """
     error = None
+
     if not debugpy.is_client_connected():
         print("starting debugpy. Listening on port:", port)
         try:
@@ -1866,22 +1944,14 @@ class TrainableWithChecks(DefaultTrainable[Any, "AlgorithmConfig", Any]):
             log_stats=self.log_stats,
         )
         metrics["_checking_class_"] = True  # pyright: ignore[reportGeneralTypeIssues]
+        if is_pbar(self._pbar):
+            self._pbar.update(1)
         self.step_post_check(result, metrics, rewards)
         return metrics
 
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # check assignment
     __: type[_TrainableWithCheckProto] = TrainableWithChecks
-
-
-@contextmanager
-def change_log_level(logger: logging.Logger, new_level: logging._Level):
-    old_level = logger.getEffectiveLevel()
-    logger.setLevel(new_level)
-    try:
-        yield
-    finally:
-        logger.setLevel(old_level)
 
 
 # region Mock classes
@@ -2067,11 +2137,11 @@ class _MockTrialRunner:
         )
 
 
-class _MockTrial(Trial):
-    def __init__(self, i, config, storage):
+class MockTrial(Trial):
+    def __init__(self, i, config=None, storage=None):
         self.trainable_name = "trial_{}".format(i)
         self.trial_id = str(i)
-        self.config = config
+        self.config = config or {}
         self.experiment_tag = "{}tag".format(i)
         self.trial_name_creator = None
         self.logger_running = False
@@ -2093,7 +2163,7 @@ class _MockTrial(Trial):
             ),
         )
         self.temporary_state = _TemporaryTrialState()
-        self.storage = storage
+        self.storage = storage or mock.MagicMock()
 
     @property
     def restored_checkpoint(self):

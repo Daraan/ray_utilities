@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import logging
 import os
+import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, ClassVar, Literal, Optional
 
 from dotenv import load_dotenv
 from typing_extensions import TypeVar
 
 from ray_utilities.callbacks.tuner import AdvCometLoggerCallback, create_tuner_callbacks
+from ray_utilities.callbacks.tuner._log_result_grouping import exclude_results
 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 
 try:
@@ -22,15 +24,14 @@ if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
     from ray.tune import Callback
 
-    from ray_utilities.setup.experiment_base import (
-        DefaultArgumentParser,
-        ExperimentSetupBase,
-    )
+    from ray_utilities.config import DefaultArgumentParser
+    from ray_utilities.setup import ExperimentSetupBase
 
 
 class _TunerCallbackSetupBase(ABC):
     @abstractmethod
-    def create_callbacks(self) -> list[Callback]: ...
+    def create_callbacks(self, *args, **kwargs) -> list[Callback]:
+        """Create a list of initialized callbacks for the tuner."""
 
 
 __all__ = [
@@ -55,16 +56,17 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             - create_comet_logger: Create a Comet logger callback.
     """
 
-    EXCLUDE_METRICS = (
-        "time_since_restore",
-        "iterations_since_restore",
+    EXCLUDE_METRICS: ClassVar[list[str]] = [
+        *exclude_results,
+        # "time_since_restore",
+        # "iterations_since_restore",
         # "timestamp",  # autofilled
         # "num_agent_steps_sampled_lifetime",
         # "learners", # NEW: filtered by log_stats
         # "timers",
         # "fault_tolerance",
         # "training_iteration", #  needed for the callback
-    )
+    ]
 
     def __init__(
         self,
@@ -96,7 +98,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
 
         # Note: Settings are overwritten by the keywords provided below (or by ray)
         try:
-            adv_settings = wandb.Settings(
+            adv_settings = wandb.Settings(  # pyright: ignore[reportPossiblyUnboundVariable]
                 disable_code=args.test,
                 disable_git=args.test,
                 # Internal setting
@@ -105,6 +107,14 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
                 # Disable check for latest version of wandb, from PyPI.
                 # x_disable_update_check=not args.test,  # not avail in latest version
             )
+        except NameError as e:
+            if "name 'wandb' is not defined" not in str(e):
+                raise
+            warnings.warn(
+                "wandb is not installed, cannot create WandbLoggerCallback. This will likely result in a RuntimeError",
+                stacklevel=2,
+            )
+            adv_settings = None
         except Exception:
             logger.exception("Error creating wandb.Settings")
             adv_settings = None
@@ -114,13 +124,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             project=self._setup.project_name,
             group=self._setup.group_name,  # if not set trainable name is used
             excludes=[
-                "node_ip",
                 *self.EXCLUDE_METRICS,
-                "cli_args/test",
-                "cli_args/num_jobs",
-                # "learners",
-                # "timers",
-                # "num_agent_steps_sampled_lifetime",
                 # "fault_tolerance",
             ],
             upload_checkpoints=False,
@@ -137,6 +141,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             log_config=False,  # Log "config" key of results; useful if params change. Defaults to False.
             # settings advanced wandb.Settings
             settings=adv_settings,
+            upload_offline_experiments=self._setup.args.wandb and "upload" in self._setup.args.wandb,
         )
 
     def create_comet_logger(
@@ -156,6 +161,8 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         )
 
         return AdvCometLoggerCallback(
+            # new key
+            upload_offline_experiments=self._setup.args.comet and "upload" in self._setup.args.comet,
             api_key=api_key,
             disabled=not args.comet and args.test if disabled is None else disabled,
             online=not use_comet_offline,  # do not upload
@@ -204,8 +211,19 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         logger.debug("COMET_API_KEY not in environment variables, trying to load from ~/.comet_api_key.env")
         return load_dotenv(Path("~/.comet_api_key.env").expanduser())
 
-    def create_callbacks(self) -> list[Callback]:
-        callbacks: list[Callback] = create_tuner_callbacks(render=bool(self._setup.args.render_mode))
+    def create_callbacks(self, *, adv_loggers: bool | None = None) -> list[Callback]:
+        """
+        Create a list of initialized callbacks for the tuner.
+
+        Args:
+            adv_loggers: Whether to include advanced variants of the standard CSV, TBX, JSON loggers.
+                If ``None``, will be set to ``True`` if :attr:`~DefaultArgumentParser.render_mode` is set in ``args`` of
+                the setup.
+                Its recommended to use ``True`` when using schedulers working with ``FORK_FROM``.
+        """
+        if adv_loggers is None:
+            adv_loggers = bool(self._setup.args.render_mode)
+        callbacks: list[Callback] = create_tuner_callbacks(adv_loggers=adv_loggers)
         if self._setup.args.wandb or self._setup.args.test:
             callbacks.append(self.create_wandb_logger())
             logger.info("Created WanbB logger" if self._setup.args.wandb else "Created WandB logger - for testing")
