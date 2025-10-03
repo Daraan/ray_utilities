@@ -35,7 +35,7 @@ else:
     del comet_ml
 # fmt: on
 
-from ray.runtime_env import RuntimeEnv as _RunetimeEnv
+from ray.runtime_env import RuntimeEnv as _RuntimeEnv
 
 from ray_utilities.constants import COMET_OFFLINE_DIRECTORY, ENTRY_POINT_ID, RUN_ID
 from ray_utilities.misc import get_trainable_name, is_pbar, trial_name_creator
@@ -89,7 +89,7 @@ else:
     del RLModuleConfig
 
 
-runtime_env = _RunetimeEnv(
+runtime_env = _RuntimeEnv(
     env_vars={
         "RAY_UTILITIES_NEW_LOG_FORMAT": "1",
         "COMET_OFFLINE_DIRECTORY": COMET_OFFLINE_DIRECTORY,

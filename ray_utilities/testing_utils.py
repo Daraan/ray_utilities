@@ -95,6 +95,7 @@ from typing_extensions import Final, NotRequired, Required, Sentinel, TypeAliasT
 
 import ray_utilities.callbacks.algorithm.model_config_saver_callback
 import ray_utilities.config.create_algorithm
+from ray_utilities import runtime_env
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.parser.mlp_argument_parser import MLPArgumentParser
 from ray_utilities.constants import ENVIRONMENT_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
@@ -503,12 +504,14 @@ class InitRay(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Initialize Ray for the test class."""
+        # TODO: Possibly also test without runtime env to check errors, especially comet related
         if not ray.is_initialized():
             ray.init(
                 include_dashboard=False,
                 ignore_reinit_error=True,
                 num_cpus=cls._num_cpus,
                 object_store_memory=1024**3 // 2,  # 512MB
+                runtime_env=runtime_env,
             )
         super().setUpClass()
 
@@ -2089,7 +2092,7 @@ class MockTrial(Trial):
     def __init__(self, i, config=None, storage=None):
         self.trainable_name = "trial_{}".format(i)
         self.trial_id = str(i)
-        self.config = config
+        self.config = config or {}
         self.experiment_tag = "{}tag".format(i)
         self.trial_name_creator = None
         self.logger_running = False

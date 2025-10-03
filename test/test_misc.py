@@ -13,12 +13,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import ray.tune.logger
+from ray import tune
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
+from ray.runtime_env import RuntimeEnv
 
 from ray_utilities.callbacks.tuner.adv_comet_callback import AdvCometLoggerCallback
 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.constants import RE_PARSE_FORK_FROM
+from ray_utilities.constants import COMET_OFFLINE_DIRECTORY, RE_PARSE_FORK_FROM
 from ray_utilities.misc import RE_GET_TRIAL_ID, parse_fork_from
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import (
@@ -35,8 +37,7 @@ from ray_utilities.testing_utils import (
 from ray_utilities.training.helpers import make_divisible
 
 if TYPE_CHECKING:
-    from ray_utilities.typing import Forktime
-    from ray_utilities.typing import ForkFromData
+    from ray_utilities.typing import ForkFromData, Forktime
 
 if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
@@ -302,6 +303,34 @@ class TestMisc(TestCase):
         # without errors. It does not need to do anything else.
         import default_arguments.PYTHON_ARGCOMPLETE_OK  # noqa: PLC0415
 
+    def test_runtime_env(self):
+        runtime_env = RuntimeEnv(
+            env_vars={
+                "RAY_UTILITIES_NEW_LOG_FORMAT": "1",
+                "COMET_OFFLINE_DIRECTORY": COMET_OFFLINE_DIRECTORY,
+                "RAY_UTILITIES_SET_COMET_DIR": "0",  # do not warn on remote
+                "TEST_RANDOM_ENV_VAR": "TEST123",
+            }
+        )
+        ray.init(runtime_env=runtime_env, num_cpus=1, include_dashboard=False, object_store_memory=78643200)
+        os.environ["LATE_VARIABLE"] = "0000"
+
+        def fake_trainable(config):
+            from ray_utilities import COMET_OFFLINE_DIRECTORY as comet_offline_dir_remote  # noqa: N811, PLC0415
+
+            assert os.environ.get("RAY_UTILITIES_NEW_LOG_FORMAT") == "1"
+            assert comet_offline_dir_remote == COMET_OFFLINE_DIRECTORY
+            assert os.environ.get("COMET_OFFLINE_DIRECTORY") == COMET_OFFLINE_DIRECTORY
+            assert os.environ.get("RAY_UTILITIES_SET_COMET_DIR") == "0"
+            assert os.environ.get("TEST_RANDOM_ENV_VAR") == "TEST123"
+            assert "LATE_VARIABLE" not in os.environ
+            return {"return_value": 1}
+
+        result = tune.Tuner(fake_trainable).fit()
+        self.assertIn("LATE_VARIABLE", os.environ)
+        self.assertEqual(result.get_best_result().metrics["return_value"], 1)  # pyright: ignore[reportOptionalSubscript]
+        ray.shutdown()
+
 
 class TestCallbackUploads(DisableLoggers, TestHelpers):
     """Test callback upload behavior after trial completion."""
@@ -496,5 +525,5 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
                 callback._sync_offline_run_if_available(trial)
 
                 # Should log failure
-                mock_logger.warning.assert_called()
-                self.assertIn("Failed to sync", mock_logger.warning.call_args[0][0])
+                mock_logger.error.assert_called()
+                self.assertIn("Failed to sync offline run", mock_logger.error.call_args[0][0])
