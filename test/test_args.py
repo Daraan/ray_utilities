@@ -167,7 +167,10 @@ class TestExtensionsAdded(SetupWithEnv, SetupLowRes, DisableLoggers):
         for config in (setup.config, trainable.algorithm_config):
             with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
                 self.assertTrue(is_algorithm_callback_added(config, DynamicGradientAccumulation))
-                self.assertTrue(issubclass(config.learner_class, PPOTorchLearnerWithGradientAccumulation))
+                self.assertTrue(
+                    issubclass(config.learner_class, PPOTorchLearnerWithGradientAccumulation),
+                    "Expected learner_class to be a subclass of PPOTorchLearnerWithGradientAccumulation when --dynamic_batch is set.",
+                )
         trainable.stop()
 
     @patch_args()

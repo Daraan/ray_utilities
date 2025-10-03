@@ -424,9 +424,12 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
         with (
             patch.object(callback.__class__.__bases__[1], "on_trial_complete") as mock_parent,
             patch.object(callback, "_sync_offline_run_if_available") as mock_sync,
+            patch("ray.wait") as ray_wait,
         ):
+            ray_wait.side_effect = lambda futures, *args, **kwargs: (futures, [])
             callback.on_trial_complete(1, [trial], trial)
 
+            assert not ray.is_initialized()
             # Should call parent method
             mock_parent.assert_called_once_with(1, [trial], trial)
             # Should call sync method
