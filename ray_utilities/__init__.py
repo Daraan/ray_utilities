@@ -37,7 +37,13 @@ else:
 
 from ray.runtime_env import RuntimeEnv as _RuntimeEnv
 
-from ray_utilities.constants import COMET_OFFLINE_DIRECTORY, ENTRY_POINT_ID, RUN_ID
+from ray_utilities.constants import (
+    COMET_OFFLINE_DIRECTORY,
+    ENTRY_POINT,
+    ENTRY_POINT_ID,
+    RAY_UTILITIES_INITIALIZATION_TIMESTAMP,
+    RUN_ID,
+)
 from ray_utilities.misc import get_trainable_name, is_pbar, trial_name_creator
 from ray_utilities.nice_logger import nice_logger
 from ray_utilities.random import seed_everything
@@ -94,6 +100,9 @@ runtime_env = _RuntimeEnv(
         "RAY_UTILITIES_NEW_LOG_FORMAT": "1",
         "COMET_OFFLINE_DIRECTORY": COMET_OFFLINE_DIRECTORY,
         "RAY_UTILITIES_SET_COMET_DIR": "0",  # do not warn on remote
+        "ENTRY_POINT": ENTRY_POINT,
+        "RUN_ID": RUN_ID,
+        "RAY_UTILITIES_INITIALIZATION_TIMESTAMP": str(RAY_UTILITIES_INITIALIZATION_TIMESTAMP),
     }
 )
 """A suggestion of environment variables to set in Ray tasks and actors."""

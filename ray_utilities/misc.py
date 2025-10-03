@@ -20,7 +20,7 @@ from ray.experimental import tqdm_ray
 from ray.tune.error import TuneError
 from ray.tune.result_grid import ResultGrid
 from tqdm import tqdm
-from typing_extensions import Iterable, TypeIs, deprecated
+from typing_extensions import Iterable, TypeIs
 
 from ray_utilities.constants import (
     DEFAULT_EVAL_METRIC,
@@ -286,6 +286,8 @@ def _make_non_fork_experiment_key(trial: Trial) -> str:
     else:  # empty list
         trial_number = ""
     base_key = f"{RUN_ID}X{trial_base}{trial_number}".replace("_", "")
+    # Pad at the end with Z to be at least 32 characters long.
+    # Use uppercase letters as trial_id is lowercase alphanumeric only.
     base_key = f"{base_key:Z<32}"
     return base_key
 
