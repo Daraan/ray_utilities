@@ -937,7 +937,9 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
         # taken from ray's testing suite
         # self.enable_loggers()
 
-        os.environ["TUNE_GLOBAL_CHECKPOINT_S"] = "500"  # timeout for save checkpoint
+        os.environ["TUNE_GLOBAL_CHECKPOINT_S"] = "500"  # timeout for save checkpoint debugging
+        # suppress warnings about excessive checkpoint syncs
+        os.environ["TUNE_WARN_EXCESSIVE_EXPERIMENT_CHECKPOINT_SYNC_THRESHOLD_S"] = "0.25"
 
         class MockTrainable(tune.Trainable):
             def setup(self, config):
@@ -947,20 +949,17 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
                 self.c = config["c"]
 
             def step(self):
+                time.sleep(0.33)
                 self.iter += 1
                 return {"mean_accuracy": (self.a - self.iter) * self.b, "a": self.a, "b": self.b, "c": self.c}
 
             def save_checkpoint(self, checkpoint_dir):
-                # breakpoint()
-                # remote_breakpoint()
                 checkpoint_path = os.path.join(checkpoint_dir, "model.mock")
                 with open(checkpoint_path, "wb") as fp:
                     pickle.dump((self.a, self.b, self.iter), fp)
 
             def load_checkpoint(self, checkpoint: str):  # pyright: ignore[reportIncompatibleMethodOverride]
                 # NOTE: loading a checkpoint changes training_iteration when synch=False
-                # breakpoint()
-                # remote_breakpoint()
                 checkpoint_path = os.path.join(checkpoint, "model.mock")
                 with open(checkpoint_path, "rb") as fp:
                     self.a, self.b, self.iter = pickle.load(fp)
@@ -1017,12 +1016,13 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
         # in the end all should have the same hyperparameters of trial_3:
         # Trial 4 (40-3) * 0.8 = 29.6
         # Trial 3 (30-3) * 1.1 = 29.7
-        trial2 = results.trials[2]
-        assert trial2.checkpoint
-        with open(os.path.join(trial2.checkpoint.path, "model.mock"), "rb") as fp:
-            trial2_ckpt = pickle.load(fp)
+        trial3 = results.trials[2]
+        assert trial3.checkpoint
+        with open(os.path.join(trial3.checkpoint.path, "model.mock"), "rb") as fp:
+            trial3_ckpt = pickle.load(fp)
+        # assert all configs are equal in the end
         for trial in results.trials[1:]:
-            self.assertDictEqual(trial.config, trial2.config)
+            self.assertDictEqual(trial.config, trial3.config)
         for i, trial in enumerate(results.trials):
             if i != 3:
                 self.assertEqual(trial.metric_analysis["a"]["min"], param_a._params[i])
@@ -1032,10 +1032,10 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
             self.assertEqual(trial.metric_analysis["b"]["last"], 1.1)
             assert trial.checkpoint
             with open(os.path.join(trial.checkpoint.path, "model.mock"), "rb") as fp:
-                self.assertEqual(trial2_ckpt, pickle.load(fp))
+                self.assertEqual(trial3_ckpt, pickle.load(fp))
             if i != 2:
                 with open(os.path.join(trial.checkpoint.path[:-1] + "0", "model.mock"), "rb") as fp:
-                    self.assertNotEqual(trial2_ckpt, pickle.load(fp))
+                    self.assertNotEqual(trial3_ckpt, pickle.load(fp))
 
 
 class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
