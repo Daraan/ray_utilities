@@ -524,8 +524,18 @@ class TestCometRestartEdgeCases(DisableLoggers, TestHelpers):
         callback = AdvCometLoggerCallback(online=True)
 
         # Create multiple forked trials
-        forked_trial_1 = self._create_mock_trial(1, config={FORK_FROM: "parent_001?_step=100"})
-        forked_trial_2 = self._create_mock_trial(2, config={FORK_FROM: "parent_002?_step=200"})
+        fork_data_1: ForkFromData = {
+            "parent_id": "parent_001",
+            "parent_training_iteration": 100,
+            "parent_time": Forktime("training_iteration", 100),
+        }
+        fork_data_2: ForkFromData = {
+            "parent_id": "parent_002",
+            "parent_training_iteration": 200,
+            "parent_time": Forktime("training_iteration", 200),
+        }
+        forked_trial_1 = self._create_mock_trial(1, config={FORK_FROM: fork_data_1})
+        forked_trial_2 = self._create_mock_trial(2, config={FORK_FROM: fork_data_2})
 
         # Mock parent experiments
         mock_parent_1 = Mock()
@@ -544,8 +554,8 @@ class TestCometRestartEdgeCases(DisableLoggers, TestHelpers):
             mock_experiment_class.side_effect = [mock_new_exp_1, mock_new_exp_2]
 
             # Restart both experiments
-            result_1 = callback._restart_experiment_for_forked_trial(forked_trial_1, ("parent_001", 100))
-            result_2 = callback._restart_experiment_for_forked_trial(forked_trial_2, ("parent_002", 200))
+            result_1 = callback._restart_experiment_for_forked_trial(forked_trial_1, fork_data_1)
+            result_2 = callback._restart_experiment_for_forked_trial(forked_trial_2, fork_data_2)
 
             # Verify both parent experiments were ended
             mock_parent_1.end.assert_called_once()
