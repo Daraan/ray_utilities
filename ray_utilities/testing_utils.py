@@ -506,6 +506,8 @@ class InitRay(unittest.TestCase):
         """Initialize Ray for the test class."""
         # TODO: Possibly also test without runtime env to check errors, especially comet related
         if not ray.is_initialized():
+            # NOTE: might have already been started (in surprising ways) by another test
+            # e.g. EnvRunnerGroup creation. In that case runtime_env is NOT applied!
             ray.init(
                 include_dashboard=False,
                 ignore_reinit_error=True,
@@ -570,7 +572,42 @@ class TestHelpers(unittest.TestCase):
     # region setups
     _fast_model_fcnet_hiddens: int = 1
 
+    @classmethod
+    def _disable_ray_auto_init(cls):
+        cls._pop_auto_connect = False
+        cls._auto_init_hook = None
+        if "RAY_ENABLE_AUTO_CONNECT" not in os.environ:
+            os.environ["RAY_ENABLE_AUTO_CONNECT"] = "0"
+            cls._pop_auto_connect = True
+            try:
+                import ray._private.auto_init_hook  # noqa: PLC0415
+
+                cls._auto_init_hook = ray._private.auto_init_hook
+            except ImportError:
+                pass
+            else:
+                ray._private.auto_init_hook.enable_auto_connect = False
+
+    @classmethod
+    def _enable_ray_auto_init(cls):
+        """NOTE: This is a classmethod, should only be called on classSetup/tearDownClass."""
+        if cls._pop_auto_connect:
+            os.environ.pop("RAY_ENABLE_AUTO_CONNECT", None)
+        if cls._auto_init_hook is not None:
+            cls._auto_init_hook.enable_auto_connect = True
+
+    @classmethod
+    def setUpClass(cls):
+        cls._disable_ray_auto_init()
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._enable_ray_auto_init()
+        super().tearDownClass()
+
     def setUp(self):
+        # Do not initialize ray if we do not have to
         super().setUp()
         AlgorithmSetup.PROJECT = "TESTING"
         os.environ["WANDB_API_KEY"] = "test"
@@ -1712,6 +1749,18 @@ class SetupLowRes(TestHelpers):
     Methods:
         _create_low_res_setup: Creates a setup with minimal resources.
     """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # need ray when EnvRunnerGroups are created
+        if not ray.is_initialized():
+            ray.init(num_cpus=1, log_to_driver=False, include_dashboard=False, object_store_memory=1024**3 // 4)
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        ray.shutdown()
 
     def _create_low_res_setup(self, *args_for_patch, init_trainable=True, **kwargs):
         with (

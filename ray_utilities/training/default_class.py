@@ -389,16 +389,16 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         """
         # Change log level:
         # When remote set log level or project here
-
-        run_context: RuntimeContext = get_runtime_context()
-        if run_context.get_actor_name() is not None:  # we are remote
-            log_level = (
-                config.get("log_level", config.get("cli_args", {}).get("log_level", self._log_level))
-                if config
-                else self._log_level
-            )
-            if log_level is not None:
-                set_project_log_level(logging.getLogger(__name__.split(".")[0]), log_level)
+        if ray.is_initialized():
+            run_context: RuntimeContext = get_runtime_context()
+            if run_context.get_actor_name() is not None:  # we are remote
+                log_level = (
+                    config.get("log_level", config.get("cli_args", {}).get("log_level", self._log_level))
+                    if config
+                    else self._log_level
+                )
+                if log_level is not None:
+                    set_project_log_level(logging.getLogger(__name__.split(".")[0]), log_level)
 
         self._algorithm = None
         self._algorithm_overrides = algorithm_overrides
