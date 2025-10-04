@@ -5,11 +5,13 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Iterable, List, Literal, Optional, cast
+from typing import TYPE_CHECKING, ClassVar, Iterable, List, Literal, Optional, cast, overload
 
 from ray.air.integrations.comet import CometLoggerCallback
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
@@ -18,7 +20,7 @@ from ray.tune.utils import flatten_dict
 from ray_utilities.callbacks.tuner._save_video_callback import SaveVideoFirstCallback
 from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
-from ray_utilities.comet import CometArchiveTracker
+from ray_utilities.comet import CometArchiveTracker, _catch_comet_offline_logger
 from ray_utilities.constants import (
     COMET_OFFLINE_DIRECTORY,
     DEFAULT_VIDEO_DICT_KEYS,
@@ -30,8 +32,11 @@ from ray_utilities.misc import ExperimentKey, make_experiment_key
 from ray_utilities.video.numpy_to_video import numpy_to_video
 
 from ._log_result_grouping import exclude_results, non_metric_results
+import subprocess
 
 if TYPE_CHECKING:
+    import io
+
     from comet_ml import Experiment, OfflineExperiment
     from numpy.typing import NDArray
     from ray.tune.experiment import Trial
@@ -205,6 +210,9 @@ class AdvCometLoggerCallback(
         self.upload_offline_experiments = upload_offline_experiments
         """If True, offline experiments will be uploaded on trial completion."""
 
+        self._threads: list[threading.Thread | subprocess.Popen] = []
+        """Threads for uploading offline experiments."""
+
     def _check_workspaces(self, trial: Trial) -> Literal[0, 1, 2]:
         """
         Return:
@@ -246,6 +254,7 @@ class AdvCometLoggerCallback(
         self, trial: Trial, fork_data: Optional[ForkFromData] = None
     ) -> Experiment | OfflineExperiment:
         try:
+            # End the current logging process and with offline+upload also upload it
             self.log_trial_end(trial)
             _LOGGER.info("Ended and restarting experiment for forked trial %s", trial)
             assert self.is_trial_forked(trial)
@@ -415,7 +424,7 @@ class AdvCometLoggerCallback(
         # Cannot remove this
         log_result["training_iteration"] = step
         # Log normal metrics and parameters
-        super().log_trial_result(iteration, trial, log_result)  # pyright: ignore[reportArgumentType]
+        super().log_trial_result(iteration, trial, log_result)
         # Log model architecture
         if trial not in self._logged_architectures and "model_architecture.json" in os.listdir(trial.path):
             if trial.path is not None:
@@ -466,23 +475,95 @@ class AdvCometLoggerCallback(
                         )
             experiment.log_other("hasVideo", value=True)
 
-    def on_trial_complete(self, iteration: int, trials: list["Trial"], trial: "Trial", **info):
-        """Called when a trial has completed. Triggers upload for offline experiments."""
-        # Call parent method to handle normal trial completion
-        super().on_trial_complete(iteration, trials, trial, **info)
+    def upload_command_from_log(self, log_stream: io.StringIO) -> Optional[str]:
+        log_contents = log_stream.getvalue()
+        match = re.search(r"(comet upload (.+\.zip))", log_contents)
+        upload_command = match.group(1) if match else None
+        return upload_command
 
-        # If we are in offline mode, try to upload this trial's experiment immediately
+    def log_trial_end(self, trial: "Trial", failed: bool = False):  # noqa: FBT001, FBT002
+        """Log the end of a trial."""
+        # Finish comet for this trial
+        with _catch_comet_offline_logger() as log_stream:
+            super().log_trial_end(trial)
         if not self.online and self.upload_offline_experiments:
-            self._upload_offline_experiment_if_available(trial)
+            upload_command = self.upload_command_from_log(log_stream)
 
-    def _upload_offline_experiment_if_available(self, trial: "Trial"):
+            # TODO: upload if failed? Blocking?
+            thread = self._upload_offline_experiment_if_available(trial, upload_command=upload_command, blocking=False)
+            if thread:
+                self._threads.append(thread)
+
+    def __del__(self):
+        try:
+            for experiment in self._trial_experiments.values():
+                experiment.end()
+            self._trial_experiments = {}
+            for thread in self._threads:
+                if hasattr(thread, "is_alive") and thread.is_alive():  # pyright: ignore[reportAttributeAccessIssue]
+                    t: threading.Thread = thread  # pyright: ignore[reportAssignmentType]
+                    _LOGGER.info("Waiting for Comet offline upload thread to finish")
+                    # Threads are daemon so they should not block exit, but we can still wait a bit
+                    t.join(timeout=5)
+                    if t.is_alive():
+                        _LOGGER.warning("Comet offline upload thread did not finish in time")
+                else:
+                    process: subprocess.Popen[str] = thread  # pyright: ignore[reportAssignmentType]
+                    if (retcode := process.poll()) is None:
+                        _LOGGER.info("Waiting for Comet offline upload process to finish (%s)", process.args)
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            _LOGGER.info("Comet offline upload process did not finish in time")
+                    elif retcode != 0:
+                        _LOGGER.warning("Comet offline upload process exited with code %s", retcode)
+        except Exception:
+            if _LOGGER is not None:  # pyright: ignore[reportUnnecessaryComparison]
+                _LOGGER.exception("Exception in __del__ of AdvCometLoggerCallback")
+
+    @overload
+    @staticmethod
+    def _upload_offline_experiment_if_available(
+        trial: "Trial", upload_command: Optional[str] = None, *, blocking: Literal[True] = True
+    ) -> None: ...
+
+    @overload
+    @staticmethod
+    def _upload_offline_experiment_if_available(
+        trial: "Trial", upload_command: str, *, blocking: Literal[False]
+    ) -> threading.Thread | subprocess.Popen[str] | None: ...
+
+    @overload
+    @staticmethod
+    def _upload_offline_experiment_if_available(
+        trial: "Trial", upload_command: None = None, *, blocking: Literal[False]
+    ) -> threading.Thread | None: ...
+
+    @staticmethod
+    def _upload_offline_experiment_if_available(
+        trial: "Trial", upload_command: Optional[str] = None, *, blocking: bool = True
+    ) -> None | threading.Thread | subprocess.Popen[str]:
         """Upload offline experiment for the given trial if it exists."""
+        if upload_command:
+            splitted = upload_command.split()
+            assert len(splitted) == 3
+            assert splitted[0] == "comet" and splitted[1] == "upload"
+            assert splitted[2].endswith(".zip")
+            success_or_process = CometArchiveTracker.upload_zip_file(splitted[2], blocking=blocking)
+            if success_or_process is True:
+                return None
+            if success_or_process is False:
+                _LOGGER.warning(
+                    "Failed to upload offline experiment using detected command, trying to find the archive"
+                )
+            else:  # return Popen object
+                return success_or_process
         try:
             # Look for the experiment archive that was just created for this trial
             comet_offline_path = Path(COMET_OFFLINE_DIRECTORY)
             if not comet_offline_path.exists():
                 _LOGGER.debug("Comet offline directory does not exist: %s", comet_offline_path)
-                return
+                return None
 
             # The zip file should contain the trial ID with _ replaced by U
             zip_files = sorted(
@@ -518,16 +599,28 @@ class AdvCometLoggerCallback(
 
             if not zip_files:
                 _LOGGER.debug("No offline experiment archives found for upload")
-                return
+                return None
 
             # Upload the most recent archive (likely from this trial)
             # Use a custom tracker to upload only the latest experiment
             latest_archive = zip_files[0]
             _LOGGER.info("Attempting to upload comet offline experiment: %s", latest_archive)
 
-            tracker = CometArchiveTracker(track=[latest_archive], auto=False)
-            tracker.upload_and_move()
+            if blocking:
+                tracker = CometArchiveTracker(track=[latest_archive], auto=False)
+                tracker.upload_and_move()
+                return None
 
+            def upload():
+                tracker = CometArchiveTracker(track=[latest_archive], auto=False)
+                tracker.upload_and_move()
+
+            thread = threading.Thread(target=upload, daemon=True)
+            thread.start()
+            return thread  # noqa: TRY300
         except (OSError, ImportError):
             _LOGGER.exception("Failed to upload offline experiment for trial %s", trial.trial_id)
-            raise
+        except Exception:
+            if trial.config.get("cli_args", {}).get("test", False):
+                # Only raise when we are in test mode otherwise keep the logger alive.
+                raise
