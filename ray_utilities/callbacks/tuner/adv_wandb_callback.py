@@ -11,13 +11,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
 from urllib.error import HTTPError
 
+import ray
 from ray.air.integrations.wandb import WandbLoggerCallback, _clean_log, _QueueItem, _WandbLoggingActor
+from ray.tune.experiment import Trial
 from ray.tune.utils import flatten_dict
 
 from ray_utilities import RUN_ID
 from ray_utilities.callbacks.tuner.new_style_logger_callback import LogMetricsDictT, NewStyleLoggerCallback
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
-from ray_utilities.comet import _LOGGER
+
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, FORK_FROM
 from ray_utilities.misc import extract_trial_id_from_checkpoint, make_experiment_key, parse_fork_from
 
@@ -325,6 +327,8 @@ class AdvWandbLoggerCallback(
         # Wait a bit before starting the next one
         self._cleanup_logging_actors(timeout=5, kill_on_timeout=False)
         # Clean queue and futures else a new one will not be created
+        # TODO: Upload old experiment when in offline+upload mode
+
         self._trial_queues.pop(trial, None)
         self._trial_logging_futures.pop(trial, None)
         self._trial_logging_actors.pop(trial, None)
@@ -359,20 +363,32 @@ class AdvWandbLoggerCallback(
 
         return metrics  # type: ignore[return-value]
 
-    def on_trial_complete(self, iteration: int, trials: list["Trial"], trial: "Trial", **info):
-        """Called when a trial has completed. Triggers sync for offline runs."""
-        # Call parent method to handle normal trial completion
-        super().on_trial_complete(iteration, trials, trial, **info)
+    def _wait_for_trial_actor(self, trial: "Trial", timeout: float = 60.0):
+        future = self._trial_logging_futures[trial]
+        done, remaining = ray.wait([future], num_returns=1, timeout=timeout)
+        if remaining:
+            _logger.debug("Logging actor for trial %s did not finish after %.1f seconds", trial.trial_id, timeout)
+        if done and remaining:
+            _logger.warning("Got unexpectedly done and remaining for trial %s", trial.trial_id)
+        for ready_future in done:
+            assert self._logging_future_to_trial.pop(ready_future) == trial
+            self._cleanup_logging_actor(trial)
 
-        # TODO: Also sync if the trial will be perturbed; but it will not reach on_trial_complete!
-        # Furthermore on_trial_complete there will be multiple folders.
+    def log_trial_end(self, trial: Trial, failed: bool = False):  # noqa: FBT001, FBT002
+        # Triggers logger stop
+        super().log_trial_end(trial, failed)
 
         # If we are in offline mode, try to sync this trial's run immediately
-        if "offline" in self.kwargs.get("mode", "") and self.upload_offline_experiments:
+        if self.upload_offline_experiments and "offline" in self.kwargs.get("mode", "online"):
             # Wandb dir is likely not yet saved by actor, wait for it, super does not wait that long.
-            self._cleanup_logging_actors(timeout=120, kill_on_timeout=False)
-            _LOGGER.info("Syncing offline WandB run for trial %s", trial.trial_id)
+            # TODO: Could also do this non-blocking.
+            _logger.info("Waiting for wandb writer to finish writing data to disk...")
+            self._wait_for_trial_actor(trial, timeout=120)
+            _logger.info("Syncing offline WandB run for trial %s", trial.trial_id)
             # NOTE: Actor should have synced everything at this point
+            # TODO: When a fork tries to upload its experiment, the parent has not yet been uploaded
+            # hence wandb upload will fail. Possibly end & upload & resume the parent to make this possible.
+            # Therefore also gather all trials then upload them in order of forking
             self._sync_offline_run_if_available(trial)
 
     def _sync_offline_run_if_available(self, trial: "Trial"):
@@ -428,6 +444,8 @@ class AdvWandbLoggerCallback(
             for run_dir in sorted(offline_runs, key=lambda p: p.stat().st_mtime, reverse=True):
                 # Use wandb sync command to upload the offline run
                 _logger.info("Attempting to sync offline WandB run: %s", run_dir)
+                # can use Popen for non-blocking
+                upload_time_start = time.time()
                 result = subprocess.run(
                     ["wandb", "sync", str(run_dir)],
                     check=False,
@@ -436,6 +454,20 @@ class AdvWandbLoggerCallback(
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                 )
+                upload_time_end = time.time()
+                if upload_time_end - upload_time_start > 30:
+                    _logger.info(
+                        "Uploading offline run for trial %s took %.1f seconds. "
+                        "Consider switching to a non-blocking upload (Popen).",
+                        trial.trial_id,
+                        upload_time_end - upload_time_start,
+                    )
+                else:
+                    _logger.debug(
+                        "Uploading offline run for trial %s took %.1f seconds.",
+                        trial.trial_id,
+                        upload_time_end - upload_time_start,
+                    )
                 if result.returncode == 0 and "error" not in result.stdout.lower():
                     _logger.info("Successfully synced offline run for trial %s\n%s", trial.trial_id, result.stdout)
                 elif "not found (<Response [404]>)" in result.stdout:
@@ -449,6 +481,7 @@ class AdvWandbLoggerCallback(
                     _logger.error("Error during syncing offline run for trial %s: %s", trial.trial_id, result.stdout)
                 if result.returncode != 0 or result.stderr:
                     _logger.error("Failed to sync offline run for trial %s: %s", trial.trial_id, result.stderr)
+                # TODO: Move files to not upload it again (there should be parallel folders)
                 if len(offline_runs) > 1:
                     time.sleep(5)  # wait a bit between uploads
 
@@ -474,9 +507,9 @@ class AdvWandbLoggerCallback(
                 artifact = FutureFile(file_path, Path(file_path).parent, policy="live")
                 result["model_architecture"] = artifact  # pyright: ignore[reportGeneralTypeIssues]
                 self._logged_architectures.add(trial)
-                _LOGGER.debug("Storing future Artifact %s", artifact.to_dict())
+                _logger.debug("Storing future Artifact %s", artifact.to_dict())
             else:
-                _LOGGER.error("Cannot save model_architecture as trial.path is None")
+                _logger.error("Cannot save model_architecture as trial.path is None")
 
         result_clean = _clean_log(self.preprocess_videos(result))
         if not self.log_config:
