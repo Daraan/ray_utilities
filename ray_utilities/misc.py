@@ -8,6 +8,7 @@ trainable introspection, dictionary operations, and error handling.
 from __future__ import annotations
 
 import datetime
+from enum import Enum
 import functools
 import logging
 import os
@@ -274,78 +275,124 @@ def get_trainable_name(trainable: Callable) -> str:
     return trainable.__name__
 
 
-def _make_non_fork_experiment_key(trial: Trial) -> str:
-    trial_base, *trial_number = trial.trial_id.split("_")
-    if len(trial_number) > 1:
-        _logger.warning(
-            "Unexpected trial_id format '%s'. Expected format '<id>_<number>'.",
-            trial.trial_id,
-        )
-    if trial_number:
-        trial_number = "C" + "".join(trial_number).replace("000", "")
-    else:  # empty list
-        trial_number = ""
-    base_key = f"{RUN_ID}X{trial_base}{trial_number}".replace("_", "")
-    # Pad at the end with Z to be at least 32 characters long.
-    # Use uppercase letters as trial_id is lowercase alphanumeric only.
-    base_key = f"{base_key:Z<32}"
-    return base_key
+class ExperimentKey(str, Enum):
+    """Lookup for replacements in experiment keys when using :func:`make_experiment_key`."""
 
+    REPLACE_UNDERSCORE = ""
+    """All underscores in the trial ID are replaced by this string."""
 
-def _make_fork_experiment_key(base_key: str, fork_data: ForkFromData) -> str:
-    base_key = base_key.rstrip("Z")
-    parent_id = fork_data["parent_id"]
-    # Prefer training iteration for experiment key (stable across frameworks)
-    ft = fork_data.get("parent_time")
-    # ft is a NamedTuple[time_attr, time]; only use numeric time
-    parent_iteration = ft[1] if ft[0] == "current_step" else fork_data["parent_training_iteration"]
+    REPLACE_3ZEROS = ""  # noqa: PIE796
+    """All occurrences of "000" in the trial ID's count part are replaced by this string to shorten it."""
 
-    fork_base, *fork_number = parent_id.split("_")
-    if fork_number:
-        fork_number = "C" + "".join(fork_number).replace("000", "")
-    else:
-        fork_number = ""
+    RIGHT_PAD_CHAR = "Z"
+    """Right padding character to reach at least 32 characters in length."""
 
-    if parent_iteration is None:
-        iteration_data = "NONE"  # rare chance that NONE is actually encoded
-        _logger.warning("parent_iteration is None, using 'NONE' in experiment key.")
-    else:
-        iteration_data = base62.encode(parent_iteration)
-    return f"{base_key}F{fork_base}{fork_number}S{iteration_data:0>4}".replace("_", "")
-
-
-def make_experiment_key(trial: Trial, fork_data: Optional[ForkFromData] = None) -> str:
+    MIN_LENGTH = 32
     """
-    Build a unique experiment key for a trial, making use of the :attr:`RUN_ID`,
-    :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`, and optional fork information.
-
-    It has the format of two forms:
-        - If not forked: "<RUN_ID of 21 chars>X<trial_id>[Z* up to 32 chars in total]"
-          it is prolonged by ``Z`` to be at least 32 chars long.
-        - If forked: "<RUN_ID of 21 chars>X<trial_id>F<trial_id>S<step>"
-          The <step> is in base62 encoded and right aligned to 4 characters with leading zeros.
-
-        Both have in common that the potential underscore in the trial ID is replaced by C and all "000" in the trials
-        count part of the trial ID are removed, e.g. ``abcd0001_00005`` becomes ``abcd0001C05``.
-
-    References:
-        - :attr:`RUN_ID <ray_utilities.constants.RUN_ID>`: A unique identifier for the current execution.
-        - :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`: The unique ID of the trial.
-
-    Note:
-        The resulting key underscores replaced by C. For compatibility it should only contain
-        numbers and letters.
-        For comet it must be between 32 and 50 characters long. This is not enforced here.
-
-        For comet support, to not exceed 50 characters, only 99 parallel trials are supported, e.g. <trial_id>_00099.
-        The highest supported forking step is 14_776_335.
-
-        It is assumed that the trial ID contains only lowercase alphanumeric characters and underscores.
+    Minimum length of the experiment key for non-forks. :attr:`RIGHT_PAD_CHAR` is used to pad the key to this length.
+    Should be at least 32 characters long to be valid for Comet.
     """
-    base_key = _make_non_fork_experiment_key(trial)
-    if not fork_data:
+
+    NO_ITERATION_DATA = "NaN"
+    """
+    String to use when no iteration data is available.
+
+    Key will end with "SNaN" in this case instead of "S####"
+    """
+
+    RUN_ID_SEPARATOR = "X"
+    """Separator between RUN_ID and trial ID."""
+
+    FORK_SEPARATOR = "F"
+    """Separator between trial ID and fork information."""
+
+    COUNT_SEPARATOR = "C"
+    """Separator between trial ID and trial count part."""
+
+    STEP_SEPARATOR = "S"
+
+    @classmethod
+    def _make_non_fork_experiment_key(cls, trial: Trial) -> str:
+        trial_base, *trial_number = trial.trial_id.split("_")
+        if len(trial_number) > 1:
+            _logger.warning(
+                "Unexpected trial_id format '%s'. Expected format '<id>_<number>'.",
+                trial.trial_id,
+            )
+        if trial_number:
+            trial_number = cls.COUNT_SEPARATOR + "".join(trial_number).replace("000", cls.REPLACE_UNDERSCORE)
+        else:  # empty list
+            trial_number = ""
+        base_key = f"{RUN_ID}{cls.RUN_ID_SEPARATOR}{trial_base}{trial_number}".replace("_", cls.REPLACE_UNDERSCORE)
+        # Pad at the end with Z to be at least 32 characters long.
+        # Use uppercase letters as trial_id is lowercase alphanumeric only.
+        base_key = f"{base_key:{cls.RIGHT_PAD_CHAR}<{cls.MIN_LENGTH}}"
         return base_key
-    return _make_fork_experiment_key(base_key, fork_data)
+
+    @classmethod
+    def _make_fork_experiment_key(cls, base_key: str, fork_data: ForkFromData) -> str:
+        base_key = base_key.rstrip(cls.RIGHT_PAD_CHAR)
+        parent_id = fork_data["parent_id"]
+        # Prefer training iteration for experiment key (stable across frameworks)
+        ft = fork_data.get("parent_time")
+        # ft is a NamedTuple[time_attr, time]; only use numeric time
+        parent_iteration = ft[1] if ft[0] == "current_step" else fork_data["parent_training_iteration"]
+
+        fork_base, *fork_number = parent_id.split("_")
+        if fork_number:
+            fork_number = cls.COUNT_SEPARATOR + "".join(fork_number).replace("000", cls.REPLACE_3ZEROS)
+        else:
+            fork_number = ""
+
+        if parent_iteration is None:  # pyright: ignore[reportUnnecessaryComparison]
+            iteration_data = "NaN"  # rare chance that NaN is actually encoded
+            r_pad = 0
+            _logger.warning("parent_iteration is None, using 'NaN' in experiment key.")
+        else:
+            r_pad = 4
+            iteration_data = base62.encode(parent_iteration)
+        return (
+            f"{base_key}{cls.FORK_SEPARATOR}{fork_base}{fork_number}{cls.STEP_SEPARATOR}{iteration_data:0>{r_pad}}"
+        ).replace("_", cls.REPLACE_UNDERSCORE)
+
+    @classmethod
+    def make_experiment_key(cls, trial: Trial, fork_data: Optional[ForkFromData] = None) -> str:
+        """
+        Build a unique experiment key for a trial, making use of the :attr:`RUN_ID`,
+        :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`, and optional fork information.
+
+        It has the format of two forms:
+            - If not forked: "<RUN_ID of 21 chars>X<trial_id>[Z* up to 32 chars in total]"
+            it is prolonged by ``Z`` (:attr:``RIGHT_PAD``) to be at least 32 chars long.
+            - If forked: "<RUN_ID of 21 chars>X<trial_id>F<trial_id>S<step>"
+            The <step> is in base62 encoded and right aligned to 4 characters with leading zeros.
+
+            Both have in common that the potential underscore in the trial ID is removed
+
+            and all "000" in the trials
+            count part of the trial ID are removed, e.g. ``abcd0001_00005`` becomes ``abcd0001C05``.
+
+        References:
+            - :attr:`RUN_ID <ray_utilities.constants.RUN_ID>`: A unique identifier for the current execution.
+            - :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`: The unique ID of the trial.
+
+        Note:
+            The resulting key underscores replaced by C. For compatibility it should only contain
+            numbers and letters.
+            For comet it must be between 32 and 50 characters long. This is not enforced here.
+
+            For comet support, to not exceed 50 characters, only 99 parallel trials are supported, e.g. <trial_id>_00099.
+            The highest supported forking step is 14_776_335.
+
+            It is assumed that the trial ID contains only lowercase alphanumeric characters and underscores.
+        """
+        base_key = cls._make_non_fork_experiment_key(trial)
+        if not fork_data:
+            return base_key
+        return cls._make_fork_experiment_key(base_key, fork_data)
+
+
+make_experiment_key = ExperimentKey.make_experiment_key
 
 
 def is_pbar(pbar: Iterable[_T]) -> TypeIs[tqdm_ray.tqdm | tqdm[_T]]:

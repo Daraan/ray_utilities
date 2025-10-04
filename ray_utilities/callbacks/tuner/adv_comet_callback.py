@@ -26,7 +26,7 @@ from ray_utilities.constants import (
     EPISODE_VIDEO_PREFIX,
     FORK_FROM,
 )
-from ray_utilities.misc import make_experiment_key
+from ray_utilities.misc import ExperimentKey, make_experiment_key
 from ray_utilities.video.numpy_to_video import numpy_to_video
 
 from ._log_result_grouping import exclude_results, non_metric_results
@@ -486,7 +486,7 @@ class AdvCometLoggerCallback(
 
             # The zip file should contain the trial ID with _ replaced by U
             zip_files = sorted(
-                comet_offline_path.glob(f"*{trial.trial_id.replace('_', 'U')}*.zip"),
+                comet_offline_path.glob(f"*{trial.trial_id.replace('_', ExperimentKey.REPLACE_UNDERSCORE)}*.zip"),
                 key=lambda p: p.stat().st_mtime,
                 reverse=True,
             )
