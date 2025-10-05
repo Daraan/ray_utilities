@@ -4,11 +4,13 @@ import logging
 import os
 import pickle
 import random
+import sys
 import tempfile
 import time
+import unittest
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
-import unittest
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -23,6 +25,7 @@ from ray.train._internal.storage import StorageContext
 from ray.tune import CheckpointConfig
 from ray.tune.experiment import Trial
 from ray.tune.result import SHOULD_CHECKPOINT, TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
+from ray.tune.schedulers.pb2 import PB2
 from ray.tune.schedulers.pbt import logger as ray_pbt_logger
 from ray.tune.search.optuna import OptunaSearch
 from ray.tune.stopper import CombinedStopper
@@ -50,10 +53,10 @@ from ray_utilities.testing_utils import (
     Cases,
     DisableLoggers,
     InitRay,
+    MockTrial,
     SetupWithCheck,
     TestHelpers,
     TrainableWithChecks,
-    MockTrial,
     _MockTrialRunner,
     format_result_errors,
     iter_cases,
@@ -72,6 +75,12 @@ if TYPE_CHECKING:
     from ray_utilities.typing.metrics import LogMetricsDict
     from ray_utilities.typing.trainable_return import TrainableReturnData
 
+
+try:
+    # Needed for PB2 init
+    import GPy  # pyright: ignore[reportMissingImports] # noqa: F401
+except ImportError:
+    sys.modules["GPy"] = MagicMock()
 
 logger = logging.getLogger(__name__)
 
@@ -1130,6 +1139,7 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
 
         class CheckTrainableForTop(TrainableWithChecks):
             debug_step = False
+            use_pbar = False
 
             def step(self) -> LogMetricsDict:
                 self._current_step += self.algorithm_config.train_batch_size_per_learner
@@ -1176,6 +1186,7 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             "--log_level", "DEBUG",
             "--log_stats", "most",
             "--perturbation_interval", perturbation_interval,
+            "--quantile_fraction", "0.1",
             "--total_steps", max(batch_sizes) * 3,
             "--use_exact_total_steps",
             "--no_dynamic_eval_interval",
@@ -1213,57 +1224,53 @@ class DummyTrial:
     def is_finished(self):
         return self._finished
 
+    def __repr__(self):
+        return f"DummyTrial('{self.trial_id}')"
+
 
 class DummyState:
     def __init__(self, last_score):
         self.last_score = last_score
 
+    def __repr__(self):
+        return f"DummyState(last_score={self.last_score})"
+
 
 class PBTQuantileNaNTest(unittest.TestCase):
     def test_nan_last_score_in_quantiles(self):
         # Create three trials: one with nan, two with valid scores
-        t1 = DummyTrial("t1")
-        t2 = DummyTrial("t2")
-        t3 = DummyTrial("t3")
         # Patch _trial_state with dummy states
-        max_states = {
-            t1: DummyState(last_score=20.0),
-            t2: DummyState(last_score=float("nan")),
-            t3: DummyState(last_score=10.0),
-        }
-        min_states = {
-            t3: DummyState(last_score=10.0),
-            t2: DummyState(last_score=float("nan")),
-            t1: DummyState(last_score=20.0),
-        }
 
+        # To test PB2 and PopulationBasedTraining in ray need https://github.com/ray-project/ray/pull/57160
         for scheduler_class in [ReTuneScheduler, TopPBTTrialScheduler]:
+            t1 = DummyTrial("t1", config=MagicMock())
+            t2 = DummyTrial("t2", config=MagicMock())
+            t3 = DummyTrial("t3", config=MagicMock())
+            max_states: dict[Any, Any] = {
+                t1: DummyState(last_score=20.0),  # best
+                t2: DummyState(last_score=float("nan")),
+                t3: DummyState(last_score=10.0),  # worst
+            }
+            min_states: dict[Any, Any] = {
+                t3: DummyState(last_score=10.0),  # best
+                t2: DummyState(last_score=float("nan")),
+                t1: DummyState(last_score=20.0),  # worst
+            }
             with self.subTest(scheduler_class=scheduler_class.__name__):
+                hp_kwargs: dict[str, Any] = {
+                    "hyperparam_mutations" if scheduler_class is not PB2 else "hyperparam_bounds": {"lr": [1e-4, 1e-3]}
+                }
+                # test max mode
                 max_scheduler = scheduler_class(
                     metric="reward",
                     mode="max",
-                    hyperparam_mutations={"lr": [1e-3, 1e-4]},
-                    # use > 0.5 to not user super()._quantile
                     quantile_fraction=0.51 if scheduler_class is ReTuneScheduler else 0.5,
+                    **hp_kwargs,
                 )
                 max_scheduler._trial_state = max_states
                 for t, state in max_states.items():
                     max_scheduler._save_trial_state(
-                        state, 100, {"reward": state.last_score, TRAINING_ITERATION: 100}, t
-                    )
-                min_scheduler = scheduler_class(
-                    metric="reward",
-                    mode="min",
-                    hyperparam_mutations={"lr": [1e-3, 1e-4]},
-                    quantile_fraction=0.51 if scheduler_class is ReTuneScheduler else 0.5,
-                )
-                min_scheduler._trial_state = min_states  # pyright: ignore[reportAttributeAccessIssue]
-                for t, state in min_states.items():
-                    min_scheduler._save_trial_state(
-                        state,
-                        100,
-                        {"reward": state.last_score, TRAINING_ITERATION: 100},
-                        t,  # pyright: ignore[reportArgumentType]
+                        state, 100, {"reward": state.last_score, "time_total_s": 1, "training_iteration": 1}, t
                     )
 
                 # Should not raise, but nan disrupts sorting
@@ -1272,21 +1279,34 @@ class PBTQuantileNaNTest(unittest.TestCase):
                 max_ordered_results = [
                     max_scheduler._trial_state[t].last_score for t in [*max_bottom, *max_other_trials, *max_top]
                 ]
-                print(max_ordered_results)
-                # [20, nan, 10]
+
+                self.assertIn(t1, max_top)
+                self.assertIn(t2, max_other_trials)
+                self.assertIn(t3, max_bottom)
+                self.assertEqual(max_ordered_results[-1], 20)
+
+                # Test min mode
+                min_scheduler = scheduler_class(
+                    metric="reward",
+                    mode="min",
+                    quantile_fraction=0.51 if scheduler_class is ReTuneScheduler else 0.5,
+                    **hp_kwargs,
+                )
+                min_scheduler._trial_state = min_states
+                for t, state in min_states.items():
+                    min_scheduler._save_trial_state(
+                        state, 100, {"reward": state.last_score, "time_total_s": 1, "training_iteration": 1}, t
+                    )
                 min_bottom, min_top = min_scheduler._quantiles()
                 min_other_trials = [t for t in min_scheduler._trial_state if t not in min_bottom + min_top]
                 min_ordered_results = [
                     min_scheduler._trial_state[t].last_score for t in [*min_bottom, *min_other_trials, *min_top]
                 ]
-                # The trial with nan should be handled gracefully (e.g., always last)
 
-                assert t1 in max_top
-                assert t3 in max_bottom
-                assert t1 in min_bottom
-                assert t3 in min_top
-                assert 20 == max_ordered_results[-1]
-                assert 10 == abs(min_ordered_results[-1]), min_ordered_results
+                self.assertIn(t1, min_bottom)
+                self.assertIn(t2, min_other_trials)
+                self.assertIn(t3, min_top)
+                self.assertEqual(abs(min_ordered_results[-1]), 10)
 
 
 if __name__ == "__main__":

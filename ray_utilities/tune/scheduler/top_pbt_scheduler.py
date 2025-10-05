@@ -303,11 +303,8 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
             if state.last_score is not None and not math.isnan(state.last_score) and not trial.is_finished():
                 trials.append(trial)
 
-        # Sort trials by score (in appropriate order based on mode)
-        if self._mode == "max":
-            trials.sort(key=lambda t: self._trial_state[t].last_score or 0.0, reverse=True)
-        else:
-            trials.sort(key=lambda t: self._trial_state[t].last_score or 0.0)
+        # Sort trials by score; _save_trial_state takes care of mode (multiply by -1 if min mode)
+        trials.sort(key=lambda t: self._trial_state[t].last_score)
 
         if len(trials) <= 1:
             return [], []
@@ -315,9 +312,11 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         # Calculate number of trials in top quantile
         num_top_trials = max(1, math.ceil(len(trials) * self._quantile_fraction))
 
-        # All other trials will exploit these top trials
-        top_trials = trials[:num_top_trials]
-        bottom_trials = trials[num_top_trials:]
+        if num_top_trials > len(trials) / 2:
+            num_top_trials = math.floor(len(trials) / 2)
+        top_trials = trials[-num_top_trials:]
+        # all other trials will exploit top trials
+        bottom_trials = trials[:-num_top_trials]
 
         logger.debug("Split trials: %s in top quantile, %s in bottom quantile", len(top_trials), len(bottom_trials))
 
