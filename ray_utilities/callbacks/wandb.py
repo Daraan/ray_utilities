@@ -151,8 +151,10 @@ class WandbUploaderMixin:
                 logger.warning("Failed to upload %d wandb runs", len(failed_uploads))
 
             logger.info(
-                "Uploaded all %d wandb offline runs from %s.",
+                "Uploaded wandb offline runs from %d trial paths: success %d, failed %d from experiment dir %s.",
                 total_uploaded,
+                len(finished_uploads),
+                len(failed_uploads),
                 results.experiment_path if results else f"local wandb fallback paths: {wandb_paths}",
             )
             return None
@@ -173,10 +175,13 @@ class WandbUploaderMixin:
             return None
 
         logger.info(
-            "Uploaded %d wandb offline runs from %s, %d still in progress.",
+            "Uploaded wandb offline runs from %d trial paths: "
+            "success %d, failed %d, still in progress %d from experiment dir %s.",
             total_uploaded,
-            results.experiment_path if results else f"local wandb fallback paths: {wandb_paths}",
+            len(finished_uploads),
+            len(failed_uploads),
             len(unfinished_uploads),
+            results.experiment_path if results else f"local wandb fallback paths: {wandb_paths}",
         )
         # There are still processes running
         return unfinished_uploads

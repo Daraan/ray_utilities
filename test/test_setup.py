@@ -18,6 +18,7 @@ from inspect import isclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import IO, TYPE_CHECKING, Any, Final, Optional, cast
+from unittest.mock import MagicMock, patch
 
 import cloudpickle
 import pyarrow as pa
@@ -38,6 +39,8 @@ from ray.rllib.utils.metrics import (
 from ray.tune.experiment import Trial
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import NUM_ENV_RUNNERS_0_1_EQUAL
+from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
+from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config import logger as parser_logger
 from ray_utilities.config.parser.mlp_argument_parser import SimpleMLPParser
@@ -1772,9 +1775,15 @@ class TestLoggerIntegration(TestHelpers):
         mock_popen_class.return_value = mocked_popen
         # use more iterations here for it to be more likely that the files are synced.
         with (
-            patch_args("--wandb", "offline+upload", "--num_jobs", 1, "--iterations", 5, "--batch_size", 32),
+            patch_args(
+                "--wandb", "offline+upload",
+                "--num_jobs", 1,
+                "--iterations", 5,
+                "--batch_size", 32,
+                "--minibatch_size", 32
+            ),
             unittest.mock.patch("subprocess.run") as mock_run,  # upload on_trial_complete
-        ):
+        ):  # fmt: skip
             setup = AlgorithmSetup()
             _results = run_tune(setup, raise_errors=True)
         mocked_popen.wait.assert_called_once()
@@ -1895,7 +1904,8 @@ class TestLoggerIntegration(TestHelpers):
             mock_popen_class.return_value = mock_popen_class
             mock_popen_class.stderr = None
             mock_popen_class.stdout = ""
-            mock_popen_class.returncode.return_value = 0
+            mock_popen_class.returncode = 0
+            mock_popen_class.args = ["wandb", "sync", mock_results[0].path]
             uploader.wandb_upload_offline_experiments(mock_results)  # pyright: ignore[reportArgumentType]
             self.assertTrue(mock_fork_called, "wandb fork relationships mock was not called")
             self.assertTrue(mock_graph_build_called, "wandb graph build mock was not called")
@@ -2031,9 +2041,6 @@ class TestLoggerIntegration(TestHelpers):
 
     def test_gather_uploads_mechanism(self):
         """Test the gather_uploads mechanism in AdvWandbLoggerCallback."""
-        from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
-        from unittest.mock import MagicMock, patch
-        import tempfile
 
         # Create callback with offline+upload mode
         callback = AdvWandbLoggerCallback(
@@ -2093,7 +2100,7 @@ class TestLoggerIntegration(TestHelpers):
                     callback._gather_and_upload_trials(trial3)
 
                     # All trials should trigger immediate processing since we have all active trials
-                    time.sleep(2)
+                    time.sleep(1)
 
                     # Verify that trials were gathered and processed
                     self.assertEqual(len(callback._trials_ending), 0)  # Should be cleared after processing
@@ -2103,8 +2110,6 @@ class TestLoggerIntegration(TestHelpers):
 
     def test_restart_logging_actor_with_resume(self):
         """Test that _restart_logging_actor properly sets resume parameter."""
-        from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
-        from unittest.mock import MagicMock, patch
 
         # Create callback
         callback = AdvWandbLoggerCallback(
@@ -2155,8 +2160,6 @@ class TestLoggerIntegration(TestHelpers):
         before AdvWandbLoggerCallback.log_trial_start is called. This means that new_trial_id
         == previous_trial_id in normal scenarios. This test simulates that behavior.
         """
-        from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
-        from unittest.mock import MagicMock, patch
 
         # Create callback
         callback = AdvWandbLoggerCallback(
@@ -2213,8 +2216,6 @@ class TestLoggerIntegration(TestHelpers):
 
     def test_track_forked_trials_get_trial_id(self):
         """Test that get_trial_id returns the correct trial ID for both forked and non-forked trials."""
-        from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
-        from unittest.mock import MagicMock
 
         # Create mixin instance
         mixin = TrackForkedTrialsMixin()
