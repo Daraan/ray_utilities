@@ -473,7 +473,12 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         callback = AdvCometLoggerCallback(online=False, upload_offline_experiments=True)
         parent_trial_id = "p_trial_0001"
         fork_step = 500
-        forked_trial = self._create_forked_trial("forked_trial_009", f"{parent_trial_id}?_step={fork_step}")
+        fork_data = {
+            "parent_id": parent_trial_id,
+            "parent_training_iteration": fork_step,
+            "parent_time": Forktime("training_iteration", fork_step),
+        }
+        forked_trial = self._create_forked_trial("forked_trial_009", fork_data)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create mock zip file for upload
@@ -507,7 +512,9 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
                 callback.on_trial_complete(1, [forked_trial], forked_trial)
 
                 # Verify upload was attempted
-                mock_upload.assert_called_once_with(forked_trial)
+                self.assertEqual(mock_upload.call_count, 2)
+                # trial, no command, not blocking
+                mock_upload.assert_called_with(forked_trial, upload_command=None, blocking=False)
 
 
 class TestCometRestartEdgeCases(DisableLoggers, TestHelpers):

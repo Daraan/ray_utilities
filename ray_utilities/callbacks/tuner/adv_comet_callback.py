@@ -621,6 +621,7 @@ class AdvCometLoggerCallback(
         except (OSError, ImportError):
             _LOGGER.exception("Failed to upload offline experiment for trial %s", trial.trial_id)
         except Exception:
+            _LOGGER.exception("Unexpected error while uploading offline experiment for trial %s", trial.trial_id)
             if trial.config.get("cli_args", {}).get("test", False):
                 # Only raise when we are in test mode otherwise keep the logger alive.
                 raise
