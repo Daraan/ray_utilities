@@ -310,12 +310,13 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
             return [], []
 
         # Calculate number of trials in top quantile
-        num_trials_in_quantile = max(1, math.ceil(len(trials) * self._quantile_fraction))
+        num_top_trials = max(1, math.ceil(len(trials) * self._quantile_fraction))
 
-        if num_trials_in_quantile > len(trials) / 2:
-            num_trials_in_quantile = math.floor(len(trials) / 2)
-        bottom_trials = trials[:num_trials_in_quantile]
-        top_trials = trials[-num_trials_in_quantile:]
+        if num_top_trials > len(trials) / 2:
+            num_top_trials = math.floor(len(trials) / 2)
+        top_trials = trials[-num_top_trials:]
+        # all other trials will exploit top trials
+        bottom_trials = trials[:-num_top_trials]
 
         logger.debug("Split trials: %s in top quantile, %s in bottom quantile", len(top_trials), len(bottom_trials))
 

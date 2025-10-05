@@ -1139,6 +1139,7 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
 
         class CheckTrainableForTop(TrainableWithChecks):
             debug_step = False
+            use_pbar = False
 
             def step(self) -> LogMetricsDict:
                 self._current_step += self.algorithm_config.train_batch_size_per_learner
@@ -1185,6 +1186,7 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             "--log_level", "DEBUG",
             "--log_stats", "most",
             "--perturbation_interval", perturbation_interval,
+            "--quantile_fraction", "0.1",
             "--total_steps", max(batch_sizes) * 3,
             "--use_exact_total_steps",
             "--no_dynamic_eval_interval",
