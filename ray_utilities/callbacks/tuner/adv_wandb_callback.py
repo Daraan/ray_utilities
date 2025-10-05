@@ -373,6 +373,7 @@ class AdvWandbLoggerCallback(
 
         # Get the previous trial ID that was being used before restart
         # This is the experiment_key that was previously logged
+        # NOTE: It is expected that new_trial_id == previous_trial_id in the current implementation
         previous_trial_id = self.get_trial_id(trial)
 
         # End current logging actor and optionally upload if in offline mode
@@ -402,7 +403,11 @@ class AdvWandbLoggerCallback(
             _logger.info("Forking WandB run: new ID %s from parent %s", new_trial_id, wandb_init_kwargs["fork_from"])
         else:
             # Starting a new trial (shouldn't normally happen in restart)
-            _logger.info("Starting new WandB run with ID %s (was %s)", new_trial_id, previous_trial_id)
+            _logger.warning(
+                "Restarting new WandB run with ID %s (was %s). This should normally not execute this function.",
+                new_trial_id,
+                previous_trial_id,
+            )
 
         self._start_logging_actor(trial, self._exclude_results, **wandb_init_kwargs)
 
