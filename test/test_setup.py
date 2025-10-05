@@ -9,6 +9,7 @@ import os
 import random
 import subprocess
 import tempfile
+import time
 import unittest
 import unittest.mock
 from ast import literal_eval
@@ -2027,6 +2028,125 @@ class TestLoggerIntegration(TestHelpers):
 
         # Level 3: grandchild
         self.assertEqual(group_trial_ids[3], ["grandchild"])
+
+    def test_gather_uploads_mechanism(self):
+        """Test the gather_uploads mechanism in AdvWandbLoggerCallback."""
+        from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
+        from unittest.mock import MagicMock, patch
+        import tempfile
+
+        # Create callback with offline+upload mode
+        callback = AdvWandbLoggerCallback(
+            project="test_project",
+            upload_offline_experiments=True,
+            mode="offline",
+        )
+
+        # Create mock trials
+        trial1 = MagicMock(spec=Trial)
+        trial1.trial_id = "trial_1"
+        trial1.status = "RUNNING"
+        trial1.local_path = None  # Will be set in test
+
+        trial2 = MagicMock(spec=Trial)
+        trial2.trial_id = "trial_2"
+        trial2.status = "RUNNING"
+        trial2.local_path = None
+
+        trial3 = MagicMock(spec=Trial)
+        trial3.trial_id = "trial_3"
+        trial3.status = "RUNNING"
+        trial3.local_path = None
+
+        # Initialize callback state
+        callback._trials = [trial1, trial2, trial3]
+        callback._active_trials_count = 3
+
+        # Mock parent log_trial_end to avoid KeyError
+        with patch.object(callback.__class__.__bases__[-1], "log_trial_end"):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # Setup trial paths
+                for i, trial in enumerate([trial1, trial2, trial3], 1):
+                    trial_path = Path(tmpdir) / f"trial_{i}"
+                    trial_path.mkdir()
+                    trial.local_path = trial_path.as_posix()
+
+                    # Create wandb offline run directory
+                    wandb_dir = trial_path / "wandb"
+                    wandb_dir.mkdir()
+                    offline_run_dir = wandb_dir / f"offline-run-20250101_120000-trial_{i}"
+                    offline_run_dir.mkdir()
+
+                # Create fork relationships - trial_2 is forked from trial_1
+                fork_file = Path(tmpdir) / "trial_1" / "wandb_fork_from.txt"
+                with fork_file.open("w") as f:
+                    f.write("trial_id, parent_id, parent_step, step_metric\n")
+                    f.write("trial_2, trial_1, 100, _step\n")
+
+                # Mock subprocess.run to avoid actual uploads
+                with patch("subprocess.run") as mock_run:
+                    mock_run.return_value = MagicMock(returncode=0, stdout="Success")
+
+                    # Call _gather_and_upload_trials directly to test the mechanism
+                    callback._gather_and_upload_trials(trial1)
+                    callback._gather_and_upload_trials(trial2)
+                    callback._gather_and_upload_trials(trial3)
+
+                    # All trials should trigger immediate processing since we have all active trials
+                    time.sleep(2)
+
+                    # Verify that trials were gathered and processed
+                    self.assertEqual(len(callback._trials_ending), 0)  # Should be cleared after processing
+
+            # Test that timer is properly managed
+            self.assertIsNone(callback._gather_timer)
+
+    def test_restart_logging_actor_with_resume(self):
+        """Test that _restart_logging_actor properly sets resume parameter."""
+        from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
+        from unittest.mock import MagicMock, patch
+
+        # Create callback
+        callback = AdvWandbLoggerCallback(
+            project="test_project",
+            upload_offline_experiments=True,
+            mode="offline",
+        )
+
+        # Create mock trial
+        trial = MagicMock(spec=Trial)
+        trial.trial_id = "trial_123"
+        trial.status = "RUNNING"
+
+        # Mock the necessary methods
+        callback._cleanup_logging_actors = MagicMock()
+        callback._start_logging_actor = MagicMock()
+        callback._trial_queues = {trial: MagicMock()}
+        callback._trial_logging_futures = {trial: MagicMock()}
+        callback._trial_logging_actors = {trial: MagicMock()}
+
+        # Mock log_trial_end to not actually end the trial
+        with patch.object(callback, "log_trial_end"):
+            # Test 1: Resume same trial (not forked)
+            wandb_kwargs = {"id": "trial_123"}
+            callback._restart_logging_actor(trial, **wandb_kwargs)
+
+            # Check that resume was set
+            start_call_kwargs = callback._start_logging_actor.call_args[1]
+            self.assertEqual(start_call_kwargs.get("resume"), "must")
+            self.assertEqual(start_call_kwargs.get("id"), "trial_123")
+
+            # Reset mocks
+            callback._start_logging_actor.reset_mock()
+
+            # Test 2: Fork (not resume)
+            wandb_kwargs = {"id": "trial_123_fork", "fork_from": "trial_123?_step=100"}
+            callback._restart_logging_actor(trial, **wandb_kwargs)
+
+            # Check that resume was NOT set for fork
+            start_call_kwargs = callback._start_logging_actor.call_args[1]
+            self.assertNotIn("resume", start_call_kwargs)
+            self.assertEqual(start_call_kwargs.get("fork_from"), "trial_123?_step=100")
 
 
 if __name__ == "__main__":
