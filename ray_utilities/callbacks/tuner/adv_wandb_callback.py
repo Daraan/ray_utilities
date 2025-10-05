@@ -6,6 +6,7 @@ import os
 import pickle
 import re
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
@@ -197,10 +198,20 @@ class AdvWandbLoggerCallback(
         self.upload_offline_experiments = upload_offline_experiments
         """If True, offline experiments will be uploaded on trial completion."""
 
+        # Gather uploads tracking
+        self._gather_uploads_lock = threading.Lock()
+        self._trials_ending: list[Trial] = []
+        self._gather_timer: Optional[threading.Timer] = None
+        self._gather_timeout = 30.0  # seconds to wait for more trials to finish
+        self._active_trials_count = 0
+
     def on_trial_start(self, iteration: int, trials: list["Trial"], trial: "Trial", **info):
         super().on_trial_start(iteration, trials, trial, **info)
         _logger.debug("Trials created: %d, re-started: %d", self._trials_created, self._trials_started)
         self._trials = trials  # keep them in case of a failure to access paths.
+        # Track active trials for gather_uploads
+        with self._gather_uploads_lock:
+            self._active_trials_count = len([t for t in trials if t.status in ("RUNNING", "PENDING", "PAUSED")])
 
     def log_trial_start(self, trial: "Trial"):
         # breakpoint()
@@ -321,17 +332,34 @@ class AdvWandbLoggerCallback(
         self._trials_started += 1
 
     def _restart_logging_actor(self, trial: "Trial", **wandb_init_kwargs):
-        """Ends the current logging actor and starts a new one. Useful for resuming with a new ID / settings."""
+        """Ends the current logging actor and starts a new one. Useful for resuming with a new ID / settings.
+
+        This is used when a trial is forked - we need to:
+        1. End the current logging actor and finish uploading if in offline+upload mode
+        2. Resume the trial with the new fork ID
+        """
+        # Get the current trial ID before ending
+        current_trial_id = wandb_init_kwargs.get("id", trial.trial_id)
+
+        # End current logging actor and optionally upload if in offline mode
         self.log_trial_end(trial, failed=False, gather_uploads=True)
         _logger.info("Restarting WandB logging actor for trial %s", trial.trial_id)
         # Wait a bit before starting the next one
         self._cleanup_logging_actors(timeout=5, kill_on_timeout=False)
         # Clean queue and futures else a new one will not be created
-        # TODO: Upload old experiment when in offline+upload mode
 
         self._trial_queues.pop(trial, None)
         self._trial_logging_futures.pop(trial, None)
         self._trial_logging_actors.pop(trial, None)
+
+        # Check if we need to resume the original trial run
+        # This happens when a trial is continued (not forked) after being ended
+        if "fork_from" not in wandb_init_kwargs and current_trial_id == trial.trial_id:
+            # We're resuming the same trial, not forking
+            wandb_init_kwargs["resume"] = "must"
+            wandb_init_kwargs["id"] = current_trial_id
+            _logger.info("Resuming WandB run with ID %s", current_trial_id)
+
         self._start_logging_actor(trial, self._exclude_results, **wandb_init_kwargs)
 
     @staticmethod
@@ -393,14 +421,209 @@ class AdvWandbLoggerCallback(
             if not gather_uploads:
                 self._sync_offline_run_if_available(trial)
             else:
-                # TODO(@Copilot) implement gather uploads: When we have multiple trials to upload, we need to upload them in the order of forking.
-                # so a required parent trial for this trial needs to be uploaded first, however it might be come after this trial in the list.
-                # In case gather_uploads is True, we want to gather all the trials that will finish in the next few seconds (e.g. 30s)
-                # and then upload them in the correct order.
-                # Your task is to implement this functionality. Use a Thread or asyncio to implement this.
-                # Check the WandbUploaderMixin class in ray_utilities/setup/_experiment_upload.py for reference, how to build the upload order.
-                # Possibly you directly use the WandbUploaderMixin to accomplish this.
-                ...
+                # Gather trials that are ending and upload them in dependency order
+                self._gather_and_upload_trials(trial)
+
+    def _gather_and_upload_trials(self, trial: Trial):
+        """Gather trials ending and upload them in dependency order.
+
+        This method collects trials that are ending within a timeout period,
+        builds a dependency graph based on fork relationships, and uploads
+        parent trials before their children.
+        """
+        with self._gather_uploads_lock:
+            # Add this trial to the list of trials ending
+            if trial not in self._trials_ending:
+                self._trials_ending.append(trial)
+
+            # Check if we should start gathering or wait for more trials
+            if self._gather_timer is None:
+                # Start a new gather timer
+                _logger.info(
+                    "Starting gather timer for trial %s. Waiting up to %.1f seconds for more trials to finish.",
+                    trial.trial_id,
+                    self._gather_timeout,
+                )
+                self._gather_timer = threading.Timer(self._gather_timeout, self._process_gathered_uploads)
+                self._gather_timer.start()
+
+            # Check if all active trials are now ending
+            if len(self._trials_ending) >= self._active_trials_count and self._active_trials_count > 0:
+                _logger.info(
+                    "All %d active trials are ending, canceling timer and processing uploads immediately",
+                    self._active_trials_count,
+                )
+                if self._gather_timer is not None:
+                    self._gather_timer.cancel()
+                self._gather_timer = None
+                # Process uploads immediately in a separate thread to avoid blocking
+                threading.Thread(target=self._process_gathered_uploads, daemon=True).start()
+
+    def _process_gathered_uploads(self):
+        """Process all gathered trials and upload them in dependency order."""
+        with self._gather_uploads_lock:
+            if not self._trials_ending:
+                _logger.debug("No trials to upload")
+                return
+
+            trials_to_upload = self._trials_ending.copy()
+            self._trials_ending.clear()
+            self._gather_timer = None
+
+        _logger.info("Processing upload for %d gathered trials", len(trials_to_upload))
+
+        try:
+            # Build trial runs list with paths
+            trial_runs: list[tuple[str, Path]] = []
+            for trial in trials_to_upload:
+                if trial.local_path:
+                    wandb_dir = Path(trial.local_path) / "wandb"
+                    if wandb_dir.exists():
+                        offline_runs = list(wandb_dir.glob("offline-run-*"))
+                        for run_dir in offline_runs:
+                            # Extract trial ID from run directory or use trial.trial_id
+                            trial_id = self._extract_trial_id_from_wandb_run(run_dir) or trial.trial_id
+                            trial_runs.append((trial_id, run_dir))
+
+            if not trial_runs:
+                _logger.warning("No offline runs found for gathered trials")
+                return
+
+            # Parse fork relationships
+            wandb_paths = [Path(trial.local_path) / "wandb" for trial in trials_to_upload if trial.local_path]
+            fork_relationships = self._parse_wandb_fork_relationships(wandb_paths)
+
+            # Build dependency-ordered upload groups
+            upload_groups = self._build_upload_dependency_graph(trial_runs, fork_relationships)
+
+            # Upload trials in dependency order
+            _logger.info("Uploading %d trials in %d groups", len(trial_runs), len(upload_groups))
+            for group_idx, group in enumerate(upload_groups):
+                _logger.info("Uploading group %d/%d with %d trials", group_idx + 1, len(upload_groups), len(group))
+                for trial_id, run_dir in group:
+                    _logger.info("Uploading offline wandb run for trial %s from: %s", trial_id, run_dir)
+                    result = subprocess.run(
+                        ["wandb", "sync", str(run_dir)],
+                        check=False,
+                        text=True,
+                        timeout=600,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                    )
+                    if result.returncode == 0 and "error" not in result.stdout.lower():
+                        _logger.info("Successfully synced offline run for trial %s", trial_id)
+                    else:
+                        _logger.error("Error during syncing offline run for trial %s: %s", trial_id, result.stdout)
+
+        except Exception:
+            _logger.exception("Error processing gathered uploads")
+
+    def _extract_trial_id_from_wandb_run(self, run_dir: Path) -> str | None:
+        """Extract trial ID from wandb offline run directory name."""
+        run_name = run_dir.name
+
+        # Match pattern: [offline-]run-YYYYMMDD_hhmmss-<trial_id>
+        if run_name.startswith(("offline-run-", "run-")):
+            parts = run_name.split("-")
+            if parts[0] == "offline":
+                parts = parts[1:]
+            if parts[0] == "run":
+                parts = parts[1:]
+            if len(parts) >= 1:
+                for i, part in enumerate(parts):
+                    if "_" in part and len(part) == 15:  # YYYYMMDD_hhmmss format
+                        if i + 1 < len(parts):
+                            trial_id = "-".join(parts[i + 1 :])
+                            return trial_id
+                        break
+
+        _logger.warning("Could not extract trial ID from run directory name %s", run_name)
+        return None
+
+    def _parse_wandb_fork_relationships(self, wandb_paths: list[Path]) -> dict[str, tuple[str | None, int | None]]:
+        """Parse fork relationship information from wandb directories.
+
+        Returns:
+            Dict mapping trial_id to (parent_id, parent_step) tuple.
+        """
+        fork_relationships: dict[str, tuple[str | None, int | None]] = {}
+
+        for wandb_dir in wandb_paths:
+            fork_info_file = wandb_dir.parent / "wandb_fork_from.txt"
+            if not fork_info_file.exists():
+                continue
+
+            try:
+                with open(fork_info_file) as f:
+                    lines = f.readlines()
+                    if len(lines) < 2:
+                        continue
+                    # Skip header
+                    for line in lines[1:]:
+                        line = line.strip()  # noqa: PLW2901
+                        if not line:
+                            continue
+                        parts = [p.strip() for p in line.split(",")]
+                        if len(parts) >= 2:
+                            trial_id = parts[0]
+                            parent_id = parts[1] if parts[1] != trial_id else None
+                            parent_step = None
+                            if len(parts) >= 3 and parts[2].isdigit():
+                                parent_step = int(parts[2])
+                            fork_relationships[trial_id] = (parent_id, parent_step)
+            except Exception:
+                _logger.exception("Failed to parse fork relationships from %s", fork_info_file)
+
+        return fork_relationships
+
+    def _build_upload_dependency_graph(
+        self, trial_runs: list[tuple[str, Path]], fork_relationships: dict[str, tuple[str | None, int | None]]
+    ) -> list[list[tuple[str, Path]]]:
+        """Build dependency-ordered groups for uploading trials.
+
+        Returns:
+            List of groups where each group can be uploaded sequentially,
+            with parent trials uploaded before their children.
+        """
+        # Build adjacency lists for dependencies
+        dependencies: dict[str, set[str]] = {}
+        trial_id_to_run = dict(trial_runs)
+
+        # Initialize dependency tracking
+        for trial_id, _ in trial_runs:
+            dependencies[trial_id] = set()
+
+        # Build dependency graph from fork relationships
+        for trial_id, (parent_id, _) in fork_relationships.items():
+            if trial_id in trial_id_to_run and parent_id and parent_id in trial_id_to_run:
+                dependencies[trial_id].add(parent_id)
+
+        # Topological sort to create upload groups
+        upload_groups: list[list[tuple[str, Path]]] = []
+        remaining_trials = {trial_id for trial_id, _ in trial_runs}
+
+        while remaining_trials:
+            # Find trials with no remaining dependencies
+            ready_trials = [
+                trial_id
+                for trial_id in remaining_trials
+                if not dependencies[trial_id] or not (dependencies[trial_id] & remaining_trials)
+            ]
+
+            if not ready_trials:
+                # Circular dependency or missing parent - add all remaining
+                _logger.warning("Circular dependency detected. Adding remaining trials: %s", remaining_trials)
+                ready_trials = list(remaining_trials)
+
+            # Create group for this batch
+            group = [(trial_id, trial_id_to_run[trial_id]) for trial_id in ready_trials]
+            upload_groups.append(group)
+
+            # Remove completed trials
+            for trial_id in ready_trials:
+                remaining_trials.remove(trial_id)
+
+        return upload_groups
 
     def _sync_offline_run_if_available(self, trial: "Trial"):
         """Sync offline WandB run for the given trial if it exists."""
