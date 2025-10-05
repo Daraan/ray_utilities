@@ -134,9 +134,9 @@ class TestTopTrialScheduler(DisableLoggers, TestHelpers):
         lower, upper = self.scheduler._quantiles()
 
         # Since quantile_fraction is 0.2, we should have 2 trials in upper quantile (20% of 10)
-        # and 8 trials in lower quantile
+        # and 2 trials in lower quantile as well.
         self.assertEqual(len(upper), 2)
-        self.assertEqual(len(lower), 8)
+        self.assertEqual(len(lower), 2)
 
         # Upper quantile should have the highest scores
         upper_scores = [self.scheduler._trial_state[t].last_score for t in upper]
@@ -167,8 +167,8 @@ class TestTopTrialScheduler(DisableLoggers, TestHelpers):
         lower_scores = [scheduler._trial_state[t].last_score for t in lower]
         # Filter out None values for min()
         lower_scores_filtered = [s for s in lower_scores if s is not None]
-        # Verify all upper scores are lower than any lower score
-        self.assertTrue(all(u < min(lower_scores_filtered) for u in upper_scores))
+        # Verify all upper scores are greater than any lower score
+        self.assertTrue(all(u > max(lower_scores_filtered) for u in upper_scores))
 
     def test_distribute_exploitation(self):
         """Test exploitation distribution among trials."""
