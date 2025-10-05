@@ -20,6 +20,7 @@ from ray.tune.utils import flatten_dict
 from ray_utilities import RUN_ID
 from ray_utilities.callbacks.tuner.new_style_logger_callback import LogMetricsDictT, NewStyleLoggerCallback
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
+from ray_utilities.callbacks.wandb import WandbUploaderMixin
 
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, FORK_FROM
 from ray_utilities.misc import extract_trial_id_from_checkpoint, make_experiment_key, parse_fork_from
@@ -154,7 +155,7 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
 
 
 class AdvWandbLoggerCallback(
-    NewStyleLoggerCallback, SaveVideoFirstCallback, TrackForkedTrialsMixin, WandbLoggerCallback
+    NewStyleLoggerCallback, SaveVideoFirstCallback, TrackForkedTrialsMixin, WandbUploaderMixin, WandbLoggerCallback
 ):
     AUTO_CONFIG_KEYS: ClassVar[list[str]] = list(
         {
@@ -517,113 +518,6 @@ class AdvWandbLoggerCallback(
 
         except Exception:
             _logger.exception("Error processing gathered uploads")
-
-    def _extract_trial_id_from_wandb_run(self, run_dir: Path) -> str | None:
-        """Extract trial ID from wandb offline run directory name."""
-        run_name = run_dir.name
-
-        # Match pattern: [offline-]run-YYYYMMDD_hhmmss-<trial_id>
-        if run_name.startswith(("offline-run-", "run-")):
-            parts = run_name.split("-")
-            if parts[0] == "offline":
-                parts = parts[1:]
-            if parts[0] == "run":
-                parts = parts[1:]
-            if len(parts) >= 1:
-                for i, part in enumerate(parts):
-                    if "_" in part and len(part) == 15:  # YYYYMMDD_hhmmss format
-                        if i + 1 < len(parts):
-                            trial_id = "-".join(parts[i + 1 :])
-                            return trial_id
-                        break
-
-        _logger.warning("Could not extract trial ID from run directory name %s", run_name)
-        return None
-
-    def _parse_wandb_fork_relationships(self, wandb_paths: list[Path]) -> dict[str, tuple[str | None, int | None]]:
-        """Parse fork relationship information from wandb directories.
-
-        Returns:
-            Dict mapping trial_id to (parent_id, parent_step) tuple.
-        """
-        fork_relationships: dict[str, tuple[str | None, int | None]] = {}
-
-        for wandb_dir in wandb_paths:
-            fork_info_file = wandb_dir.parent / "wandb_fork_from.txt"
-            if not fork_info_file.exists():
-                continue
-
-            try:
-                with open(fork_info_file) as f:
-                    lines = f.readlines()
-                    if len(lines) < 2:
-                        continue
-                    # Skip header
-                    for line in lines[1:]:
-                        line = line.strip()  # noqa: PLW2901
-                        if not line:
-                            continue
-                        parts = [p.strip() for p in line.split(",")]
-                        if len(parts) >= 2:
-                            trial_id = parts[0]
-                            parent_id = parts[1] if parts[1] != trial_id else None
-                            parent_step = None
-                            if len(parts) >= 3 and parts[2].isdigit():
-                                parent_step = int(parts[2])
-                            fork_relationships[trial_id] = (parent_id, parent_step)
-            except Exception:
-                _logger.exception("Failed to parse fork relationships from %s", fork_info_file)
-
-        return fork_relationships
-
-    def _build_upload_dependency_graph(
-        self, trial_runs: list[tuple[str, Path]], fork_relationships: dict[str, tuple[str | None, int | None]]
-    ) -> list[list[tuple[str, Path]]]:
-        """Build dependency-ordered groups for uploading trials.
-
-        Returns:
-            List of groups where each group can be uploaded sequentially,
-            with parent trials uploaded before their children.
-        """
-        # Build adjacency lists for dependencies
-        dependencies: dict[str, set[str]] = {}
-        trial_id_to_run = dict(trial_runs)
-
-        # Initialize dependency tracking
-        for trial_id, _ in trial_runs:
-            dependencies[trial_id] = set()
-
-        # Build dependency graph from fork relationships
-        for trial_id, (parent_id, _) in fork_relationships.items():
-            if trial_id in trial_id_to_run and parent_id and parent_id in trial_id_to_run:
-                dependencies[trial_id].add(parent_id)
-
-        # Topological sort to create upload groups
-        upload_groups: list[list[tuple[str, Path]]] = []
-        remaining_trials = {trial_id for trial_id, _ in trial_runs}
-
-        while remaining_trials:
-            # Find trials with no remaining dependencies
-            ready_trials = [
-                trial_id
-                for trial_id in remaining_trials
-                if not dependencies[trial_id] or not (dependencies[trial_id] & remaining_trials)
-            ]
-
-            if not ready_trials:
-                # Circular dependency or missing parent - add all remaining
-                _logger.warning("Circular dependency detected. Adding remaining trials: %s", remaining_trials)
-                ready_trials = list(remaining_trials)
-
-            # Create group for this batch
-            group = [(trial_id, trial_id_to_run[trial_id]) for trial_id in ready_trials]
-            upload_groups.append(group)
-
-            # Remove completed trials
-            for trial_id in ready_trials:
-                remaining_trials.remove(trial_id)
-
-        return upload_groups
 
     def _sync_offline_run_if_available(self, trial: "Trial"):
         """Sync offline WandB run for the given trial if it exists."""
