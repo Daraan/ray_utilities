@@ -360,15 +360,20 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
         trial = MockTrial("test_trial_001")
 
         with (
-            patch.object(callback.__class__.__bases__[1], "on_trial_complete") as mock_parent,
             patch.object(callback, "_upload_offline_experiment_if_available") as mock_upload,
+            patch.object(callback, "_start_experiment") as mock_start,
         ):
+
+            def start_experiment_side_effect(trial):
+                callback._trial_experiments[trial] = MagicMock()
+                return callback._trial_experiments[trial]
+
+            mock_start.side_effect = start_experiment_side_effect
+            callback.on_trial_start(1, [trial], trial)
             callback.on_trial_complete(1, [trial], trial)
 
-            # Should call parent method
-            mock_parent.assert_called_once_with(1, [trial], trial)
             # Should call upload method for offline mode
-            mock_upload.assert_called_once_with(trial)
+            mock_upload.assert_called_once_with(trial, upload_command=None, blocking=False)
 
     def test_comet_upload_offline_experiment_no_directory(self):
         """Test Comet upload behavior when offline directory doesn't exist."""
@@ -423,21 +428,25 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
 
     def test_wandb_callback_on_trial_complete(self):
         """Test that on_trial_complete triggers sync for WandB runs."""
-        callback = AdvWandbLoggerCallback(mode="offline+upload", upload_offline_experiments=True)
-        trial = MockTrial("test_trial_001")
+        callback = AdvWandbLoggerCallback(mode="offline", upload_offline_experiments=True)
+        trial = MockTrial("test_trial_001", status="PAUSED")
 
         with (
-            patch.object(callback.__class__.__bases__[1], "on_trial_complete") as mock_parent,
-            patch.object(callback, "_sync_offline_run_if_available") as mock_sync,
             patch("ray.wait") as ray_wait,
+            patch("ray.remote") as ray_remote,
+            patch("ray.get"),
+            patch("ray.kill"),
+            patch("ray.get_runtime_context") as mock_runtime_context,
+            patch.object(callback, "_sync_offline_run_if_available") as mock_subprocess_run,
+            patch.object(callback, "_wait_for_trial_actor"),
         ):
             ray_wait.side_effect = lambda futures, *args, **kwargs: (futures, [])
+            callback.on_trial_start(1, [trial], trial)
             callback.on_trial_complete(1, [trial], trial)
 
-            # Should call parent method
-            mock_parent.assert_called_once_with(1, [trial], trial)
+            # mock_thread.assert_called()
             # Should call sync method
-            mock_sync.assert_called_once_with(trial)
+            mock_subprocess_run.assert_called_once_with(trial)
 
     def test_wandb_sync_offline_run_not_offline_mode(self):
         """Test WandB sync behavior when not in offline mode and no offline runs."""

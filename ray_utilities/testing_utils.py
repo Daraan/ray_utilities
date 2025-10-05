@@ -2138,7 +2138,13 @@ class _MockTrialRunner:
 
 
 class MockTrial(Trial):
-    def __init__(self, i, config=None, storage=None):
+    def __init__(
+        self,
+        i,
+        config=None,
+        storage=None,
+        status=None,
+    ):
         self.trainable_name = "trial_{}".format(i)
         self.trial_id = str(i)
         self.config = config or {}
@@ -2150,6 +2156,7 @@ class MockTrial(Trial):
         self.placement_group_factory = PlacementGroupFactory([{"CPU": 1}])
         self.custom_trial_name = None
         self.custom_dirname = None
+        self.status = status or Trial.PENDING
         # ray missing coverage here,  if attr not in trial.config: i.e. config not provided by searcher
         # self.evaluated_params = {}  # XXX: Added by us; why does ray not raise error here
         self._legacy_local_experiment_path = None
