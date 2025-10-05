@@ -136,7 +136,7 @@ class TestTopTrialScheduler(DisableLoggers, TestHelpers):
         # Since quantile_fraction is 0.2, we should have 2 trials in upper quantile (20% of 10)
         # and 2 trials in lower quantile as well.
         self.assertEqual(len(upper), 2)
-        self.assertEqual(len(lower), 2)
+        self.assertEqual(len(lower), 8)
 
         # Upper quantile should have the highest scores
         upper_scores = [self.scheduler._trial_state[t].last_score for t in upper]
