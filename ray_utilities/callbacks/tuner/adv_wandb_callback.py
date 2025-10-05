@@ -297,6 +297,8 @@ class AdvWandbLoggerCallback(
             config.setdefault("experiment_key", make_experiment_key(trial, fork_data))
         else:
             # No fork info present in config; use non-fork key
+            # Use get_trial_id to get the consistent trial ID
+            trial_id = self.get_trial_id(trial)
             config.setdefault("experiment_key", make_experiment_key(trial))
 
         # TODO: trial_id of a forked trial might be very long
@@ -324,10 +326,25 @@ class AdvWandbLoggerCallback(
 
         if trial not in self._trial_logging_actors:
             self._trials_created += 1
-        if fork_from and trial in self._trial_logging_futures:
-            assert self.is_trial_forked(trial), "Expected trial to be tracked as forked trial."
+
+        # Determine if we need to restart the logging actor
+        # Restart is needed when:
+        # 1. Trial is being forked (has fork_from and actor exists)
+        # 2. Trial is being resumed after pause (actor exists but trial was paused)
+        needs_restart = trial in self._trial_logging_futures
+
+        if needs_restart:
+            # Actor already exists, need to restart it
+            if fork_from:
+                # Forking scenario
+                assert self.is_trial_forked(trial), "Expected trial to be tracked as forked trial."
+                _logger.debug("Restarting logging actor for forked trial %s", trial.trial_id)
+            else:
+                # Resume scenario - trial was paused and is now continuing
+                _logger.debug("Restarting logging actor for resumed trial %s", trial.trial_id)
             self._restart_logging_actor(trial, **wandb_init_kwargs)
         else:
+            # No actor exists yet, start a new one
             # can be forked from a checkpoint, if not stopped does not start a new
             self._start_logging_actor(trial, exclude_results, **wandb_init_kwargs)
         self._trials_started += 1
@@ -335,12 +352,16 @@ class AdvWandbLoggerCallback(
     def _restart_logging_actor(self, trial: "Trial", **wandb_init_kwargs):
         """Ends the current logging actor and starts a new one. Useful for resuming with a new ID / settings.
 
-        This is used when a trial is forked - we need to:
-        1. End the current logging actor and finish uploading if in offline+upload mode
-        2. Resume the trial with the new fork ID
+        This is used when:
+        1. A trial is forked - needs to end current run and start with new fork ID
+        2. A trial is paused & resumed - needs to resume the existing run
         """
-        # Get the current trial ID before ending
-        current_trial_id = wandb_init_kwargs.get("id", trial.trial_id)
+        # Get the new trial ID that we're about to start with
+        new_trial_id = wandb_init_kwargs.get("id", trial.trial_id)
+
+        # Get the previous trial ID that was being used before restart
+        # This is the experiment_key that was previously logged
+        previous_trial_id = self.get_trial_id(trial)
 
         # End current logging actor and optionally upload if in offline mode
         self.log_trial_end(trial, failed=False, gather_uploads=True)
@@ -353,13 +374,23 @@ class AdvWandbLoggerCallback(
         self._trial_logging_futures.pop(trial, None)
         self._trial_logging_actors.pop(trial, None)
 
-        # Check if we need to resume the original trial run
-        # This happens when a trial is continued (not forked) after being ended
-        if "fork_from" not in wandb_init_kwargs and current_trial_id == trial.trial_id:
-            # We're resuming the same trial, not forking
+        # Determine if we should resume or fork
+        # Resume: when continuing the same trial without forking (same experiment_key)
+        # Fork: when creating a new forked trial (different experiment_key, has fork_from)
+        is_fork = "fork_from" in wandb_init_kwargs and wandb_init_kwargs["fork_from"] is not None
+        is_resume = not is_fork and new_trial_id == previous_trial_id
+
+        if is_resume:
+            # We're resuming the same trial run, not forking
             wandb_init_kwargs["resume"] = "must"
-            wandb_init_kwargs["id"] = current_trial_id
-            _logger.info("Resuming WandB run with ID %s", current_trial_id)
+            wandb_init_kwargs["id"] = previous_trial_id
+            _logger.info("Resuming WandB run with ID %s", previous_trial_id)
+        elif is_fork:
+            # Forking - the fork_from is already set in wandb_init_kwargs
+            _logger.info("Forking WandB run: new ID %s from parent %s", new_trial_id, wandb_init_kwargs["fork_from"])
+        else:
+            # Starting a new trial (shouldn't normally happen in restart)
+            _logger.info("Starting new WandB run with ID %s (was %s)", new_trial_id, previous_trial_id)
 
         self._start_logging_actor(trial, self._exclude_results, **wandb_init_kwargs)
 
