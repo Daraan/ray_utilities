@@ -9,6 +9,7 @@ import os
 import random
 import subprocess
 import tempfile
+import time
 import unittest
 import unittest.mock
 from ast import literal_eval
@@ -17,6 +18,7 @@ from inspect import isclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import IO, TYPE_CHECKING, Any, Final, Optional, cast
+from unittest.mock import MagicMock, patch
 
 import cloudpickle
 import pyarrow as pa
@@ -37,6 +39,8 @@ from ray.rllib.utils.metrics import (
 from ray.tune.experiment import Trial
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import NUM_ENV_RUNNERS_0_1_EQUAL
+from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
+from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config import logger as parser_logger
 from ray_utilities.config.parser.mlp_argument_parser import SimpleMLPParser
@@ -1771,9 +1775,15 @@ class TestLoggerIntegration(TestHelpers):
         mock_popen_class.return_value = mocked_popen
         # use more iterations here for it to be more likely that the files are synced.
         with (
-            patch_args("--wandb", "offline+upload", "--num_jobs", 1, "--iterations", 5, "--batch_size", 32),
+            patch_args(
+                "--wandb", "offline+upload",
+                "--num_jobs", 1,
+                "--iterations", 5,
+                "--batch_size", 32,
+                "--minibatch_size", 32
+            ),
             unittest.mock.patch("subprocess.run") as mock_run,  # upload on_trial_complete
-        ):
+        ):  # fmt: skip
             setup = AlgorithmSetup()
             _results = run_tune(setup, raise_errors=True)
         mocked_popen.wait.assert_called_once()
@@ -1894,7 +1904,8 @@ class TestLoggerIntegration(TestHelpers):
             mock_popen_class.return_value = mock_popen_class
             mock_popen_class.stderr = None
             mock_popen_class.stdout = ""
-            mock_popen_class.returncode.return_value = 0
+            mock_popen_class.returncode = 0
+            mock_popen_class.args = ["wandb", "sync", mock_results[0].path]
             uploader.wandb_upload_offline_experiments(mock_results)  # pyright: ignore[reportArgumentType]
             self.assertTrue(mock_fork_called, "wandb fork relationships mock was not called")
             self.assertTrue(mock_graph_build_called, "wandb graph build mock was not called")
@@ -2027,6 +2038,246 @@ class TestLoggerIntegration(TestHelpers):
 
         # Level 3: grandchild
         self.assertEqual(group_trial_ids[3], ["grandchild"])
+
+    def test_gather_uploads_mechanism(self):
+        """Test the gather_uploads mechanism in AdvWandbLoggerCallback."""
+
+        # Create callback with offline+upload mode
+        callback = AdvWandbLoggerCallback(
+            project="test_project",
+            upload_offline_experiments=True,
+            mode="offline",
+        )
+
+        # Create mock trials
+        trial1 = MagicMock(spec=Trial)
+        trial1.trial_id = "trial_1"
+        trial1.status = "RUNNING"
+        trial1.local_path = None  # Will be set in test
+
+        trial2 = MagicMock(spec=Trial)
+        trial2.trial_id = "trial_2"
+        trial2.status = "RUNNING"
+        trial2.local_path = None
+
+        trial3 = MagicMock(spec=Trial)
+        trial3.trial_id = "trial_3"
+        trial3.status = "RUNNING"
+        trial3.local_path = None
+
+        # Initialize callback state
+        callback._trials = [trial1, trial2, trial3]
+        callback._active_trials_count = 3
+
+        # Mock parent log_trial_end to avoid KeyError
+        with patch.object(callback.__class__.__bases__[-1], "log_trial_end"):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # Setup trial paths
+                for i, trial in enumerate([trial1, trial2, trial3], 1):
+                    trial_path = Path(tmpdir) / f"trial_{i}"
+                    trial_path.mkdir()
+                    trial.local_path = trial_path.as_posix()
+
+                    # Create wandb offline run directory
+                    wandb_dir = trial_path / "wandb"
+                    wandb_dir.mkdir()
+                    offline_run_dir = wandb_dir / f"offline-run-20250101_120000-trial_{i}"
+                    offline_run_dir.mkdir()
+
+                # Create fork relationships - trial_2 is forked from trial_1
+                fork_file = Path(tmpdir) / "trial_1" / "wandb_fork_from.txt"
+                with fork_file.open("w") as f:
+                    f.write("trial_id, parent_id, parent_step, step_metric\n")
+                    f.write("trial_2, trial_1, 100, _step\n")
+
+                # Mock subprocess.run to avoid actual uploads
+                with patch("subprocess.run") as mock_run:
+                    mock_run.return_value = MagicMock(returncode=0, stdout="Success")
+
+                    # Call _gather_and_upload_trials directly to test the mechanism
+                    callback._gather_and_upload_trials(trial1)
+                    callback._gather_and_upload_trials(trial2)
+                    callback._gather_and_upload_trials(trial3)
+
+                    # All trials should trigger immediate processing since we have all active trials
+                    time.sleep(1)
+
+                    # Verify that trials were gathered and processed
+                    self.assertEqual(len(callback._trials_ending), 0)  # Should be cleared after processing
+
+            # Test that timer is properly managed
+            self.assertIsNone(callback._gather_timer)
+
+    def test_restart_logging_actor_with_resume(self):
+        """Test that _restart_logging_actor properly sets resume parameter."""
+
+        # Create callback
+        callback = AdvWandbLoggerCallback(
+            project="test_project",
+            upload_offline_experiments=True,
+            mode="offline",
+        )
+
+        # Create mock trial
+        trial = MagicMock(spec=Trial)
+        trial.trial_id = "trial_123"
+        trial.status = "RUNNING"
+
+        # Mock the necessary methods
+        callback._cleanup_logging_actors = MagicMock()
+        callback._start_logging_actor = MagicMock()
+        callback._trial_queues = {trial: MagicMock()}
+        callback._trial_logging_futures = {trial: MagicMock()}
+        callback._trial_logging_actors = {trial: MagicMock()}
+
+        # Mock log_trial_end to not actually end the trial
+        with patch.object(callback, "log_trial_end"):
+            # Test 1: Resume same trial (not forked)
+            wandb_kwargs = {"id": "trial_123"}
+            callback._restart_logging_actor(trial, **wandb_kwargs)
+
+            # Check that resume was set
+            start_call_kwargs = callback._start_logging_actor.call_args[1]
+            self.assertEqual(start_call_kwargs.get("resume"), "must")
+            self.assertEqual(start_call_kwargs.get("id"), "trial_123")
+
+            # Reset mocks
+            callback._start_logging_actor.reset_mock()
+
+            # Test 2: Fork (not resume)
+            wandb_kwargs = {"id": "trial_123_fork", "fork_from": "trial_123?_step=100"}
+            callback._restart_logging_actor(trial, **wandb_kwargs)
+
+            # Check that resume was NOT set for fork
+            start_call_kwargs = callback._start_logging_actor.call_args[1]
+            self.assertNotIn("resume", start_call_kwargs)
+            self.assertEqual(start_call_kwargs.get("fork_from"), "trial_123?_step=100")
+
+    def test_restart_logging_actor_with_forked_trial_resume(self):
+        """Test that _restart_logging_actor correctly handles resuming a trial that was previously forked.
+
+        In the normal workflow, the trial ID is set in TrackForkedTrialsMixin.on_trial_start
+        before AdvWandbLoggerCallback.log_trial_start is called. This means that new_trial_id
+        == previous_trial_id in normal scenarios. This test simulates that behavior.
+        """
+
+        # Create callback
+        callback = AdvWandbLoggerCallback(
+            project="test_project",
+            upload_offline_experiments=True,
+            mode="offline",
+        )
+
+        # Create mock trial
+        trial = MagicMock(spec=Trial)
+        trial.trial_id = "trial_123"
+        trial.status = "RUNNING"
+
+        # Simulate that this trial was forked before and has a custom trial ID
+        # (experiment_key different from trial.trial_id)
+        # In normal flow, this would be set by on_trial_start
+        forked_trial_id = "trial_123_forkof_parent_456_step_100"
+        callback._trial_ids = {trial: forked_trial_id}
+
+        # Mock the necessary methods
+        callback._cleanup_logging_actors = MagicMock()
+        callback._start_logging_actor = MagicMock()
+        callback._trial_queues = {trial: MagicMock()}
+        callback._trial_logging_futures = {trial: MagicMock()}
+        callback._trial_logging_actors = {trial: MagicMock()}
+
+        # Mock log_trial_end to not actually end the trial
+        with patch.object(callback, "log_trial_end"):
+            # Test 1: Resume a previously forked trial without creating a new fork
+            # In normal flow, the ID passed in wandb_kwargs matches the tracked ID
+            # because both were set in on_trial_start
+            wandb_kwargs = {"id": forked_trial_id}
+            callback._restart_logging_actor(trial, **wandb_kwargs)
+
+            # Check that resume was set because new_id == previous_id and no fork_from
+            start_call_kwargs = callback._start_logging_actor.call_args[1]
+            self.assertEqual(start_call_kwargs.get("resume"), "must")
+            self.assertEqual(start_call_kwargs.get("id"), forked_trial_id)
+
+            # Reset mocks
+            callback._start_logging_actor.reset_mock()
+
+            # Test 2: Fork from the previously forked trial
+            # When forking, we pass fork_from which indicates this is a new fork
+            # In normal flow, the trial would have been forked in on_trial_start first
+            # and the ID would still match, but fork_from would be present
+            wandb_kwargs = {"id": forked_trial_id, "fork_from": f"{forked_trial_id}?_step=200"}
+            callback._restart_logging_actor(trial, **wandb_kwargs)
+
+            # Check that resume was NOT set because fork_from is present
+            start_call_kwargs = callback._start_logging_actor.call_args[1]
+            self.assertNotIn("resume", start_call_kwargs)
+            self.assertEqual(start_call_kwargs.get("fork_from"), f"{forked_trial_id}?_step=200")
+
+    def test_track_forked_trials_get_trial_id(self):
+        """Test that get_trial_id returns the correct trial ID for both forked and non-forked trials."""
+
+        # Create mixin instance
+        mixin = TrackForkedTrialsMixin()
+
+        # Test 1: Non-forked trial - should return trial.trial_id
+        trial1 = MagicMock(spec=Trial)
+        trial1.trial_id = "trial_abc"
+
+        # Simulate on_trial_start for non-forked trial
+        mixin._trial_ids[trial1] = trial1.trial_id
+        self.assertEqual(mixin.get_trial_id(trial1), "trial_abc")
+
+        # Test 2: Forked trial - should return custom experiment_key
+        trial2 = MagicMock(spec=Trial)
+        trial2.trial_id = "trial_def"
+        forked_id = "trial_def_forkof_parent_123_step_50"
+
+        # Simulate on_trial_start for forked trial
+        mixin._trial_ids[trial2] = forked_id
+        self.assertEqual(mixin.get_trial_id(trial2), forked_id)
+
+        # Test 3: Trial not tracked yet - should return trial.trial_id as fallback
+        trial3 = MagicMock(spec=Trial)
+        trial3.trial_id = "trial_ghi"
+        self.assertEqual(mixin.get_trial_id(trial3), "trial_ghi")
+
+    def test_track_forked_trials_cleanup_on_complete(self):
+        """Test that on_trial_complete properly cleans up all tracking data."""
+        from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
+        from unittest.mock import MagicMock
+
+        # Create mixin instance
+        mixin = TrackForkedTrialsMixin()
+
+        # Create mock trial
+        trial = MagicMock(spec=Trial)
+        trial.trial_id = "trial_123"
+
+        # Simulate tracking data for a forked trial
+        forked_id = "trial_123_forkof_parent_456_step_100"
+        mixin._trial_ids[trial] = forked_id
+        mixin._current_fork_ids[trial] = forked_id
+        mixin._forked_trials[trial] = [{"parent_id": "parent_456"}]
+        mixin._currently_not_forked_trials.add(trial)
+        mixin.parent_trial_lookup[trial] = "parent_456"
+
+        # Verify data is present
+        self.assertIn(trial, mixin._trial_ids)
+        self.assertIn(trial, mixin._current_fork_ids)
+        self.assertIn(trial, mixin._forked_trials)
+        self.assertIn(trial, mixin._currently_not_forked_trials)
+        self.assertIn(trial, mixin.parent_trial_lookup)
+
+        # Call on_trial_complete
+        mixin.on_trial_complete(iteration=1, trials=[trial], trial=trial)
+
+        # Verify all data is cleaned up
+        self.assertNotIn(trial, mixin._trial_ids)
+        self.assertNotIn(trial, mixin._current_fork_ids)
+        self.assertNotIn(trial, mixin._forked_trials)
+        self.assertNotIn(trial, mixin._currently_not_forked_trials)
+        self.assertNotIn(trial, mixin.parent_trial_lookup)
 
 
 if __name__ == "__main__":
