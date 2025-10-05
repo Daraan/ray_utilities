@@ -140,7 +140,7 @@ class WandbUploaderMixin:
         if wait:
             logger.info("Waiting for all wandb uploads to finish...")
             for process in uploads:
-                exit_code = self._report_wandb_upload(process)
+                exit_code = self._report_wandb_upload(process, wait=True)
                 if exit_code == 0:
                     finished_uploads.add(process)
                 else:
@@ -188,9 +188,6 @@ class WandbUploaderMixin:
         The tuner can be provided in case no results are available, e.g. due to an error,
         furthermore passing the tuner allows to check for missing wandb directories.
         """
-        # Import here to avoid circular dependency
-        from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
-
         if results is None:
             if tuner is None:
                 logger.error("No results or tuner provided to get wandb paths, cannot get paths.")
@@ -204,6 +201,9 @@ class WandbUploaderMixin:
             except RuntimeError as e:
                 if not tuner._local_tuner or tuner._local_tuner.get_run_config().callbacks:  # assume there is a logger
                     raise RuntimeError("Cannot get trials") from e
+                # Import here to avoid circular dependency
+                from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback  # noqa: PLC0415
+
                 wandb_cb = next(
                     cb
                     for cb in tuner._local_tuner.get_run_config().callbacks  # pyright: ignore[reportOptionalIterable]
@@ -221,7 +221,7 @@ class WandbUploaderMixin:
         try:
             # compare paths for completeness
             assert tuner._local_tuner is not None
-            trials = tuner._local_tuner.get_results()._experiment_analysis.trials  # pyright: ignore[reportOptionalMemberAccess]
+            trials = tuner._local_tuner.get_results()._experiment_analysis.trials
             trial_paths = [Path(trial.local_path) / "wandb" for trial in trials if trial.local_path]
         except Exception:
             logger.exception("Could not get trials or their paths")
@@ -265,7 +265,7 @@ class WandbUploaderMixin:
                 continue
 
             try:
-                with open(fork_info_file) as f:
+                with open(fork_info_file, "r") as f:
                     lines = f.readlines()
                     # Check header
                     header = [p.strip() for p in lines[0].split(",")]
