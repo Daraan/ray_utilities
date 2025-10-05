@@ -2149,89 +2149,134 @@ class TestLoggerIntegration(TestHelpers):
             self.assertEqual(start_call_kwargs.get("fork_from"), "trial_123?_step=100")
 
     def test_restart_logging_actor_with_forked_trial_resume(self):
-        """Test that _restart_logging_actor correctly handles resuming a trial that was previously forked."""
+        """Test that _restart_logging_actor correctly handles resuming a trial that was previously forked.
+
+        In the normal workflow, the trial ID is set in TrackForkedTrialsMixin.on_trial_start
+        before AdvWandbLoggerCallback.log_trial_start is called. This means that new_trial_id
+        == previous_trial_id in normal scenarios. This test simulates that behavior.
+        """
         from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
         from unittest.mock import MagicMock, patch
-        
+
         # Create callback
         callback = AdvWandbLoggerCallback(
             project="test_project",
             upload_offline_experiments=True,
             mode="offline",
         )
-        
+
         # Create mock trial
         trial = MagicMock(spec=Trial)
         trial.trial_id = "trial_123"
         trial.status = "RUNNING"
-        
+
         # Simulate that this trial was forked before and has a custom trial ID
         # (experiment_key different from trial.trial_id)
+        # In normal flow, this would be set by on_trial_start
         forked_trial_id = "trial_123_forkof_parent_456_step_100"
         callback._trial_ids = {trial: forked_trial_id}
-        
+
         # Mock the necessary methods
         callback._cleanup_logging_actors = MagicMock()
         callback._start_logging_actor = MagicMock()
         callback._trial_queues = {trial: MagicMock()}
         callback._trial_logging_futures = {trial: MagicMock()}
         callback._trial_logging_actors = {trial: MagicMock()}
-        
+
         # Mock log_trial_end to not actually end the trial
         with patch.object(callback, "log_trial_end"):
-            # Test: Resume a previously forked trial
-            # The new ID matches the previous experiment_key (not trial.trial_id)
+            # Test 1: Resume a previously forked trial without creating a new fork
+            # In normal flow, the ID passed in wandb_kwargs matches the tracked ID
+            # because both were set in on_trial_start
             wandb_kwargs = {"id": forked_trial_id}
             callback._restart_logging_actor(trial, **wandb_kwargs)
-            
-            # Check that resume was set because new_id == previous_id
+
+            # Check that resume was set because new_id == previous_id and no fork_from
             start_call_kwargs = callback._start_logging_actor.call_args[1]
             self.assertEqual(start_call_kwargs.get("resume"), "must")
             self.assertEqual(start_call_kwargs.get("id"), forked_trial_id)
-            
+
             # Reset mocks
             callback._start_logging_actor.reset_mock()
-            
-            # Test: Fork from the previously forked trial
-            # This creates a new fork with a different ID
-            new_fork_id = "trial_123_forkof_parent_456_step_100_forkof_another_step_200"
-            wandb_kwargs = {"id": new_fork_id, "fork_from": f"{forked_trial_id}?_step=200"}
+
+            # Test 2: Fork from the previously forked trial
+            # When forking, we pass fork_from which indicates this is a new fork
+            # In normal flow, the trial would have been forked in on_trial_start first
+            # and the ID would still match, but fork_from would be present
+            wandb_kwargs = {"id": forked_trial_id, "fork_from": f"{forked_trial_id}?_step=200"}
             callback._restart_logging_actor(trial, **wandb_kwargs)
-            
-            # Check that resume was NOT set for new fork
+
+            # Check that resume was NOT set because fork_from is present
             start_call_kwargs = callback._start_logging_actor.call_args[1]
             self.assertNotIn("resume", start_call_kwargs)
             self.assertEqual(start_call_kwargs.get("fork_from"), f"{forked_trial_id}?_step=200")
-    
+
     def test_track_forked_trials_get_trial_id(self):
         """Test that get_trial_id returns the correct trial ID for both forked and non-forked trials."""
         from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
         from unittest.mock import MagicMock
-        
+
         # Create mixin instance
         mixin = TrackForkedTrialsMixin()
-        
+
         # Test 1: Non-forked trial - should return trial.trial_id
         trial1 = MagicMock(spec=Trial)
         trial1.trial_id = "trial_abc"
-        
+
         # Simulate on_trial_start for non-forked trial
         mixin._trial_ids[trial1] = trial1.trial_id
         self.assertEqual(mixin.get_trial_id(trial1), "trial_abc")
-        
+
         # Test 2: Forked trial - should return custom experiment_key
         trial2 = MagicMock(spec=Trial)
         trial2.trial_id = "trial_def"
         forked_id = "trial_def_forkof_parent_123_step_50"
-        
+
         # Simulate on_trial_start for forked trial
         mixin._trial_ids[trial2] = forked_id
         self.assertEqual(mixin.get_trial_id(trial2), forked_id)
-        
+
         # Test 3: Trial not tracked yet - should return trial.trial_id as fallback
         trial3 = MagicMock(spec=Trial)
         trial3.trial_id = "trial_ghi"
         self.assertEqual(mixin.get_trial_id(trial3), "trial_ghi")
+
+    def test_track_forked_trials_cleanup_on_complete(self):
+        """Test that on_trial_complete properly cleans up all tracking data."""
+        from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
+        from unittest.mock import MagicMock
+
+        # Create mixin instance
+        mixin = TrackForkedTrialsMixin()
+
+        # Create mock trial
+        trial = MagicMock(spec=Trial)
+        trial.trial_id = "trial_123"
+
+        # Simulate tracking data for a forked trial
+        forked_id = "trial_123_forkof_parent_456_step_100"
+        mixin._trial_ids[trial] = forked_id
+        mixin._current_fork_ids[trial] = forked_id
+        mixin._forked_trials[trial] = [{"parent_id": "parent_456"}]
+        mixin._currently_not_forked_trials.add(trial)
+        mixin.parent_trial_lookup[trial] = "parent_456"
+
+        # Verify data is present
+        self.assertIn(trial, mixin._trial_ids)
+        self.assertIn(trial, mixin._current_fork_ids)
+        self.assertIn(trial, mixin._forked_trials)
+        self.assertIn(trial, mixin._currently_not_forked_trials)
+        self.assertIn(trial, mixin.parent_trial_lookup)
+
+        # Call on_trial_complete
+        mixin.on_trial_complete(iteration=1, trials=[trial], trial=trial)
+
+        # Verify all data is cleaned up
+        self.assertNotIn(trial, mixin._trial_ids)
+        self.assertNotIn(trial, mixin._current_fork_ids)
+        self.assertNotIn(trial, mixin._forked_trials)
+        self.assertNotIn(trial, mixin._currently_not_forked_trials)
+        self.assertNotIn(trial, mixin.parent_trial_lookup)
 
 
 if __name__ == "__main__":

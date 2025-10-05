@@ -367,13 +367,20 @@ class AdvWandbLoggerCallback(
         This is used when:
         1. A trial is forked - needs to end current run and start with new fork ID
         2. A trial is paused & resumed - needs to resume the existing run
+
+        Note: In the normal workflow where on_trial_start is called before log_trial_start,
+        the trial ID is already set in TrackForkedTrialsMixin.on_trial_start, so
+        new_trial_id == previous_trial_id is always true. This method handles both:
+        - Resume: same trial ID, no fork_from -> sets resume="must"
+        - Fork: same trial ID but has fork_from -> creates forked run
         """
         # Get the new trial ID that we're about to start with
+        # This comes from log_trial_start which gets it via get_forked_trial_id or get_trial_id
         new_trial_id = wandb_init_kwargs.get("id", trial.trial_id)
 
         # Get the previous trial ID that was being used before restart
         # This is the experiment_key that was previously logged
-        # NOTE: It is expected that new_trial_id == previous_trial_id in the current implementation
+        # In normal flow: new_trial_id == previous_trial_id (both set in on_trial_start)
         previous_trial_id = self.get_trial_id(trial)
 
         # End current logging actor and optionally upload if in offline mode

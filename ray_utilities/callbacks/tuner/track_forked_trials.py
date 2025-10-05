@@ -224,4 +224,9 @@ class TrackForkedTrialsMixin(LoggerCallback):
 
     def on_trial_complete(self, iteration: int, trials: list[Trial], trial: Trial, **info):
         super().on_trial_complete(iteration, trials, trial, **info)
+        # Clean up all tracking data for completed trial
         self._current_fork_ids.pop(trial, None)
+        self._trial_ids.pop(trial, None)
+        self._forked_trials.pop(trial, None)
+        self._currently_not_forked_trials.discard(trial)
+        self.parent_trial_lookup.pop(trial, None)
