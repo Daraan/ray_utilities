@@ -6,6 +6,7 @@ import os
 import pickle
 import re
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
@@ -19,6 +20,7 @@ from ray.tune.utils import flatten_dict
 from ray_utilities import RUN_ID
 from ray_utilities.callbacks.tuner.new_style_logger_callback import LogMetricsDictT, NewStyleLoggerCallback
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
+from ray_utilities.callbacks.wandb import WandbUploaderMixin
 
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, FORK_FROM
 from ray_utilities.misc import extract_trial_id_from_checkpoint, make_experiment_key, parse_fork_from
@@ -153,7 +155,7 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
 
 
 class AdvWandbLoggerCallback(
-    NewStyleLoggerCallback, SaveVideoFirstCallback, TrackForkedTrialsMixin, WandbLoggerCallback
+    NewStyleLoggerCallback, SaveVideoFirstCallback, TrackForkedTrialsMixin, WandbUploaderMixin, WandbLoggerCallback
 ):
     AUTO_CONFIG_KEYS: ClassVar[list[str]] = list(
         {
@@ -197,10 +199,33 @@ class AdvWandbLoggerCallback(
         self.upload_offline_experiments = upload_offline_experiments
         """If True, offline experiments will be uploaded on trial completion."""
 
+        # Gather uploads tracking
+        self._gather_uploads_lock = threading.Lock()
+        self._trials_ending: dict[Trial, Optional[bool]] = {}
+        """Trials that are currently ending and the info if their logger has ended"""
+        self._gather_timer: Optional[threading.Timer] = None
+        self._gather_timeout = 30.0  # seconds to wait for more trials to finish
+        self._active_trials_count = 0
+
+    def __getstate__(self):
+        # We need to be able to pickle this class but we cannot pickle locks, remove them
+        state = self.__dict__.copy()
+        # Remove the lock before pickling
+        state.pop("_gather_uploads_lock", None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # Restore the lock after unpickling
+        self._gather_uploads_lock = threading.Lock()
+
     def on_trial_start(self, iteration: int, trials: list["Trial"], trial: "Trial", **info):
         super().on_trial_start(iteration, trials, trial, **info)
         _logger.debug("Trials created: %d, re-started: %d", self._trials_created, self._trials_started)
         self._trials = trials  # keep them in case of a failure to access paths.
+        # Track active trials for gather_uploads
+        with self._gather_uploads_lock:
+            self._active_trials_count = len([t for t in trials if t.status in ("RUNNING", "PENDING", "PAUSED")])
 
     def log_trial_start(self, trial: "Trial"):
         # breakpoint()
@@ -285,6 +310,8 @@ class AdvWandbLoggerCallback(
             config.setdefault("experiment_key", make_experiment_key(trial, fork_data))
         else:
             # No fork info present in config; use non-fork key
+            # Use get_trial_id to get the consistent trial ID
+            trial_id = self.get_trial_id(trial)
             config.setdefault("experiment_key", make_experiment_key(trial))
 
         # TODO: trial_id of a forked trial might be very long
@@ -312,26 +339,86 @@ class AdvWandbLoggerCallback(
 
         if trial not in self._trial_logging_actors:
             self._trials_created += 1
-        if fork_from and trial in self._trial_logging_futures:
-            assert self.is_trial_forked(trial), "Expected trial to be tracked as forked trial."
+
+        # Determine if we need to restart the logging actor
+        # Restart is needed when:
+        # 1. Trial is being forked (has fork_from and actor exists)
+        # 2. Trial is being resumed after pause (actor exists but trial was paused)
+        needs_restart = trial in self._trial_logging_futures
+
+        if needs_restart:
+            # Actor already exists, need to restart it
+            if fork_from:
+                # Forking scenario
+                assert self.is_trial_forked(trial), "Expected trial to be tracked as forked trial."
+                _logger.debug("Restarting logging actor for forked trial %s", trial.trial_id)
+            else:
+                # Resume scenario - trial was paused and is now continuing
+                _logger.debug("Restarting logging actor for resumed trial %s", trial.trial_id)
             self._restart_logging_actor(trial, **wandb_init_kwargs)
         else:
+            # No actor exists yet, start a new one
             # can be forked from a checkpoint, if not stopped does not start a new
             self._start_logging_actor(trial, exclude_results, **wandb_init_kwargs)
         self._trials_started += 1
 
     def _restart_logging_actor(self, trial: "Trial", **wandb_init_kwargs):
-        """Ends the current logging actor and starts a new one. Useful for resuming with a new ID / settings."""
+        """Ends the current logging actor and starts a new one. Useful for resuming with a new ID / settings.
+
+        This is used when:
+        1. A trial is forked - needs to end current run and start with new fork ID
+        2. A trial is paused & resumed - needs to resume the existing run
+
+        Note: In the normal workflow where on_trial_start is called before log_trial_start,
+        the trial ID is already set in TrackForkedTrialsMixin.on_trial_start, so
+        new_trial_id == previous_trial_id is always true. This method handles both:
+        - Resume: same trial ID, no fork_from -> sets resume="must"
+        - Fork: same trial ID but has fork_from -> creates forked run
+        """
+        # Get the new trial ID that we're about to start with
+        # This comes from log_trial_start which gets it via get_forked_trial_id or get_trial_id
+        new_trial_id = wandb_init_kwargs.get("id", trial.trial_id)
+
+        # Get the previous trial ID that was being used before restart
+        # This is the experiment_key that was previously logged
+        # In normal flow: new_trial_id == previous_trial_id (both set in on_trial_start)
+        previous_trial_id = self.get_trial_id(trial)
+
+        # End current logging actor and optionally upload if in offline mode
         self.log_trial_end(trial, failed=False, gather_uploads=True)
         _logger.info("Restarting WandB logging actor for trial %s", trial.trial_id)
         # Wait a bit before starting the next one
         self._cleanup_logging_actors(timeout=5, kill_on_timeout=False)
         # Clean queue and futures else a new one will not be created
-        # TODO: Upload old experiment when in offline+upload mode
 
         self._trial_queues.pop(trial, None)
         self._trial_logging_futures.pop(trial, None)
         self._trial_logging_actors.pop(trial, None)
+
+        # Determine if we should resume or fork
+        # Resume: when continuing the same trial without forking (same experiment_key)
+        # Fork: when creating a new forked trial (different experiment_key, has fork_from)
+        is_fork = "fork_from" in wandb_init_kwargs and wandb_init_kwargs["fork_from"] is not None
+        is_resume = not is_fork and new_trial_id == previous_trial_id
+
+        if is_resume:
+            # We're resuming the same trial run, not forking
+            wandb_init_kwargs["resume"] = "must"
+            wandb_init_kwargs["id"] = previous_trial_id
+            _logger.info("Resuming WandB run with ID %s", previous_trial_id)
+        elif is_fork:
+            # Forking - the fork_from is already set in wandb_init_kwargs
+            _logger.info("Forking WandB run: new ID %s from parent %s", new_trial_id, wandb_init_kwargs["fork_from"])
+        else:
+            # Starting a new trial (shouldn't normally happen in restart)
+            _logger.warning(
+                "Restarting new WandB run with ID %s (was %s). This should normally not execute this function.",
+                new_trial_id,
+                previous_trial_id,
+            )
+        # For now add assertion to check
+        assert is_fork or is_resume, "Expected either fork or resume scenario."
+
         self._start_logging_actor(trial, self._exclude_results, **wandb_init_kwargs)
 
     @staticmethod
@@ -363,7 +450,7 @@ class AdvWandbLoggerCallback(
 
         return metrics  # type: ignore[return-value]
 
-    def _wait_for_trial_actor(self, trial: "Trial", timeout: float = 60.0):
+    def _wait_for_trial_actor(self, trial: "Trial", timeout: float = 60.0) -> bool:
         future = self._trial_logging_futures[trial]
         done, remaining = ray.wait([future], num_returns=1, timeout=timeout)
         if remaining:
@@ -373,34 +460,135 @@ class AdvWandbLoggerCallback(
         for ready_future in done:
             assert self._logging_future_to_trial.pop(ready_future) == trial
             self._cleanup_logging_actor(trial)
+        return done and not remaining
 
     def log_trial_end(self, trial: Trial, failed: bool = False, *, gather_uploads: bool = False):  # noqa: FBT001, FBT002
         # Triggers logger stop
+        shutdown_start = time.time()
         super().log_trial_end(trial, failed)
 
         # If we are in offline mode, try to sync this trial's run immediately
-        if self.upload_offline_experiments and "offline" in self.kwargs.get("mode", "online"):
+        if self.upload_offline_experiments and self.kwargs.get("mode", "online") == "offline":
             # Wandb dir is likely not yet saved by actor, wait for it, super does not wait that long.
-            # TODO: Could also do this non-blocking.
+            # Wait less now if we are gathering uploads, instead wait for actor a bit more during processing
 
-            _logger.info("Waiting for wandb writer to finish writing data to disk...")
-            self._wait_for_trial_actor(trial, timeout=120)
-            _logger.info("Syncing offline WandB run for trial %s", trial.trial_id)
+            wait_time = 30 if gather_uploads else 120
+            _logger.info("Waiting up to %ss for wandb writer to finish writing data to disk...", wait_time)
+            done = self._wait_for_trial_actor(trial, timeout=wait_time)
             # NOTE: Actor should have synced everything at this point
-            # TODO: When a fork tries to upload its experiment, the parent has not yet been uploaded
-            # hence wandb upload will fail. Possibly end & upload & resume the parent to make this possible.
-            # Therefore also gather all trials then upload them in order of forking
+            _logger.debug(
+                "WandB logging actor for trial %s shutdown took %.1f seconds. Logging Actor done: %s",
+                trial.trial_id,
+                time.time() - shutdown_start,
+                done,
+            )
             if not gather_uploads:
+                _logger.info("Syncing offline WandB run for trial %s", trial.trial_id)
                 self._sync_offline_run_if_available(trial)
             else:
-                # TODO(@Copilot) implement gather uploads: When we have multiple trials to upload, we need to upload them in the order of forking.
-                # so a required parent trial for this trial needs to be uploaded first, however it might be come after this trial in the list.
-                # In case gather_uploads is True, we want to gather all the trials that will finish in the next few seconds (e.g. 30s)
-                # and then upload them in the correct order.
-                # Your task is to implement this functionality. Use a Thread or asyncio to implement this.
-                # Check the WandbUploaderMixin class in ray_utilities/setup/_experiment_upload.py for reference, how to build the upload order.
-                # Possibly you directly use the WandbUploaderMixin to accomplish this.
-                ...
+                _logger.info("Gathering more trials to upload to WandB in dependency order...")
+                # Gather trials that are ending and upload them in dependency order
+                self._gather_and_upload_trials(trial, actor_done=done)
+
+    def _gather_and_upload_trials(self, trial: Trial, *, actor_done: Optional[bool] = None):
+        """Gather trials ending and upload them in dependency order.
+
+        This method collects trials that are ending within a timeout period,
+        builds a dependency graph based on fork relationships, and uploads
+        parent trials before their children.
+        """
+        with self._gather_uploads_lock:
+            # Add this trial to the list of trials ending
+            if trial not in self._trials_ending:
+                self._trials_ending[trial] = actor_done
+
+            # Check if we should start gathering or wait for more trials
+            if self._gather_timer is None:
+                # Start a new gather timer
+                _logger.info(
+                    "Starting gather timer for trial %s. Waiting up to %.1f seconds for more trials to finish.",
+                    trial.trial_id,
+                    self._gather_timeout,
+                )
+                self._gather_timer = threading.Timer(self._gather_timeout, self._process_gathered_uploads)
+                self._gather_timer.start()
+
+            # Check if all active trials are now ending
+            if len(self._trials_ending) >= self._active_trials_count and self._active_trials_count > 0:
+                _logger.info(
+                    "All %d active trials are ending, canceling timer and processing uploads immediately",
+                    self._active_trials_count,
+                )
+                self._gather_timer.cancel()
+                self._gather_timer = None
+                # Process uploads immediately in a separate thread to avoid blocking
+                threading.Thread(target=self._process_gathered_uploads, daemon=True).start()
+
+    def _process_gathered_uploads(self):
+        """Process all gathered trials and upload them in dependency order."""
+        with self._gather_uploads_lock:
+            if not self._trials_ending:
+                _logger.debug("No trials to upload")
+                return
+
+            trials_to_upload = self._trials_ending.copy()
+            self._trials_ending.clear()
+            self._gather_timer = None
+
+        _logger.info("Processing upload for %d gathered trials", len(trials_to_upload))
+
+        wait_for_actors = any(done is False for done in trials_to_upload.values())
+        try:
+            # Build trial runs list with paths
+            trial_runs: list[tuple[str, Path]] = []
+            for trial in trials_to_upload.keys():
+                if trial.local_path:
+                    wandb_dir = Path(trial.local_path) / "wandb"
+                    if wandb_dir.exists():
+                        offline_runs = list(wandb_dir.glob("offline-run-*"))
+                        for run_dir in offline_runs:
+                            # Extract trial ID from run directory or use trial.trial_id
+                            trial_id = self._extract_trial_id_from_wandb_run(run_dir) or trial.trial_id
+                            trial_runs.append((trial_id, run_dir))
+
+            if not trial_runs:
+                _logger.warning("No offline runs found for gathered trials")
+                return
+
+            # Parse fork relationships
+            wandb_paths = [Path(trial.local_path) / "wandb" for trial in trials_to_upload if trial.local_path]
+            fork_relationships = self._parse_wandb_fork_relationships(wandb_paths)
+
+            # Build dependency-ordered upload groups
+            upload_groups = self._build_upload_dependency_graph(trial_runs, fork_relationships)
+
+            if wait_for_actors:
+                _logger.info("Waiting for WandB logging actors that were still writing data to disk...")
+                # Do NOT use _wait_for_trial_actor, as the actor might be already the new one.
+                # Cannot shorten wait time as we have no longer access to the ending actors.
+                # TODO: Could store the future instead of bool.
+                time.sleep(50)
+            # Upload trials in dependency order
+            _logger.info("Uploading %d trials in %d groups", len(trial_runs), len(upload_groups))
+            for group_idx, group in enumerate(upload_groups):
+                _logger.info("Uploading group %d/%d with %d trials", group_idx + 1, len(upload_groups), len(group))
+                for trial_id, run_dir in group:
+                    _logger.info("Uploading offline wandb run for trial %s from: %s", trial_id, run_dir)
+                    result = subprocess.run(
+                        ["wandb", "sync", str(run_dir)],
+                        check=False,
+                        text=True,
+                        timeout=600,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                    )
+                    if result.returncode == 0 and "error" not in result.stdout.lower():
+                        _logger.info("Successfully synced offline run for trial %s", trial_id)
+                    else:
+                        _logger.error("Error during syncing offline run for trial %s: %s", trial_id, result.stdout)
+
+        except Exception:
+            _logger.exception("Error processing gathered uploads")
 
     def _sync_offline_run_if_available(self, trial: "Trial"):
         """Sync offline WandB run for the given trial if it exists."""
