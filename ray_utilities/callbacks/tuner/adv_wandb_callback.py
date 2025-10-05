@@ -322,7 +322,7 @@ class AdvWandbLoggerCallback(
 
     def _restart_logging_actor(self, trial: "Trial", **wandb_init_kwargs):
         """Ends the current logging actor and starts a new one. Useful for resuming with a new ID / settings."""
-        self.log_trial_end(trial, failed=False)
+        self.log_trial_end(trial, failed=False, gather_uploads=True)
         _logger.info("Restarting WandB logging actor for trial %s", trial.trial_id)
         # Wait a bit before starting the next one
         self._cleanup_logging_actors(timeout=5, kill_on_timeout=False)
@@ -374,7 +374,7 @@ class AdvWandbLoggerCallback(
             assert self._logging_future_to_trial.pop(ready_future) == trial
             self._cleanup_logging_actor(trial)
 
-    def log_trial_end(self, trial: Trial, failed: bool = False):  # noqa: FBT001, FBT002
+    def log_trial_end(self, trial: Trial, failed: bool = False, *, gather_uploads: bool = False):  # noqa: FBT001, FBT002
         # Triggers logger stop
         super().log_trial_end(trial, failed)
 
@@ -382,6 +382,7 @@ class AdvWandbLoggerCallback(
         if self.upload_offline_experiments and "offline" in self.kwargs.get("mode", "online"):
             # Wandb dir is likely not yet saved by actor, wait for it, super does not wait that long.
             # TODO: Could also do this non-blocking.
+
             _logger.info("Waiting for wandb writer to finish writing data to disk...")
             self._wait_for_trial_actor(trial, timeout=120)
             _logger.info("Syncing offline WandB run for trial %s", trial.trial_id)
@@ -389,7 +390,17 @@ class AdvWandbLoggerCallback(
             # TODO: When a fork tries to upload its experiment, the parent has not yet been uploaded
             # hence wandb upload will fail. Possibly end & upload & resume the parent to make this possible.
             # Therefore also gather all trials then upload them in order of forking
-            self._sync_offline_run_if_available(trial)
+            if not gather_uploads:
+                self._sync_offline_run_if_available(trial)
+            else:
+                # TODO(@Copilot) implement gather uploads: When we have multiple trials to upload, we need to upload them in the order of forking.
+                # so a required parent trial for this trial needs to be uploaded first, however it might be come after this trial in the list.
+                # In case gather_uploads is True, we want to gather all the trials that will finish in the next few seconds (e.g. 30s)
+                # and then upload them in the correct order.
+                # Your task is to implement this functionality. Use a Thread or asyncio to implement this.
+                # Check the WandbUploaderMixin class in ray_utilities/setup/_experiment_upload.py for reference, how to build the upload order.
+                # Possibly you directly use the WandbUploaderMixin to accomplish this.
+                ...
 
     def _sync_offline_run_if_available(self, trial: "Trial"):
         """Sync offline WandB run for the given trial if it exists."""
