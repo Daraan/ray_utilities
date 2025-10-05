@@ -206,6 +206,18 @@ class AdvWandbLoggerCallback(
         self._gather_timeout = 30.0  # seconds to wait for more trials to finish
         self._active_trials_count = 0
 
+    def __getstate__(self):
+        # We need to be able to pickle this class but we cannot pickle locks, remove them
+        state = self.__dict__.copy()
+        # Remove the lock before pickling
+        state.pop("_gather_uploads_lock", None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # Restore the lock after unpickling
+        self._gather_uploads_lock = threading.Lock()
+
     def on_trial_start(self, iteration: int, trials: list["Trial"], trial: "Trial", **info):
         super().on_trial_start(iteration, trials, trial, **info)
         _logger.debug("Trials created: %d, re-started: %d", self._trials_created, self._trials_started)
@@ -485,8 +497,7 @@ class AdvWandbLoggerCallback(
                     "All %d active trials are ending, canceling timer and processing uploads immediately",
                     self._active_trials_count,
                 )
-                if self._gather_timer is not None:
-                    self._gather_timer.cancel()
+                self._gather_timer.cancel()
                 self._gather_timer = None
                 # Process uploads immediately in a separate thread to avoid blocking
                 threading.Thread(target=self._process_gathered_uploads, daemon=True).start()
