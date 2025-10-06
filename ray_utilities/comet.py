@@ -401,9 +401,10 @@ class CometArchiveTracker:
             stderr = process.stderr
         success = (
             process.returncode == 0
-            and not process.stderr
-            and "error" not in stdout.lower()
-            and "fail" not in stderr.lower()
+            and "error" not in (stderr or "").lower()
+            and "fail" not in (stderr or "").lower()
+            and "error" not in (stdout or "").lower()
+            and "fail" not in (stdout or "").lower()
         )
         if success:
             _COMET_OFFLINE_LOGGER.info("Successfully uploaded to comet:\n%s", stdout)

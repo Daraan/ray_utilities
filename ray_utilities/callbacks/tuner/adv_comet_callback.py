@@ -490,9 +490,9 @@ class AdvCometLoggerCallback(
             upload_command = self.upload_command_from_log(log_stream)
 
             # TODO: upload if failed? Blocking?
-            thread = self._upload_offline_experiment_if_available(trial, upload_command=upload_command, blocking=False)
-            if thread:
-                self._threads.append(thread)
+            process = self._upload_offline_experiment_if_available(trial, upload_command=upload_command, blocking=False)
+            if process:
+                self._threads.append(process)
 
     def __del__(self):
         try:
