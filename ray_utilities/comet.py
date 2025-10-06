@@ -83,9 +83,6 @@ Use :func:`get_comet_api` to access this instance
 and initialize it if it first if it is not already created.
 """
 
-_LOGGER = logging.getLogger(__name__)
-_COMET_OFFLINE_LOGGER = logging.getLogger("comet_ml.offline")
-
 __all__ = [
     "COMET_OFFLINE_DIRECTORY",
     "CometArchiveTracker",
@@ -94,6 +91,16 @@ __all__ = [
     "get_comet_api",
     "get_default_workspace",
 ]
+
+_LOGGER = logging.getLogger(__name__)
+_COMET_OFFLINE_LOGGER = logging.getLogger("comet_ml.offline")
+
+COMET_COLOR_STRINGS = {
+    "COMET INFO": "\x1b[1;38;5;39mCOMET INFO:\x1b[0m",
+    "COMET WARNING": "\x1b[1;38;5;214mCOMET WARNING:\x1b[0m",
+    "COMET ERROR": "\x1b[1;38;5;196mCOMET ERROR:\x1b[0m",
+}
+"""Colored log level strings for Comet ML console output."""
 
 
 def get_comet_api() -> comet_ml.API:
@@ -401,11 +408,16 @@ class CometArchiveTracker:
             stderr = process.stderr
         success = (
             process.returncode == 0
-            and "error" not in (stderr or "").lower()
-            and "fail" not in (stderr or "").lower()
-            and "error" not in (stdout or "").lower()
-            and "fail" not in (stdout or "").lower()
+            and "error" not in stderr.lower()
+            and "fail" not in stderr.lower()
+            and "error" not in stdout.lower()
+            and "fail" not in stdout.lower()
         )
+        for log_str, color_str in COMET_COLOR_STRINGS.items():
+            if log_str in stdout:
+                stdout = stdout.replace(log_str, color_str)
+            if log_str in stderr:
+                stderr = stderr.replace(log_str, color_str)
         if success:
             _COMET_OFFLINE_LOGGER.info("Successfully uploaded to comet:\n%s", stdout)
         else:
