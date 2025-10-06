@@ -56,6 +56,7 @@ See Also:
 # pyright: reportPossiblyUnboundVariable=information
 from __future__ import annotations
 
+import atexit
 from contextlib import contextmanager
 import io
 import logging
@@ -63,6 +64,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import threading
 import time
 from typing import Literal, Optional, Sequence, cast, overload
 
@@ -296,6 +298,7 @@ class CometArchiveTracker:
         self.archives = list(track) if track else []
         self._auto = auto
         self._called_upload: bool = False
+        self._wait_and_move_threads: list[threading.Thread] = []
 
     def get_archives(self):
         return list(self.path.glob("*.zip"))
@@ -370,43 +373,103 @@ class CometArchiveTracker:
             else:
                 _LOGGER.info("Skipping archive %s, not uploaded as not reported as upload succeeded", path)
 
-    @overload
     @staticmethod
-    def upload_zip_file(zip_file: str, *, blocking: Literal[True] = True, move: bool = True) -> bool: ...
+    def _finish_upload_by_process(
+        process: subprocess.Popen[str] | subprocess.CompletedProcess[str],
+        zip_file,
+        *,
+        move: bool,
+        timeout: int | None = None,
+    ) -> bool:
+        # Note, comet writes its messages to stderr, need to check for errors in the contents.
+        breakpoint()
+        if isinstance(process, subprocess.Popen):
+            if timeout is not None:
+                while timeout > 0 and process.poll() is None:
+                    time.sleep(1)
+                    timeout -= 1
+                if process.poll() is None:
+                    _LOGGER.error("Timeout expired while waiting for comet upload process to finish")
+                    return False
+            done = process.poll() is not None
+            if not done:
+                _LOGGER.error("Should only call _finish_upload with finished processes", stacklevel=2)
+            stdout = process.stdout.read() if process.stdout else "No stdout"
+            stderr = process.stderr.read() if process.stderr else ""
+        else:
+            stdout = process.stdout
+            stderr = process.stderr
+        success = (
+            process.returncode == 0
+            and not process.stderr
+            and "error" not in stdout.lower()
+            and "fail" not in stderr.lower()
+        )
+        if success:
+            _COMET_OFFLINE_LOGGER.info("Successfully uploaded to comet:\n%s", stdout)
+        else:
+            _COMET_OFFLINE_LOGGER.error("Error while uploading to comet:\n%s", stdout)
+        if process.stderr:
+            _COMET_OFFLINE_LOGGER.error("Error while uploading to comet:\n%s", stderr)
+        if not move or not success:
+            return success
+        zip_path = Path(zip_file)
+        (zip_path.parent / "uploaded").mkdir(exist_ok=True)
+        new_zip_path = zip_path.rename(zip_path.parent / "uploaded" / zip_path.name)
+        _LOGGER.debug("Moved uploaded archive %s to %s", zip_path, new_zip_path)
+        return success
 
     @overload
-    @staticmethod
-    def upload_zip_file(zip_file: str, *, blocking: Literal[False]) -> subprocess.Popen[str]: ...
+    @classmethod
+    def upload_zip_file(cls, zip_file: str, *, blocking: Literal[True] = True, move: bool = True) -> bool: ...
 
-    @staticmethod
-    def upload_zip_file(zip_file: str, *, blocking: bool = True, move: bool = True) -> bool | subprocess.Popen[str]:
+    @overload
+    @classmethod
+    def upload_zip_file(cls, zip_file: str, *, blocking: Literal[False]) -> subprocess.Popen[str]: ...
+
+    @classmethod
+    def upload_zip_file(
+        cls, zip_file: str, *, blocking: bool = True, move: bool = True
+    ) -> bool | subprocess.Popen[str]:
         """Uploads a single Comet ML offline experiment ZIP file."""
-        if not blocking and move:
-            raise ValueError("Can only move files if blocking=True")
         if blocking:
             process = subprocess.run(["comet", "upload", zip_file], check=False, text=True, capture_output=True)
-            success = (
-                process.returncode == 0
-                and not process.stderr
-                and "error" not in process.stdout.lower()
-                and "fail" not in process.stdout.lower()
-            )
-            if success:
-                _COMET_OFFLINE_LOGGER.info("Successfully uploaded to comet:\n%s", process.stdout)
-            else:
-                _COMET_OFFLINE_LOGGER.error("Error while uploading to comet:\n%s", process.stdout)
-            if process.stderr:
-                _COMET_OFFLINE_LOGGER.error("Error while uploading to comet:\n%s", process.stderr)
-            if not move or not success:
-                return success
-            zip_path = Path(zip_file)
-            new_zip_path = zip_path.rename(zip_path.parent / "uploaded" / zip_path.name)
-            _LOGGER.debug("Moved uploaded archive %s to %s", zip_path, new_zip_path)
-            return success
+            return cls._finish_upload_by_process(process, zip_file, move=move)
+        # Note, comet writes output to stderr
         process = subprocess.Popen(
-            ["comet", "upload", zip_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            ["comet", "upload", zip_file], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
         )
+        if move:
+            # Start a thread to wait for the process to finish and then move the file
+            wait_and_move_thread = threading.Thread(
+                target=cls._finish_upload_by_process,
+                args=(process, zip_file),
+                kwargs={"move": True, "timeout": 1800},
+                daemon=False,
+                name=f"Thread-_finish_upload_by_process({zip_file})",
+            )
+            wait_and_move_thread.start()
+            _default_comet_archive_tracker._wait_and_move_threads.append(wait_and_move_thread)
         return process
+
+    def __del__(self):
+        for thread in self._wait_and_move_threads:
+            try:
+                if thread.is_alive():
+                    _LOGGER.info(
+                        "Waiting 5s for Comet offline upload to finish to move files (%s daemon=%s)",
+                        thread.name,
+                        thread.daemon,
+                    )
+                    thread.join(timeout=5)
+                    if thread.is_alive():
+                        _LOGGER.warning(
+                            "Comet offline upload thread did not finish in time (%s daemon=%s)",
+                            thread.name,
+                            thread.daemon,
+                        )
+            except (RuntimeError, Exception):  # noqa: PERF203
+                _LOGGER.exception("Error while waiting for Comet offline upload thread to finish (%s)", thread.name)
 
 
 _default_comet_archive_tracker = CometArchiveTracker()

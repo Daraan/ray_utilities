@@ -500,21 +500,23 @@ class AdvCometLoggerCallback(
                 experiment.end()
             self._trial_experiments = {}
             for thread in self._threads:
+                # try not to access global variables as they might be already deleted
                 if hasattr(thread, "is_alive") and thread.is_alive():  # pyright: ignore[reportAttributeAccessIssue]
                     t: threading.Thread = thread  # pyright: ignore[reportAssignmentType]
                     _LOGGER.info("Waiting for Comet offline upload thread to finish")
-                    # Threads are daemon so they should not block exit, but we can still wait a bit
-                    t.join(timeout=5)
+                    # Threads are non-daemon and will block exit, wait a bit for them to finish
+                    t.join(timeout=30)
                     if t.is_alive():
                         _LOGGER.warning("Comet offline upload thread did not finish in time")
                 else:
                     process: subprocess.Popen[str] = thread  # pyright: ignore[reportAssignmentType]
                     if (retcode := process.poll()) is None:
-                        _LOGGER.info("Waiting for Comet offline upload process to finish (%s)", process.args)
+                        _LOGGER.info("Comet offline is still in progress (%s)", process.args)
                         try:
+                            # subprocess does continue after exit, but might be attached to a thread to move the files
                             process.wait(timeout=5)
                         except subprocess.TimeoutExpired:
-                            _LOGGER.info("Comet offline upload process did not finish in time")
+                            pass
                     elif retcode != 0:
                         _LOGGER.warning("Comet offline upload process exited with code %s", retcode)
         except Exception:
@@ -615,7 +617,7 @@ class AdvCometLoggerCallback(
                 tracker = CometArchiveTracker(track=[latest_archive], auto=False)
                 tracker.upload_and_move()
 
-            thread = threading.Thread(target=upload, daemon=True)
+            thread = threading.Thread(target=upload, daemon=False)
             thread.start()
             return thread  # noqa: TRY300
         except (OSError, ImportError):
