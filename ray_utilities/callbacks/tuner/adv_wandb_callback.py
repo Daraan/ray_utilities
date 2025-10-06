@@ -597,7 +597,7 @@ class AdvWandbLoggerCallback(
             if actors_to_wait_for:
                 # Do NOT use _wait_for_trial_actor, as the actor might be already the new one.
                 _logger.info("Waiting 30s for WandB logging actors that were still writing data to disk...")
-                ray.wait([actors_to_wait_for], num_return=len(actors_to_wait_for), timeout=60, fetch_local=False)
+                ray.wait([actors_to_wait_for], num_returns=len(actors_to_wait_for), timeout=60, fetch_local=False)
             # Upload in dependency order; no need to wait more as we should be in a thread and uploads are subprocesses
             self.upload_paths(wandb_paths, trial_runs, wait=wait)
         except Exception:
