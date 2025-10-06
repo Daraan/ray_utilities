@@ -487,6 +487,7 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
                 patch("ray_utilities.callbacks.tuner.adv_wandb_callback.Path") as mock_path_class,
                 patch("ray_utilities.callbacks.tuner.adv_wandb_callback.subprocess.run") as mock_subprocess,
                 patch("ray_utilities.callbacks.tuner.adv_wandb_callback._logger") as mock_logger,
+                patch("ray_utilities.callbacks.upload_helper.logger") as mock_logger_upload,
             ):
                 # Mock Path.home() to return our temp directory
                 mock_path_class.home.return_value = offline_run_dir
@@ -509,8 +510,8 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
                 self.assertTrue(str(args[2]).endswith("offline-run-20240101_120000-abcd1234"))
 
                 # Should log success
-                mock_logger.info.assert_called()
-                log_calls = [call[0][0] for call in mock_logger.info.call_args_list]
+                mock_logger_upload.info.assert_called()
+                log_calls = [call[0][0] for call in mock_logger_upload.info.call_args_list]
                 self.assertTrue(any("Successfully synced" in msg for msg in log_calls))
 
     def test_wandb_sync_offline_run_subprocess_error(self):
@@ -527,7 +528,7 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
                 patch.dict(os.environ, {"WANDB_MODE": "offline"}, clear=False),
                 patch("ray_utilities.callbacks.tuner.adv_wandb_callback.Path") as mock_path_class,
                 patch("ray_utilities.callbacks.tuner.adv_wandb_callback.subprocess.run") as mock_subprocess,
-                patch("ray_utilities.callbacks.tuner.adv_wandb_callback._logger") as mock_logger,
+                patch("ray_utilities.callbacks.upload_helper.logger") as mock_logger,
             ):
                 # Mock Path.home() to return our temp directory
                 mock_path_class.home.return_value = offline_run_dir
