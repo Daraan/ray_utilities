@@ -1907,7 +1907,7 @@ class TestLoggerIntegration(TestHelpers):
             mock_popen_class.stdout = ""
             mock_popen_class.returncode = 0
             mock_popen_class.args = ["wandb", "sync", mock_results[0].path]
-            uploader.wandb_upload_offline_experiments(mock_results)  # pyright: ignore[reportArgumentType]
+            uploader.wandb_upload_results(mock_results)  # pyright: ignore[reportArgumentType]
             self.assertTrue(mock_fork_called, "wandb fork relationships mock was not called")
             self.assertTrue(mock_graph_build_called, "wandb graph build mock was not called")
             self.assertEqual(mock_popen_class.call_count, len(trial_id_to_trial))

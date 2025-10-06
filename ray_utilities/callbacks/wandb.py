@@ -26,7 +26,7 @@ class WandbUploaderMixin:
     - Upload trials in correct order (parents before children)
     """
 
-    def wandb_upload_offline_experiments(
+    def wandb_upload_results(
         self,
         results: Optional[ResultGrid],
         tuner: Optional[tune.Tuner] = None,
@@ -51,31 +51,43 @@ class WandbUploaderMixin:
         global_wandb_dir = os.environ.get("WANDB_DIR", None)
         if global_wandb_dir and (global_wandb_dir := Path(global_wandb_dir)).exists():
             wandb_paths.append(global_wandb_dir)
+        uploads = self.upload_paths(wandb_paths, wait=wait, parallel_uploads=parallel_uploads)
+        return uploads
 
+    def upload_paths(
+        self,
+        wandb_paths,
+        trial_runs: Optional[list[tuple[str, Path]]] = None,
+        *,
+        wait: bool = True,
+        parallel_uploads: int = 5,
+    ):
         # Step 2: Collect all trial runs with their trial IDs
-        trial_runs: list[tuple[str, Path]] = []  # (trial_id, run_dir)
+        if trial_runs is None:
+            logger.info("No trial_runs provided, extracting from wandb paths.", stacklevel=2)
+            trial_runs = []  # (trial_id, run_dir)
 
-        for wandb_dir in wandb_paths:
-            # Find offline run directories
-            offline_runs = list(wandb_dir.glob("offline-run-*"))
-            if len(offline_runs) > 1:
-                logger.warning("Multiple wandb offline directories found in %s: %s", wandb_dir, offline_runs)
+            for wandb_dir in wandb_paths:
+                # Find offline run directories
+                offline_runs = list(wandb_dir.glob("offline-run-*"))
+                if len(offline_runs) > 1:
+                    logger.warning("Multiple wandb offline directories found in %s: %s", wandb_dir, offline_runs)
 
-            if not offline_runs:
-                logger.error(
-                    "No wandb offline experiments found to upload in %s: %s. ", wandb_dir, list(wandb_dir.glob("*"))
-                )
-                continue
-
-            for run_dir in offline_runs:
-                trial_id = self._extract_trial_id_from_wandb_run(run_dir)
-                if trial_id:
-                    trial_runs.append((trial_id, run_dir))
-                else:
-                    logger.warning(
-                        "Could not extract trial ID from %s, will upload without dependency ordering", run_dir
+                if not offline_runs:
+                    logger.error(
+                        "No wandb offline experiments found to upload in %s: %s. ", wandb_dir, list(wandb_dir.glob("*"))
                     )
-                    trial_runs.append((run_dir.name, run_dir))
+                    continue
+
+                for run_dir in offline_runs:
+                    trial_id = self._extract_trial_id_from_wandb_run(run_dir)
+                    if trial_id:
+                        trial_runs.append((trial_id, run_dir))
+                    else:
+                        logger.warning(
+                            "Could not extract trial ID from %s, will upload without dependency ordering", run_dir
+                        )
+                        trial_runs.append((run_dir.name, run_dir))
 
         if not trial_runs:
             logger.info("No wandb offline runs found to upload.")
@@ -83,17 +95,18 @@ class WandbUploaderMixin:
 
         # Step 3: Parse fork relationships
         fork_relationships = self._parse_wandb_fork_relationships(wandb_paths)
-        logger.info("Found %d fork relationships: %s", len(fork_relationships), fork_relationships)
+        logger.debug("Found %d fork relationships: %s", len(fork_relationships), fork_relationships)
 
         # Step 4: Build dependency-ordered upload groups
         upload_groups = self._build_upload_dependency_graph(trial_runs, fork_relationships)
-        logger.info("Created %d upload groups with dependency ordering", len(upload_groups))
+        logger.debug("Created %d upload groups with dependency ordering", len(upload_groups))
 
         # Step 5: Upload trials in dependency order
-        uploads: list[subprocess.Popen[bytes]] = []
-        finished_uploads: set[subprocess.Popen[bytes]] = set()
-        failed_uploads: list[subprocess.Popen[bytes]] = []
+        uploads: list[subprocess.Popen[str]] = []
+        finished_uploads: set[subprocess.Popen[str]] = set()
+        failed_uploads: list[subprocess.Popen[str]] = []
         total_uploaded = 0
+        upload_to_trial: dict[subprocess.Popen[str], str] = {}
 
         for group_idx, group in enumerate(upload_groups):
             logger.info("Uploading group %d/%d with %d trials", group_idx + 1, len(upload_groups), len(group))
@@ -102,7 +115,8 @@ class WandbUploaderMixin:
             if group_idx > 0:
                 logger.info("Waiting for previous upload group to complete...")
                 for process in uploads:
-                    exit_code = self._report_wandb_upload(process)
+                    process.wait()
+                    exit_code = self._report_wandb_sync(process)
                     if exit_code == 0:
                         finished_uploads.add(process)
                     else:
@@ -119,7 +133,8 @@ class WandbUploaderMixin:
                         uploads_in_progress,
                     )
                     for process in uploads:
-                        exit_code = self._report_wandb_upload(process)
+                        process.wait()
+                        exit_code = self._report_wandb_sync(process)
                         if exit_code == 0:
                             finished_uploads.add(process)
                         else:
@@ -131,60 +146,44 @@ class WandbUploaderMixin:
                     ["wandb", "sync", run_dir.as_posix()],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
+                    text=True,
                 )
                 uploads.append(process)
+                upload_to_trial[process] = trial_id
                 total_uploaded += 1
 
         # Handle final completion
-        # TODO: Can these two sections be simplified
         if wait:
             logger.info("Waiting for all wandb uploads to finish...")
-            for process in uploads:
-                exit_code = self._report_wandb_upload(process, wait=True)
-                if exit_code == 0:
-                    finished_uploads.add(process)
-                else:
-                    failed_uploads.append(process)
-            uploads = []
-
-            if failed_uploads:
-                logger.warning("Failed to upload %d wandb runs", len(failed_uploads))
-
-            logger.info(
-                "Uploaded wandb offline runs from %d trial paths: success %d, failed %d from experiment dir %s.",
-                total_uploaded,
-                len(finished_uploads),
-                len(failed_uploads),
-                results.experiment_path if results else f"local wandb fallback paths: {wandb_paths}",
-            )
-            return None
-
-        # Report on completed uploads without waiting
         unfinished_uploads = uploads.copy()
         for process in uploads:
+            if wait:
+                process.wait()
             if process.poll() is not None:
-                exit_code = self._report_wandb_upload(process)
+                exit_code = self._report_wandb_sync(process)
                 if exit_code == 0:
                     finished_uploads.add(process)
                 else:
                     failed_uploads.append(process)
                 unfinished_uploads.remove(process)
+        uploads = []
 
+        if failed_uploads:
+            logger.warning("Failed to upload %d wandb runs", len(failed_uploads))
         if not unfinished_uploads:
-            logger.info("All wandb offline runs have been uploaded.")
-            return None
-
+            logger.info("All wandb offline runs have been tried to upload.")
         logger.info(
             "Uploaded wandb offline runs from %d trial paths: "
-            "success %d, failed %d, still in progress %d from experiment dir %s.",
+            "success %d, failed %d, still in progress %d from paths: %s.",
             total_uploaded,
             len(finished_uploads),
             len(failed_uploads),
             len(unfinished_uploads),
-            results.experiment_path if results else f"local wandb fallback paths: {wandb_paths}",
+            f"wandb paths: {wandb_paths}",
         )
-        # There are still processes running
-        return unfinished_uploads
+        if unfinished_uploads:  # There are still processes running
+            return unfinished_uploads
+        return None
 
     def _get_wandb_paths(self, results: Optional[ResultGrid] = None, tuner: Optional[tune.Tuner] = None) -> list[Path]:
         """
@@ -296,8 +295,8 @@ class WandbUploaderMixin:
                             logger.error("Unexpected line formatting, expected trial_id, parent_id: %s", parts)
             except AssertionError:
                 raise
-            except Exception as e:
-                logger.warning("Failed to parse fork relationships from %s: %s", fork_info_file, e)
+            except Exception:
+                logger.exception("Failed to parse fork relationships from %s", fork_info_file)
 
         return fork_relationships
 
@@ -328,32 +327,6 @@ class WandbUploaderMixin:
         # Fallback: use the entire directory name
         logger.warning("Could not extract trial ID from run directory name %s, using full name", run_name)
         return run_name
-
-    @staticmethod
-    def _report_wandb_upload(process: subprocess.Popen[bytes], run_dir: Optional[Path] = None, *, wait: bool = True):
-        """Wait and report the output of a WandB upload process."""
-        run_dir = run_dir or Path(process.args[-1])  # pyright: ignore[reportArgumentType, reportIndexIssue]
-        exit_code = 0
-        if wait:
-            process.wait()
-        if process.stdout:
-            stdout = process.stdout.read()
-            msg = stdout if isinstance(stdout, str) else stdout.decode("utf-8")
-            print(msg)
-            if "error" in msg.lower():  # pyright: ignore[reportOperatorIssue]
-                # This likely happens when we want to upload a fork_from where the parent is not yet uploaded
-                logger.error("Error during wandb upload of offline run %s: %s", run_dir, msg)
-                exit_code = 1
-        if process.returncode != 0 or process.stderr:
-            stderr = process.stderr.read() if process.stderr else b""
-            logger.error(
-                "Failed to upload wandb offline run %s with exit code %d. Output: %s",
-                run_dir,
-                process.returncode,
-                stderr.decode("utf-8"),
-            )
-            exit_code = process.returncode or 1
-        return exit_code
 
     def _build_upload_dependency_graph(
         self, trial_runs: list[tuple[str, Path]], fork_relationships: Mapping[str, tuple[str | None, int | None]]
@@ -416,16 +389,59 @@ class WandbUploaderMixin:
         return upload_groups
 
     @staticmethod
-    def _report_wandb_sync(result: subprocess.CompletedProcess[str], trial_id: str):
+    def _popen_to_completed_process(
+        process: subprocess.Popen[str] | subprocess.Popen[bytes],
+        out: Optional[str] = None,
+        returncode: Optional[int] = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Convert a Popen process to a CompletedProcess by waiting for it to finish."""
+        if process.poll() is None:
+            logger.warning("Calling _popen_to_completed_process on running process")
+        out_str = out or (process.stdout.read() if process.stdout else None)
+        if isinstance(out_str, bytes):
+            out_str = out_str.decode("utf-8")
+        err = process.stderr.read() if process.stderr else None
+        err_str = err if isinstance(err, str) or err is None else err.decode("utf-8")
+        return subprocess.CompletedProcess(
+            args=process.args,
+            returncode=returncode if returncode is not None else process.returncode,
+            stdout=out_str,
+            stderr=err_str,
+        )
+
+    @staticmethod
+    def _report_wandb_sync(
+        result: subprocess.CompletedProcess[str] | subprocess.Popen[str] | subprocess.Popen[bytes],
+        trial_id: Optional[str] = None,
+    ):
+        """Check result return code and log output."""
+        if isinstance(result, subprocess.Popen):
+            result = WandbUploaderMixin._popen_to_completed_process(result)
+        exit_code = result.returncode
+        trial_info = f"for trial {trial_id}" if trial_id else ""
         if result.returncode == 0 and "error" not in result.stdout.lower():
-            logger.info("Successfully synced offline run for trial %s\n%s", trial_id, result.stdout)
+            logger.info("Successfully synced offline run %s: %s\n%s", result.args[-1], trial_info, {result.stdout})
         elif "not found (<Response [404]>)" in result.stdout:
             logger.error(
-                "Could not sync run for trial %s (Is it a forked_run? - The parent needs to be uploaded first): %s",
-                trial_id,
+                "Could not sync run for %s %s (Is it a forked_run? - The parent needs to be uploaded first): %s",
+                trial_info,
+                result.args[-1],
                 result.stdout,
             )
+            exit_code = result.returncode or 1
+        elif "fromStep is greater than the run's last step" in result.stdout:
+            logger.error(
+                "Could not sync run %s %s"
+                "(Is it a forked_run? - The parents fork step needs to be uploaded first. )"
+                "If this error persists it might be a off-by-one error:\n%s",
+                trial_info,
+                result.args[-1],
+                result.stdout,
+            )
+            exit_code = result.returncode or 1
         else:
-            logger.error("Error during syncing offline run for trial %s: %s", trial_id, result.stdout)
+            logger.error("Error during syncing offline run %s %s:\n%s", trial_info, result.args[-1], result.stdout)
+            exit_code = result.returncode or 1
         if result.returncode != 0 or result.stderr:
-            logger.error("Failed to sync offline run for trial %s: %s", trial_id, result.stderr or "")
+            logger.error("Failed to sync offline run %s %s:\n%s", trial_info, result.args[-1], result.stderr or "")
+        return exit_code
