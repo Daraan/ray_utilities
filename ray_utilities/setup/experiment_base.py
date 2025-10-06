@@ -52,7 +52,7 @@ from typing_extensions import NotRequired, Self, TypedDict, TypeVar, deprecated
 from ray_utilities import RUN_ID
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
-from ray_utilities.comet import CometArchiveTracker
+from ray_utilities.callbacks.comet import CometArchiveTracker
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.parser.default_argument_parser import ConfigFilePreParser, SupportsMetaAnnotations
 from ray_utilities.environment import create_env

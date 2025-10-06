@@ -73,6 +73,7 @@ try:
 except ImportError:
     pass
 
+from ray_utilities.callbacks.upload_helper import UploadHelperMixin
 from ray_utilities.constants import COMET_OFFLINE_DIRECTORY
 
 _api: Optional[comet_ml.API] = None
@@ -243,7 +244,7 @@ def comet_assure_project_exists(workspace_name: str, project_name: str, project_
         )
 
 
-class CometArchiveTracker:
+class CometArchiveTracker(UploadHelperMixin):
     """Track and manage offline Comet ML experiment archives for batch uploading.
 
     This class provides functionality to track offline Comet ML experiment archives
@@ -380,8 +381,9 @@ class CometArchiveTracker:
             else:
                 _LOGGER.info("Skipping archive %s, not uploaded as not reported as upload succeeded", path)
 
-    @staticmethod
+    @classmethod
     def _finish_upload_by_process(
+        cls,
         process: subprocess.Popen[str] | subprocess.CompletedProcess[str],
         zip_file,
         *,
@@ -389,7 +391,6 @@ class CometArchiveTracker:
         timeout: int | None = None,
     ) -> bool:
         # Note, comet writes its messages to stderr, need to check for errors in the contents.
-        breakpoint()
         if isinstance(process, subprocess.Popen):
             if timeout is not None:
                 while timeout > 0 and process.poll() is None:
@@ -408,10 +409,8 @@ class CometArchiveTracker:
             stderr = process.stderr
         success = (
             process.returncode == 0
-            and "error" not in stderr.lower()
-            and "fail" not in stderr.lower()
-            and "error" not in stdout.lower()
-            and "fail" not in stdout.lower()
+            and not any(pattern in stderr.lower() for pattern in cls.error_patterns)
+            and not any(pattern in stdout.lower() for pattern in cls.error_patterns)
         )
         for log_str, color_str in COMET_COLOR_STRINGS.items():
             if log_str in stdout:
@@ -446,8 +445,11 @@ class CometArchiveTracker:
     ) -> bool | subprocess.Popen[str]:
         """Uploads a single Comet ML offline experiment ZIP file."""
         if blocking:
-            process = subprocess.run(["comet", "upload", zip_file], check=False, text=True, capture_output=True)
-            return cls._finish_upload_by_process(process, zip_file, move=move)
+            process = subprocess.Popen(
+                ["comet", "upload", zip_file], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+            )
+            cls._failure_aware_wait(process, timeout=600, report_upload=False)
+            return cls._finish_upload_by_process(process, zip_file, move=move, timeout=None)
         # Note, comet writes output to stderr
         process = subprocess.Popen(
             ["comet", "upload", zip_file], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True

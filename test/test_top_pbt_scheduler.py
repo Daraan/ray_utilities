@@ -167,7 +167,7 @@ class TestTopTrialScheduler(DisableLoggers, TestHelpers):
         lower_scores = [scheduler._trial_state[t].last_score for t in lower]
         # Filter out None values for min()
         lower_scores_filtered = [s for s in lower_scores if s is not None]
-        # Verify all upper scores are greater than any lower score
+        # Verify all upper scores are greater than any lower score. Remember for min mode the sign is switched.
         self.assertTrue(all(u > max(lower_scores_filtered) for u in upper_scores))
 
     def test_distribute_exploitation(self):

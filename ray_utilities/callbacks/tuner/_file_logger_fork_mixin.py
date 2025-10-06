@@ -124,13 +124,19 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
         # Different nodes - sync via remote storage
         if trial.storage and parent_trial.storage:
             try:
-                parent_remote_file_path = (Path(parent_trial.path) / parent_file_name).as_posix()  # pyright: ignore[reportArgumentType]
+                parent_remote_file_path = Path(parent_trial.path) / parent_file_name  # pyright: ignore[reportArgumentType]
                 logger.debug(
                     "Syncing up parent %s file to %s", self._get_file_extension().upper(), parent_remote_file_path
                 )
+                # prevent a pyarrow exception
+                if parent_remote_file_path.exists():
+                    parent_remote_file_path.rename(
+                        parent_remote_file_path.parent / (parent_remote_file_path.name + ".old")
+                    )
+
                 parent_trial.storage.syncer.sync_up(
                     parent_local_file_path.as_posix(),
-                    parent_remote_file_path,
+                    parent_remote_file_path.as_posix(),
                     exclude=["*/checkpoint_*", "*.pkl", "events.out.tfevents.*"],
                 )
                 parent_trial.storage.syncer.wait()
@@ -138,7 +144,7 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
                     "Syncing down parent %s file to %s", self._get_file_extension().upper(), local_file_path.as_posix()
                 )
                 trial.storage.syncer.sync_down(
-                    parent_remote_file_path,
+                    parent_remote_file_path.as_posix(),
                     local_file_path.as_posix(),
                     exclude=["*/checkpoint_*", "*.pkl", "events.out.tfevents.*"],
                 )

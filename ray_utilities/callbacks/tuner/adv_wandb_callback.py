@@ -201,7 +201,7 @@ class AdvWandbLoggerCallback(
 
         # Gather uploads tracking
         self._gather_uploads_lock = threading.Lock()
-        self._trials_ending: dict[Trial, Optional[bool]] = {}
+        self._trials_ending: dict[Trial, tuple[Optional[bool], Optional[ray.ObjectRef[_WandbLoggingActor]]]] = {}
         """Trials that are currently ending and the info if their logger has ended"""
         self._gather_timer: Optional[threading.Timer] = None
         self._gather_timeout_min = 10.0  # seconds to wait for more trials to finish
@@ -497,7 +497,7 @@ class AdvWandbLoggerCallback(
         with self._gather_uploads_lock:
             # Add this trial to the list of trials ending
             if trial not in self._trials_ending:
-                self._trials_ending[trial] = actor_done
+                self._trials_ending[trial] = (actor_done, self._trial_logging_futures.get(trial, None))
 
             # Check if we should start gathering or wait for more trials
             # Dynamically adjust gather timeout: more active trials = longer wait, more ending = shorter wait
@@ -572,7 +572,9 @@ class AdvWandbLoggerCallback(
 
         _logger.info("Processing upload for %d gathered trials", len(trials_to_upload))
 
-        wait_for_actors = any(done is False for done in trials_to_upload.values())
+        actors_to_wait_for = [
+            future for done, future in trials_to_upload.values() if done is False and future is not None
+        ]
         try:
             # Build trial runs list with paths
             trial_runs: list[tuple[str, Path]] = []
@@ -592,12 +594,10 @@ class AdvWandbLoggerCallback(
 
             # Parse fork relationships
             wandb_paths = [Path(trial.local_path) / "wandb" for trial in trials_to_upload if trial.local_path]
-            if wait_for_actors:
-                _logger.info("Waiting 30s for WandB logging actors that were still writing data to disk...")
+            if actors_to_wait_for:
                 # Do NOT use _wait_for_trial_actor, as the actor might be already the new one.
-                # Cannot shorten wait time as we have no longer access to the ending actors.
-                # TODO: Could store the future instead of bool.
-                time.sleep(30)
+                _logger.info("Waiting 30s for WandB logging actors that were still writing data to disk...")
+                ray.wait([actors_to_wait_for], num_return=len(actors_to_wait_for), timeout=60, fetch_local=False)
             # Upload in dependency order; no need to wait more as we should be in a thread and uploads are subprocesses
             self.upload_paths(wandb_paths, trial_runs, wait=wait)
         except Exception:
@@ -680,7 +680,7 @@ class AdvWandbLoggerCallback(
                         trial.trial_id,
                         upload_time_end - upload_time_start,
                     )
-                self._report_wandb_sync(result, trial.trial_id)
+                self._report_upload(result, trial.trial_id)
                 # TODO: Move files to not upload it again (there should be parallel folders)
                 if len(offline_runs) > 1:
                     time.sleep(5)  # wait a bit between uploads

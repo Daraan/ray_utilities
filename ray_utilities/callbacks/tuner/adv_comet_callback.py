@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import threading
@@ -17,10 +18,10 @@ from ray.air.integrations.comet import CometLoggerCallback
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
 from ray.tune.utils import flatten_dict
 
+from ray_utilities.callbacks.comet import CometArchiveTracker, _catch_comet_offline_logger
 from ray_utilities.callbacks.tuner._save_video_callback import SaveVideoFirstCallback
 from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
-from ray_utilities.comet import CometArchiveTracker, _catch_comet_offline_logger
 from ray_utilities.constants import (
     COMET_OFFLINE_DIRECTORY,
     DEFAULT_VIDEO_DICT_KEYS,
@@ -32,7 +33,6 @@ from ray_utilities.misc import ExperimentKey, make_experiment_key
 from ray_utilities.video.numpy_to_video import numpy_to_video
 
 from ._log_result_grouping import exclude_results, non_metric_results
-import subprocess
 
 if TYPE_CHECKING:
     import io
@@ -488,8 +488,6 @@ class AdvCometLoggerCallback(
             super().log_trial_end(trial)
         if not self.online and self.upload_offline_experiments:
             upload_command = self.upload_command_from_log(log_stream)
-
-            # TODO: upload if failed? Blocking?
             process = self._upload_offline_experiment_if_available(trial, upload_command=upload_command, blocking=False)
             if process:
                 self._threads.append(process)

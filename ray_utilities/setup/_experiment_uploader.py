@@ -5,8 +5,8 @@ from typing import TYPE_CHECKING, Generic, Optional, TypeAlias
 
 from typing_extensions import Sentinel, TypeVar
 
+from ray_utilities.callbacks.comet import CometArchiveTracker
 from ray_utilities.callbacks.wandb import WandbUploaderMixin
-from ray_utilities.comet import CometArchiveTracker
 
 # pyright: enableExperimentalFeatures=true
 
@@ -87,7 +87,7 @@ class ExperimentUploader(WandbUploaderMixin, CometUploaderMixin[ParserType_co]):
         failed_runs = []
         if unfinished_wandb_uploads:
             for process in unfinished_wandb_uploads:
-                exit_code = self._report_wandb_upload(process, wait=True)
+                exit_code = self._failure_aware_wait(process, timeout=900, trial_id="")
                 if exit_code != 0:
                     try:
                         failed_runs.append(" ".join(process.args))  # pyright: ignore[reportArgumentType, reportCallIssue]

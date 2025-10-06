@@ -6,14 +6,15 @@ import logging
 import os
 import subprocess
 import threading
-import time
 from pathlib import Path
-from typing import TYPE_CHECKING, AnyStr, Mapping, Optional, cast
+from typing import TYPE_CHECKING, Iterable, Mapping, Optional, cast
 
 if TYPE_CHECKING:
     from ray import tune
     from ray.tune import ResultGrid
 
+from ray_utilities._runtime_constants import RUN_ID
+from ray_utilities.callbacks.upload_helper import UploadHelperMixin
 from ray_utilities.misc import RE_GET_TRIAL_ID
 
 logger = logging.getLogger(__name__)
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 _failed_upload_file_lock = threading.Lock()
 
 
-class WandbUploaderMixin:
+class WandbUploaderMixin(UploadHelperMixin):
     """Mixin for uploading WandB offline experiments with dependency ordering.
 
     This mixin provides methods to:
@@ -29,6 +30,8 @@ class WandbUploaderMixin:
     - Build dependency graphs for upload ordering
     - Upload trials in correct order (parents before children)
     """
+
+    _upload_service_name = "wandb"
 
     def wandb_upload_results(
         self,
@@ -191,7 +194,7 @@ class WandbUploaderMixin:
                 exit_code = self._failure_aware_wait(process, timeout=900, trial_id=upload_to_trial.get(process, ""))
             if process.poll() is not None:
                 if exit_code is None:
-                    exit_code = self._report_wandb_sync(process)
+                    exit_code = self._report_upload(process)
                 if exit_code == 0:
                     finished_uploads.add(process)
                 else:
@@ -200,13 +203,21 @@ class WandbUploaderMixin:
         uploads = []
 
         if failed_uploads:
-            logger.warning("Failed to upload %d wandb runs:\n%s", len(failed_uploads), failed_uploads)
+            logger.error(
+                "Failed to upload %d wandb runs:\n%s", len(failed_uploads), "\n".join(map(str, failed_uploads))
+            )
             with _failed_upload_file_lock:
-                failed_file = Path("failed_wandb_uploads.txt")
+                failed_file = Path(f"failed_wandb_uploads-{RUN_ID}.txt")
                 with failed_file.open("a") as f:
                     for process in failed_uploads:
                         trial_id = upload_to_trial.get(process, "unknown")
-                        f.write(f"{trial_id} : {process.args}")
+                        formatted_args = (
+                            " ".join(map(str, process.args))
+                            if not isinstance(process.args, (str, bytes)) and isinstance(process.args, Iterable)
+                            else process.args
+                        )
+                        err = ("\n" + process.stdout.read() + "\n") if process.stdout else ""
+                        f.write(f"{trial_id} : {formatted_args}{err}\n")
                 logger.warning("Wrote details of failed uploads to %s", failed_file.resolve())
         if not unfinished_uploads:
             logger.info("All wandb offline runs have been tried to upload.")
@@ -425,137 +436,3 @@ class WandbUploaderMixin:
                     dependencies[dependent_id].discard(trial_id)
 
         return upload_groups
-
-    @staticmethod
-    def _popen_to_completed_process(
-        process: subprocess.Popen[AnyStr],
-        out: Optional[str] = None,
-        returncode: Optional[int] = None,
-    ) -> subprocess.CompletedProcess[str]:
-        """Convert a Popen process to a CompletedProcess by waiting for it to finish."""
-        if process.poll() is None:
-            logger.warning("Calling _popen_to_completed_process on running process")
-        out_str = out or (process.stdout.read() if process.stdout else None)
-        if isinstance(out_str, bytes):
-            out_str = out_str.decode("utf-8")
-        err = process.stderr.read() if process.stderr else None
-        err_str = err if isinstance(err, str) or err is None else err.decode("utf-8")
-        return subprocess.CompletedProcess(
-            args=process.args,
-            returncode=returncode if returncode is not None else process.returncode,
-            stdout=out_str,
-            stderr=err_str,
-        )
-
-    @classmethod
-    def _failure_aware_wait(
-        cls,
-        process: subprocess.Popen[AnyStr],
-        timeout: int = 600,
-        trial_id: str = "",
-        *,
-        terminate_on_timeout: bool = True,
-    ) -> int:
-        """
-        Wait for process to complete and return its exit code, handling exceptions.
-
-        If an error pattern is detected in the process output or if the timeout is reached
-        and `terminate_on_timeout` is ``True``, this method forcibly terminates the process.
-        """
-        start = last_count = time.time()
-
-        out = ""
-        error_occurred = False
-        # Define error patterns to look for in output (case-insensitive)
-        error_patterns = ["error", "failed", "exception", "traceback", "critical"]
-        while True:
-            line = process.stdout.readline() if process.stdout else None
-            count = time.time()
-            if line:
-                if isinstance(line, bytes):
-                    line = line.decode("utf-8")
-                out += line + "\n"
-                # Check for any error pattern in the line (case-insensitive)
-                if any(pattern in line.lower() for pattern in error_patterns):
-                    error_occurred = True
-                    logger.error(
-                        "Detected error pattern in wandb sync output while uploading trial %s. "
-                        "Killing process. Output line: %s",
-                        trial_id,
-                        line.strip(),
-                    )
-                    process.terminate()
-                    break
-            elif process.poll() is not None:
-                break  # Process finished
-            elif count - start > timeout:
-                logger.warning(
-                    "Timeout reached while uploading trial %s to wandb. %s",
-                    trial_id,
-                    "Killing process." if terminate_on_timeout else "Not killing process as.",
-                )
-                error_occurred = True
-                if terminate_on_timeout:
-                    process.terminate()
-                break
-            else:
-                time.sleep(0.2)  # Avoid busy waiting
-            if count - last_count > 10:
-                logger.info("Still uploading trial %s to wandb after %.1f seconds...", trial_id, count - start)
-                last_count = count
-        if process.stdout is not None:
-            try:
-                rest = process.stdout.read()
-                if rest:
-                    if isinstance(rest, bytes):
-                        rest = rest.decode("utf-8")
-                    out += rest
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Could not read remaining output from process.stdout: %s", e)
-        if error_occurred:
-            returncode = process.returncode or 1
-        elif process.returncode is not None:
-            returncode = process.returncode
-        else:
-            returncode = int(error_occurred)
-        return cls._report_wandb_sync(
-            cls._popen_to_completed_process(process, returncode=returncode),
-            trial_id,
-        )
-
-    @staticmethod
-    def _report_wandb_sync(
-        result: subprocess.CompletedProcess[str] | subprocess.Popen[AnyStr],
-        trial_id: Optional[str] = None,
-    ):
-        """Check result return code and log output."""
-        if isinstance(result, subprocess.Popen):
-            result = WandbUploaderMixin._popen_to_completed_process(result)
-        exit_code = result.returncode
-        trial_info = f"for trial {trial_id}" if trial_id else ""
-        if result.returncode == 0 and "error" not in result.stdout.lower():
-            logger.info("Successfully synced offline run %s: %s\n%s", result.args[-1], trial_info, {result.stdout})
-        elif "not found (<Response [404]>)" in result.stdout:
-            logger.error(
-                "Could not sync run for %s %s (Is it a forked_run? - The parent needs to be uploaded first): %s",
-                trial_info,
-                result.args[-1],
-                result.stdout,
-            )
-            exit_code = result.returncode or 1
-        elif "fromStep is greater than the run's last step" in result.stdout:
-            logger.error(
-                "Could not sync run %s %s"
-                "(Is it a forked_run? - The parents fork step needs to be uploaded first. )"
-                "If this error persists it might be a off-by-one error:\n%s",
-                trial_info,
-                result.args[-1],
-                result.stdout,
-            )
-            exit_code = result.returncode or 1
-        else:
-            logger.error("Error during syncing offline run %s %s:\n%s", trial_info, result.args[-1], result.stdout)
-            exit_code = result.returncode or 1
-        if result.returncode != 0 or result.stderr:
-            logger.error("Failed to sync offline run %s %s:\n%s", trial_info, result.args[-1], result.stderr or "")
-        return exit_code
