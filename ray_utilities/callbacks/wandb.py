@@ -202,10 +202,12 @@ class WandbUploaderMixin:
                 assert tuner._local_tuner is not None
                 trials = (
                     tuner._local_tuner.get_results()._experiment_analysis.trials  # pyright: ignore[reportOptionalMemberAccess]
-                )  # pyright: ignore[reportOptionalMemberAccess]
+                )
             except RuntimeError as e:
-                if not tuner._local_tuner or tuner._local_tuner.get_run_config().callbacks:  # assume there is a logger
-                    raise RuntimeError("Cannot get trials") from e
+                if (
+                    not tuner._local_tuner or not tuner._local_tuner.get_run_config().callbacks
+                ):  # assume there is a logger
+                    raise RuntimeError("Cannot get trials as local tuner or callbacks are missing.") from e
                 # Import here to avoid circular dependency
                 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback  # noqa: PLC0415
 
@@ -412,3 +414,18 @@ class WandbUploaderMixin:
                     dependencies[dependent_id].discard(trial_id)
 
         return upload_groups
+
+    @staticmethod
+    def _report_wandb_sync(result: subprocess.CompletedProcess[str], trial_id: str):
+        if result.returncode == 0 and "error" not in result.stdout.lower():
+            logger.info("Successfully synced offline run for trial %s\n%s", trial_id, result.stdout)
+        elif "not found (<Response [404]>)" in result.stdout:
+            logger.error(
+                "Could not sync run for trial %s (Is it a forked_run? - The parent needs to be uploaded first): %s",
+                trial_id,
+                result.stdout,
+            )
+        else:
+            logger.error("Error during syncing offline run for trial %s: %s", trial_id, result.stdout)
+        if result.returncode != 0 or result.stderr:
+            logger.error("Failed to sync offline run for trial %s: %s", trial_id, result.stderr or "")

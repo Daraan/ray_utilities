@@ -204,7 +204,7 @@ class AdvWandbLoggerCallback(
         self._trials_ending: dict[Trial, Optional[bool]] = {}
         """Trials that are currently ending and the info if their logger has ended"""
         self._gather_timer: Optional[threading.Timer] = None
-        self._gather_timeout = 30.0  # seconds to wait for more trials to finish
+        self._gather_timeout_min = 10.0  # seconds to wait for more trials to finish
         self._active_trials_count = 0
 
     def __getstate__(self):
@@ -482,13 +482,13 @@ class AdvWandbLoggerCallback(
                 time.time() - shutdown_start,
                 done,
             )
-            if not gather_uploads:
-                _logger.info("Syncing offline WandB run for trial %s", trial.trial_id)
-                self._sync_offline_run_if_available(trial)
-            else:
+            if gather_uploads:
                 _logger.info("Gathering more trials to upload to WandB in dependency order...")
                 # Gather trials that are ending and upload them in dependency order
                 self._gather_and_upload_trials(trial, actor_done=done)
+            else:
+                _logger.info("Syncing offline WandB run for trial %s", trial.trial_id)
+                self._sync_offline_run_if_available(trial)
 
     def _gather_and_upload_trials(self, trial: Trial, *, actor_done: Optional[bool] = None):
         """Gather trials ending and upload them in dependency order.
@@ -503,15 +503,40 @@ class AdvWandbLoggerCallback(
                 self._trials_ending[trial] = actor_done
 
             # Check if we should start gathering or wait for more trials
-            if self._gather_timer is None:
-                # Start a new gather timer
-                _logger.info(
-                    "Starting gather timer for trial %s. Waiting up to %.1f seconds for more trials to finish.",
+            # Dynamically adjust gather timeout: more active trials = longer wait, more ending = shorter wait
+            min_timeout = self._gather_timeout_min
+            max_timeout = 90.0
+            # Increase timeout with more active trials, decrease as more trials are ending
+            base_timeout = 10.0 + 6.0 * max(0, self._active_trials_count - 1)
+            # Reduce timeout as more trials are ending (but not below min_timeout)
+            dynamic_timeout = max(
+                min_timeout,
+                min(
+                    max_timeout,
+                    base_timeout - 4.0 * (len(self._trials_ending) - 1),
+                ),
+            )
+            if self._gather_timer is not None:
+                # Cancel and reset timer if a new trial is added
+                self._gather_timer.cancel()
+                _logger.debug(
+                    "Resetting gather timer for trial %s. New timeout: %.1f seconds (active: %d, ending: %d)",
                     trial.trial_id,
-                    self._gather_timeout,
+                    dynamic_timeout,
+                    self._active_trials_count,
+                    len(self._trials_ending),
                 )
-                self._gather_timer = threading.Timer(self._gather_timeout, self._process_gathered_uploads)
-                self._gather_timer.start()
+            else:
+                _logger.info(
+                    "Starting gather timer for trial %s. Timeout: %.1f seconds (Trials active: %d, ending: %d). "
+                    "Will reset timer on new trial addition.",
+                    trial.trial_id,
+                    dynamic_timeout,
+                    self._active_trials_count,
+                    len(self._trials_ending),
+                )
+            self._gather_timer = threading.Timer(dynamic_timeout, self._process_gathered_uploads)
+            self._gather_timer.start()
 
             # Check if all active trials are now ending
             if len(self._trials_ending) >= self._active_trials_count and self._active_trials_count > 0:
@@ -522,7 +547,7 @@ class AdvWandbLoggerCallback(
                 self._gather_timer.cancel()
                 self._gather_timer = None
                 # Process uploads immediately in a separate thread to avoid blocking
-                threading.Thread(target=self._process_gathered_uploads, daemon=True).start()
+                threading.Thread(target=self._process_gathered_uploads, daemon=False).start()
 
     def _process_gathered_uploads(self):
         """Process all gathered trials and upload them in dependency order."""
@@ -582,10 +607,7 @@ class AdvWandbLoggerCallback(
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
                     )
-                    if result.returncode == 0 and "error" not in result.stdout.lower():
-                        _logger.info("Successfully synced offline run for trial %s", trial_id)
-                    else:
-                        _logger.error("Error during syncing offline run for trial %s: %s", trial_id, result.stdout)
+                    self._report_wandb_sync(result, trial_id)
 
         except Exception:
             _logger.exception("Error processing gathered uploads")
@@ -667,19 +689,7 @@ class AdvWandbLoggerCallback(
                         trial.trial_id,
                         upload_time_end - upload_time_start,
                     )
-                if result.returncode == 0 and "error" not in result.stdout.lower():
-                    _logger.info("Successfully synced offline run for trial %s\n%s", trial.trial_id, result.stdout)
-                elif "not found (<Response [404]>)" in result.stdout:
-                    _logger.error(
-                        "Could not sync run for trial %s "
-                        "(Is it a forked_run? - The parent needs to be uploaded first): %s",
-                        trial.trial_id,
-                        result.stdout,
-                    )
-                else:
-                    _logger.error("Error during syncing offline run for trial %s: %s", trial.trial_id, result.stdout)
-                if result.returncode != 0 or result.stderr:
-                    _logger.error("Failed to sync offline run for trial %s: %s", trial.trial_id, result.stderr)
+                self._report_wandb_sync(result, trial.trial_id)
                 # TODO: Move files to not upload it again (there should be parallel folders)
                 if len(offline_runs) > 1:
                     time.sleep(5)  # wait a bit between uploads
