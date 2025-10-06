@@ -398,7 +398,8 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create a mock zip file
-            zip_file = Path(tmpdir) / "test_trial_001.zip".replace("_", ExperimentKey.REPLACE_UNDERSCORE)
+            filename = "test_trial_001.zip".replace("_", ExperimentKey.REPLACE_UNDERSCORE)
+            zip_file = Path(tmpdir) / filename
             zip_file.touch()
 
             with (
