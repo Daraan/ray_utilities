@@ -87,6 +87,7 @@ class TestMeta(TestCase):
 
 
 class TestNoLoggers(DisableLoggers):
+    @mock_trainable_algorithm
     def test_no_loggers(self):
         # This test is just to ensure that the DisableLoggers context manager works.
         # It does not need to do anything, as the context manager will disable loggers.

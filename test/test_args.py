@@ -40,6 +40,7 @@ class TestExtensionsAdded(SetupWithEnv, SetupLowRes, DisableLoggers):
             )
 
     @patch_args()
+    @mock_trainable_algorithm
     def test_exact_sampling_callback_added(self):
         setup = self._DEFAULT_SETUP_LOW_RES
         self.assertFalse(setup.args.no_exact_sampling)
@@ -59,8 +60,9 @@ class TestExtensionsAdded(SetupWithEnv, SetupLowRes, DisableLoggers):
             "Expected no_exact_sampling to be False when --no_exact_sampling is not set.",
         )
 
-    @patch_args()
     @unittest.skip("Decide on default value on argument")
+    # @patch_args()
+    # @mock_trainable_algorithm
     def test_episode_metrics_removed_callback_added(self):
         setup = self._DEFAULT_SETUP_LOW_RES
         # self.assertFalse(setup.args.limit_episode_metrics_to_iteration)
@@ -81,6 +83,7 @@ class TestExtensionsAdded(SetupWithEnv, SetupLowRes, DisableLoggers):
         )
 
     @patch_args()
+    @mock_trainable_algorithm(mock_learner=False)
     def test_remove_masked_samples_added(self):
         setup = AlgorithmSetup(init_trainable=False)
         setup.config.environment(observation_space=self._OBSERVATION_SPACE, action_space=self._ACTION_SPACE)
@@ -129,6 +132,7 @@ class TestExtensionsAdded(SetupWithEnv, SetupLowRes, DisableLoggers):
                     )
 
     @patch_args()
+    @mock_trainable_algorithm
     def test_dynamic_buffer_added(self):
         setup = self._DEFAULT_SETUP_LOW_RES
         self.assertFalse(setup.args.dynamic_buffer)
@@ -149,6 +153,7 @@ class TestExtensionsAdded(SetupWithEnv, SetupLowRes, DisableLoggers):
                 )
 
     @patch_args()
+    @mock_trainable_algorithm(mock_learner=False)
     def test_dynamic_batch_added(self):
         setup = self._DEFAULT_SETUP_LOW_RES
         self.assertFalse(setup.args.dynamic_buffer)

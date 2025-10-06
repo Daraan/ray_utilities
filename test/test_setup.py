@@ -602,9 +602,10 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 self.assertNotEqual(setup2.args.log_level, "WARNING")
                 self.assertEqual(setup2.args.num_jobs, DefaultArgumentParser.num_jobs)
 
+    @mock_trainable_algorithm(mock_env_runners=False)
     def test_seeded_env(self):
         with patch_args("--seed", "1234", "--num_env_runners", 2), AlgorithmSetup(init_trainable=False) as setup:
-            # NOTE: if async the np_random generator is changed my gymnasium
+            # NOTE: if async the np_random generator is changed by gymnasium
             setup.config.env_runners(gym_env_vectorize_mode="SYNC")
         trainable = setup.trainable_class({"env_seed": 2222})
         assert trainable.algorithm_config.num_envs_per_env_runner is not None
