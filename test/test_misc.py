@@ -22,7 +22,7 @@ from ray_utilities.callbacks.tuner.adv_comet_callback import AdvCometLoggerCallb
 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.constants import COMET_OFFLINE_DIRECTORY, RE_PARSE_FORK_FROM
-from ray_utilities.misc import RE_GET_TRIAL_ID, parse_fork_from
+from ray_utilities.misc import RE_GET_TRIAL_ID, ExperimentKey, parse_fork_from
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import (
     Cases,
@@ -398,7 +398,7 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create a mock zip file
-            zip_file = Path(tmpdir) / "test_trial_001.zip".replace("_", "xx")
+            zip_file = Path(tmpdir) / "test_trial_001.zip".replace("_", ExperimentKey.REPLACE_UNDERSCORE)
             zip_file.touch()
 
             with (
@@ -418,7 +418,9 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
                 args = mock_tracker_class.call_args[1]
                 self.assertFalse(args["auto"])
                 self.assertEqual(len(args["track"]), 1)
-                self.assertTrue(str(args["track"][0]).endswith("test_trial_001.zip".replace("_", "xx")))
+                self.assertTrue(
+                    str(args["track"][0]).endswith("test_trial_001.zip".replace("_", ExperimentKey.REPLACE_UNDERSCORE))
+                )
 
                 # Should call upload_and_move
                 mock_tracker.upload_and_move.assert_called_once()
