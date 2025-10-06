@@ -5,8 +5,10 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import threading
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping, Optional, cast
+from typing import TYPE_CHECKING, AnyStr, Mapping, Optional, cast
 
 if TYPE_CHECKING:
     from ray import tune
@@ -15,6 +17,8 @@ if TYPE_CHECKING:
 from ray_utilities.misc import RE_GET_TRIAL_ID
 
 logger = logging.getLogger(__name__)
+
+_failed_upload_file_lock = threading.Lock()
 
 
 class WandbUploaderMixin:
@@ -114,39 +118,64 @@ class WandbUploaderMixin:
             # Wait for previous group to complete before starting next group
             if group_idx > 0:
                 logger.info("Waiting for previous upload group to complete...")
+                finished_or_failed = []
                 for process in uploads:
-                    process.wait()
-                    exit_code = self._report_wandb_sync(process)
+                    exit_code = self._failure_aware_wait(
+                        process, timeout=900, trial_id=upload_to_trial.get(process, "")
+                    )
                     if exit_code == 0:
                         finished_uploads.add(process)
                     else:
                         failed_uploads.append(process)
-                uploads = [p for p in uploads if p not in finished_uploads]
+                    finished_or_failed.append(process)
+                uploads = [p for p in uploads if p not in finished_or_failed]
 
             # Upload trials in current group (can be parallel within group)
             for trial_id, run_dir in group:
                 # Manage parallel upload limit within group
-                uploads_in_progress = len(uploads) - len(finished_uploads)
-                if uploads_in_progress >= parallel_uploads:
+                if len(uploads) >= parallel_uploads:
                     logger.info(
-                        "Waiting for %d wandb uploads to finish before starting new ones.",
-                        uploads_in_progress,
+                        "%d >= %d uploads already in progress waiting for some to finish before starting new ones...",
+                        len(uploads),
+                        parallel_uploads,
                     )
-                    for process in uploads:
-                        process.wait()
-                        exit_code = self._report_wandb_sync(process)
+                # process uploads that are already finished:
+                for process in (p for p in uploads if p.poll() is not None):
+                    exit_code = self._failure_aware_wait(process, timeout=60, trial_id=upload_to_trial.get(process, ""))
+                    if exit_code == 0:
+                        finished_uploads.add(process)
+                    else:
+                        failed_uploads.append(process)
+                    uploads.remove(process)
+                while len(uploads) >= parallel_uploads:
+                    finished_or_failed = set()
+                    # Prioritize checking processes that have already finished else oldest first
+                    for process in sorted(uploads, key=lambda p: p.poll() is None):
+                        exit_code = self._failure_aware_wait(
+                            process, timeout=900, trial_id=upload_to_trial.get(process, "")
+                        )
                         if exit_code == 0:
                             finished_uploads.add(process)
                         else:
                             failed_uploads.append(process)
-                    uploads = [p for p in uploads if p not in finished_uploads]
+                        finished_or_failed.add(process)
+                    uploads = [p for p in uploads if p not in finished_or_failed]
 
-                logger.info("Uploading offline wandb run for trial %s from: %s", trial_id, run_dir)
+                logger.info(
+                    "Uploading offline wandb run for trial %s from: %s (group %d/%d, trial %d/%d in group)",
+                    trial_id,
+                    run_dir,
+                    group_idx + 1,
+                    len(upload_groups),
+                    group.index((trial_id, run_dir)) + 1,
+                    len(group),
+                )
                 process = subprocess.Popen(
                     ["wandb", "sync", run_dir.as_posix()],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
+                    bufsize=1,  # line-buffered
                 )
                 uploads.append(process)
                 upload_to_trial[process] = trial_id
@@ -156,11 +185,13 @@ class WandbUploaderMixin:
         if wait:
             logger.info("Waiting for all wandb uploads to finish...")
         unfinished_uploads = uploads.copy()
-        for process in uploads:
+        for process in sorted(uploads, key=lambda p: p.poll() is None):
+            exit_code = None
             if wait:
-                process.wait()
+                exit_code = self._failure_aware_wait(process, timeout=900, trial_id=upload_to_trial.get(process, ""))
             if process.poll() is not None:
-                exit_code = self._report_wandb_sync(process)
+                if exit_code is None:
+                    exit_code = self._report_wandb_sync(process)
                 if exit_code == 0:
                     finished_uploads.add(process)
                 else:
@@ -169,7 +200,14 @@ class WandbUploaderMixin:
         uploads = []
 
         if failed_uploads:
-            logger.warning("Failed to upload %d wandb runs", len(failed_uploads))
+            logger.warning("Failed to upload %d wandb runs:\n%s", len(failed_uploads), failed_uploads)
+            with _failed_upload_file_lock:
+                failed_file = Path("failed_wandb_uploads.txt")
+                with failed_file.open("a") as f:
+                    for process in failed_uploads:
+                        trial_id = upload_to_trial.get(process, "unknown")
+                        f.write(f"{trial_id} : {process.args}")
+                logger.warning("Wrote details of failed uploads to %s", failed_file.resolve())
         if not unfinished_uploads:
             logger.info("All wandb offline runs have been tried to upload.")
         logger.info(
@@ -390,7 +428,7 @@ class WandbUploaderMixin:
 
     @staticmethod
     def _popen_to_completed_process(
-        process: subprocess.Popen[str] | subprocess.Popen[bytes],
+        process: subprocess.Popen[AnyStr],
         out: Optional[str] = None,
         returncode: Optional[int] = None,
     ) -> subprocess.CompletedProcess[str]:
@@ -409,9 +447,85 @@ class WandbUploaderMixin:
             stderr=err_str,
         )
 
+    @classmethod
+    def _failure_aware_wait(
+        cls,
+        process: subprocess.Popen[AnyStr],
+        timeout: int = 600,
+        trial_id: str = "",
+        *,
+        terminate_on_timeout: bool = True,
+    ) -> int:
+        """
+        Wait for process to complete and return its exit code, handling exceptions.
+
+        If an error pattern is detected in the process output or if the timeout is reached
+        and `terminate_on_timeout` is ``True``, this method forcibly terminates the process.
+        """
+        start = last_count = time.time()
+
+        out = ""
+        error_occurred = False
+        # Define error patterns to look for in output (case-insensitive)
+        error_patterns = ["error", "failed", "exception", "traceback", "critical"]
+        while True:
+            line = process.stdout.readline() if process.stdout else None
+            count = time.time()
+            if line:
+                if isinstance(line, bytes):
+                    line = line.decode("utf-8")
+                out += line + "\n"
+                # Check for any error pattern in the line (case-insensitive)
+                if any(pattern in line.lower() for pattern in error_patterns):
+                    error_occurred = True
+                    logger.error(
+                        "Detected error pattern in wandb sync output while uploading trial %s. "
+                        "Killing process. Output line: %s",
+                        trial_id,
+                        line.strip(),
+                    )
+                    process.terminate()
+                    break
+            elif process.poll() is not None:
+                break  # Process finished
+            elif count - start > timeout:
+                logger.warning(
+                    "Timeout reached while uploading trial %s to wandb. %s",
+                    trial_id,
+                    "Killing process." if terminate_on_timeout else "Not killing process as.",
+                )
+                error_occurred = True
+                if terminate_on_timeout:
+                    process.terminate()
+                break
+            else:
+                time.sleep(0.2)  # Avoid busy waiting
+            if count - last_count > 10:
+                logger.info("Still uploading trial %s to wandb after %.1f seconds...", trial_id, count - start)
+                last_count = count
+        if process.stdout is not None:
+            try:
+                rest = process.stdout.read()
+                if rest:
+                    if isinstance(rest, bytes):
+                        rest = rest.decode("utf-8")
+                    out += rest
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Could not read remaining output from process.stdout: %s", e)
+        if error_occurred:
+            returncode = process.returncode or 1
+        elif process.returncode is not None:
+            returncode = process.returncode
+        else:
+            returncode = int(error_occurred)
+        return cls._report_wandb_sync(
+            cls._popen_to_completed_process(process, returncode=returncode),
+            trial_id,
+        )
+
     @staticmethod
     def _report_wandb_sync(
-        result: subprocess.CompletedProcess[str] | subprocess.Popen[str] | subprocess.Popen[bytes],
+        result: subprocess.CompletedProcess[str] | subprocess.Popen[AnyStr],
         trial_id: Optional[str] = None,
     ):
         """Check result return code and log output."""

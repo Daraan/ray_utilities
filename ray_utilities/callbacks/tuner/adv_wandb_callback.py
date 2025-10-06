@@ -416,9 +416,6 @@ class AdvWandbLoggerCallback(
                 new_trial_id,
                 previous_trial_id,
             )
-        # For now add assertion to check
-        assert is_fork or is_resume, "Expected either fork or resume scenario."
-
         self._start_logging_actor(trial, self._exclude_results, **wandb_init_kwargs)
 
     @staticmethod
@@ -549,8 +546,21 @@ class AdvWandbLoggerCallback(
                 # Process uploads immediately in a separate thread to avoid blocking
                 threading.Thread(target=self._process_gathered_uploads, daemon=False).start()
 
-    def _process_gathered_uploads(self):
-        """Process all gathered trials and upload them in dependency order."""
+    def _process_gathered_uploads(self, *, wait=False):
+        """
+        Process all gathered trials and upload them in dependency order.
+
+        This method is responsible for uploading the results of all trials that have finished within
+        a recent time window. It ensures that uploads are performed in an order that respects
+        parent-child (fork) dependencies between trials: parent trials are uploaded before their
+        forked children. The method processes all trials gathered in :attr:`_trials_ending`,
+        builds a list of their offline WandB run directories, and then uploads them using :meth:`upload_paths`.
+        If any trial's logging actor was still writing data to disk, it waits before uploading to ensure data
+        consistency.
+        This function is typically called in a background thread and is thread-safe.
+        Side effects include clearing the internal list of trials to upload and triggering
+        subprocesses for WandB sync.
+        """
         with self._gather_uploads_lock:
             if not self._trials_ending:
                 _logger.debug("No trials to upload")
@@ -582,33 +592,14 @@ class AdvWandbLoggerCallback(
 
             # Parse fork relationships
             wandb_paths = [Path(trial.local_path) / "wandb" for trial in trials_to_upload if trial.local_path]
-            fork_relationships = self._parse_wandb_fork_relationships(wandb_paths)
-
-            # Build dependency-ordered upload groups
-            upload_groups = self._build_upload_dependency_graph(trial_runs, fork_relationships)
-
             if wait_for_actors:
-                _logger.info("Waiting for WandB logging actors that were still writing data to disk...")
+                _logger.info("Waiting 30s for WandB logging actors that were still writing data to disk...")
                 # Do NOT use _wait_for_trial_actor, as the actor might be already the new one.
                 # Cannot shorten wait time as we have no longer access to the ending actors.
                 # TODO: Could store the future instead of bool.
-                time.sleep(50)
-            # Upload trials in dependency order
-            _logger.info("Uploading %d trials in %d groups", len(trial_runs), len(upload_groups))
-            for group_idx, group in enumerate(upload_groups):
-                _logger.info("Uploading group %d/%d with %d trials", group_idx + 1, len(upload_groups), len(group))
-                for trial_id, run_dir in group:
-                    _logger.info("Uploading offline wandb run for trial %s from: %s", trial_id, run_dir)
-                    result = subprocess.run(
-                        ["wandb", "sync", str(run_dir)],
-                        check=False,
-                        text=True,
-                        timeout=600,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                    )
-                    self._report_wandb_sync(result, trial_id)
-
+                time.sleep(30)
+            # Upload in dependency order; no need to wait more as we should be in a thread and uploads are subprocesses
+            self.upload_paths(wandb_paths, trial_runs, wait=wait)
         except Exception:
             _logger.exception("Error processing gathered uploads")
 
