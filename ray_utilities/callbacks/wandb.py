@@ -4,19 +4,20 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import threading
 from pathlib import Path
 from textwrap import indent
-from typing import TYPE_CHECKING, Iterable, Mapping, Optional, cast
-
-if TYPE_CHECKING:
-    from ray import tune
-    from ray.tune import ResultGrid
+from typing import TYPE_CHECKING, Iterable, Mapping, Optional, Sequence, cast
 
 from ray_utilities._runtime_constants import RUN_ID
 from ray_utilities.callbacks.upload_helper import AnyPopen, UploadHelperMixin
 from ray_utilities.misc import RE_GET_TRIAL_ID
+
+if TYPE_CHECKING:
+    from ray import tune
+    from ray.tune import ResultGrid
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ class WandbUploaderMixin(UploadHelperMixin):
 
     def upload_paths(
         self,
-        wandb_paths,
+        wandb_paths: Sequence[Path],
         trial_runs: Optional[list[tuple[str, Path]]] = None,
         *,
         wait: bool = True,
@@ -209,8 +210,10 @@ class WandbUploaderMixin(UploadHelperMixin):
             logger.error(
                 "Failed to upload %d wandb runs:\n%s", len(failed_uploads), "\n".join(map(str, failed_uploads))
             )
+            # parent is trial dir, grandparent is experiment path
+            grand_path = wandb_paths[0].parent.parent
             with _failed_upload_file_lock:
-                failed_file = Path(f"failed_wandb_uploads-{RUN_ID}.txt")
+                failed_file = grand_path / f"failed_wandb_uploads-{RUN_ID}.txt"
                 with failed_file.open("a") as f:
                     for process in failed_uploads:
                         trial_id = upload_to_trial.get(process, "unknown")
@@ -224,9 +227,22 @@ class WandbUploaderMixin(UploadHelperMixin):
                             out_left = process.stdout.read()
                             if isinstance(out_left, bytes):
                                 out_left = out_left.decode("utf-8")
-                            err = "\n" + indent(out_left, prefix=" " * 4) + "\n"
+                            if out_left:
+                                err = "\n" + indent(out_left, prefix=" " * 4) + "\n"
                         f.write(f"{trial_id} : {formatted_args}{err}\n")
                 logger.warning("Wrote details of failed uploads to %s", failed_file.resolve())
+            for path in wandb_paths[1:]:
+                if path == grand_path:
+                    continue
+                # copy failure doc to other experiment
+                try:
+                    dest = path / f"failed_wandb_uploads-{RUN_ID}.txt"
+                    if dest.exists():
+                        dest.rename(dest.with_suffix(".txt.old"))
+                    shutil.copyfile(failed_file, dest)
+                    logger.info("Copied failed upload file to %s", dest.resolve())
+                except Exception:
+                    logger.exception("Failed to copy failed upload file to %s", path)
         if not unfinished_uploads:
             logger.info("All wandb offline runs have been tried to upload.")
         logger.info(
@@ -313,7 +329,7 @@ class WandbUploaderMixin(UploadHelperMixin):
                 logger.info("Added trial.paths to results, now having %d paths", len(result_paths))
         return result_paths
 
-    def _parse_wandb_fork_relationships(self, wandb_paths: list[Path]) -> dict[str, tuple[str | None, int | None]]:
+    def _parse_wandb_fork_relationships(self, wandb_paths: Sequence[Path]) -> dict[str, tuple[str | None, int | None]]:
         """Parse fork relationship information from wandb directories.
 
         Returns:

@@ -56,7 +56,6 @@ See Also:
 # pyright: reportPossiblyUnboundVariable=information
 from __future__ import annotations
 
-import atexit
 from contextlib import contextmanager
 import io
 import logging
@@ -95,6 +94,8 @@ __all__ = [
 
 _LOGGER = logging.getLogger(__name__)
 _COMET_OFFLINE_LOGGER = logging.getLogger("comet_ml.offline")
+
+_failed_upload_file_lock = threading.Lock()
 
 COMET_COLOR_STRINGS = {
     "COMET INFO": "\x1b[1;38;5;39mCOMET INFO:\x1b[0m",
@@ -359,8 +360,22 @@ class CometArchiveTracker(UploadHelperMixin):
         return failed_uploads, successful_uploads
 
     def upload_and_move(self):
-        _failed, succeeded = self._upload()
+        failed_uploads, succeeded = self._upload()
+        self._write_failed_upload_file(failed_uploads)
         self.move_archives(succeeded)
+
+    def _write_failed_upload_file(self, failed_uploads: list[str]) -> None:
+        """Write details of failed comet uploads to a file in the experiment directory."""
+        if not failed_uploads:
+            return
+        # Use the configured COMET_OFFLINE_DIRECTORY for failed upload file location
+        failed_file = Path(COMET_OFFLINE_DIRECTORY) / "failed_comet_uploads.txt"
+        # Write failed archive names to file
+        with _failed_upload_file_lock:
+            with failed_file.open("a") as f:
+                for archive_name in failed_uploads:
+                    f.write(f"{archive_name}\n")
+        _LOGGER.warning("Wrote details of failed comet uploads to %s", failed_file.resolve())
 
     def make_uploaded_dir(self) -> Path:
         new_dir = self.path / "uploaded"
