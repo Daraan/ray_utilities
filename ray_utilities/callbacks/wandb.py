@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from ray.tune import ResultGrid
 
 from ray_utilities._runtime_constants import RUN_ID
-from ray_utilities.callbacks.upload_helper import UploadHelperMixin
+from ray_utilities.callbacks.upload_helper import AnyPopen, UploadHelperMixin
 from ray_utilities.misc import RE_GET_TRIAL_ID
 
 logger = logging.getLogger(__name__)
@@ -106,15 +106,17 @@ class WandbUploaderMixin(UploadHelperMixin):
         logger.debug("Found %d fork relationships: %s", len(fork_relationships), fork_relationships)
 
         # Step 4: Build dependency-ordered upload groups
-        upload_groups = self._build_upload_dependency_graph(trial_runs, fork_relationships)
+        upload_groups: list[list[tuple[str, Path]]] = self._build_upload_dependency_graph(
+            trial_runs, fork_relationships
+        )
         logger.debug("Created %d upload groups with dependency ordering", len(upload_groups))
 
         # Step 5: Upload trials in dependency order
-        uploads: list[subprocess.Popen[str]] = []
-        finished_uploads: set[subprocess.Popen[str]] = set()
-        failed_uploads: list[subprocess.Popen[str]] = []
+        uploads: list[AnyPopen] = []
+        finished_uploads: set[AnyPopen] = set()
+        failed_uploads: list[AnyPopen] = []
         total_uploaded = 0
-        upload_to_trial: dict[subprocess.Popen[str], str] = {}
+        upload_to_trial: dict[AnyPopen, str] = {}
 
         for group_idx, group in enumerate(upload_groups):
             logger.info("Uploading group %d/%d with %d trials", group_idx + 1, len(upload_groups), len(group))
@@ -217,7 +219,12 @@ class WandbUploaderMixin(UploadHelperMixin):
                             if not isinstance(process.args, (str, bytes)) and isinstance(process.args, Iterable)
                             else process.args
                         )
-                        err = ("\n" + indent(process.stdout.read(), prefix=" " * 4) + "\n") if process.stdout else ""
+                        err = ""
+                        if process.stdout:
+                            out_left = process.stdout.read()
+                            if isinstance(out_left, bytes):
+                                out_left = out_left.decode("utf-8")
+                            err = "\n" + indent(out_left, prefix=" " * 4) + "\n"
                         f.write(f"{trial_id} : {formatted_args}{err}\n")
                 logger.warning("Wrote details of failed uploads to %s", failed_file.resolve())
         if not unfinished_uploads:

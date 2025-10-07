@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import io
+import logging
 import subprocess
 import time
-from typing import AnyStr, ClassVar, Optional
-import logging
+from typing import ClassVar, Optional, TypeAlias
 
 logger = logging.getLogger(__name__)
+
+AnyPopen: TypeAlias = subprocess.Popen[str] | subprocess.Popen[bytes]
 
 
 class UploadHelperMixin:
@@ -16,7 +17,7 @@ class UploadHelperMixin:
 
     @staticmethod
     def _popen_to_completed_process(
-        process: subprocess.Popen[AnyStr],
+        process: AnyPopen,
         out: Optional[str] = None,
         returncode: Optional[int] = None,
     ) -> subprocess.CompletedProcess[str]:
@@ -41,7 +42,7 @@ class UploadHelperMixin:
     @classmethod
     def _failure_aware_wait(
         cls,
-        process: subprocess.Popen[AnyStr],
+        process: AnyPopen,
         timeout: int = 600,
         trial_id: str = "",
         *,
@@ -69,7 +70,7 @@ class UploadHelperMixin:
                     line += "\n"
                 stdout_accum += line
                 # Check for any error pattern in the line (case-insensitive)
-                if any(pattern in line.lower() for pattern in cls.error_patterns):
+                if any(pattern in line.lower() for pattern in map(str.lower, cls.error_patterns)):
                     error_occurred = True
                     logger.error(
                         "Detected error pattern in %s sync output while uploading trial %s. "
@@ -128,7 +129,7 @@ class UploadHelperMixin:
     @classmethod
     def _report_upload(
         cls,
-        result: subprocess.CompletedProcess[str] | subprocess.Popen[AnyStr],
+        result: subprocess.CompletedProcess[str] | AnyPopen,
         trial_id: Optional[str] = None,
     ):
         """Check result return code and log output."""
@@ -138,7 +139,7 @@ class UploadHelperMixin:
         trial_info = f"for trial {trial_id}" if trial_id else ""
         stdout = result.stdout or ""
         if result.returncode == 0 and (
-            not stdout or not any(pattern in stdout.lower() for pattern in cls.error_patterns)
+            not stdout or not any(pattern in stdout.lower() for pattern in map(str.lower, cls.error_patterns))
         ):
             logger.info("Successfully synced offline run %s: %s\n%s", result.args[-1], trial_info, stdout)
         elif "not found (<Response [404]>)" in stdout:

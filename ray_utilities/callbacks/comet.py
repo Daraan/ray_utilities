@@ -407,8 +407,8 @@ class CometArchiveTracker(UploadHelperMixin):
             stderr = process.stderr
         success = (
             process.returncode == 0
-            and not any(pattern in stderr.lower() for pattern in cls.error_patterns)
-            and not any(pattern in stdout.lower() for pattern in cls.error_patterns)
+            and not any(pattern in stderr.lower() for pattern in map(str.lower, cls.error_patterns))
+            and not any(pattern in stdout.lower() for pattern in map(str.lower, cls.error_patterns))
         )
         for log_str, color_str in COMET_COLOR_STRINGS.items():
             if log_str in stdout:

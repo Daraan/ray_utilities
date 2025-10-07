@@ -363,7 +363,7 @@ class TestMisc(TestCase):
         foo1()  # pyright: ignore[reportCallIssue]
         foo2()  # pyright: ignore[reportCallIssue]
         assert cls1 is not None and cls2 is not None
-        self.assertTrue(cls1.call_count, 3)
+        self.assertEqual(cls1.call_count, 3)
         self.assertIsNot(cls1, cls2)
 
         mocked_popen = MockPopen()
