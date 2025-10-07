@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import io
 import logging
 import subprocess
 import time
-from typing import ClassVar, Optional, TypeAlias
+from typing import IO, ClassVar, Optional, TypeAlias
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +61,16 @@ class UploadHelperMixin:
         stdout_accum = ""
         error_occurred = False
         # Define error patterns to look for in output (case-insensitive)
+        stdout_type = None
         while True:
             line = process.stdout.readline() if process.stdout else None
             count = time.time()
             if line:
                 if isinstance(line, bytes):
+                    stdout_type = bytes
                     line = line.decode("utf-8")
+                else:
+                    stdout_type = str
                 if not line.endswith("\n"):
                     line += "\n"
                 stdout_accum += line
@@ -121,9 +126,18 @@ class UploadHelperMixin:
             returncode = 0
         if report_upload:
             return cls._report_upload(
-                cls._popen_to_completed_process(process, returncode=returncode),
+                cls._popen_to_completed_process(process, returncode=returncode, out=stdout_accum),
                 trial_id,
             )
+        if process.poll() and stdout_accum and stdout_type is not None:
+            # regenerate stdout
+
+            fresh_stdout: IO[str] | IO[bytes]
+            if stdout_type is bytes:
+                fresh_stdout = io.BytesIO(stdout_accum.encode("utf-8"))
+            else:
+                fresh_stdout = io.StringIO(stdout_accum)
+            process.stdout = fresh_stdout  # pyright: ignore[reportAttributeAccessIssue]
         return returncode
 
     @classmethod
