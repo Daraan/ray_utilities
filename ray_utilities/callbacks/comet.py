@@ -340,9 +340,11 @@ class CometArchiveTracker(UploadHelperMixin):
         archives_str = [str(p) for p in self.archives]
         _LOGGER.info("Uploading Archives: %s", archives_str)
 
-        with _catch_comet_offline_logger() as log_stream:
-            comet_ml.offline.main_upload(archives_str, force_upload=False)  # pyright: ignore[reportPossiblyUnboundVariable]
-
+        try:
+            with _catch_comet_offline_logger() as log_stream:
+                comet_ml.offline.main_upload(archives_str, force_upload=False)  # pyright: ignore[reportPossiblyUnboundVariable]
+        except comet_ml.exceptions.OfflineExperimentUploadFailed as e:
+            _LOGGER.error("Comet offline upload failed with exception: %s", e)
         log_contents = log_stream.getvalue()
 
         failed_uploads = re.findall(r"Upload failed for '([^']+\.zip)'", log_contents)

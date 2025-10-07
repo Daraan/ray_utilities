@@ -66,7 +66,7 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
         fork_from = self.kwargs.get("fork_from", None) is not None
         if fork_from:
             # Write info about forked trials, to know in which order to upload trials
-            info_file = Path(self._logdir) / "wandb_fork_from.txt"
+            info_file = Path(self._logdir).parent / "wandb_fork_from.csv"
             if not info_file.exists():
                 # write header
                 info_file.write_text("trial_id, parent_id, parent_step, step_metric\n")

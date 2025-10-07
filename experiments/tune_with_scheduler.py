@@ -12,6 +12,9 @@ from ray_utilities.setup.scheduled_tuner_setup import PPOMLPWithPBTSetup
 
 os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
 
+# print all messages from comet when we upload from a worker
+os.environ.setdefault("RAY_DEDUP_LOGS_ALLOW_REGEX", "COMET|wandb")
+
 if __name__ == "__main__":
     ray.init(object_store_memory=4 * 1024**3, runtime_env=runtime_env)  # 4 GB
     PPOMLPWithPBTSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB

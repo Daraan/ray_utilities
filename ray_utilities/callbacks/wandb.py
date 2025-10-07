@@ -339,7 +339,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         fork_relationships: dict[str, tuple[str | None, int | None]] = {}
 
         for wandb_dir in wandb_paths:
-            fork_info_file = wandb_dir.parent / "wandb_fork_from.txt"
+            fork_info_file = wandb_dir.parent.parent / "wandb_fork_from.csv"
             if not fork_info_file.exists():
                 continue
 

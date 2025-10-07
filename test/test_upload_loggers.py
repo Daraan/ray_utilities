@@ -356,9 +356,22 @@ class TestLoggerIntegration(TestHelpers):
         self.assertFalse(mock_aware_wait.called, "Should not gather and therefore not wait.")
 
     @MockPopenClass.mock
-    def test_wandb_upload_order(self, mock_popen_class, mock_popen):
+    def test_wandb_upload_dependency_ordering(self, mock_popen_class, mock_popen):
         # randomize this test
-        base_trial_ids = [Trial.generate_id() for _ in range(3)]
+        random.seed(22)
+        id_counter = 1
+
+        # Use a large prime multiplier and modulus to generate deterministic, pseudo-random IDs.
+        # This ensures unique, reproducible IDs for testing without collisions.
+        def generate_id():
+            nonlocal id_counter
+            # Deterministic but random-like: use a counter and hash it
+            val = (id_counter * 982451653) % (2**32)
+            id_counter += 1
+            # Format as 8 hex digits
+            return f"{val:08x}"
+
+        base_trial_ids = [generate_id() for _ in range(3)]
         # Add parallel trial ids
         base_trial_ids.extend(base_trial_ids[0] + "_" + f"{i:05}" for i in range(5))
         trials = {tid: MockTrial(tid) for tid in base_trial_ids}
@@ -377,8 +390,12 @@ class TestLoggerIntegration(TestHelpers):
             parent_trials = [trial_id_to_trial[p] for p in possible_parents_this_generation]
             possible_child_trials = [t for t in trials.values() if t not in parent_trials]
             self.assertGreater(len(possible_parents_this_generation), 0)
-            for _ in range(min(6, len(possible_child_trials))):
-                parent_id = random.choice(possible_parents_this_generation)
+            for i in range(min(6, len(possible_child_trials))):
+                if i == 0 and gen % 2 == 0:
+                    # assure at least one re-forking each second generation, use last child
+                    parent_id = child_id  # pyright: ignore[reportPossiblyUnboundVariable]  # noqa: F821
+                else:
+                    parent_id = random.choice(possible_parents_this_generation)
                 fork_data: ForkFromData = {
                     "parent_id": trial_id_to_trial[parent_id].trial_id,
                     "parent_training_iteration": gen * 10,
@@ -406,7 +423,7 @@ class TestLoggerIntegration(TestHelpers):
 
             mock_results = MockResults(SimpleNamespace(path=p.as_posix()) for p in trial_paths.values())
             # create wandb_folders
-            track_file_contents = dict.fromkeys(trials, "trial_id, parent_id, parent_step, step_metric\n")
+            track_file_contents = dict.fromkeys(trials, "")
             # create child dirs and tracking files
             trial_paths: dict[str, Path]
             for trial, children in child_graph.items():
@@ -422,14 +439,21 @@ class TestLoggerIntegration(TestHelpers):
                 base_run_dir = base_path / "wandb" / f"offline-run-20250101_123030-{base_tid}"
                 base_run_dir.mkdir(parents=True, exist_ok=True)
                 trial_paths[base_tid] = base_run_dir
-                if len((track := track_file_contents[base_tid]).split("\n")) > 2:
+                self.assertEqual(str(base_path.parent), tmpdir)
+                if len((track := track_file_contents[base_tid]).split("\n")) > 0:
                     # only write if base was forked once
-                    with open(base_path / "wandb_fork_from.txt", "w") as f:
+                    csv_file = base_path.parent / "wandb_fork_from.csv"
+                    if not csv_file.exists():
+                        with open(csv_file, "w") as f:
+                            f.write("trial_id, parent_id, parent_step, step_metric\n")
+                    with open(csv_file, "a") as f:
                         f.write(track)
 
             # possible upload order, traverse child graph
             uploader = WandbUploaderMixin()
             mock_fork_called = False
+
+            self.maxDiff = None
 
             def mock_fork_relationships(wandb_paths):
                 result = WandbUploaderMixin._parse_wandb_fork_relationships(uploader, wandb_paths)
@@ -492,7 +516,7 @@ class TestLoggerIntegration(TestHelpers):
 
     def _create_fork_info_file(self, wandb_dir: Path, fork_data: list[tuple[str, str, Optional[int]]]):
         """Create a wandb_fork_from.txt file with fork relationship data."""
-        fork_file = wandb_dir / "wandb_fork_from.txt"
+        fork_file = wandb_dir / "wandb_fork_from.csv"
         exists = fork_file.exists()
         with fork_file.open("a" if exists else "w") as f:
             if not exists:
@@ -550,7 +574,7 @@ class TestLoggerIntegration(TestHelpers):
         uploader = WandbUploaderMixin()
         for case in cases:
             with self.subTest(case=case["desc"]), tempfile.TemporaryDirectory() as tmpdir:
-                dirs = [Path(tmpdir) / d for d in case["dirs"]]
+                dirs = [Path(tmpdir) / d / "wandb" for d in case["dirs"]]
                 if case["fork_data"]:
                     self._create_fork_info_file(Path(tmpdir), case["fork_data"])
                 relationships = uploader._parse_wandb_fork_relationships(dirs)
@@ -646,7 +670,7 @@ class TestLoggerIntegration(TestHelpers):
                     offline_run_dir.mkdir()
 
                 # Create fork relationships - trial_2 is forked from trial_1
-                fork_file = Path(tmpdir) / "trial_1" / "wandb_fork_from.txt"
+                fork_file = Path(tmpdir) / "wandb_fork_from.csv"
                 with fork_file.open("w") as f:
                     f.write("trial_id, parent_id, parent_step, step_metric\n")
                     f.write("trial_2, trial_1, 100, _step\n")
