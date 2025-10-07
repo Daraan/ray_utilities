@@ -202,6 +202,9 @@ def run_tune(
         raise_tune_errors(results)
     if fallback_error and fit_error:
         # Use Base in case of KeyboardInterrupt
+        if isinstance(fit_error, KeyboardInterrupt) and "experiment has not been run" in str(fallback_error):
+            # Just raise the KeyboardInterrupt
+            raise fit_error
         raise BaseExceptionGroup(
             f"Encountered an error {fit_error} and could not call get_results {fallback_error!r}",
             [fit_error, fallback_error],

@@ -8,6 +8,7 @@ from abc import abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, TextIO
 
+import pyarrow.fs
 from ray.tune.experiment.trial import Trial
 
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
@@ -117,7 +118,9 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
         parent_local_file_path = Path(parent_trial.local_path, parent_file_name)  # pyright: ignore[reportArgumentType]
 
         # Same node - use local copy
-        if trial.node_ip == parent_trial.node_ip and parent_local_file_path.exists():
+        if trial.node_ip == parent_trial.node_ip or (
+            parent_local_file_path.exists() and local_file_path.parent.exists()
+        ):
             shutil.copy2(parent_local_file_path, local_file_path)
             return True
 
@@ -134,12 +137,24 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
                         parent_remote_file_path.parent / (parent_remote_file_path.name + ".old")
                     )
 
-                parent_trial.storage.syncer.sync_up(
-                    parent_local_file_path.as_posix(),
-                    parent_remote_file_path.as_posix(),
-                    exclude=["*/checkpoint_*", "*.pkl", "events.out.tfevents.*"],
-                )
-                parent_trial.storage.syncer.wait()
+                try:
+                    pyarrow.fs.copy_files(
+                        parent_local_file_path.as_posix(),
+                        parent_remote_file_path.as_posix(),
+                        source_filesystem=None,
+                        destination_filesystem=trial.storage.storage_filesystem,
+                        chunk_size=512 * 1024,
+                        use_threads=False,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.info("Exception while coppying file: %s. Falling back to different method", e)
+                    # sync_up does not support single files
+                    parent_trial.storage.syncer.sync_up(
+                        parent_local_file_path.as_posix(),
+                        parent_remote_file_path.as_posix(),
+                        exclude=["*/checkpoint_*", "*.pkl", "events.out.tfevents.*"],
+                    )
+                    parent_trial.storage.syncer.wait()
                 logger.debug(
                     "Syncing down parent %s file to %s", self._get_file_extension().upper(), local_file_path.as_posix()
                 )

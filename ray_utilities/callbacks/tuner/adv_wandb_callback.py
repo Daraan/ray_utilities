@@ -21,25 +21,24 @@ from ray_utilities import RUN_ID
 from ray_utilities.callbacks.tuner.new_style_logger_callback import LogMetricsDictT, NewStyleLoggerCallback
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
 from ray_utilities.callbacks.wandb import WandbUploaderMixin
-
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, FORK_FROM
 from ray_utilities.misc import extract_trial_id_from_checkpoint, make_experiment_key, parse_fork_from
 
 if TYPE_CHECKING:
-    from ray_utilities.typing.metrics import AnyFlatLogMetricsDict
     from ray_utilities.typing import ForkFromData
+    from ray_utilities.typing.metrics import AnyFlatLogMetricsDict
 
 from ._log_result_grouping import non_metric_results
 from ._save_video_callback import SaveVideoFirstCallback
 
 if TYPE_CHECKING:
     from ray.tune.experiment import Trial
-    from wandb.sdk.interface.interface import PolicyName
 
     from ray_utilities.typing.metrics import (
         VideoMetricsDict,
         _LogMetricsEvalEnvRunnersResultsDict,
     )
+    from wandb.sdk.interface.interface import PolicyName
 
 try:
     from wandb import Artifact, Video
@@ -47,6 +46,7 @@ except ImportError:
     pass  # wandb not installed
 else:
     from ray.air.integrations import wandb as ray_wandb
+
     from wandb.errors import CommError
 
     def _is_allowed_type_patch(obj):
@@ -341,7 +341,7 @@ class AdvWandbLoggerCallback(
             self._trials_created += 1
 
         # Determine if we need to restart the logging actor
-        # Restart is needed when:
+        # The logging actor is present if:
         # 1. Trial is being forked (has fork_from and actor exists)
         # 2. Trial is being resumed after pause (actor exists but trial was paused)
         needs_restart = trial in self._trial_logging_futures
@@ -718,6 +718,29 @@ class AdvWandbLoggerCallback(
             # Config will be logged once log_trial_start
             result_clean.pop("config", None)  # type: ignore
         self._trial_queues[trial].put((_QueueItem.RESULT, result_clean))
+
+    def on_experiment_end(self, trials: list[Trial], **info):
+        super().on_experiment_end(trials, **info)
+        # wait and report any remaining uploads
+        failed_uploads = []
+        if self._unfinished_gathered_uploads:
+            self._unfinished_gathered_uploads = unfinished_from_past = [
+                p for p in self._unfinished_gathered_uploads if p.poll() is None
+            ]
+            if unfinished_from_past:
+                _logger.info(
+                    "Continuing %d unfinished wandb uploads from previous gather: %s",
+                    len(unfinished_from_past),
+                    unfinished_from_past,
+                )
+                for process in unfinished_from_past:
+                    exit_code = self._failure_aware_wait(process, timeout=600)
+                    if exit_code != 0:
+                        failed_uploads.append(process)
+            if failed_uploads and trials and trials[0].local_path:
+                self._update_failed_upload_file(failed_uploads, Path(trials[0].local_path))
+
+            # TODO: DO I need this for comet as well?
 
 
 class _WandbFuture(abc.ABC):

@@ -128,8 +128,9 @@ class UploadHelperMixin:
             return cls._report_upload(
                 cls._popen_to_completed_process(process, returncode=returncode, out=stdout_accum),
                 trial_id,
+                stacklevel=3,  # one above this function
             )
-        if process.poll() and stdout_accum and stdout_type is not None:
+        if process.poll() is not None and stdout_accum and stdout_type is not None:
             # regenerate stdout
 
             fresh_stdout: IO[str] | IO[bytes]
@@ -145,7 +146,8 @@ class UploadHelperMixin:
         cls,
         result: subprocess.CompletedProcess[str] | AnyPopen,
         trial_id: Optional[str] = None,
-    ):
+        stacklevel: int = 2,
+    ) -> int:
         """Check result return code and log output."""
         if isinstance(result, subprocess.Popen):
             result = cls._popen_to_completed_process(result)
@@ -160,7 +162,7 @@ class UploadHelperMixin:
                 result.args[-1],
                 trial_info,
                 stdout,
-                stacklevel=2,
+                stacklevel=stacklevel,
             )
         elif "not found (<Response [404]>)" in stdout:
             logger.error(
@@ -168,18 +170,18 @@ class UploadHelperMixin:
                 trial_info,
                 result.args[-1],
                 result.stdout,
-                stacklevel=2,
+                stacklevel=stacklevel,
             )
             exit_code = result.returncode or 1
         elif "fromStep is greater than the run's last step" in stdout:
             logger.error(
                 "Could not sync run %s %s "
-                "(Is it a forked_run? - The parents fork step needs to be uploaded first. )"
+                "(Is it a forked_run? - The parents fork step needs to be uploaded first.) "
                 "If this error persists it might be a off-by-one error:\n%s",
                 trial_info,
                 result.args[-1],
                 result.stdout,
-                stacklevel=2,
+                stacklevel=stacklevel,
             )
             exit_code = result.returncode or 1
         else:
@@ -188,7 +190,7 @@ class UploadHelperMixin:
                 trial_info,
                 result.args[-1],
                 stdout,
-                stacklevel=2,
+                stacklevel=stacklevel,
             )
             exit_code = result.returncode or 1
         if result.returncode != 0 or result.stderr:
@@ -197,6 +199,6 @@ class UploadHelperMixin:
                 trial_info,
                 result.args[-1],
                 result.stderr or "",
-                stacklevel=2,
+                stacklevel=stacklevel,
             )
         return exit_code

@@ -35,6 +35,10 @@ class WandbUploaderMixin(UploadHelperMixin):
 
     _upload_service_name = "wandb"
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._unfinished_gathered_uploads: list[AnyPopen] = []
+
     def wandb_upload_results(
         self,
         results: Optional[ResultGrid],
@@ -118,6 +122,21 @@ class WandbUploaderMixin(UploadHelperMixin):
         failed_uploads: list[AnyPopen] = []
         total_uploaded = 0
         upload_to_trial: dict[AnyPopen, str] = {}
+
+        if self._unfinished_gathered_uploads:
+            self._unfinished_gathered_uploads = unfinished_from_past = [
+                p for p in self._unfinished_gathered_uploads if p.poll() is None
+            ]
+            if unfinished_from_past:
+                logger.warning(
+                    "Continuing %d unfinished wandb uploads from previous gather: %s",
+                    len(unfinished_from_past),
+                    unfinished_from_past,
+                )
+                for process in unfinished_from_past:
+                    exit_code = self._failure_aware_wait(process, timeout=300)
+                    if exit_code != 0:
+                        failed_uploads.append(process)
 
         for group_idx, group in enumerate(upload_groups):
             logger.info("Uploading group %d/%d with %d trials", group_idx + 1, len(upload_groups), len(group))
@@ -207,30 +226,16 @@ class WandbUploaderMixin(UploadHelperMixin):
         uploads = []
 
         if failed_uploads:
-            logger.error(
-                "Failed to upload %d wandb runs:\n%s", len(failed_uploads), "\n".join(map(str, failed_uploads))
-            )
+            try:
+                formatted_failed = "\n".join(
+                    f"returncode: {p.returncode} args: {' '.join(p.args)}" for p in failed_uploads
+                )  # pyright: ignore[reportArgumentType, reportCallIssue]
+            except TypeError:
+                formatted_failed = "\n".join(f"returncode: {p.returncode} args: {p.args}" for p in failed_uploads)
+            logger.error("Failed to upload %d wandb runs:\n%s", len(failed_uploads), formatted_failed)
             # parent is trial dir, grandparent is experiment path
             grand_path = wandb_paths[0].parent.parent
-            with _failed_upload_file_lock:
-                failed_file = grand_path / f"failed_wandb_uploads-{RUN_ID}.txt"
-                with failed_file.open("a") as f:
-                    for process in failed_uploads:
-                        trial_id = upload_to_trial.get(process, "unknown")
-                        formatted_args = (
-                            " ".join(map(str, process.args))
-                            if not isinstance(process.args, (str, bytes)) and isinstance(process.args, Iterable)
-                            else process.args
-                        )
-                        err = ""
-                        if process.stdout:
-                            out_left = process.stdout.read()
-                            if isinstance(out_left, bytes):
-                                out_left = out_left.decode("utf-8")
-                            if out_left:
-                                err = "\n" + indent(out_left, prefix=" " * 4) + "\n"
-                        f.write(f"{trial_id} : {formatted_args}{err}\n")
-                logger.warning("Wrote details of failed uploads to %s", failed_file.resolve())
+            failed_file = self._update_failed_upload_file(failed_uploads, grand_path, upload_to_trial)
             for path in wandb_paths[1:]:
                 if path == grand_path:
                     continue
@@ -240,7 +245,7 @@ class WandbUploaderMixin(UploadHelperMixin):
                     if dest.exists():
                         dest.rename(dest.with_suffix(".txt.old"))
                     shutil.copyfile(failed_file, dest)
-                    logger.info("Copied failed upload file to %s", dest.resolve())
+                    logger.info("Copied file for failed uploads to %s", dest.resolve())
                 except Exception:
                     logger.exception("Failed to copy failed upload file to %s", path)
         if not unfinished_uploads:
@@ -255,8 +260,34 @@ class WandbUploaderMixin(UploadHelperMixin):
             f"wandb paths: {wandb_paths}",
         )
         if unfinished_uploads:  # There are still processes running
+            self._unfinished_gathered_uploads.extend(unfinished_uploads)
+            self._unfinished_gathered_uploads = [p for p in self._unfinished_gathered_uploads if p.poll() is None]
             return unfinished_uploads
         return None
+
+    def _update_failed_upload_file(
+        self, failed_uploads: Iterable[AnyPopen], file_dir: Path, process_to_trial: Optional[dict[AnyPopen, str]] = None
+    ) -> Path:
+        with _failed_upload_file_lock:
+            failed_file = file_dir / f"failed_wandb_uploads-{RUN_ID}.txt"
+            with failed_file.open("a") as f:
+                for process in failed_uploads:
+                    trial_id = process_to_trial.get(process, "unknown") if process_to_trial else "unknown"
+                    formatted_args = (
+                        " ".join(map(str, process.args))
+                        if not isinstance(process.args, (str, bytes)) and isinstance(process.args, Iterable)
+                        else process.args
+                    )
+                    err = ""
+                    if process.stdout:
+                        out_left = process.stdout.read()
+                        if isinstance(out_left, bytes):
+                            out_left = out_left.decode("utf-8")
+                        if out_left:
+                            err = "\n" + indent(out_left, prefix=" " * 4) + "\n"
+                    f.write(f"{trial_id} : {formatted_args}{err}\n")
+        logger.warning("Wrote details of failed uploads to %s", failed_file.resolve())
+        return failed_file
 
     def _get_wandb_paths(self, results: Optional[ResultGrid] = None, tuner: Optional[tune.Tuner] = None) -> list[Path]:
         """
@@ -416,14 +447,18 @@ class WandbUploaderMixin(UploadHelperMixin):
 
         trial_id_to_run = dict(trial_runs)
 
-        # Initialize dependency tracking
+        # Initialize dependency tracking, trial_runs might be not complete
         for trial_id, _ in trial_runs:
             dependencies[trial_id] = set()
             dependents[trial_id] = []
 
-        # Build dependency graph from fork relationships
+        # Build dependency graph from fork relationships, which should be complete
         for trial_id, (parent_id, _) in fork_relationships.items():
             if parent_id and parent_id in trial_id_to_run:
+                if trial_id not in dependencies or parent_id not in dependents:
+                    breakpoint()
+                if trial_id not in dependencies:
+                    dependencies[trial_id] = set()
                 dependencies[trial_id].add(parent_id)
                 dependents[parent_id].append(trial_id)
 
