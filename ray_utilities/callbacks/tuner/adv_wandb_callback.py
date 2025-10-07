@@ -479,7 +479,9 @@ class AdvWandbLoggerCallback(
                 time.time() - shutdown_start,
                 done,
             )
-            if gather_uploads:
+            # TODO: when completed, we still might need to gather uploads if this trial is a fork,
+            # but not when we load a checkpoint, but when it initially was a checkpoint and then got forked
+            if gather_uploads or self.is_trial_forked(trial):
                 _logger.info("Gathering more trials to upload to WandB in dependency order...")
                 # Gather trials that are ending and upload them in dependency order
                 self._gather_and_upload_trials(trial, actor_done=done)

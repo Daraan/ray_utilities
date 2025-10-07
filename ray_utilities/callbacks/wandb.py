@@ -7,6 +7,7 @@ import os
 import subprocess
 import threading
 from pathlib import Path
+from textwrap import indent
 from typing import TYPE_CHECKING, Iterable, Mapping, Optional, cast
 
 if TYPE_CHECKING:
@@ -216,7 +217,7 @@ class WandbUploaderMixin(UploadHelperMixin):
                             if not isinstance(process.args, (str, bytes)) and isinstance(process.args, Iterable)
                             else process.args
                         )
-                        err = ("\n" + process.stdout.read() + "\n") if process.stdout else ""
+                        err = ("\n" + indent(process.stdout.read(), prefix=" " * 4) + "\n") if process.stdout else ""
                         f.write(f"{trial_id} : {formatted_args}{err}\n")
                 logger.warning("Wrote details of failed uploads to %s", failed_file.resolve())
         if not unfinished_uploads:

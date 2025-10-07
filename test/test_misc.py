@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import io
 import os
 import random
 import re
 import sys
 import tempfile
+import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest import TestCase
-import unittest
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -27,6 +28,8 @@ from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import (
     Cases,
     DisableLoggers,
+    MockPopen,
+    MockPopenClass,
     MockTrial,
     TestHelpers,
     check_args,
@@ -336,6 +339,37 @@ class TestMisc(TestCase):
         self.assertIn("LATE_VARIABLE", os.environ)
         self.assertEqual(result.get_best_result().metrics["return_value"], 1)  # pyright: ignore[reportOptionalSubscript]
         ray.shutdown()
+
+    def test_mock_popen_class(self):
+        cls1 = None
+        cls2 = None
+
+        @MockPopenClass.mock
+        def foo1(mock_popen_class, mock_popen):
+            assert hasattr(MockPopenClass().stdout, "read")
+            assert hasattr(MockPopenClass(), "poll")
+            assert MockPopenClass() is mock_popen
+            nonlocal cls1
+            cls1 = mock_popen_class
+
+        @MockPopenClass.mock
+        def foo2(mock_popen_class, mock_popen):
+            assert hasattr(MockPopenClass().stdout, "read")
+            assert hasattr(MockPopenClass(), "poll")
+            assert MockPopenClass() is mock_popen
+            nonlocal cls2
+            cls2 = mock_popen_class
+
+        foo1()  # pyright: ignore[reportCallIssue]
+        foo2()  # pyright: ignore[reportCallIssue]
+        assert cls1 is not None and cls2 is not None
+        self.assertTrue(cls1.call_count, 3)
+        self.assertIsNot(cls1, cls2)
+
+        mocked_popen = MockPopen()
+        assert isinstance(mocked_popen, MockPopenClass)
+        assert isinstance(mocked_popen.stdout, (io.StringIO, io.BytesIO)), type(mocked_popen.stdout)
+        assert mocked_popen.args
 
 
 class TestCallbackUploads(DisableLoggers, TestHelpers):

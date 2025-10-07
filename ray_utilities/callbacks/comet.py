@@ -393,9 +393,7 @@ class CometArchiveTracker(UploadHelperMixin):
         # Note, comet writes its messages to stderr, need to check for errors in the contents.
         if isinstance(process, subprocess.Popen):
             if timeout is not None:
-                while timeout > 0 and process.poll() is None:
-                    time.sleep(1)
-                    timeout -= 1
+                cls._failure_aware_wait(process, timeout=timeout, report_upload=False)
                 if process.poll() is None:
                     _LOGGER.error("Timeout expired while waiting for comet upload process to finish")
                     return False

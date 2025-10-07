@@ -7,8 +7,8 @@ import json
 import math
 import os
 import random
-import subprocess
 import tempfile
+import threading
 import time
 import unittest
 import unittest.mock
@@ -17,7 +17,7 @@ from copy import deepcopy
 from inspect import isclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import IO, TYPE_CHECKING, Any, Final, Optional, cast
+from typing import TYPE_CHECKING, Any, Final, Optional, cast
 from unittest.mock import MagicMock, patch
 
 import cloudpickle
@@ -41,6 +41,7 @@ from ray.tune.experiment import Trial
 from ray_utilities.callbacks.algorithm.seeded_env_callback import NUM_ENV_RUNNERS_0_1_EQUAL
 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
+from ray_utilities.callbacks.upload_helper import UploadHelperMixin
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config import logger as parser_logger
 from ray_utilities.config.parser.mlp_argument_parser import SimpleMLPParser
@@ -65,6 +66,7 @@ from ray_utilities.testing_utils import (
     TWO_ENV_RUNNER_CASES,
     Cases,
     InitRay,
+    MockPopenClass,
     MockTrial,
     SetupDefaults,
     SetupWithCheck,
@@ -1758,22 +1760,12 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
 
 
 class TestLoggerIntegration(TestHelpers):
-    @unittest.mock.patch("subprocess.Popen")
-    def test_wandb_upload(self, mock_popen_class: unittest.mock.MagicMock):
+    @MockPopenClass.mock
+    def test_wandb_upload(self, mock_popen_class, mock_popen):
         # NOTE: This test is flaky, there are instances of no wandb folder copied
         # Does the actor die silently?
         self.no_pbar_updates()
 
-        class MockPopen(unittest.mock.MagicMock):
-            returncode = 1
-            stdout: IO[bytes] = io.BytesIO(b"MOCK: wandb: Syncing files...")
-            stderr: IO[bytes] | None = io.BytesIO(b"MOCK: stderr - its expected you see this message")
-
-            def poll(self) -> None:
-                return None
-
-        mocked_popen = MockPopen()
-        mock_popen_class.return_value = mocked_popen
         # use more iterations here for it to be more likely that the files are synced.
         with (
             patch_args(
@@ -1781,21 +1773,26 @@ class TestLoggerIntegration(TestHelpers):
                 "--num_jobs", 1,
                 "--iterations", 5,
                 "--batch_size", 32,
-                "--minibatch_size", 32
+                "--minibatch_size", 32,
+                "--num_envs_per_env_runner", 1,
+                "--fcnet_hiddens", "[8]",
             ),
             unittest.mock.patch("subprocess.run") as mock_run,  # upload on_trial_complete
+            unittest.mock.patch.object(UploadHelperMixin, "_failure_aware_wait") as mock_aware_wait,
         ):  # fmt: skip
-            setup = AlgorithmSetup()
+            setup = MLPSetup()
             _results = run_tune(setup, raise_errors=True)
-        mocked_popen.wait.assert_called_once()
+        threads = threading.enumerate()
+        for t in threads:
+            if "upload" in t.name.lower():
+                t.join()
+                self.assertFalse(t.is_alive(), "Upload thread did not finish")
         mock_run.assert_called_once()
-        self.assertDictEqual(
-            mock_popen_class.call_args.kwargs, {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT}
-        )
         self.assertListEqual(mock_run.call_args.args[0][:2], ["wandb", "sync"])
+        self.assertFalse(mock_aware_wait.called, "Should not gather and therefore not wait.")
 
-    @unittest.mock.patch("subprocess.Popen")
-    def test_wandb_upload_order(self, mock_popen_class: unittest.mock.MagicMock):
+    @MockPopenClass.mock
+    def test_wandb_upload_order(self, mock_popen_class, mock_popen):
         # randomize this test
         base_trial_ids = [Trial.generate_id() for _ in range(3)]
         # Add parallel trial ids
@@ -1902,11 +1899,10 @@ class TestLoggerIntegration(TestHelpers):
 
             uploader._parse_wandb_fork_relationships = mock_fork_relationships
             uploader._build_upload_dependency_graph = mock_graph_build
-            mock_popen_class.return_value = mock_popen_class
-            mock_popen_class.stderr = None
-            mock_popen_class.stdout = ""
-            mock_popen_class.returncode = 0
-            mock_popen_class.args = ["wandb", "sync", mock_results[0].path]
+            mock_popen.stderr = None
+            mock_popen.stdout = io.StringIO("MOCK: wandb: Syncing files...")
+            mock_popen.returncode = 0
+            mock_popen.args = ["wandb", "sync", mock_results[0].path]
             uploader.wandb_upload_results(mock_results)  # pyright: ignore[reportArgumentType]
             self.assertTrue(mock_fork_called, "wandb fork relationships mock was not called")
             self.assertTrue(mock_graph_build_called, "wandb graph build mock was not called")
@@ -2108,6 +2104,10 @@ class TestLoggerIntegration(TestHelpers):
 
             # Test that timer is properly managed
             self.assertIsNone(callback._gather_timer)
+        threads = threading.enumerate()
+        for thread in threads:
+            if "upload" in thread.name.lower():
+                thread.join()
 
     def test_restart_logging_actor_with_resume(self):
         """Test that _restart_logging_actor properly sets resume parameter."""
@@ -2245,8 +2245,7 @@ class TestLoggerIntegration(TestHelpers):
 
     def test_track_forked_trials_cleanup_on_complete(self):
         """Test that on_trial_complete properly cleans up all tracking data."""
-        from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
-        from unittest.mock import MagicMock
+        from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin  # noqa: PLC0415
 
         # Create mixin instance
         mixin = TrackForkedTrialsMixin()

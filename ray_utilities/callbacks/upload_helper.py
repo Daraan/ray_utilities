@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 class UploadHelperMixin:
     error_patterns: ClassVar[set[str]] = {"error", "failed", "exception", "traceback", "critical"}
+    """lowercase error patterns to look for in output"""
     _upload_service_name: ClassVar[str] = "upload_service"
 
     @staticmethod
@@ -117,11 +118,6 @@ class UploadHelperMixin:
             returncode = process.returncode
         else:
             returncode = 0
-        process.stdout = (
-            io.BytesIO(bytes(stdout_accum, "utf-8"))
-            if isinstance(process.stdout, io.BytesIO)
-            else io.StringIO(stdout_accum)
-        )  # pyright: ignore[reportAttributeAccessIssue]
         if report_upload:
             return cls._report_upload(
                 cls._popen_to_completed_process(process, returncode=returncode),

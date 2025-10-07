@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import atexit
 import difflib
+import io
 import logging
 import math
 import os
@@ -37,6 +38,7 @@ from copy import deepcopy
 from functools import partial, wraps
 from types import MappingProxyType
 from typing import (
+    IO,
     TYPE_CHECKING,
     Any,
     Callable,
@@ -785,6 +787,7 @@ class TestHelpers(unittest.TestCase):
             mock.patch.object(ray_utilities.callbacks.progress_bar, "update_pbar"),
             mock.patch.object(ray_utilities.training.default_class, "update_pbar"),
             mock.patch.object(ray_utilities.training.functional, "update_pbar"),
+            mock.patch.object(TrainableBase, "use_pbar", False),
         ]
         for pbar_update in pbar_updates:
             pbar_update.start()
@@ -2183,3 +2186,78 @@ class MockTrial(Trial):
             assert result.checkpoint
             return result.checkpoint.path
         return self._restored_checkpoint
+
+
+class MockPopen(mock.MagicMock):
+    returncode = 1
+    _stdout: IO[str] = io.StringIO("MOCK: wandb: Syncing files...")
+    _stderr: IO[str] | None = io.StringIO("MOCK: stderr - its expected you see this message")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._poll_count = 0
+
+    def poll(self) -> int | None:
+        self._poll_count += 1
+        if self._poll_count > 0:
+            self.returncode = 0
+            return 0
+        return None
+
+    @property
+    def stdout(self) -> IO[str]:
+        return self._stdout
+
+    @stdout.setter
+    def stdout(self, value: IO[str]) -> None:
+        # Something in the back sets this to -1, ignore
+        pass
+
+    @property
+    def stderr(self) -> IO[str] | None:
+        return self._stderr
+
+    @stderr.setter
+    def stderr(self, value: IO[str] | None) -> None:
+        pass
+
+
+class MockPopenClassMeta(type):
+    def __instancecheck__(cls, instance):
+        return isinstance(instance, (mock.MagicMock, MockPopen))
+
+    def __getattr__(cls, name: str) -> Any:
+        return getattr(cls._class_mock, name)
+
+
+class MockPopenClass(mock.MagicMock, metaclass=MockPopenClassMeta):
+    _mock_opened: MockPopen | None = None
+
+    @classmethod
+    def _set_mock(cls, mock: MockPopen | None = None):
+        if mock is None:
+            mock = MockPopen()
+        cls._mock_opened = mock
+        cls._class_mock = mock.MagicMock()
+        cls._class_mock.return_value = cls._mock_opened
+        return cls._mock_opened
+
+    def __new__(cls, *args, **kwargs):
+        if cls._mock_opened is None:
+            raise RuntimeError("MockPopenClass not initialized, use MockPopenClass._set_mock() first")
+        return cls._class_mock(*args, **kwargs)
+
+    @classmethod
+    def mock(cls, func):
+        def wrapper(*args, **kwargs):
+            mock_instance = cls._set_mock(MockPopen())
+            mocked_func = mock.patch("subprocess.Popen", new=cls)
+            with mocked_func:
+                r = func(*args, cls._class_mock, mock_instance, **kwargs)
+            cls._mock_opened = None
+            cls._class_mock = None
+            del cls._class_mock
+            del cls._mock_opened
+            return r
+
+        return wrapper
