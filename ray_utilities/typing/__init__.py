@@ -114,8 +114,8 @@ class Forktime(NamedTuple):
 
 
 class ForkFromData(TypedDict):
-    parent_id: str
-    """Trial id of the run to fork"""
+    parent_trial_id: str
+    """Trial id of the run to fork. This is the pure trial_id of the ``Trial`` object, without  any fork info."""
 
     parent_training_iteration: int
     """Training iteration the fork is at. This is needed for example for WandB's fork_from feature"""
@@ -145,3 +145,6 @@ class ForkFromData(TypedDict):
 
     controller: NotRequired[str | Any]
     """A field to inform who decided the forking, e.g. scheduler name"""
+
+    parent_env_steps: NotRequired[int]
+    """If available, the exact amount of env steps the parent had sampled at forking time."""

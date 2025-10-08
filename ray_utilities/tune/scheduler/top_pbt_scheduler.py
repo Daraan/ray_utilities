@@ -20,13 +20,29 @@ import math
 import random
 from functools import partial
 from itertools import cycle
-from typing import TYPE_CHECKING, Any, Callable, Container, Dict, Generic, List, Optional, Tuple, TypeVar, cast
+from pathlib import Path
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Container,
+    Dict,
+    Generic,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    TypeVar,
+    cast,
+    overload,
+)
 
 from ray.train._internal.session import _FutureTrainingResult, _TrainingResult
 from ray.tune.experiment import Trial
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.schedulers.pbt import PopulationBasedTraining
 
+from ray_utilities._runtime_constants import RUN_ID
 from ray_utilities.constants import FORK_FROM, PERTURBED_HPARAMS
 from ray_utilities.misc import (
     build_nested_dict,
@@ -34,6 +50,8 @@ from ray_utilities.misc import (
     get_current_step,
     get_value_by_path,
     make_experiment_key,
+    make_fork_from_csv_header,
+    make_fork_from_csv_line,
 )
 from ray_utilities.typing import ForkFromData, Forktime
 
@@ -64,6 +82,9 @@ if TYPE_CHECKING:
             super().__init__(trial)
             self.last_training_iteration: int  # not present before on_trial_add
             """The training iteration at which the last result was reported."""
+
+            self.current_env_steps: int | None
+            """The amount of (exact) env steps sampled"""
 
 
 def _grid_search_sample_function(grid_search_space: Iterable[_T], *, repeat=True) -> Callable[[], _T]:
@@ -282,15 +303,69 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         # Store assignments for exploit distribution
         self._exploit_assignments = {}
         self._current_assignments: dict[Trial, Trial] | None = None
+        self.current_trial_keys: dict[Trial, str] = {}
+        """Currently assigned fork ids for each trial."""
+        self._fork_ids: dict[tuple[Trial, tuple[Trial, int] | None], tuple[str, str] | str] = {}
+        """
+        Lookup for fork ids based on key=(trial, (parent_trial, parent_training_iteration) | None).
+        The second the second element of the key is None for the initial trial (no fork).
+        Key maps to (fork_id, parent_fork_id).
+        """
+
+        self._fork_time_data: dict[
+            tuple[Trial, tuple[Trial, int] | None], dict[Literal["child", "parent"], tuple[Forktime, Forktime]]
+        ] = {}
+        """
+        Lookup for fork time data based on key=(trial, (parent_trial, parent_training_iteration) | None).
+        The second the second element of the key is None for the initial trial (no fork).
+
+        The value is a dict with keys "child" and "parent", each mapping to a tuple of Forktime:
+        The first Forktime is the ``time_attr`` and the second is the "current_step" Forktime.
+        """
+
+        self._fork_data_file: Path | None = None
+
+    @overload
+    def get_fork_ids(self, trial: Trial, parent: None = None, step: None = None) -> tuple[str, None]: ...
+
+    @overload
+    def get_fork_ids(self, trial: Trial, parent: Trial, step: int) -> tuple[str, str]: ...
+
+    def get_fork_ids(
+        self, trial: Trial, parent: Trial | None = None, step: Optional[int] = None
+    ) -> tuple[str, str] | tuple[str, None]:
+        if parent is None:
+            return cast("str", self._fork_ids[trial, None]), None
+        assert step is not None
+        ret = self._fork_ids[trial, (parent, step)]
+        if isinstance(ret, str):
+            logger.error("Inconsistent fork id entry for trial %s, parent %s at step %s: %s", trial, parent, step, ret)
+            return ret, None
+        return ret
 
     def on_trial_add(self, tune_controller: TuneController, trial: Trial):
-        """Updates the trials config with hyperparam_mutations"""
-        # Adds a new trial with config updated based on hyperparam_mutations
+        """Called when a new trial is added to the Tuner.
+
+        Updates the trials config based on :attr:`hyperparam_mutations`.
+        """
         super().on_trial_add(tune_controller, trial)
+        if self._fork_data_file is None:
+            self._fork_data_file = Path(tune_controller.experiment_path) / f"pbt_fork_data-{RUN_ID}.csv"
+            with self._fork_data_file.open("w") as f:
+                f.write(make_fork_from_csv_header())
         if FORK_FROM in trial.config:
-            self._trial_state[trial].last_training_iteration = trial.config[FORK_FROM].get("fork_training_iteration", 0)
+            fork_config: ForkFromData = trial.config[FORK_FROM]
+            logger.info("Adding a forked trial %s with config: %s", trial, fork_config)
+            self._trial_state[trial].last_training_iteration = fork_config.get("parent_training_iteration", 0)
+            self._trial_state[trial].current_env_steps = fork_config.get("parent_env_steps", None)
+            # NOTE: its both unsave to use parent_trial_id or None as a fallback
+            self.current_trial_keys[trial] = make_experiment_key(trial, fork_config)
+            self._fork_ids[trial, None] = fork_config.get("fork_id_this_trial", trial.trial_id)
         else:
             self._trial_state[trial].last_training_iteration = 0
+            self._trial_state[trial].current_env_steps = 0
+            self.current_trial_keys[trial] = trial.trial_id
+            self._fork_ids[trial, None] = trial.trial_id  # initial fork id is trial id
 
     def _quantiles(self) -> Tuple[List[Trial], List[Trial]]:
         """Returns trials in the lower and upper `quantile` of the population.
@@ -425,6 +500,7 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         # FIXME: next perturbation interval does not increase linearly. Trials train longer and longer as well
 
         # Create a checkpoint for all trials
+        breakpoint()
         logger.debug("Instructing %s to save.", trial)
         checkpoint = tune_controller._schedule_trial_save(trial, result=state.last_result)
 
@@ -500,15 +576,46 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
             for k in self.additional_config_keys:
                 trial.config.pop(k, None)
             # Set info which trial was forked from
+            parent_iteration = self._trial_state[trial_to_clone].last_training_iteration
             fork_data: ForkFromData = {
-                "parent_id": trial_to_clone.trial_id,
+                "parent_trial_id": trial_to_clone.trial_id,  # NOTE: This is the pure trial_id, does not support
                 "parent_trial": trial_to_clone,
-                "parent_training_iteration": self._trial_state[trial_to_clone].last_training_iteration,  # pyright: ignore[reportAttributeAccessIssue]
+                "parent_training_iteration": parent_iteration,
                 "parent_time": Forktime(self._time_attr, self._trial_state[trial_to_clone].last_train_time),
                 "controller": self.__class__.__name__,
             }
+            forked_trial_id = make_experiment_key(trial, fork_data)
+            fork_data["fork_id_this_trial"] = forked_trial_id
+            if (current_env_steps := self._trial_state[trial_to_clone].current_env_steps) is not None:
+                fork_data["parent_env_steps"] = current_env_steps
+            fork_data["parent_fork_id"] = self.current_trial_keys[trial_to_clone]
             trial.config[FORK_FROM] = fork_data
             trial.invalidate_json_state()
+            # Update variables tracking the fork ids
+            self._fork_ids[trial, (trial_to_clone, parent_iteration)] = forked_trial_id
+            self._fork_time_data[trial, (trial_to_clone, parent_iteration)] = {
+                "child": (
+                    Forktime(self._time_attr, state.last_train_time),
+                    Forktime(
+                        "current_step", state.current_env_steps if state.current_env_steps is not None else float("nan")
+                    ),
+                ),
+                "parent": (
+                    fork_data["parent_time"],
+                    Forktime("current_step", current_env_steps if current_env_steps is not None else float("nan")),
+                ),
+            }
+            self.current_trial_keys[trial] = forked_trial_id
+            assert self._fork_data_file
+            with self._fork_data_file.open("a") as f:
+                f.write(
+                    self._write_fork_data_csv_line(
+                        trial,
+                        (trial_to_clone, parent_iteration),
+                        forked_trial_id,
+                        parent_fork_id=fork_data["parent_fork_id"],
+                    )
+                )
         else:
             for k in self.additional_config_keys:
                 trial.config.pop(k, None)
@@ -520,6 +627,10 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         score = super()._save_trial_state(state, time, cast("dict", result), trial)
         # Save training iteration for the step for loggers like WandB / Comet
         state.last_training_iteration = result[TRAINING_ITERATION]  # pyright: ignore[reportAttributeAccessIssue]
+        try:
+            state.current_env_steps = get_current_step(result)  # pyright: ignore[reportArgumentType, reportAttributeAccessIssue]
+        except KeyError:
+            state.current_env_steps = None  # pyright: ignore[reportAttributeAccessIssue]
         return score
 
     def reset_exploitations(self):
@@ -528,6 +639,52 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         This should be called at the beginning of each perturbation round.
         """
         self._current_assignments = None
+
+    @overload
+    def _write_fork_data_csv_line(
+        self, trial: Trial, parent_data: None, fork_id: str, *, parent_fork_id: str | None = None
+    ) -> str: ...
+
+    @overload
+    def _write_fork_data_csv_line(
+        self, trial: Trial, parent_data: tuple[Trial, int], fork_id: str, *, parent_fork_id: str
+    ) -> str: ...
+
+    def _write_fork_data_csv_line(
+        self,
+        trial: Trial,
+        parent_data: tuple[Trial, int] | None,
+        fork_id: str,
+        *,
+        parent_fork_id: Optional[str] = None,
+    ) -> str:
+        if parent_data is None:
+            parent_fork_id = None
+            parent_step = None
+            parent_trial = None
+            return ""
+        else:
+            assert parent_fork_id is not None
+            parent_trial, parent_step = parent_data
+        parent_time = self._fork_time_data[trial, parent_data]["parent"][1]
+        assert parent_time[0] == "current_step"
+        fork_data: ForkFromData = {
+            "parent_trial_id": parent_trial.trial_id,
+            "parent_trial": parent_trial,
+            "parent_fork_id": parent_fork_id,
+            "parent_training_iteration": parent_step,
+            "parent_time": parent_time,
+            "fork_id_this_trial": fork_id,
+            "controller": self.__class__.__name__,
+        }
+        return make_fork_from_csv_line(fork_data)
+
+    def dump_fork_data(self) -> str:
+        """Format the fork data as CSV string."""
+        contents = make_fork_from_csv_header()
+        for (trial, parent_data), (fork_id, parent_fork_id) in self._fork_ids.items():
+            contents += self._write_fork_data_csv_line(trial, parent_data, fork_id, parent_fork_id=parent_fork_id)
+        return contents
 
     def on_trial_complete(
         self, tune_controller: TuneController, trial: Trial, result: FlatLogMetricsDict | dict[str, Any]

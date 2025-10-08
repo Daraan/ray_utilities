@@ -22,7 +22,13 @@ from ray_utilities.callbacks.tuner.new_style_logger_callback import LogMetricsDi
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
 from ray_utilities.callbacks.wandb import WandbUploaderMixin
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, FORK_FROM
-from ray_utilities.misc import extract_trial_id_from_checkpoint, make_experiment_key, parse_fork_from
+from ray_utilities.misc import (
+    extract_trial_id_from_checkpoint,
+    make_experiment_key,
+    make_fork_from_csv_header,
+    make_fork_from_csv_line,
+    parse_fork_from,
+)
 
 if TYPE_CHECKING:
     from ray_utilities.typing import ForkFromData
@@ -69,11 +75,18 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
             info_file = Path(self._logdir).parent / "wandb_fork_from.csv"
             if not info_file.exists():
                 # write header
-                info_file.write_text("trial_id, parent_id, parent_step, step_metric\n")
-            fork_data = parse_fork_from(self.kwargs["fork_from"])
+                info_file.write_text(make_fork_from_csv_header())
+            fork_data_tuple = parse_fork_from(self.kwargs["fork_from"])
             with info_file.open("a") as f:
-                if fork_data is not None:
-                    parent_id, parent_step = fork_data
+                if fork_data_tuple is not None:
+                    parent_id, parent_step = fork_data_tuple
+                    line = make_fork_from_csv_line(
+                        {
+                            "parent_trial_id": parent_id,
+                            "parent_training_iteration": parent_step,
+                        },
+                        optional=True,
+                    )
                     f.write(f"{self.kwargs['id']}, {parent_id}, {parent_step}, _step\n")
                 else:
                     _logger.error("Could not parse fork_from: %s", self.kwargs["fork_from"])

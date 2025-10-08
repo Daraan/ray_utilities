@@ -33,8 +33,11 @@ from typing_extensions import Iterable, Sentinel, TypeIs
 from ray_utilities.constants import (
     DEFAULT_EVAL_METRIC,
     EVAL_METRIC_RETURN_MEAN,
+    FORK_DATA_KEYS,
+    FORK_FROM_CSV_KEY_MAPPING,
     NEW_LOG_EVAL_METRIC,
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
+    OPTIONAL_FORK_DATA_KEYS,
     RAY_UTILITIES_INITIALIZATION_TIMESTAMP,
     RE_PARSE_FORK_FROM,
     RUN_ID,
@@ -125,6 +128,58 @@ def parse_fork_from(fork_from: str) -> tuple[str, int | None] | None:
     step_str = match.group("fork_step")
     step = int(step_str) if step_str is not None else None
     return trial_id, step
+
+
+def make_fork_from_csv_header(*, optional: bool = True) -> str:
+    """Create a CSV header string for forked trial information.
+
+    This function generates a CSV header string that includes the keys
+    used to log forked trial information. The keys are defined in the
+    :attr:`FORK_DATA_KEYS` constant.
+
+    Args:
+        optional: If ``True``, includes all keys in the header.
+            If ``False``, excludes optional keys defined in :attr:`OPTIONAL_FORK_DATA_KEYS`.
+            Defaults to ``True``.
+
+    Returns:
+        A comma-separated string representing the CSV header for forked trial data.
+        Ends with a newline character.
+
+    Example:
+        >>> make_fork_from_csv_header()
+        'trial_id, parent_id, parent_step, step_metric, current_step, controller\n'
+    """
+    if optional:
+        return ", ".join(FORK_DATA_KEYS) + "\n"
+    return ", ".join([key for key in FORK_DATA_KEYS if key not in OPTIONAL_FORK_DATA_KEYS]) + "\n"
+
+
+def make_fork_from_csv_line(fork_data: ForkFromData, *, trial_id: Optional[str] = None, optional: bool = True) -> str:
+    keys = FORK_DATA_KEYS if optional else [key for key in FORK_DATA_KEYS if key not in OPTIONAL_FORK_DATA_KEYS]
+    contents = ""
+    for key in keys:
+        mapping_key = FORK_FROM_CSV_KEY_MAPPING[key]
+        if mapping_key is None:  # skip step_metric_value
+            continue
+        if trial_id is not None and key == "trial_id":
+            if trial_id != fork_data.get(mapping_key, _NOT_FOUND) is not _NOT_FOUND:
+                _logger.warning(
+                    "Keyword trial_id does not match with %s: %s != %s to write the csv file line.",
+                    mapping_key,
+                    trial_id,
+                    fork_data[mapping_key],
+                )
+            data = trial_id
+        else:
+            data = fork_data.get(mapping_key, _NOT_FOUND)
+        if mapping_key == "parent_time" and data is not _NOT_FOUND:
+            assert key == "step_metric"
+            metric, value = cast("tuple[str, str]", data)
+            contents += f"{metric}, {value}, "
+        elif data is not _NOT_FOUND:
+            contents += f"{data}, "
+    return contents.rstrip(", ") + "\n"
 
 
 def trial_name_creator(trial: Trial) -> str:
@@ -343,7 +398,7 @@ class ExperimentKey(str, Enum):
     @classmethod
     def _make_fork_experiment_key(cls, base_key: str, fork_data: ForkFromData) -> str:
         base_key = base_key.rstrip(cls.RIGHT_PAD_CHAR)
-        parent_id = fork_data["parent_id"]
+        parent_id = fork_data["parent_trial_id"]  # non-forked key
         # Prefer training iteration for experiment key (stable across frameworks)
         ft = fork_data.get("parent_time")
         # ft is a NamedTuple[time_attr, time]; only use numeric time

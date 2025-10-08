@@ -127,7 +127,12 @@ class _LogMetricsBase(TypedDict):
 
 
 class LogMetricsDict(_LogMetricsBase):
-    """Stays true to RLlib's naming."""
+    """
+    Dictionary structure for metrics logged via `train.report()`.
+
+    Stays true to RLlib's naming unlike :class:`NewLogMetricsDict`
+    which is more user friendly.
+    """
 
     env_runners: _LogMetricsEnvRunnersResultsDict
     evaluation: _LogMetricsEvaluationResultsDict

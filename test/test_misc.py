@@ -17,7 +17,12 @@ from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 from ray.runtime_env import RuntimeEnv
 
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.constants import COMET_OFFLINE_DIRECTORY, RE_PARSE_FORK_FROM
+from ray_utilities.constants import (
+    COMET_OFFLINE_DIRECTORY,
+    FORK_DATA_KEYS,
+    FORK_FROM_CSV_KEY_MAPPING,
+    RE_PARSE_FORK_FROM,
+)
 from ray_utilities.misc import RE_GET_TRIAL_ID, make_experiment_key, parse_fork_from
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import (
@@ -32,9 +37,10 @@ from ray_utilities.testing_utils import (
     patch_args,
 )
 from ray_utilities.training.helpers import make_divisible
+from ray_utilities.typing import ForkFromData
 
 if TYPE_CHECKING:
-    from ray_utilities.typing import ForkFromData, Forktime
+    from ray_utilities.typing import Forktime
 
 if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
@@ -169,7 +175,7 @@ class TestMisc(TestCase):
                 for step in [None, 2_000_000]:
                     with self.subTest(t1=t1, t2_id=t2_id, step=step):
                         fork_data: ForkFromData = {
-                            "parent_id": t2_id,
+                            "parent_trial_id": t2_id,
                             "parent_training_iteration": step,
                             "parent_time": cast("Forktime", ("training_iteration", step)),
                         }
@@ -362,3 +368,10 @@ class TestMisc(TestCase):
         assert isinstance(mocked_popen, MockPopenClass)
         assert isinstance(mocked_popen.stdout, (io.StringIO, io.BytesIO)), type(mocked_popen.stdout)
         assert mocked_popen.args
+
+    def test_fork_from_data_keys(self):
+        """Test key membership between FORK_DATA_KEYS, ForkFromData and FORK_FROM_DATA_TO_FORK_DATA_KEYS."""
+        fork_dict_keys = ForkFromData.__required_keys__ | ForkFromData.__optional_keys__
+        self.assertSetEqual(set(FORK_DATA_KEYS), set(FORK_FROM_CSV_KEY_MAPPING.keys()))
+        # The keys in FORK_FROM_DATA_TO_FORK_DATA_KEYS can be a subset of fork_dict_keys
+        self.assertTrue({v for v in FORK_FROM_CSV_KEY_MAPPING.values() if v is not None}.issubset(fork_dict_keys))
