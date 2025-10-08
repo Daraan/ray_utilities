@@ -245,6 +245,9 @@ class ExperimentSetupBase(
     _fixed_argv: ClassVar[list[str] | None] = None
     """When using remote (no sys.args available) and checkpoints fix the args to the time of creation"""
 
+    storage_path: str | Path = "../outputs/experiments"
+    """Base path where experiment outputs are stored by the tuner."""
+
     @property
     def project_name(self) -> str:
         """Name for the output folder, wandb project, and comet workspace."""
@@ -697,7 +700,7 @@ class ExperimentSetupBase(
             if module_spec.module_class is not None:
                 module = module_spec.module_class.__name__
             else:
-                module = f"RLModule({self.args.agent_type})"
+                module = f"RLModule={self.args.agent_type}"
         else:
             module = None
         # Arguments reported on the CLI
