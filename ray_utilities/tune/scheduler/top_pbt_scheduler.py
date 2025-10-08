@@ -500,7 +500,6 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         # FIXME: next perturbation interval does not increase linearly. Trials train longer and longer as well
 
         # Create a checkpoint for all trials
-        breakpoint()
         logger.debug("Instructing %s to save.", trial)
         checkpoint = tune_controller._schedule_trial_save(trial, result=state.last_result)
 

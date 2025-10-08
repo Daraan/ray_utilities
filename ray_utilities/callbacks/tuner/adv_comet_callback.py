@@ -329,7 +329,6 @@ class AdvCometLoggerCallback(
         Overwritten method to respect ignored/refactored keys.
         nested to other keys will only have their deepest key logged.
         """
-        # breakpoint()
         trial_name = str(trial)
         tags = self.tags
         if FORK_FROM in trial.config:

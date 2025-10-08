@@ -397,7 +397,7 @@ class TestLoggerIntegration(TestHelpers):
                 else:
                     parent_id = random.choice(possible_parents_this_generation)
                 fork_data: ForkFromData = {
-                    "parent_id": trial_id_to_trial[parent_id].trial_id,
+                    "parent_trial_id": trial_id_to_trial[parent_id].trial_id,
                     "parent_training_iteration": gen * 10,
                     "parent_time": Forktime("current_step", gen * 100),
                 }
@@ -846,7 +846,7 @@ class TestLoggerIntegration(TestHelpers):
         forked_id = "trial_123_forkof_parent_456_step_100"
         mixin._trial_ids[trial] = forked_id
         mixin._current_fork_ids[trial] = forked_id
-        mixin._forked_trials[trial] = [{"parent_id": "parent_456"}]
+        mixin._forked_trials[trial] = [{"parent_trial_id": "parent_456"}]
         mixin._currently_not_forked_trials.add(trial)
         mixin.parent_trial_lookup[trial] = "parent_456"
 
@@ -931,7 +931,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         parent_trial_id = "p_trial_0001"
         fork_step = 100
         fork_data: ForkFromData = {
-            "parent_id": parent_trial_id,
+            "parent_trial_id": parent_trial_id,
             "parent_training_iteration": fork_step,
             "parent_time": Forktime("training_iteration", fork_step),
         }
@@ -953,7 +953,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
 
             # Call the method under test
             fork_data: ForkFromData = {
-                "parent_id": parent_trial_id,
+                "parent_trial_id": parent_trial_id,
                 "parent_training_iteration": fork_step,
                 "parent_time": Forktime("training_iteration", fork_step),
             }
@@ -975,7 +975,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         parent_trial_id = "p_trial_0001"
         fork_step = 50
         fork_data: ForkFromData = {
-            "parent_id": parent_trial_id,
+            "parent_trial_id": parent_trial_id,
             "parent_training_iteration": fork_step,
             "parent_time": Forktime("training_iteration", fork_step),
         }
@@ -997,7 +997,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
 
             # Call the method under test
             fork_data: ForkFromData = {
-                "parent_id": parent_trial_id,
+                "parent_trial_id": parent_trial_id,
                 "parent_training_iteration": fork_step,
                 "parent_time": Forktime("training_iteration", fork_step),
             }
@@ -1020,7 +1020,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         parent_trial_id = "p_trial_0001"
         fork_step = 200
         fork_data: ForkFromData = {
-            "parent_id": parent_trial_id,
+            "parent_trial_id": parent_trial_id,
             "parent_training_iteration": fork_step,
             "parent_time": Forktime("training_iteration", fork_step),
         }
@@ -1046,7 +1046,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
 
             # Call the method under test
             fork_data: ForkFromData = {
-                "parent_id": parent_trial_id,
+                "parent_trial_id": parent_trial_id,
                 "parent_training_iteration": fork_step,
                 "parent_time": Forktime("training_iteration", fork_step),
             }
@@ -1073,7 +1073,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         parent_trial_id = "p_trial_0001"
         fork_step = 75
         fork_data: ForkFromData = {
-            "parent_id": parent_trial_id,
+            "parent_trial_id": parent_trial_id,
             "parent_training_iteration": fork_step,
             "parent_time": Forktime("training_iteration", fork_step),
         }
@@ -1103,7 +1103,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
 
             # Call the method under test
             fork_data: ForkFromData = {
-                "parent_id": parent_trial_id,
+                "parent_trial_id": parent_trial_id,
                 "parent_training_iteration": fork_step,
                 "parent_time": Forktime("training_iteration", fork_step),
             }
@@ -1124,7 +1124,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         parent_trial_id = "p_trial_0001"
         fork_step = 150
         fork_data: ForkFromData = {
-            "parent_id": parent_trial_id,
+            "parent_trial_id": parent_trial_id,
             "parent_training_iteration": fork_step,
             "parent_time": Forktime("training_iteration", fork_step),
         }
@@ -1258,7 +1258,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         parent_trial_id = "p_trial_0001"
         fork_step = 300
         fork_data: ForkFromData = {
-            "parent_id": parent_trial_id,
+            "parent_trial_id": parent_trial_id,
             "parent_training_iteration": fork_step,
             "parent_time": Forktime("training_iteration", fork_step),
         }
@@ -1280,7 +1280,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
 
             # Call the method under test
             fork_data: ForkFromData = {
-                "parent_id": parent_trial_id,
+                "parent_trial_id": parent_trial_id,
                 "parent_training_iteration": fork_step,
                 "parent_time": Forktime("training_iteration", fork_step),
             }
@@ -1296,7 +1296,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         parent_trial_id = "p_trial_0001"
         fork_step = 400
         fork_data = {
-            "parent_id": parent_trial_id,
+            "parent_trial_id": parent_trial_id,
             "parent_training_iteration": fork_step,
             "parent_time": Forktime("training_iteration", fork_step),
         }
@@ -1315,7 +1315,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
 
             callback._trial_experiments[forked_trial] = Mock()  # Previous experiment
             fork_data: ForkFromData = {
-                "parent_id": parent_trial_id,
+                "parent_trial_id": parent_trial_id,
                 "parent_training_iteration": fork_step,
                 "parent_time": Forktime("training_iteration", fork_step),
             }
@@ -1340,7 +1340,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
         parent_trial_id = "p_trial_0001"
         fork_step = 500
         fork_data = {
-            "parent_id": parent_trial_id,
+            "parent_trial_id": parent_trial_id,
             "parent_training_iteration": fork_step,
             "parent_time": Forktime("training_iteration", fork_step),
         }
@@ -1368,7 +1368,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
 
                 # Restart experiment
                 fork_data: ForkFromData = {
-                    "parent_id": parent_trial_id,
+                    "parent_trial_id": parent_trial_id,
                     "parent_training_iteration": fork_step,
                     "parent_time": Forktime("training_iteration", fork_step),
                 }
@@ -1388,12 +1388,12 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
 
         # Create multiple forked trials
         fork_data_1: ForkFromData = {
-            "parent_id": "parent_001",
+            "parent_trial_id": "parent_001",
             "parent_training_iteration": 100,
             "parent_time": Forktime("training_iteration", 100),
         }
         fork_data_2: ForkFromData = {
-            "parent_id": "parent_002",
+            "parent_trial_id": "parent_002",
             "parent_training_iteration": 200,
             "parent_time": Forktime("training_iteration", 200),
         }

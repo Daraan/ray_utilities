@@ -120,7 +120,7 @@ class ForkFromData(TypedDict):
     parent_training_iteration: int
     """Training iteration the fork is at. This is needed for example for WandB's fork_from feature"""
 
-    parent_time: Forktime
+    parent_time: Forktime | tuple[str, int | float]
     """
     Current time the fork is at.
 

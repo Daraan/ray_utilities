@@ -72,6 +72,7 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
         fork_from = self.kwargs.get("fork_from", None) is not None
         if fork_from:
             # Write info about forked trials, to know in which order to upload trials
+            # This in the trial dir, no need for a Lock
             info_file = Path(self._logdir).parent / "wandb_fork_from.csv"
             if not info_file.exists():
                 # write header
@@ -83,11 +84,13 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
                     line = make_fork_from_csv_line(
                         {
                             "parent_trial_id": parent_id,
-                            "parent_training_iteration": parent_step,
+                            "fork_id_this_trial": self.kwargs["id"],
+                            "parent_training_iteration": cast("int", parent_step),
+                            "parent_time": ("_step", cast("float", parent_step)),
                         },
                         optional=True,
                     )
-                    f.write(f"{self.kwargs['id']}, {parent_id}, {parent_step}, _step\n")
+                    f.write(line)
                 else:
                     _logger.error("Could not parse fork_from: %s", self.kwargs["fork_from"])
                     f.write(f"{self.kwargs['id']}, {self.kwargs['fork_from']}\n")
@@ -310,7 +313,7 @@ class AdvWandbLoggerCallback(
         # we let take FORK_FROM a higher priority
         if FORK_FROM in trial.config:
             fork_data = cast("ForkFromData", trial.config[FORK_FROM])
-            fork_id = fork_data["parent_id"]
+            fork_id = fork_data["parent_trial_id"]
             fork_iteration = fork_data["parent_training_iteration"]
             fork_from = f"{fork_id}?_step={fork_iteration}"
             # We should not have multiple ?_step= in the id
