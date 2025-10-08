@@ -58,8 +58,6 @@ __all__ += [
     "RUN_ID",
 ]
 
-_logger = logging.getLogger(__name__)
-
 # region runtime constants
 
 # Version Compatibility Flags
@@ -101,6 +99,19 @@ See Also:
     `Ray RLlib New API Stack Migration Guide
     <https://docs.ray.io/en/latest/rllib/new-api-stack-migration-guide.html>`_
 """
+
+TUNE_RESULT_IS_A_COPY = RAY_VERSION < Version("2.50.0")
+"""
+Before Ray version `2.50.0`
+
+Tuner does not allow to modify the result dict as it is a copy. As long as this is True
+use the callback on an Algorithm. Or the HACK in the DefaultTrainable class to trigger
+checkpointing.
+
+See Also:
+    - https://github.com/ray-project/ray/pull/55527
+"""
+
 
 # endregion
 
