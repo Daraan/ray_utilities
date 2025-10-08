@@ -381,7 +381,7 @@ class WandbUploaderMixin(UploadHelperMixin):
                     lines = f.readlines()
                     # Check header
                     header = [p.strip() for p in lines[0].split(",")]
-                    assert header[:2] == FORK_DATA_KEYS[:2]
+                    assert tuple(header[:2]) == tuple(FORK_DATA_KEYS[:2])
                     assert len(lines) >= 2
                     for line in lines[1:]:
                         line = line.strip()  # noqa: PLW2901
