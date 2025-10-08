@@ -105,6 +105,23 @@ COMET_COLOR_STRINGS = {
 """Colored log level strings for Comet ML console output."""
 
 
+def color_comet_log_strings(log_str: str) -> str:
+    """Add ANSI color codes to Comet ML log level strings in the given text.
+
+    This function replaces standard Comet ML log level prefixes with colored
+    versions for improved console readability.
+
+    Args:
+        log_str: The input log string potentially containing Comet ML log levels.
+
+    Returns:
+        The input log string with colored Comet ML log level prefixes.
+    """
+    for level, color in COMET_COLOR_STRINGS.items():
+        log_str = log_str.replace(level, color)
+    return log_str
+
+
 def get_comet_api() -> comet_ml.API:
     """Create a persistent Comet API client that makes use of caching.
 
@@ -427,11 +444,8 @@ class CometArchiveTracker(UploadHelperMixin):
             and not any(pattern in stderr.lower() for pattern in map(str.lower, cls.error_patterns))
             and not any(pattern in stdout.lower() for pattern in map(str.lower, cls.error_patterns))
         )
-        for log_str, color_str in COMET_COLOR_STRINGS.items():
-            if log_str in stdout:
-                stdout = stdout.replace(log_str, color_str)
-            if log_str in stderr:
-                stderr = stderr.replace(log_str, color_str)
+        stdout = color_comet_log_strings(stdout)
+        stderr = color_comet_log_strings(stderr)
         if success:
             _COMET_OFFLINE_LOGGER.info("Successfully uploaded to comet:\n%s", stdout)
         else:

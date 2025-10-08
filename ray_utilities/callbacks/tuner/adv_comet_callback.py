@@ -18,7 +18,7 @@ from ray.air.integrations.comet import CometLoggerCallback
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
 from ray.tune.utils import flatten_dict
 
-from ray_utilities.callbacks.comet import CometArchiveTracker, _catch_comet_offline_logger
+from ray_utilities.callbacks.comet import CometArchiveTracker, _catch_comet_offline_logger, color_comet_log_strings
 from ray_utilities.callbacks.tuner._save_video_callback import SaveVideoFirstCallback
 from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
     from ray.tune.experiment import Trial
 
+    from ray_utilities.callbacks.upload_helper import AnyPopen
     from ray_utilities.typing import CometStripedVideoFilename, ForkFromData
     from ray_utilities.typing.metrics import AnyFlatLogMetricsDict
 
@@ -210,7 +211,7 @@ class AdvCometLoggerCallback(
         self.upload_offline_experiments = upload_offline_experiments
         """If True, offline experiments will be uploaded on trial completion."""
 
-        self._threads: list[threading.Thread | subprocess.Popen] = []
+        self._threads: list[threading.Thread | AnyPopen] = []
         """Threads for uploading offline experiments."""
 
     def _check_workspaces(self, trial: Trial) -> Literal[0, 1, 2]:
@@ -491,6 +492,45 @@ class AdvCometLoggerCallback(
             process = self._upload_offline_experiment_if_available(trial, upload_command=upload_command, blocking=False)
             if process:
                 self._threads.append(process)
+
+    def on_experiment_end(self, trials: List[Trial], **info):
+        super().on_experiment_end(trials, **info)
+        total_count = 0
+        for thread in self._threads:
+            count = 0
+            while (count <= 40 or total_count < 600) and (
+                (isinstance(thread, threading.Thread) and thread.is_alive())
+                or (isinstance(thread, subprocess.Popen) and thread.poll() is None)
+            ):
+                time.sleep(1)
+                total_count += 1
+                count += 1
+                if total_count % 20 == 0:
+                    if isinstance(thread, subprocess.Popen):
+                        out = ""
+                        err = ""
+                        stdout, stderr = thread.communicate(timeout=0.1)
+                        if isinstance(stdout, bytes):
+                            out += stdout.decode("utf-8", errors="ignore")
+                            err += stderr.decode("utf-8", errors="ignore")  # pyright: ignore[reportAttributeAccessIssue]
+                        else:
+                            out += stdout
+                            err += str(stderr)
+                        out = color_comet_log_strings(out)
+                        err = color_comet_log_strings(err)
+                        _LOGGER.info(
+                            "Waiting for Comet offline upload process to finish (process %s/40s total timeout: %ss/600s) output:\n%s\n%s",
+                            count,
+                            total_count,
+                            out,
+                            err,
+                        )
+                    else:
+                        _LOGGER.info(
+                            "Waiting for Comet offline upload thread to finish (thread %s/40s total timeout: %ss/600s)",
+                            count,
+                            total_count,
+                        )
 
     def __del__(self):
         try:
