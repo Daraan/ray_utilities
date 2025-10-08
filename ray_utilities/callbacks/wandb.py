@@ -455,8 +455,6 @@ class WandbUploaderMixin(UploadHelperMixin):
         # Build dependency graph from fork relationships, which should be complete
         for trial_id, (parent_id, _) in fork_relationships.items():
             if parent_id and parent_id in trial_id_to_run:
-                if trial_id not in dependencies or parent_id not in dependents:
-                    breakpoint()
                 if trial_id not in dependencies:
                     dependencies[trial_id] = set()
                 dependencies[trial_id].add(parent_id)

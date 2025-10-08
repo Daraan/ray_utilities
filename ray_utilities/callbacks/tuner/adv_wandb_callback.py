@@ -95,7 +95,6 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
             return super().run()
         except CommError as e:  # pyright: ignore[reportPossiblyUnboundVariable]
             # NOTE: its possible that wandb is stuck because of async logging and we never reach here :/
-            # breakpoint()
             online = self.kwargs.get("mode", "online") == "online"
             if "fromStep is greater than the run's last step" in str(e):
                 # This can happen if the parent run is not yet fully synced.
@@ -241,7 +240,6 @@ class AdvWandbLoggerCallback(
             self._active_trials_count = len([t for t in trials if t.status in ("RUNNING", "PENDING", "PAUSED")])
 
     def log_trial_start(self, trial: "Trial"):
-        # breakpoint()
         config = trial.config.copy()
 
         config.pop("callbacks", None)  # Remove callbacks
