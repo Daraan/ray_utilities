@@ -8,25 +8,33 @@ trainable introspection, dictionary operations, and error handling.
 from __future__ import annotations
 
 import datetime
-from enum import Enum
 import functools
 import logging
 import os
 import re
 import sys
-from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, cast
 
 import base62
 from ray.experimental import tqdm_ray
+from ray.rllib.utils.metrics import (
+    ALL_MODULES,  # pyright: ignore[reportPrivateImportUsage]
+    ENV_RUNNER_RESULTS,
+    LEARNER_RESULTS,
+    NUM_ENV_STEPS_SAMPLED_LIFETIME,
+)
+from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 from ray.tune.error import TuneError
 from ray.tune.result_grid import ResultGrid
 from tqdm import tqdm
-from typing_extensions import Iterable, TypeIs
+from typing_extensions import Iterable, Sentinel, TypeIs
 
 from ray_utilities.constants import (
     DEFAULT_EVAL_METRIC,
     EVAL_METRIC_RETURN_MEAN,
     NEW_LOG_EVAL_METRIC,
+    NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
     RAY_UTILITIES_INITIALIZATION_TIMESTAMP,
     RE_PARSE_FORK_FROM,
     RUN_ID,
@@ -37,12 +45,15 @@ if TYPE_CHECKING:
 
     from ray.tune.experiment import Trial
 
-    from ray_utilities.typing import ForkFromData
+    from ray_utilities.typing import ForkFromData, StrictAlgorithmReturnData
+    from ray_utilities.typing.metrics import LogMetricsDict
 
 if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
 
 _T = TypeVar("_T")
+_NOT_FOUND = Sentinel("_NOT_FOUND")
+
 
 _logger = logging.getLogger(__name__)
 
@@ -643,3 +654,38 @@ def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, An
         if key_orig != k:
             del nested_metrics[key_orig]
     return nested_metrics
+
+
+def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict | dict[str, Any] | MetricsLogger) -> int:
+    """
+    Get the current step from the result dictionary. This will prefer the exact steps as logged by
+    the :func:`exact_sampling_callback` or a ``Learner`` connector logging to the
+    :const:`NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME` metric.
+
+    It will fallback to the :const:`NUM_ENV_STEPS_SAMPLED_LIFETIME` metric if the exact step is not found.
+    """
+    # requires exact_sampling_callback to be set in the results, otherwise fallback
+    if isinstance(result, MetricsLogger):
+        # For peek do not use None as default as this triggers KeyError
+        current_step = result.peek((LEARNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=_NOT_FOUND)
+        if current_step is not _NOT_FOUND:
+            return current_step
+        current_step = result.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=_NOT_FOUND)
+        if current_step is not _NOT_FOUND:
+            return current_step
+        return result.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=0)
+
+    current_step = result.get("current_step")  # likely not present
+    if current_step is not None:  # LogMetricsDict
+        return current_step
+    result = cast("StrictAlgorithmReturnData", result)
+    if LEARNER_RESULTS in result:
+        current_step = result[LEARNER_RESULTS][ALL_MODULES].get(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)
+        if current_step is not None:
+            return current_step
+    # try metric logged on env runner; else defaults to NUM_ENV_STEPS_SAMPLED_LIFETIME
+    return int(
+        result[ENV_RUNNER_RESULTS].get(
+            NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]
+        )
+    )

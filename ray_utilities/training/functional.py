@@ -34,13 +34,12 @@ from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS, EPISODE_RETURN_MEAN, EVA
 from ray_utilities.callbacks.progress_bar import update_pbar
 from ray_utilities.config.parser.default_argument_parser import LOG_STATS
 from ray_utilities.constants import EVALUATED_THIS_STEP
-from ray_utilities.misc import is_pbar
+from ray_utilities.misc import get_current_step, is_pbar
 from ray_utilities.postprocessing import create_log_metrics, filter_metrics
 from ray_utilities.postprocessing import verify_return as verify_return_type
 from ray_utilities.training.helpers import (
     DefaultExperimentSetup,
     episode_iterator,
-    get_current_step,
     get_total_steps,
     logger,
     setup_trainable,

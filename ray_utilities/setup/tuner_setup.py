@@ -33,7 +33,7 @@ from ray.tune.search.optuna import OptunaSearch
 from ray.tune.stopper import CombinedStopper, FunctionStopper
 from typing_extensions import TypeVar
 
-from ray_utilities.callbacks.tuner.metric_checkpointer import TUNE_RESULT_IS_A_COPY, StepCheckpointer
+from ray_utilities.callbacks.tuner.metric_checkpointer import StepCheckpointer
 from ray_utilities.config._tuner_callbacks_setup import TunerCallbackSetup
 from ray_utilities.constants import (
     CLI_REPORTER_PARAMETER_COLUMNS,
@@ -41,10 +41,11 @@ from ray_utilities.constants import (
     EVAL_METRIC_RETURN_MEAN,
     FORK_FROM,
     NEW_LOG_EVAL_METRIC,
+    TUNE_RESULT_IS_A_COPY,
 )
-from ray_utilities.misc import new_log_format_used, trial_name_creator as default_trial_name_creator
+from ray_utilities.misc import get_current_step, new_log_format_used
+from ray_utilities.misc import trial_name_creator as default_trial_name_creator
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner, create_search_algo
-from ray_utilities.training.helpers import get_current_step
 from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultIterationStopper
 
 if TYPE_CHECKING:

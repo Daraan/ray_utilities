@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from ray.tune.experiment.trial import Trial
 from ray.tune.logger import LoggerCallback
 
 from ray_utilities.constants import FORK_FROM
 from ray_utilities.misc import extract_trial_id_from_checkpoint, make_experiment_key
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ray_utilities.typing import ForkFromData
