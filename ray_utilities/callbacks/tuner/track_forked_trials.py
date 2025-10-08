@@ -95,7 +95,7 @@ class TrackForkedTrialsMixin(LoggerCallback):
     @staticmethod
     def make_forked_trial_name(trial: Trial, fork_data: ForkFromData) -> str:
         trial_name = str(trial)
-        parent_id = fork_data["parent_id"]
+        parent_id = fork_data["parent_trial_id"]
         ft = fork_data.get("parent_time", None)
         if ft is not None:  # pyright: ignore[reportUnnecessaryComparison]
             trial_name += f"_forkof_{parent_id}_{ft[0]}={ft[1]}"  # type: ignore[index]
@@ -164,7 +164,7 @@ class TrackForkedTrialsMixin(LoggerCallback):
                 # need to load the checkpoint first too see more information
                 self._forked_trials[trial].append(
                     {
-                        "parent_id": extracted_id,
+                        "parent_trial_id": extracted_id,
                         "controller": "from_checkpoint",
                     }
                 )
@@ -173,7 +173,7 @@ class TrackForkedTrialsMixin(LoggerCallback):
             self.add_forked_trial_id(trial, fork_data=None)
         if FORK_FROM in trial.config:
             fork_data: ForkFromData = trial.config[FORK_FROM]
-            parent_trial_id = fork_data["parent_id"]
+            parent_trial_id = fork_data["parent_trial_id"]
             # Could be a live or past trial
             if "forkof" in parent_trial_id or "_step=" in parent_trial_id or "fork_from" in parent_trial_id:
                 _logger.error("Unexpected parent trial id format: %s", parent_trial_id)

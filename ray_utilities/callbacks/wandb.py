@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Iterable, Mapping, Optional, Sequence, cast
 
 from ray_utilities._runtime_constants import RUN_ID
 from ray_utilities.callbacks.upload_helper import AnyPopen, UploadHelperMixin
+from ray_utilities.constants import FORK_DATA_KEYS
 from ray_utilities.misc import RE_GET_TRIAL_ID
 
 if TYPE_CHECKING:
@@ -228,8 +229,9 @@ class WandbUploaderMixin(UploadHelperMixin):
         if failed_uploads:
             try:
                 formatted_failed = "\n".join(
-                    f"returncode: {p.returncode} args: {' '.join(p.args)}" for p in failed_uploads
-                )  # pyright: ignore[reportArgumentType, reportCallIssue]
+                    f"returncode: {p.returncode} args: {' '.join(p.args)}"  # pyright: ignore[reportArgumentType, reportCallIssue]
+                    for p in failed_uploads
+                )
             except TypeError:
                 formatted_failed = "\n".join(f"returncode: {p.returncode} args: {p.args}" for p in failed_uploads)
             logger.error("Failed to upload %d wandb runs:\n%s", len(failed_uploads), formatted_failed)
@@ -379,7 +381,7 @@ class WandbUploaderMixin(UploadHelperMixin):
                     lines = f.readlines()
                     # Check header
                     header = [p.strip() for p in lines[0].split(",")]
-                    assert header[:2] == ["trial_id", "parent_id"]
+                    assert header[:2] == FORK_DATA_KEYS[:2]
                     assert len(lines) >= 2
                     for line in lines[1:]:
                         line = line.strip()  # noqa: PLW2901
