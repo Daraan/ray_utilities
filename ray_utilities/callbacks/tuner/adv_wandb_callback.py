@@ -67,6 +67,9 @@ else:
 _logger = logging.getLogger(__name__)
 
 
+wandb_monitor_lock = threading.Lock()
+
+
 class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
     def run(self, retries=0):
         fork_from = self.kwargs.get("fork_from", None) is not None
@@ -100,7 +103,7 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
             # NOTE: its possible that wandb is stuck because of async logging and we never reach here :/
             online = self.kwargs.get("mode", "online") == "online"
             if "fromStep is greater than the run's last step" in str(e):
-                # This can happen if the parent run is not yet fully synced.
+                # This can happen if the parent run is not yet fully synced, we need to wait for the newest history artifact
                 if not fork_from:
                     raise  # should only happen on forks
                 if retries >= 5:
@@ -217,7 +220,12 @@ class AdvWandbLoggerCallback(
         # Gather uploads tracking
         self._gather_uploads_lock = threading.Lock()
         self._trials_ending: dict[Trial, tuple[Optional[bool], Optional[ray.ObjectRef[_WandbLoggingActor]]]] = {}
-        """Trials that are currently ending and the info if their logger has ended"""
+        """Trials that are currently ending
+
+        The first element of the value tuple tells whether the logging actor has finished writing the data to disk.
+        The second element is the ray.ObjectRef of the logging actor. Both elements can be None if we are unsure
+        of the state of the logging actor or have no access to it.
+        """
         self._gather_timer: Optional[threading.Timer] = None
         self._gather_timeout_min = 10.0  # seconds to wait for more trials to finish
         self._active_trials_count = 0

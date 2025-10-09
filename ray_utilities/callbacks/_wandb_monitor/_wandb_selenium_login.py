@@ -4,16 +4,15 @@ This script handles automated login to wandb.ai and provides a foundation
 for visiting other WandB websites and using the WandB API.
 """
 
+from __future__ import annotations
+
 import logging
 import os
-from pathlib import Path
-import dotenv
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
-import wandb
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.chrome.options import Options as ChromeOptions
@@ -22,7 +21,12 @@ from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-dotenv.load_dotenv(Path("~/.comet_api_key.env").expanduser())
+import wandb
+from ray_utilities.callbacks._wandb_monitor._wandb_session_cache import WandBSessionCache
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,12 +49,14 @@ class WandBSeleniumSession:
 
     def __init__(
         self,
-        credentials: WandBCredentials,
+        credentials: WandBCredentials | None,
         *,
         browser: str = "chrome",
         headless: bool = True,
         timeout: int = 30,
         callback: Optional[Callable[[str, Any], None]] = None,
+        use_cache: bool = True,
+        cache_dir: Optional[Path] = None,
     ):
         """
         Initialize the WandB Selenium session.
@@ -61,12 +67,26 @@ class WandBSeleniumSession:
             headless: Whether to run browser in headless mode
             timeout: Default timeout for web elements
             callback: Optional callback function for status updates
+            use_cache: Whether to use cookie/session caching (default: True)
+            cache_dir: Directory for cache files (default: ~/.wandb_session_cache)
         """
+        if credentials is None:
+            credentials = WandBCredentials(
+                username=os.getenv("WANDB_VIEWER_MAIL", ""),
+                password=os.getenv("WANDB_VIEWER_PW", ""),
+                api_key=os.getenv("WANDB_API_KEY", None),
+            )
+        if not credentials.username or not credentials.password:
+            logger.warning("WandB credentials not provided or incomplete. For public workspaces this is fine.")
         self.credentials = credentials
         self.browser = browser.lower()
         self.headless = headless
         self.timeout = timeout
         self.callback = callback
+        self.use_cache = use_cache
+
+        # Initialize session cache
+        self.session_cache = WandBSessionCache(cache_dir) if use_cache else None
 
         self.driver: Optional[webdriver.Remote] = None
         self.is_logged_in = False
@@ -92,7 +112,8 @@ class WandBSeleniumSession:
             options.add_argument("--disable-dev-shm-usage")
             options.add_argument("--disable-gpu")
             options.add_argument("--window-size=1920,1080")
-            return webdriver.Chrome(options=options)
+            self.driver = webdriver.Chrome(options=options)
+            return self.driver
 
         if self.browser == "firefox":
             options = FirefoxOptions()
@@ -109,7 +130,8 @@ class WandBSeleniumSession:
                 if os.path.exists(path):
                     options.binary_location = path
                     break
-            return webdriver.Firefox(options=options)
+            self.driver = webdriver.Firefox(options=options)
+            return self.driver
 
         raise ValueError(f"Unsupported browser: {self.browser}")
 
@@ -139,6 +161,127 @@ class WandBSeleniumSession:
         wait = WebDriverWait(self.driver, wait_time)
         return wait.until(EC.element_to_be_clickable((by, locator)))
 
+    def _load_cached_cookies(self) -> bool:
+        """
+        Load and apply cached cookies if available.
+
+        Returns:
+            True if cached cookies were loaded and session is valid, False otherwise
+        """
+        if not self.use_cache or not self.session_cache:
+            return False
+
+        if not self.driver:
+            return False
+
+        try:
+            # Load cached cookies
+            cached_cookies = self.session_cache.load_cookies(
+                self.credentials.username,
+                self.browser,
+                max_age_hours=24.0,  # Consider cookies valid for 24 hours
+            )
+
+            if not cached_cookies:
+                return False
+
+            # Navigate to WandB domain first to set cookies
+            self.driver.get("https://wandb.ai")
+            time.sleep(2)  # Wait for page load
+
+            # Apply cached cookies
+            cookies_applied = 0
+            for cookie in cached_cookies:
+                try:
+                    # Remove problematic fields that selenium doesn't need
+                    cookie_data = {
+                        k: v
+                        for k, v in cookie.items()
+                        if k in ["name", "value", "domain", "path", "secure", "httpOnly"]
+                    }
+
+                    # Skip cookies that might cause issues
+                    if cookie_data.get("domain") and not cookie_data["domain"].endswith("wandb.ai"):
+                        continue
+
+                    self.driver.add_cookie(cookie_data)
+                    cookies_applied += 1
+                except WebDriverException as e:
+                    logger.debug("Failed to add cookie %s: %s", cookie.get("name", "unknown"), e)
+                    continue
+
+            logger.debug("Applied %d out of %d cached cookies", cookies_applied, len(cached_cookies))
+
+            # Test session validity by trying to access the project - it might be public (treat like we are logged in)
+            # if its not public it will show "404" and "stumbled on an empty page" if not authenticated
+            test_run_url = "https://wandb.ai/daraan/dev-workspace/"
+            self.driver.get(test_run_url)
+            time.sleep(7)  # Wait for page load and potential redirects
+
+            current_url = self.driver.current_url
+            page_source = self.driver.page_source.lower()
+
+            logger.debug("Current URL after applying cookies: %s", current_url)
+
+            # Check for authentication indicators
+            # If we're authenticated, we should either see the run page or be redirected to login
+            # If we get "stumbled on an empty page", that means we're not authenticated
+            is_authenticated = (
+                "wandb.ai" in current_url
+                and "auth0.com" not in current_url
+                and "stumbled on an empty page" not in page_source  # This is the key 404 indicator
+                and ("login" not in current_url or "runs/" in current_url)  # Either on run page or login redirect
+            )
+
+            if is_authenticated:
+                logger.info("Successfully restored session using cached cookies")
+                self.is_logged_in = True
+                self._notify("cached_login_success")
+
+                # Load cached session data (API key, etc.)
+                if not self.credentials.api_key:
+                    session_data = self.session_cache.load_session_data(self.credentials.username)
+                    if session_data and session_data.get("api_key"):
+                        self.credentials.api_key = session_data["api_key"]
+                        logger.debug("Loaded cached API key")
+
+                return True
+
+            logger.debug("Cached session validation failed - URL: %s", current_url)
+            if "stumbled on an empty page" in page_source:
+                logger.debug("Got 'stumbled on an empty page' - session is definitely invalid")
+            elif "login" in current_url:
+                logger.debug("Redirected to login page - session expired")
+            elif "404" in page_source:
+                logger.debug("Got 404 page - session may be invalid")
+            else:
+                logger.debug("Session validation failed for unknown reason")
+            return False
+
+        except Exception as e:
+            logger.debug("Failed to load cached cookies: %s", e)
+            return False
+
+    def _save_current_cookies(self) -> None:
+        """Save current browser cookies to cache."""
+        if not self.use_cache or not self.session_cache or not self.driver:
+            return
+
+        try:
+            # Get all cookies from current session
+            cookies = self.driver.get_cookies()
+
+            # Save cookies to cache
+            if cookies:
+                self.session_cache.save_cookies(self.credentials.username, self.browser, cookies)
+                logger.debug("Saved %d cookies to cache", len(cookies))
+
+            # Save session data
+            self.session_cache.save_session_data(self.credentials.username, self.credentials.api_key)
+
+        except Exception as e:
+            logger.debug("Failed to save cookies to cache: %s", e)
+
     def login(self) -> bool:
         """
         Perform WandB login via Selenium.
@@ -147,10 +290,17 @@ class WandBSeleniumSession:
             True if login successful, False otherwise
         """
         if not self.driver:
-            raise RuntimeError("Driver not initialized")
+            self.driver = self._setup_driver()
 
         try:
             self._notify("starting_login")
+
+            # First, try to use cached cookies if available
+            if self._load_cached_cookies():
+                return True
+
+            # If cached login failed, proceed with manual login
+            logger.info("Cached login failed or not available, performing manual login")
 
             # Navigate to WandB login page (new URL that redirects to Auth0)
             login_url = "https://app.wandb.ai/login?_gl=1*1njlh40*_ga*MjAzMDY0NTMxOC4xNjg2NzMzODEw*_ga_JH1SJHJQXJ*MTY5MDk5MDgxNS4xMjEuMS4xNjkwOTkxMDExLjYwLjAuMA.."
@@ -163,6 +313,21 @@ class WandBSeleniumSession:
             # Check if we're on Auth0 domain
             current_url = self.driver.current_url
             logger.info("Current URL after navigation: %s", current_url)
+
+            # Check if we're already logged in (redirected to wandb.ai instead of auth0)
+            if (
+                "wandb.ai" in current_url
+                and "auth0.com" not in current_url
+                and "login" not in current_url
+                and ("home" in current_url or "dashboard" in current_url)
+            ):
+                logger.info("Already logged in, no manual login needed")
+                self.is_logged_in = True
+                self._notify("login_success")
+
+                # Save cookies and session data for future use
+                self._save_current_cookies()
+                return True
 
             # Look for email field with Auth0-specific selectors
             email_selectors = [
@@ -195,10 +360,11 @@ class WandBSeleniumSession:
                 "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", username_field
             )
             time.sleep(1)  # Wait for scroll to complete
+            breakpoint()
 
             username_field.clear()
             username_field.send_keys(self.credentials.username)
-            logger.info("Entered username")
+            logger.info("Entered username: %s", self.credentials.username[0] + "***" + self.credentials.username[-4:])
 
             # Look for password field with Auth0-specific selectors
             password_selectors = [
@@ -265,7 +431,7 @@ class WandBSeleniumSession:
             self.driver.execute_script(
                 "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", login_button
             )
-            time.sleep(1)  # Wait for scroll to complete
+            time.sleep(2)  # Wait for scroll to complete
 
             login_button.click()
             logger.info("Clicked login button")
@@ -293,9 +459,8 @@ class WandBSeleniumSession:
                 logger.info("Final URL: %s", self.driver.current_url)
                 self._notify("login_success")
 
-                # Extract API key if available and not provided
-                if not self.credentials.api_key:
-                    self._extract_api_key()
+                # Save cookies and session data for future use
+                self._save_current_cookies()
 
             except TimeoutException:
                 # Check for error messages on Auth0 or WandB
@@ -330,38 +495,6 @@ class WandBSeleniumSession:
 
         return True
 
-    def _extract_api_key(self) -> Optional[str]:
-        """
-        Attempt to extract API key from WandB settings page.
-
-        Returns:
-            API key if found, None otherwise
-        """
-        if not self.driver:
-            raise RuntimeError("Driver not initialized")
-
-        try:
-            # Navigate to settings/API keys page
-            self.driver.get("https://wandb.ai/settings")
-
-            # Look for API key elements
-            api_key_element = self._wait_for_element(
-                By.CSS_SELECTOR, "[data-test*='api-key'], .api-key, input[value*='wandb_']", timeout=10
-            )
-
-            api_key = api_key_element.get_attribute("value") or api_key_element.text
-            if api_key and api_key.startswith("wandb_"):
-                self.credentials.api_key = api_key
-                logger.info("Successfully extracted API key")
-                self._notify("api_key_extracted", api_key[:10] + "...")
-                return api_key
-
-        except (TimeoutException, WebDriverException) as e:
-            logger.warning("Could not extract API key: %s", e)
-            self._notify("api_key_extraction_failed", str(e))
-
-        return None
-
     def visit_wandb_page(self, url: str) -> bool:
         """
         Visit a WandB page and wait for it to load.
@@ -385,6 +518,19 @@ class WandBSeleniumSession:
             WebDriverWait(self.driver, self.timeout).until(
                 lambda driver: driver.execute_script("return document.readyState") == "complete"
             )
+
+            # Check if we ended up on a 404 page (private page without authentication)
+            page_source = self.driver.page_source.lower()
+            current_url = self.driver.current_url
+
+            if "stumbled on an empty page" in page_source or ("404" in page_source and "wandb.ai" in current_url):
+                logger.error("Accessed private page without authentication: %s", url)
+                logger.error("Got 404 error - insufficient permissions or invalid session")
+                self._notify(
+                    "page_visit_failed", {"url": url, "error": "404 - Private page or authentication required"}
+                )
+                return False
+
             logger.info("Successfully visited: %s", url)
             self._notify("page_visited", url)
 
@@ -439,7 +585,7 @@ class WandBSeleniumSession:
         """Internal method for threaded execution."""
         try:
             with self._lock:
-                self.driver = self._setup_driver()
+                self._setup_driver()
                 self._notify("driver_initialized")
 
             # Perform login
@@ -474,6 +620,38 @@ class WandBSeleniumSession:
             self.thread.join(timeout=5)
             logger.info("Stopped WandB session thread")
 
+    def clear_cache(self) -> bool:
+        """
+        Clear cached session data for the current user.
+
+        Returns:
+            True if cache cleared successfully, False otherwise
+        """
+        if not self.use_cache or not self.session_cache:
+            logger.warning("Cache not enabled, cannot clear cache")
+            return False
+
+        return self.session_cache.clear_cache(self.credentials.username)
+
+    def is_cache_valid(self, max_age_hours: float = 24.0) -> bool:
+        """
+        Check if cached session data exists and is still valid.
+
+        Args:
+            max_age_hours: Maximum age of cached data in hours
+
+        Returns:
+            True if valid cached data exists, False otherwise
+        """
+        if not self.use_cache or not self.session_cache:
+            return False
+
+        cached_cookies = self.session_cache.load_cookies(
+            self.credentials.username, self.browser, max_age_hours=max_age_hours
+        )
+
+        return cached_cookies is not None
+
     def cleanup(self) -> None:
         """Clean up resources."""
         with self._lock:
@@ -491,12 +669,19 @@ class WandBSeleniumSession:
 
     def __enter__(self):
         """Context manager entry."""
-        self.driver = self._setup_driver()
+        self._setup_driver()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit."""
         self.cleanup()
+
+    def __del__(self):
+        """Destructor to ensure cleanup."""
+        try:
+            self.cleanup()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def example_usage():
