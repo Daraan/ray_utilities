@@ -125,11 +125,11 @@ class WandBSessionCache:
 
     def save_session_data(self, username: str, api_key: Optional[str] = None) -> bool:
         """
-        Save session data like API keys.
+        Save session data. Note: API keys are not saved for security reasons.
 
         Args:
             username: WandB username/email
-            api_key: WandB API key if available
+            api_key: WandB API key (ignored for security - use environment variables)
 
         Returns:
             True if session data saved successfully, False otherwise
@@ -143,8 +143,8 @@ class WandBSessionCache:
 
             cache_key = self._get_cache_key(username, "")
 
-            # Store session data with timestamp
-            session_data[cache_key] = {"api_key": api_key, "timestamp": time.time(), "username": username}
+            # Store session data with timestamp (API key not stored for security)
+            session_data[cache_key] = {"timestamp": time.time(), "username": username}
 
             # Write back to file with secure permissions
             with open(self.session_file, "w") as f:

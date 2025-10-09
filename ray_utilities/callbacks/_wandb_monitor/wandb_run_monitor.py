@@ -16,12 +16,12 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 import dotenv
 
 import wandb
-from ray_utilities.callbacks._wandb_monitor._wandb_selenium_login import WandBCredentials, WandBSeleniumSession
+from ray_utilities.callbacks._wandb_monitor._wandb_selenium_login_mp import WandBCredentials, WandBSeleniumSession
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class MonitorResult:
     error_message: Optional[str] = None
 
 
-class WandBRunMonitor:
+class WandbRunMonitor:
     """
     Threaded WandB run monitor that combines Selenium login with API artifact checking.
 
@@ -143,18 +143,12 @@ class WandBRunMonitor:
             )
 
             # login which sets up the driver and keeps session open for later use
-            self.selenium_session.driver = self.selenium_session._setup_driver()
             if not self.selenium_session.login():
                 logger.error("Failed to login via Selenium")
                 self._notify("initialization_failed", "Selenium login failed")
                 return False
 
-            # Initialize WandB API
-            if self.selenium_session.credentials.api_key:
-                self.wandb_api = wandb.Api(api_key=self.selenium_session.credentials.api_key)
-            else:
-                # Try to initialize API without explicit key (using environment/config)
-                self.wandb_api = wandb.Api()
+            self.wandb_api = wandb.Api()
 
             logger.info("Successfully initialized monitor")
             self.is_initialized = True
@@ -196,12 +190,9 @@ class WandBRunMonitor:
         try:
             self._notify("visiting_run_page", {"url": run_url})
 
-            # Use existing session if available, otherwise create new context
-            if self.selenium_session.driver:
-                success = self.selenium_session.visit_wandb_page(run_url)
-            else:
-                with self.selenium_session as session:
-                    success = session.visit_wandb_page(run_url)
+            # For multiprocessing implementation, driver is None (it's in the worker process)
+            # Just use the session directly without checking driver
+            success = self.selenium_session.visit_wandb_page(run_url)
 
         except Exception as e:
             logger.error("Error visiting run page %s: %s", run_url, e)
@@ -325,6 +316,8 @@ class WandBRunMonitor:
                 )
 
                 # Wait for next check
+                if self._stop_event.is_set():
+                    break
                 time.sleep(check_interval)
                 total_wait_time = time.time() - start_time
 
@@ -398,9 +391,9 @@ class WandBRunMonitor:
         Returns:
             Thread object for the monitoring process
         """
-        if self.monitor_thread and self.monitor_thread.is_alive():
+        if self.is_monitoring():
             logger.warning("Monitor thread already running")
-            return self.monitor_thread
+            return cast("threading.Thread", self.monitor_thread)
 
         self.monitor_thread = threading.Thread(
             target=self._threaded_monitor_run,
@@ -468,12 +461,43 @@ class WandBRunMonitor:
             logger.error("Thread execution error: %s", e)
             self._notify("threaded_monitor_error", str(e))
 
-    def stop_monitoring(self) -> None:
-        """Stop any active monitoring."""
+    def is_monitoring(self) -> bool:
+        """Check if monitoring thread is active."""
+        if self.monitor_thread is None:
+            return False
+        if self.monitor_thread.is_alive():
+            return True
+        return False
+
+    def stop_monitoring(self) -> bool:
+        """Stop any active monitoring. Returns True if no active activity remains."""
         self._stop_event.set()
         if self.monitor_thread:
             self.monitor_thread.join(timeout=10)
-            logger.info("Stopped monitoring thread")
+            logger.debug("Stopped monitoring thread")
+            if not self.monitor_thread.is_alive():
+                self.monitor_thread = None
+                logger.debug("Monitoring thread has been joined and cleared")
+                return True
+            return False
+        return True
+
+    def refresh(self, timeout=30):
+        done = self.stop_monitoring()
+        logger.debug("Stopped monitoring: %s", done)
+        if done:
+            self._stop_event.clear()
+            self.monitor_thread = None
+            return
+        logger.info("Waiting for monitoring thread to stop...")
+        wait = 0
+        while self.is_monitoring() and wait < timeout:
+            time.sleep(1)
+            wait += 1
+        if wait >= timeout:
+            logger.warning("Timeout waiting for monitoring thread to stop")
+        self._stop_event.clear()
+        self.monitor_thread = None
 
     def cleanup(self) -> None:
         """Clean up resources safely and thoroughly."""

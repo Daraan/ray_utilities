@@ -37,6 +37,7 @@ class WandBCredentials:
     username: str
     password: str
     api_key: Optional[str] = None
+    team_name: Optional[str] = None  # Optional team name to verify loggin
 
 
 class WandBSeleniumSession:
@@ -75,6 +76,7 @@ class WandBSeleniumSession:
                 username=os.getenv("WANDB_VIEWER_MAIL", ""),
                 password=os.getenv("WANDB_VIEWER_PW", ""),
                 api_key=os.getenv("WANDB_API_KEY", None),
+                team_name=os.getenv("WANDB_VIEWER_TEAM_NAME", None),
             )
         if not credentials.username or not credentials.password:
             logger.warning("WandB credentials not provided or incomplete. For public workspaces this is fine.")
