@@ -16,13 +16,22 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 import dotenv
 
+import ray
 import wandb
 import wandb.errors
-from ray_utilities.callbacks._wandb_monitor._wandb_selenium_login_mp import WandBCredentials, WandBSeleniumSession
+
+# multiprocessing version we currently do not use
+# from ray_utilities.callbacks._wandb_monitor._wandb_selenium_login_mp import WandBCredentials, WandBSeleniumSession
+# Instead we use one in the same process
+from ray_utilities.callbacks._wandb_monitor._wandb_selenium_login import WandBCredentials, WandBSeleniumSession
+
+if TYPE_CHECKING:
+    from ray.actor import ActorHandle, ActorProxy
+
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +209,9 @@ class WandbRunMonitor:
         entity = entity or self.entity
         project = project or self.project
 
+        if entity is None or project is None:
+            logger.error("Entity and project must be set to visit run page")
+            return False
         run_url = f"https://wandb.ai/{entity}/{project}/runs/{run_id}"
 
         try:
@@ -207,7 +219,8 @@ class WandbRunMonitor:
 
             # For multiprocessing implementation, driver is None (it's in the worker process)
             # Just use the session directly without checking driver
-            success = self.selenium_session.visit_wandb_page(run_url)
+            # success = self.selenium_session.visit_wandb_page(run_url)
+            success = self.selenium_session.visit_run_page(entity, project, run_id)
 
         except Exception as e:
             logger.error("Error visiting run page %s: %s", run_url, e)
@@ -610,6 +623,89 @@ class WandbRunMonitor:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit."""
         self.cleanup()
+
+
+class RemoteWandbRunMonitor(WandbRunMonitor):
+    """
+    WandB run monitor that can be used in parallel processes.
+
+    This class extends WandbRunMonitor to support usage in separate processes.
+    It overrides methods to ensure thread safety and proper resource management
+    when used in a multiprocessing context.
+    """
+
+    def __init__(
+        self,
+        credentials: WandBCredentials | None = None,
+        *,
+        project: str,
+        entity: str | None = None,
+        browser: str = "firefox",
+        headless: bool = True,
+        timeout: int = 30,
+        callback: Callable[[str, Any], None] | None = None,
+        wandb_api: wandb.Api | None = None,
+        _remote_init: bool = False,
+    ):
+        if not _remote_init:
+            raise ValueError("RemoteWandbRunMonitor must be instantiated via get_remote_monitor()")
+        super().__init__(
+            credentials,
+            project=project,
+            entity=entity,
+            browser=browser,
+            headless=headless,
+            timeout=timeout,
+            callback=callback,
+            wandb_api=wandb_api,
+        )
+
+    @classmethod
+    def get_remote_monitor(
+        cls,
+        credentials: WandBCredentials | None = None,
+        *,
+        project: str,
+        entity: Optional[str] = None,
+        browser: str = "firefox",
+        headless: bool = True,
+        timeout: int = 30,
+        callback: Optional[Callable[[str, Any], None]] = None,
+        wandb_api: Optional[wandb.Api] = None,
+        # actor options
+        num_cpus: int = 1,
+        name: str = "remote_wandb_run_monitor",
+        actor_options: Optional[dict[str, Any]] = None,
+    ) -> "ActorHandle[RemoteWandbRunMonitor] | ActorProxy[RemoteWandbRunMonitor]":
+        """Create a remote WandbRunMonitor actor."""
+        if actor_options is None:
+            actor_options = {
+                "num_cpus": num_cpus,
+                "max_restarts": -1,
+                "name": name,
+            }
+        else:
+            actor_options = dict(actor_options)
+            actor_options.setdefault("num_cpus", num_cpus)
+            actor_options.setdefault("max_restarts", -1)
+            actor_options.setdefault("name", name)
+
+        remote_actor = (
+            ray.remote(cls)
+            .options(max_concurrency=1, **actor_options)
+            .remote(
+                credentials,
+                project=project,
+                entity=entity,
+                browser=browser,
+                headless=headless,
+                timeout=timeout,
+                callback=callback,
+                wandb_api=wandb_api,
+                _remote_init=True,
+            )
+        )
+        return remote_actor
 
 
 if __name__ == "__main__":

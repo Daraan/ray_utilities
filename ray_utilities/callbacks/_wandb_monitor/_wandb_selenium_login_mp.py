@@ -33,14 +33,6 @@ from ray_utilities.callbacks._wandb_monitor._wandb_session_cache import WandBSes
 
 logger = logging.getLogger(__name__)
 
-# Set multiprocessing start method to spawn for better isolation
-# This is especially important for Selenium and GUI applications
-try:
-    multiprocessing.set_start_method("spawn", force=True)
-except RuntimeError:
-    # Already set, ignore
-    pass
-
 
 @dataclass
 class WandBCredentials:

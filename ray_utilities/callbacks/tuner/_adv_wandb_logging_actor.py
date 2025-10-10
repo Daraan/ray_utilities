@@ -43,20 +43,21 @@ ray_wandb._is_allowed_type = _is_allowed_type_patch
 
 class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
     def run(self, retries=0):
-        from ray_utilities.callbacks.tuner.wandb_helpers import _wandb_web_monitor
+        if False:
+            from ray_utilities.callbacks.tuner.wandb_helpers import _wandb_web_monitor
 
-        logger.warning(f"wandb web monitor at import: {_wandb_web_monitor}")
-        try:
-            with get_wandb_web_monitor(
-                entity=self.kwargs.get("entity", wandb_api().default_entity), project=self.kwargs["project"]
-            ) as monitor:
-                logger.warning(f"wandb web monitor in context: {monitor}")
-                ...
-        except Exception as e:
-            logger.exception("Failed to get wandb web monitor: %s", str(e))
-        from ray_utilities.callbacks.tuner.wandb_helpers import _wandb_web_monitor as wb2
+            logger.warning(f"wandb web monitor at import: {_wandb_web_monitor}")
+            try:
+                with get_wandb_web_monitor(
+                    entity=self.kwargs.get("entity", wandb_api().default_entity), project=self.kwargs["project"]
+                ) as monitor:
+                    logger.warning(f"wandb web monitor in context: {monitor}")
+                    ...
+            except Exception as e:
+                logger.exception("Failed to get wandb web monitor: %s", str(e))
+            from ray_utilities.callbacks.tuner.wandb_helpers import _wandb_web_monitor as wb2
 
-        logger.warning(f"wandb web monitor after import: {wb2}")
+            logger.warning(f"wandb web monitor after import: {wb2}")
         fork_from = self.kwargs.get("fork_from", None) is not None
         if fork_from:
             # Write info about forked trials, to know in which order to upload trials

@@ -50,7 +50,7 @@ class WandBSeleniumSession:
 
     def __init__(
         self,
-        credentials: WandBCredentials | None,
+        credentials: WandBCredentials | None = None,
         *,
         browser: str = "chrome",
         headless: bool = True,
@@ -95,6 +95,9 @@ class WandBSeleniumSession:
         self.thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
+
+        # Track run page tabs: {run_url: tab_handle}
+        self._run_tabs: dict[str, str] = {}
 
     def _notify(self, status: str, data: Any = None) -> None:
         """Send notification via callback if available."""
@@ -163,13 +166,132 @@ class WandBSeleniumSession:
         wait = WebDriverWait(self.driver, wait_time)
         return wait.until(EC.element_to_be_clickable((by, locator)))
 
-    def _load_cached_cookies(self) -> bool:
+    def _check_team_present(self) -> bool | None:
         """
-        Load and apply cached cookies if available.
+        Check if the expected team name profile is visible in the top right corner.
 
         Returns:
-            True if cached cookies were loaded and session is valid, False otherwise
+            True if expected team is found, False if logged out or wrong team, None if no team specified
         """
+        if not self.driver:
+            return False
+
+        try:
+            # Get expected team name from environment variable or credentials
+            expected_team_name = self.credentials.team_name or os.getenv("WANDB_VIEWER_TEAM_NAME", None)
+            if not expected_team_name:
+                logger.debug("No team name specified for verification, skipping check")
+                return None  # No specific team to check, assume success
+
+            # First check if we're logged out by looking for logged-out indicators
+            logged_out_indicators = [
+                ".logged-out-menu",
+                "[data-test='login-button']",
+                "[data-test='signup']",
+                "button:contains('Log in')",
+                "button:contains('Sign up')",
+            ]
+
+            for selector in logged_out_indicators:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    if elements:
+                        logger.debug("Found logged-out indicator: %s", selector)
+                        return False
+                except Exception:
+                    continue
+
+            # Look for the profile selector element that contains the expected team name
+            profile_selectors = [
+                "[data-test='nav-profile-account-selector']",
+                ".nav-profile-account-selector",
+                "[aria-label*='Toggle profile']",
+                "[class*='profile']",
+            ]
+
+            for selector in profile_selectors:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    for element in elements:
+                        if expected_team_name in element.text:
+                            logger.debug("Found expected team name '%s' in profile indicator", expected_team_name)
+                            return True
+                except Exception:
+                    continue
+
+            # Fallback: check page source for expected team name
+            page_source = self.driver.page_source
+            if expected_team_name in page_source:
+                logger.debug("Found expected team name '%s' in page source", expected_team_name)
+                return True
+
+            logger.debug("Expected team name '%s' not found in profile", expected_team_name)
+            return False
+
+        except Exception as e:
+            logger.debug("Error checking for team profile: %s", e)
+            return False
+
+    def _check_run_page_loaded(self, url: str) -> bool:
+        """
+        Check if a WandB run page has fully loaded by looking for 'Run details' button.
+
+        Args:
+            url: The URL being checked
+
+        Returns:
+            True if run page is fully loaded or not a run page, False if run page but not loaded
+        """
+        if not self.driver:
+            return False
+
+        try:
+            # Check if this is a run page URL
+            if "/runs/" not in url:
+                # Not a run page, skip this check
+                return True
+
+            # Look for "Run details" button to confirm run page is loaded
+            run_details_selectors = [
+                # XPath selectors that can search by text content
+                "//a[contains(text(), 'Run details')]",
+                "//button[contains(text(), 'Run details')]",
+                "//a[@data-component='Button' and contains(text(), 'Run details')]",
+                "//a[contains(@href, '/overview') and contains(text(), 'Run details')]",
+                # CSS selectors for button components (without text matching)
+                "a[data-component='Button'][href*='/overview']",
+                "a[href*='/overview']",
+            ]
+
+            for selector in run_details_selectors:
+                try:
+                    if selector.startswith("//"):
+                        # XPath selector
+                        elements = self.driver.find_elements(By.XPATH, selector)
+                    else:
+                        # CSS selector
+                        elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+
+                    if elements:
+                        logger.debug("Found 'Run details' button - run page loaded successfully")
+                        return True
+                except Exception:
+                    continue
+
+            # Fallback: check page source for "Run details" text
+            page_source = self.driver.page_source
+            if "Run details" in page_source:
+                logger.debug("Found 'Run details' text in page source")
+                return True
+
+            logger.debug("'Run details' button not found - run page may not be fully loaded")
+            return False
+
+        except Exception as e:
+            logger.debug("Error checking if run page loaded: %s", e)
+            return False
+
+    def _load_cached_cookies(self) -> bool:
         if not self.use_cache or not self.session_cache:
             return False
 
@@ -225,18 +347,25 @@ class WandBSeleniumSession:
 
             logger.debug("Current URL after applying cookies: %s", current_url)
 
-            # Check for authentication indicators
-            # If we're authenticated, we should either see the run page or be redirected to login
-            # If we get "stumbled on an empty page", that means we're not authenticated
-            is_authenticated = (
+            # Check basic authentication indicators
+            basic_auth_check = (
                 "wandb.ai" in current_url
                 and "auth0.com" not in current_url
-                and "stumbled on an empty page" not in page_source  # This is the key 404 indicator
-                and ("login" not in current_url or "runs/" in current_url)  # Either on run page or login redirect
+                and "stumbled on an empty page" not in page_source
+                and ("login" not in current_url or "runs/" in current_url)
             )
 
+            # Check for Team profile to verify specific user authentication
+            team_profile_check = self._check_team_present() if basic_auth_check else False
+
+            is_authenticated = basic_auth_check and (team_profile_check is not False)
+
             if is_authenticated:
-                logger.info("Successfully restored session using cached cookies")
+                expected_team_name = self.credentials.team_name or os.getenv("WANDB_VIEWER_TEAM_NAME", None)
+                logger.info(
+                    "Successfully restored session using cached cookies with %s profile verified",
+                    expected_team_name,
+                )
                 self.is_logged_in = True
                 self._notify("cached_login_success")
 
@@ -248,6 +377,13 @@ class WandBSeleniumSession:
                         logger.debug("Loaded cached API key")
 
                 return True
+
+            if basic_auth_check and not team_profile_check:
+                expected_team_name = self.credentials.team_name or os.getenv("WANDB_VIEWER_TEAM_NAME", None)
+                logger.warning(
+                    "Basic authentication passed but %s profile not found - cached session may be for different user",
+                    expected_team_name,
+                )
 
             logger.debug("Cached session validation failed - URL: %s", current_url)
             if "stumbled on an empty page" in page_source:
@@ -362,7 +498,6 @@ class WandBSeleniumSession:
                 "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", username_field
             )
             time.sleep(1)  # Wait for scroll to complete
-            breakpoint()
 
             username_field.clear()
             username_field.send_keys(self.credentials.username)
@@ -533,6 +668,24 @@ class WandBSeleniumSession:
                 )
                 return False
 
+            # Special verification for run pages - wait for content to load
+            if "/runs/" in url:
+                logger.debug("Run page detected, waiting for run content to load...")
+
+                # Wait up to 10 seconds for run details to appear
+                run_loaded = False
+                for _ in range(10):
+                    if self._check_run_page_loaded(url):
+                        run_loaded = True
+                        break
+                    time.sleep(1)
+
+                if not run_loaded:
+                    logger.warning("Run page may not have fully loaded - 'Run details' button not found: %s", url)
+                    # Don't fail the visit, just warn - some run pages might have different layouts
+                else:
+                    logger.info("Run page fully loaded with 'Run details' button verified: %s", url)
+
             logger.info("Successfully visited: %s", url)
             self._notify("page_visited", url)
 
@@ -542,6 +695,370 @@ class WandBSeleniumSession:
             return False
 
         return True
+
+    def open_new_tab(self, *, switch_to: bool = True) -> str:
+        """
+        Open a new browser tab.
+
+        Args:
+            switch_to: Whether to switch to the new tab immediately
+
+        Returns:
+            Handle of the new tab
+
+        Raises:
+            RuntimeError: If driver is not initialized or failed to create new tab
+        """
+        if not self.driver:
+            raise RuntimeError("Driver not initialized")
+
+        try:
+            # Store current tab handle
+            original_tab = self.driver.current_window_handle
+
+            # Open new tab using JavaScript
+            self.driver.execute_script("window.open('', '_blank');")
+
+            # Get all window handles
+            all_tabs = self.driver.window_handles
+
+            # Find the new tab (should be the last one)
+            new_tab = None
+            for tab in all_tabs:
+                if tab != original_tab:
+                    new_tab = tab
+                    break
+
+            if not new_tab:
+                raise RuntimeError("Failed to create new tab")
+
+            # Switch to new tab if requested
+            if switch_to:
+                self.driver.switch_to.window(new_tab)
+                logger.info("Opened and switched to new tab")
+            else:
+                logger.info("Opened new tab without switching")
+
+            self._notify("new_tab_opened", {"tab_handle": new_tab, "switched": switch_to})
+
+        except WebDriverException as e:
+            logger.error("Failed to open new tab: %s", e)
+            self._notify("new_tab_failed", str(e))
+            raise
+        else:
+            return new_tab
+
+    def visit_run_page(self, entity: str, project: str, run_id: str, *, in_new_tab: bool = False) -> bool:
+        """
+        Visit a specific WandB run page, managing dedicated tabs for each run.
+
+        Each unique run gets its own tab. If the same run is requested again,
+        the method switches to the existing tab and refreshes the page.
+
+        Args:
+            entity: WandB entity (username or team name)
+            project: WandB project name
+            run_id: WandB run ID
+            in_new_tab: Deprecated - each run always gets its own tab (kept for compatibility)
+
+        Returns:
+            True if run page loaded successfully, False otherwise
+        """
+        # Construct the run URL
+        run_url = f"https://wandb.ai/{entity}/{project}/runs/{run_id}"
+
+        if not self.is_logged_in:
+            logger.warning("Not logged in, cannot visit run page")
+            return False
+
+        if not self.driver:
+            raise RuntimeError("Driver not initialized")
+
+        try:
+            # Check if we already have a tab for this run
+            if run_url in self._run_tabs:
+                existing_tab = self._run_tabs[run_url]
+
+                # Verify the tab still exists
+                current_tabs = self.get_all_tab_handles()
+                if existing_tab in current_tabs:
+                    # Switch to existing tab
+                    self.switch_tab(existing_tab)
+                    logger.info("Switched to existing tab for run: %s/%s/%s", entity, project, run_id)
+
+                    # Wait a short bit before refreshing
+                    time.sleep(2)
+
+                    # Refresh the page
+                    self.driver.refresh()
+                    logger.info("Refreshed run page: %s", run_url)
+
+                    # Wait for page to load after refresh
+                    WebDriverWait(self.driver, self.timeout).until(
+                        lambda driver: driver.execute_script("return document.readyState") == "complete"
+                    )
+
+                    # Verify the run page is fully loaded
+                    if "/runs/" in run_url:
+                        run_loaded = False
+                        for _ in range(10):
+                            if self._check_run_page_loaded(run_url):
+                                run_loaded = True
+                                break
+                            time.sleep(1)
+
+                        if run_loaded:
+                            logger.info("Run page refreshed and fully loaded: %s", run_url)
+                        else:
+                            logger.warning("Run page refreshed but 'Run details' button not found: %s", run_url)
+
+                    self._notify(
+                        "run_page_refreshed",
+                        {"entity": entity, "project": project, "run_id": run_id, "tab_handle": existing_tab},
+                    )
+                    return True
+
+                # Tab no longer exists, remove from tracking
+                del self._run_tabs[run_url]
+                logger.debug("Removed stale tab reference for run: %s", run_url)
+
+            # Create new tab for this run
+            try:
+                new_tab = self.open_new_tab(switch_to=True)
+                logger.info("Opened new dedicated tab for run: %s/%s/%s", entity, project, run_id)
+            except RuntimeError as e:
+                logger.error("Failed to open new tab for run page: %s", e)
+                return False
+
+            # Visit the run page in the new tab
+            success = self.visit_wandb_page(run_url)
+
+            if success:
+                # Track this tab for this run
+                self._run_tabs[run_url] = new_tab
+                logger.info("Successfully visited run page: %s/%s/%s in tab %s", entity, project, run_id, new_tab)
+                self._notify(
+                    "run_page_visited",
+                    {
+                        "entity": entity,
+                        "project": project,
+                        "run_id": run_id,
+                        "new_tab": True,
+                        "tab_handle": new_tab,
+                    },
+                )
+            else:
+                logger.error("Failed to visit run page: %s/%s/%s", entity, project, run_id)
+                self._notify(
+                    "run_page_visit_failed",
+                    {"entity": entity, "project": project, "run_id": run_id, "new_tab": True},
+                )
+
+        except (TimeoutException, WebDriverException) as e:
+            logger.error("Error visiting run page %s: %s", run_url, e)
+            self._notify("run_page_error", {"url": run_url, "error": str(e)})
+            return False
+        else:
+            return success
+
+    def switch_tab(self, tab_handle: str) -> bool:
+        """
+        Switch to a specific browser tab.
+
+        Args:
+            tab_handle: Handle of the tab to switch to
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.driver:
+            raise RuntimeError("Driver not initialized")
+
+        try:
+            self.driver.switch_to.window(tab_handle)
+            logger.info("Switched to tab: %s", tab_handle)
+            self._notify("tab_switched", tab_handle)
+
+        except WebDriverException as e:
+            logger.error("Failed to switch to tab %s: %s", tab_handle, e)
+            self._notify("tab_switch_failed", {"tab_handle": tab_handle, "error": str(e)})
+            return False
+        else:
+            return True
+
+    def _cleanup_run_tab_tracking(self, tab_handle: str) -> None:
+        """
+        Clean up run tab tracking when a tab is closed.
+
+        Args:
+            tab_handle: Handle of the tab being closed
+        """
+        # Find and remove any run URLs that reference this tab
+        urls_to_remove = [url for url, handle in self._run_tabs.items() if handle == tab_handle]
+        for url in urls_to_remove:
+            del self._run_tabs[url]
+            logger.debug("Removed run tab tracking for URL: %s", url)
+
+    def close_current_tab(self) -> bool:
+        """
+        Close the currently active tab.
+
+        Returns:
+            True if successful, False otherwise
+
+        Note:
+            If this is the last tab, the browser will be closed
+        """
+        if not self.driver:
+            raise RuntimeError("Driver not initialized")
+
+        try:
+            current_tab = self.driver.current_window_handle
+            all_tabs = self.driver.window_handles
+
+            # Clean up run tab tracking for the tab being closed
+            self._cleanup_run_tab_tracking(current_tab)
+
+            # Close current tab
+            self.driver.close()
+
+            # If there are other tabs, switch to the first available one
+            if len(all_tabs) > 1:
+                remaining_tabs = [tab for tab in all_tabs if tab != current_tab]
+                if remaining_tabs:
+                    self.driver.switch_to.window(remaining_tabs[0])
+                    logger.info("Closed tab and switched to remaining tab")
+                else:
+                    logger.warning("No remaining tabs to switch to")
+            else:
+                logger.info("Closed last tab - browser will close")
+
+            self._notify("tab_closed", current_tab)
+
+        except WebDriverException as e:
+            logger.error("Failed to close current tab: %s", e)
+            self._notify("tab_close_failed", str(e))
+            return False
+        else:
+            return True
+
+    def get_current_tab_handle(self) -> str:
+        """
+        Get the handle of the currently active tab.
+
+        Returns:
+            Current tab handle
+
+        Raises:
+            RuntimeError: If driver is not initialized
+        """
+        if not self.driver:
+            raise RuntimeError("Driver not initialized")
+
+        return self.driver.current_window_handle
+
+    def get_all_tab_handles(self) -> list[str]:
+        """
+        Get handles of all open tabs.
+
+        Returns:
+            List of all tab handles
+
+        Raises:
+            RuntimeError: If driver is not initialized
+        """
+        if not self.driver:
+            raise RuntimeError("Driver not initialized")
+
+        return self.driver.window_handles
+
+    def get_run_tabs(self) -> dict[str, str]:
+        """
+        Get currently tracked run tabs.
+
+        Returns:
+            Dictionary mapping run URLs to their tab handles
+        """
+        return self._run_tabs.copy()
+
+    def get_run_tab_count(self) -> int:
+        """
+        Get the number of currently tracked run tabs.
+
+        Returns:
+            Number of tracked run tabs
+        """
+        return len(self._run_tabs)
+
+    def close_run_tab(self, entity: str, project: str, run_id: str) -> bool:
+        """
+        Close the tab for a specific run.
+
+        Args:
+            entity: WandB entity (username or team name)
+            project: WandB project name
+            run_id: WandB run ID
+
+        Returns:
+            True if tab was found and closed successfully, False otherwise
+        """
+        # Construct the run URL
+        run_url = f"https://wandb.ai/{entity}/{project}/runs/{run_id}"
+
+        if run_url not in self._run_tabs:
+            logger.warning("No tab found for run: %s/%s/%s", entity, project, run_id)
+            return False
+
+        if not self.driver:
+            raise RuntimeError("Driver not initialized")
+
+        tab_handle = self._run_tabs[run_url]
+
+        try:
+            # Verify the tab still exists
+            current_tabs = self.get_all_tab_handles()
+            if tab_handle not in current_tabs:
+                # Tab no longer exists, remove from tracking
+                del self._run_tabs[run_url]
+                logger.debug("Removed stale tab reference for run: %s", run_url)
+                return False
+
+            # Get current tab to restore later if needed
+            current_tab = self.driver.current_window_handle
+
+            # Switch to the target tab
+            self.driver.switch_to.window(tab_handle)
+            logger.debug("Switched to tab for run: %s/%s/%s", entity, project, run_id)
+
+            # Close the tab
+            self.driver.close()
+
+            # Remove from tracking
+            del self._run_tabs[run_url]
+
+            # Switch back to a remaining tab if we're not on the closed tab
+            remaining_tabs = self.get_all_tab_handles()
+            if remaining_tabs:
+                if current_tab in remaining_tabs:
+                    # Switch back to the original tab if it still exists
+                    self.driver.switch_to.window(current_tab)
+                else:
+                    # Switch to the first available tab
+                    self.driver.switch_to.window(remaining_tabs[0])
+                logger.debug("Switched to remaining tab after closing run tab")
+            else:
+                logger.info("Closed last tab - browser will close")
+
+            logger.info("Successfully closed tab for run: %s/%s/%s", entity, project, run_id)
+            self._notify("run_tab_closed", {"entity": entity, "project": project, "run_id": run_id})
+            return True
+
+        except WebDriverException as e:
+            logger.error("Failed to close tab for run %s/%s/%s: %s", entity, project, run_id, e)
+            self._notify(
+                "run_tab_close_failed", {"entity": entity, "project": project, "run_id": run_id, "error": str(e)}
+            )
+            return False
 
     def initialize_wandb_api(self) -> bool:
         """
@@ -666,6 +1183,10 @@ class WandBSeleniumSession:
                     self.driver = None
                     self.is_logged_in = False
 
+        # Clear run tab tracking
+        self._run_tabs.clear()
+        logger.debug("Cleared run tab tracking")
+
         self._notify("cleanup_complete")
         logger.info("Cleaned up WandB session")
 
@@ -707,6 +1228,33 @@ def example_usage():
                 session.visit_wandb_page("https://wandb.ai/home")
                 session.visit_wandb_page("https://wandb.ai/profile")
 
+                # Example of visiting a specific run page in a new tab
+                success = session.visit_run_page("daraan", "dev-workspace", "example-run-id")
+                if success:
+                    print("Successfully opened run page in dedicated tab!")
+                else:
+                    print("Failed to open run page - run may not exist")
+
+                # Example of visiting the same run again (will switch to existing tab and refresh)
+                success2 = session.visit_run_page("daraan", "dev-workspace", "example-run-id")
+                if success2:
+                    print("Switched to existing tab and refreshed!")
+
+                # Example of opening another run (will open a new tab)
+                session.visit_run_page("daraan", "dev-workspace", "another-run-id")
+
+                # Example of run tab management
+                run_tabs = session.get_run_tabs()
+                print(f"Currently tracking {len(run_tabs)} run tabs: {list(run_tabs.keys())}")
+
+                all_tabs = session.get_all_tab_handles()
+                print(f"Total browser tabs open: {len(all_tabs)}")
+
+                # Example of closing a specific run tab
+                if session.close_run_tab("daraan", "dev-workspace", "example-run-id"):
+                    print("Successfully closed run tab!")
+                    print(f"Run tabs remaining: {session.get_run_tab_count()}")
+
                 # Initialize API if key is available
                 if session.credentials.api_key:
                     session.initialize_wandb_api()
@@ -740,6 +1288,29 @@ def example_usage():
 
             # Use the session
             session.visit_wandb_page("https://wandb.ai/home")
+
+            # Example of opening run pages in threaded mode (each gets its own tab)
+            session.visit_run_page("daraan", "dev-workspace", "run-1")
+            session.visit_run_page("daraan", "dev-workspace", "run-2")
+            session.visit_run_page("daraan", "dev-workspace", "run-1")  # Will switch to existing tab and refresh
+
+            # Example of run tab management in threaded mode
+            run_tabs = session.get_run_tabs()
+            print(f"Tracking {len(run_tabs)} run tabs in background session")
+
+            # Example of closing a specific run tab
+            session.close_run_tab("daraan", "dev-workspace", "run-1")
+            print(f"Run tabs after closing: {session.get_run_tab_count()}")
+
+            # Example of switching between remaining tabs
+            tabs = session.get_all_tab_handles()
+            if len(tabs) > 1:
+                print(f"Switching between {len(tabs)} tabs")
+                # Switch to first tab
+                session.switch_tab(tabs[0])
+                time.sleep(2)
+                # Switch back to second tab
+                session.switch_tab(tabs[1])
 
             if session.credentials.api_key:
                 session.initialize_wandb_api()
