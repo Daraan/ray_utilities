@@ -48,7 +48,7 @@ class DummyWandbUploader(WandbUploaderMixin):
     def _failure_aware_wait(cls, process, timeout=1, trial_id=None, *, terminate_on_timeout=False, report_upload=True):  # pyright: ignore[reportIncompatibleMethodOverride]
         return 1  # Simulate failure
 
-    def upload_paths(self, wandb_paths, trial_runs=None, *, wait=True, parallel_uploads=5):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def upload_paths(self, wandb_paths, trial_runs=None, *, wait=True, parallel_uploads=5) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
         # Simulate a failed upload
         class DummyProcess:
             def __init__(self, wandb_path):
@@ -64,7 +64,6 @@ class DummyWandbUploader(WandbUploaderMixin):
         failed_file = grand_path / f"failed_wandb_uploads-{RUN_ID}.txt"
         with open(failed_file, "w") as f:
             f.write("trial_1 : wandb sync /fake/path\n")
-            # Explicit return None is not needed
 
 
 class TestCallbackUploads(DisableLoggers, TestHelpers):

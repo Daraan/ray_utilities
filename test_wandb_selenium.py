@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 
 # Import our script
 try:
-    from wandb_selenium_login_fixed import WandBCredentials, WandBSeleniumSession
+    from ray_utilities.callbacks._wandb_monitor._wandb_selenium_login import WandBCredentials, WandBSeleniumSession
 
     print("✓ Successfully imported WandBSeleniumSession")
 except ImportError as e:
