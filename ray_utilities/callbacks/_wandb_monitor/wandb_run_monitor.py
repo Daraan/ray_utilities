@@ -21,6 +21,7 @@ from typing import Any, Callable, Optional, cast
 import dotenv
 
 import wandb
+import wandb.errors
 from ray_utilities.callbacks._wandb_monitor._wandb_selenium_login_mp import WandBCredentials, WandBSeleniumSession
 
 logger = logging.getLogger(__name__)
@@ -63,12 +64,13 @@ class WandbRunMonitor:
         self,
         credentials: WandBCredentials | None = None,
         *,
-        entity: str,
         project: str,
+        entity: Optional[str] = None,
         browser: str = "firefox",
         headless: bool = True,
         timeout: int = 30,
         callback: Optional[Callable[[str, Any], None]] = None,
+        wandb_api: Optional[wandb.Api] = None,
     ):
         """
         Initialize the WandB run monitor.
@@ -76,7 +78,7 @@ class WandbRunMonitor:
         Args:
             credentials: WandB login credentials. If not provided, will use environment variables.
                 WANDB_VIEWER_MAIL, WANDB_VIEWER_PW, and WANDB_API_KEY.
-            entity: Default WandB entity name
+            entity: WandB entity name. If not provided falls back to auto-detected entity.
             project: Default WandB project name
             browser: Browser to use ("chrome" or "firefox")
             headless: Whether to run browser in headless mode
@@ -85,7 +87,13 @@ class WandbRunMonitor:
         """
         if credentials is None:
             if "WANDB_VIEWER_MAIL" not in os.environ or "WANDB_VIEWER_PW" not in os.environ:
-                raise ValueError("WandB credentials not provided and environment variables not set")
+                dotenv.load_dotenv(Path("~/.wandb_viewer.env").expanduser())
+                if "WANDB_VIEWER_MAIL" not in os.environ or "WANDB_VIEWER_PW" not in os.environ:
+                    raise ValueError(
+                        "WandB credentials not provided and environment variables %s or %s not set",
+                        "WANDB_VIEWER_MAIL",
+                        "WANDB_VIEWER_PW",
+                    )
             credentials = WandBCredentials(
                 username=os.getenv("WANDB_VIEWER_MAIL", ""),
                 password=os.getenv("WANDB_VIEWER_PW", ""),
@@ -100,7 +108,7 @@ class WandbRunMonitor:
         self.callback = callback
 
         self.selenium_session: Optional[WandBSeleniumSession] = None
-        self.wandb_api: Optional[wandb.Api] = None
+        self.wandb_api: Optional[wandb.Api] = wandb_api
         self.is_initialized = False
         self.monitor_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -148,7 +156,14 @@ class WandbRunMonitor:
                 self._notify("initialization_failed", "Selenium login failed")
                 return False
 
-            self.wandb_api = wandb.Api()
+            if self.wandb_api is None:
+                self.wandb_api = wandb.Api()
+            if self.entity is None:
+                self.entity = self.wandb_api.default_entity
+                if self.entity is None:
+                    logger.error("Failed to auto-detect WandB entity")
+                    self._notify("initialization_failed", "Failed to auto-detect entity")
+                    return False
 
             logger.info("Successfully initialized monitor")
             self.is_initialized = True
@@ -208,6 +223,47 @@ class WandbRunMonitor:
             self._notify("run_page_visit_failed", {"url": run_url})
             return False
 
+    def get_history_artifact_name(self, run_id: str, version: Optional[str | int] = "latest") -> str:
+        """Get the full name of the history artifact for a given run ID and version."""
+        if not self.entity or not self.project:
+            raise ValueError("Entity and project must be set to construct artifact name")
+        if isinstance(version, int):
+            version = "v" + str(version)
+        return f"{self.entity}/{self.project}/run-{run_id}-history:{version}"
+
+    def is_artifact_present(self, run_id: str, version: Optional[str | int] = "latest") -> Optional[bool]:
+        if not self.wandb_api:
+            logger.error("WandB API not initialized")
+            return None
+        history_artifact_name = self.get_history_artifact_name(run_id, version)
+        return self.wandb_api.artifact_exists(history_artifact_name)
+
+    def get_artifact_for_run(self, run_id: str, version: Optional[str | int] = "latest") -> Optional[wandb.Artifact]:
+        """Retrieve the history artifact for a given run ID and version."""
+        if not self.wandb_api:
+            logger.error("WandB API not initialized")
+            return None
+        history_artifact_name = self.get_history_artifact_name(run_id, version)
+        try:
+            artifact = self.wandb_api.artifact(history_artifact_name)
+        except wandb.errors.CommError as e:
+            logger.error("Error retrieving artifact %s: %s", history_artifact_name, e)
+            return None
+        else:
+            return artifact
+
+    def latest_artifact_version(self, artifact: wandb.Artifact) -> Optional[int]:
+        """Get the latest version number of an artifact."""
+        if not artifact or not artifact.version:
+            return None
+        try:
+            if artifact.version.startswith("v"):
+                return int(artifact.version[1:])
+            return int(artifact.version)
+        except ValueError:
+            logger.warning("Artifact version %s is not an integer", artifact.version)
+            return None
+
     def monitor_artifact(
         self,
         run_id: str,
@@ -249,7 +305,8 @@ class WandbRunMonitor:
         # Construct artifact name
         if isinstance(version, int):
             version = "v" + str(version)
-        history_artifact_name = f"{entity}/{project}/run-{run_id}-history:{version}"
+
+        history_artifact_name = self.get_history_artifact_name(run_id, version)
 
         self._notify(
             "starting_artifact_monitor",

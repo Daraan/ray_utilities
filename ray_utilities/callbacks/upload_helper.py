@@ -5,10 +5,47 @@ import logging
 import subprocess
 import time
 from typing import IO, ClassVar, Optional, TypeAlias
+from enum import IntEnum, auto
 
 logger = logging.getLogger(__name__)
 
 AnyPopen: TypeAlias = subprocess.Popen[str] | subprocess.Popen[bytes]
+
+
+class ExitCode(IntEnum):
+    SUCCESS = 0
+    """Process completed successfully without errors."""
+
+    ERROR = 1
+    """Process encountered an error during execution."""
+
+    TIMEOUT = auto()
+    """Process was terminated due to a timeout."""
+
+    TERMINATED = auto()
+    """Process was manually terminated."""
+
+    WANDB_PARENT_NOT_FOUND = auto()
+    """Process failed due to WandB specific error, normally a HTTP 404. Parent needs to be uploaded first."""
+
+    WANDB_BEHIND_STEP = auto()
+    """Failed because current step on the server is behind the local step.
+
+    Solution: Either the parent is not uploaded yet or the wandb-run-history is not properly updated.
+    Visiting the run page of the parent should solve this issue.
+    """
+
+    WANDB_SERVER_ERROR = auto()
+    """
+    Process failed due to a WandB server error (5xx).
+
+    This could be when a fork is created but the parent's history artifact is not yet available.
+
+    Solution: Visit the run page of the parent to trigger creation of the history artifact. Potentially wait and retry.
+    """
+
+    WANDB_UNKNOWN_ERROR = auto()
+    """Process failed due to an unknown WandB specific error."""
 
 
 class UploadHelperMixin:
@@ -49,7 +86,7 @@ class UploadHelperMixin:
         *,
         terminate_on_timeout: bool = True,
         report_upload: bool = True,
-    ) -> int:
+    ) -> int | ExitCode:
         """
         Wait for process to complete and return its exit code, handling exceptions.
 
@@ -62,6 +99,7 @@ class UploadHelperMixin:
         error_occurred = False
         # Define error patterns to look for in output (case-insensitive)
         stdout_type = None
+        error_code = ExitCode.SUCCESS
         while True:
             line = process.stdout.readline() if process.stdout else None
             count = time.time()
@@ -84,9 +122,18 @@ class UploadHelperMixin:
                         trial_id,
                         line.strip(),
                     )
+                    if "contact support" in line and "500" in line:
+                        error_code = ExitCode.WANDB_SERVER_ERROR
+                    elif "not found (<Response [404]>)" in line:
+                        error_code = ExitCode.WANDB_PARENT_NOT_FOUND
+                    elif "fromStep is greater than the run's last step" in line:
+                        error_code = ExitCode.WANDB_BEHIND_STEP
+                    else:
+                        error_code = ExitCode.ERROR
                     process.terminate()
                     break
             elif process.poll() is not None:
+                error_code = ExitCode.SUCCESS
                 break  # Process finished
             elif count - start > timeout:
                 logger.warning(
@@ -95,9 +142,10 @@ class UploadHelperMixin:
                     cls._upload_service_name,
                     "Killing process." if terminate_on_timeout else "Not killing process as.",
                 )
-                error_occurred = True
                 if terminate_on_timeout:
                     process.terminate()
+                error_occurred = True
+                error_code = ExitCode.TIMEOUT
                 break
             else:
                 time.sleep(0.2)  # Avoid busy waiting
@@ -119,11 +167,17 @@ class UploadHelperMixin:
             except (IOError, OSError) as e:  # noqa: BLE001
                 logger.warning("Could not read remaining output from process.stdout: %s", e)
         if error_occurred:
-            returncode = process.returncode or 1
+            if error_code <= ExitCode.ERROR:
+                returncode = process.returncode or ExitCode.ERROR
+            else:  # more specific
+                returncode = error_code
         elif process.returncode is not None:
-            returncode = process.returncode
+            if error_code <= ExitCode.ERROR:
+                returncode = process.returncode
+            else:  # more specific
+                returncode = error_code
         else:
-            returncode = 0
+            returncode = ExitCode.SUCCESS
         if report_upload:
             return cls._report_upload(
                 cls._popen_to_completed_process(process, returncode=returncode, out=stdout_accum),
@@ -147,13 +201,14 @@ class UploadHelperMixin:
         result: subprocess.CompletedProcess[str] | AnyPopen,
         trial_id: Optional[str] = None,
         stacklevel: int = 2,
-    ) -> int:
+    ) -> int | ExitCode:
         """Check result return code and log output."""
         if isinstance(result, subprocess.Popen):
             result = cls._popen_to_completed_process(result)
         exit_code = result.returncode
         trial_info = f"for trial {trial_id}" if trial_id else ""
         stdout = result.stdout or ""
+        error_code = ExitCode.SUCCESS
         if result.returncode == 0 and (
             not stdout or not any(pattern in stdout.lower() for pattern in map(str.lower, cls.error_patterns))
         ):
@@ -164,6 +219,7 @@ class UploadHelperMixin:
                 stdout,
                 stacklevel=stacklevel,
             )
+            error_code = ExitCode.SUCCESS
         elif "not found (<Response [404]>)" in stdout:
             logger.error(
                 "Could not sync run for %s %s (Is it a forked_run? - The parent needs to be uploaded first): %s",
@@ -172,7 +228,8 @@ class UploadHelperMixin:
                 result.stdout,
                 stacklevel=stacklevel,
             )
-            exit_code = result.returncode or 1
+            error_code = ExitCode.WANDB_PARENT_NOT_FOUND
+            exit_code = error_code
         elif "fromStep is greater than the run's last step" in stdout:
             logger.error(
                 "Could not sync run %s %s "
@@ -183,7 +240,7 @@ class UploadHelperMixin:
                 result.stdout,
                 stacklevel=stacklevel,
             )
-            exit_code = result.returncode or 1
+            error_code = exit_code = ExitCode.WANDB_BEHIND_STEP
         else:
             logger.error(
                 "Error during syncing offline run %s %s:\n%s",
@@ -193,12 +250,14 @@ class UploadHelperMixin:
                 stacklevel=stacklevel,
             )
             exit_code = result.returncode or 1
+            error_code = ExitCode.ERROR
         if result.returncode != 0 or result.stderr:
             logger.error(
-                "Failed to sync offline run %s %s:\n%s",
+                "Failed to sync offline run %s %s (%s):\n%s",
                 trial_info,
                 result.args[-1],
                 result.stderr or "",
+                error_code,
                 stacklevel=stacklevel,
             )
         return exit_code

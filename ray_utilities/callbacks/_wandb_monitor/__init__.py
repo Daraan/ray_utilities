@@ -8,3 +8,7 @@ This submodule provides a workaround that uses a selenium browser to log in to w
 view the run page, which triggers the creation of the history artifact. This is done in a
 background thread, so that the main process can continue to run and wait for the artifact to appear
 """
+
+from .wandb_run_monitor import WandbRunMonitor
+
+__all__ = ["WandbRunMonitor"]

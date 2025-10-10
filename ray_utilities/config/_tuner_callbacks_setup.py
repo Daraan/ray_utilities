@@ -159,6 +159,8 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             "use_comet_offline",
             self._setup.args.comet and self._setup.args.comet.lower().startswith("offline"),
         )
+        # Possibly raise a warning if a pbt scheduler is used but not viewer credentials are setup
+        _viewer_vars_set = self._set_wandb_viewer_credentials()
 
         return AdvCometLoggerCallback(
             # new key
@@ -210,6 +212,15 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             return True
         logger.debug("COMET_API_KEY not in environment variables, trying to load from ~/.comet_api_key.env")
         return load_dotenv(Path("~/.comet_api_key.env").expanduser())
+
+    @staticmethod
+    def _set_wandb_viewer_credentials() -> bool:
+        if "WANDB_VIEWER_MAIL" in os.environ and "WANDB_VIEWER_PW" in os.environ:
+            return True
+        logger.debug(
+            "WANDB_VIEWER_MAIL or WANDB_VIEWER_PW not in environment variables, trying to load from ~/.wandb_viewer.env"
+        )
+        return load_dotenv(Path("~/.wandb_viewer.env").expanduser())
 
     def create_callbacks(self, *, adv_loggers: bool | None = None) -> list[Callback]:
         """

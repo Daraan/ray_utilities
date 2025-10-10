@@ -1,38 +1,32 @@
 from __future__ import annotations
 
-import abc
 import logging
 import os
 import pickle
-import re
 import subprocess
 import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
-from urllib.error import HTTPError
 
 import ray
 from ray.air.integrations.wandb import WandbLoggerCallback, _clean_log, _QueueItem, _WandbLoggingActor
 from ray.tune.experiment import Trial
-from ray.tune.utils import flatten_dict
 
 from ray_utilities import RUN_ID
 from ray_utilities.callbacks.tuner.new_style_logger_callback import LogMetricsDictT, NewStyleLoggerCallback
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
+from ray_utilities.callbacks.tuner.wandb_helpers import FutureArtifact, FutureFile
 from ray_utilities.callbacks.wandb import WandbUploaderMixin
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, FORK_FROM
 from ray_utilities.misc import (
     extract_trial_id_from_checkpoint,
     make_experiment_key,
-    make_fork_from_csv_header,
-    make_fork_from_csv_line,
-    parse_fork_from,
 )
 
 if TYPE_CHECKING:
+    from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor
     from ray_utilities.typing import ForkFromData
-    from ray_utilities.typing.metrics import AnyFlatLogMetricsDict
 
 from ._log_result_grouping import non_metric_results
 from ._save_video_callback import SaveVideoFirstCallback
@@ -44,132 +38,19 @@ if TYPE_CHECKING:
         VideoMetricsDict,
         _LogMetricsEvalEnvRunnersResultsDict,
     )
-    from wandb.sdk.interface.interface import PolicyName
 
 try:
-    from wandb import Artifact, Video
-except ImportError:
-    pass  # wandb not installed
+    from wandb import Video
+except ModuleNotFoundError:
+
+    class _WandbNotInstalled:
+        pass
+
+    _WandbLoggingActorWithArtifactSupport = _WandbNotInstalled
 else:
-    from ray.air.integrations import wandb as ray_wandb
-
-    from wandb.errors import CommError
-
-    def _is_allowed_type_patch(obj):
-        """Return True if type is allowed for logging to wandb"""
-        if _original_is_allowed_type(obj):
-            return True
-        return isinstance(obj, (FutureFile, FutureArtifact))
-
-    _original_is_allowed_type = ray_wandb._is_allowed_type
-    ray_wandb._is_allowed_type = _is_allowed_type_patch
+    from ._adv_wandb_logging_actor import _WandbLoggingActorWithArtifactSupport
 
 _logger = logging.getLogger(__name__)
-
-
-wandb_monitor_lock = threading.Lock()
-
-
-class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
-    def run(self, retries=0):
-        fork_from = self.kwargs.get("fork_from", None) is not None
-        if fork_from:
-            # Write info about forked trials, to know in which order to upload trials
-            # This in the trial dir, no need for a Lock
-            info_file = Path(self._logdir).parent / "wandb_fork_from.csv"
-            if not info_file.exists():
-                # write header
-                info_file.write_text(make_fork_from_csv_header())
-            fork_data_tuple = parse_fork_from(self.kwargs["fork_from"])
-            with info_file.open("a") as f:
-                if fork_data_tuple is not None:
-                    parent_id, parent_step = fork_data_tuple
-                    line = make_fork_from_csv_line(
-                        {
-                            "parent_trial_id": parent_id,
-                            "fork_id_this_trial": self.kwargs["id"],
-                            "parent_training_iteration": cast("int", parent_step),
-                            "parent_time": ("_step", cast("float", parent_step)),
-                        },
-                        optional=True,
-                    )
-                    f.write(line)
-                else:
-                    _logger.error("Could not parse fork_from: %s", self.kwargs["fork_from"])
-                    f.write(f"{self.kwargs['id']}, {self.kwargs['fork_from']}\n")
-        try:
-            return super().run()
-        except CommError as e:  # pyright: ignore[reportPossiblyUnboundVariable]
-            # NOTE: its possible that wandb is stuck because of async logging and we never reach here :/
-            online = self.kwargs.get("mode", "online") == "online"
-            if "fromStep is greater than the run's last step" in str(e):
-                # This can happen if the parent run is not yet fully synced, we need to wait for the newest history artifact
-                if not fork_from:
-                    raise  # should only happen on forks
-                if retries >= 5:
-                    _logger.error(
-                        "WandB communication error. online mode: %s, fork_from: %s - Error: %s", online, fork_from, e
-                    )
-                    if not online:
-                        raise
-                    _logger.warning("Switching to offline mode")
-                    self.kwargs["mode"] = "offline"
-                    return super().run()
-                _logger.warning("WandB communication error, retrying after 10s: %s", e)
-                time.sleep(10)
-                return self.run(retries=retries + 1)
-            if not online:
-                _logger.exception("WandB communication error in offline mode. Cannot recover.")
-                raise
-            if fork_from:
-                _logger.error("WandB communication error when using fork_from")
-            _logger.exception("WandB communication error. Trying to switch to offline mode.")
-            self.kwargs["mode"] = "offline"
-            super().run()
-            # TODO: communicate to later upload offline run
-
-    def _handle_result(self, result: dict) -> tuple[dict, dict]:
-        config_update = result.get("config", {}).copy()
-        log = {}
-        flat_result: AnyFlatLogMetricsDict | dict[str, Any] = flatten_dict(result, delimiter="/")
-
-        for k, v in flat_result.items():
-            if any(k.startswith(item + "/") or k == item for item in self._exclude):
-                continue
-            if any(k.startswith(item + "/") or k == item for item in self._to_config):
-                config_update[k] = v
-            elif isinstance(v, FutureFile):
-                try:
-                    self._wandb.save(v.global_str, base_path=v.base_path)
-                except (HTTPError, Exception) as e:  # noqa: BLE001
-                    _logger.error("Failed to log artifact: %s", e)
-            elif isinstance(v, FutureArtifact):
-                # not serializable
-                artifact = Artifact(  # pyright: ignore[reportPossiblyUnboundVariable]
-                    name=v.name,
-                    type=v.type,
-                    description=v.description,
-                    metadata=v.metadata,
-                    incremental=v.incremental,
-                    **v.kwargs,
-                )
-                for file_dict in v._added_files:
-                    artifact.add_file(**file_dict)
-                for dir_dict in v._added_dirs:
-                    artifact.add_dir(**dir_dict)
-                for ref_dict in v._added_references:
-                    artifact.add_reference(**ref_dict)
-                try:
-                    self._wandb.log_artifact(artifact)
-                except (HTTPError, Exception) as e:
-                    _logger.error("Failed to log artifact: %s", e)
-            elif not _is_allowed_type_patch(v):
-                continue
-            else:
-                log[k] = v
-
-        config_update.pop("callbacks", None)  # Remove callbacks
-        return log, config_update
 
 
 class AdvWandbLoggerCallback(
@@ -185,6 +66,9 @@ class AdvWandbLoggerCallback(
     _logger_actor_cls = _WandbLoggingActorWithArtifactSupport
 
     _logged_architectures: set[Trial]
+
+    _monitor: WandbRunMonitor | None = None
+    """The WandbRunMonitor instance used to monitor parents of forked runs and ensure history artifacts are created."""
 
     def __init__(
         self,
@@ -249,6 +133,7 @@ class AdvWandbLoggerCallback(
         # Track active trials for gather_uploads
         with self._gather_uploads_lock:
             self._active_trials_count = len([t for t in trials if t.status in ("RUNNING", "PENDING", "PAUSED")])
+        breakpoint()
 
     def log_trial_start(self, trial: "Trial"):
         config = trial.config.copy()
@@ -763,111 +648,3 @@ class AdvWandbLoggerCallback(
                 self._update_failed_upload_file(failed_uploads, Path(trials[0].local_path))
 
             # TODO: DO I need this for comet as well?
-
-
-class _WandbFuture(abc.ABC):
-    @abc.abstractmethod
-    def json_encode(self) -> dict[str, Any]: ...
-
-    def to_dict(self):
-        return self.json_encode()
-
-
-class FutureFile(_WandbFuture):
-    """A file to be logged to WandB for this run, has to be compatible with :meth:`wandb.save`."""
-
-    def __init__(
-        self,
-        glob_str: str | os.PathLike,
-        base_path: str | os.PathLike | None = None,
-        policy: PolicyName = "live",
-    ) -> None:
-        self.global_str = glob_str
-        self.base_path = base_path
-        self.policy = policy
-
-    def json_encode(self) -> dict[str, Any]:
-        return {
-            "glob_str": self.global_str,
-            "base_path": self.base_path,
-            "policy": self.policy,
-        }
-
-
-class FutureArtifact(_WandbFuture):
-    def __init__(
-        self,
-        name: str,
-        type: str,
-        description: str | None = None,
-        metadata: dict[str, Any] | None = None,
-        *,
-        incremental: bool = False,
-        **kwargs,
-    ):
-        if not re.match(r"^[a-zA-Z0-9_\-.]+$", name):
-            raise ValueError(
-                f"Artifact name may only contain alphanumeric characters, dashes, "
-                f"underscores, and dots. Invalid name: {name}"
-            )
-        self.name = name
-        self.type = type
-        self.description = description
-        self.metadata = metadata
-        self.incremental = incremental
-        self.kwargs = kwargs
-        self._added_dirs = []
-        self._added_files = []
-        self._added_references = []
-
-    def add_reference(self, uri: Any | str, name: str | None = None, **kwargs) -> None:
-        self._added_references.append({"uri": uri, "name": name, **kwargs})
-
-    def add_file(
-        self,
-        local_path: str,
-        name: str | None = None,
-        *,
-        is_tmp: bool | None = False,
-        overwrite: bool = False,
-        **kwargs,
-    ) -> None:
-        self._added_files.append(
-            {
-                "local_path": local_path,
-                "name": name,
-                "is_tmp": is_tmp,
-                "overwrite": overwrite,
-                **kwargs,
-            }
-        )
-
-    def add_dir(
-        self,
-        local_path: str,
-        name: str | None = None,
-        **kwargs,
-    ) -> None:
-        self._added_dirs.append(
-            {
-                "local_path": local_path,
-                "name": name,
-                **kwargs,
-            }
-        )
-
-    def json_encode(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "type": self.type,
-            "description": self.description,
-            "metadata": self.metadata,
-            "incremental": self.incremental,
-            "kwargs": self.kwargs,
-            "added_dirs": self._added_dirs,
-            "added_files": self._added_files,
-            "added_references": self._added_references,
-        }
-
-    def to_dict(self) -> dict[str, Any]:
-        return self.json_encode()
