@@ -113,6 +113,9 @@ class Forktime(NamedTuple):
     """Current time of the fork, tracked in :attr:`time_attr` units"""
 
 
+ForktimeTuple = TypeAliasType("ForktimeTuple", tuple[str, int | float] | Forktime)
+
+
 class ForkFromData(TypedDict):
     parent_trial_id: str
     """Trial id of the run to fork. This is the pure trial_id of the ``Trial`` object, without  any fork info."""

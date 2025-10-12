@@ -378,6 +378,71 @@ class ExperimentKey(str, Enum):
     STEP_SEPARATOR = "S"
 
     @classmethod
+    def parse_experiment_key(cls, key: str):
+        """Parse an experiment key back into its components.
+
+        This function reverses the transformation applied by :func:`make_experiment_key`,
+        extracting the original trial ID, fork information, and step from the experiment key.
+
+        Args:
+            key: The experiment key string to parse.
+        Returns:
+            A tuple containing:
+                - The original trial ID as a string.
+                - A dictionary with fork information if the key represents a forked trial, otherwise ``None``.
+                - The step as an integer if available, otherwise ``None``.
+        """
+        if len(key) < cls.MIN_LENGTH.value:
+            _logger.warning("Experiment key '%s' is shorter than expected minimum length of 32.", key)
+        run_id_part, key = key.split(cls.RUN_ID_SEPARATOR, 1)
+        if not run_id_part.startswith(RUN_ID):
+            _logger.debug("Experiment key '%s' does not start with expected RUN_ID prefix '%s'.", key, RUN_ID + "X")
+        fork_data = None
+        if cls.FORK_SEPARATOR in key:
+            key, fork_part = key.split(cls.FORK_SEPARATOR, 1)
+            if cls.STEP_SEPARATOR in fork_part:
+                fork_id_part, step_part = fork_part.split(cls.STEP_SEPARATOR, 1)
+                fork_step = None
+                if step_part != cls.NO_ITERATION_DATA:
+                    try:
+                        fork_step = base62.decode(step_part.lstrip("0"))
+                    except ValueError as e:
+                        _logger.warning("Failed to decode step part '%s' from experiment key: %s", step_part, e)
+                else:
+                    _logger.info("No iteration data available in experiment key '%s'.", key)
+            else:
+                fork_id_part = fork_part
+                fork_step = None
+                _logger.warning(
+                    "No step separator '%s' found in fork part of experiment key '%s'.",
+                    ExperimentKey.STEP_SEPARATOR,
+                    key,
+                )
+            # Reconstruct original trial ID from fork_id_part
+            if cls.COUNT_SEPARATOR in fork_id_part:
+                fork_base, fork_number = fork_id_part.split(cls.COUNT_SEPARATOR, 1)
+                # Reinsert "000" into the count part
+                fork_number = fork_number.replace(cls.REPLACE_3ZEROS, "000")
+                parent_trial_id = f"{fork_base}_{fork_number}"
+            else:
+                parent_trial_id = fork_id_part
+            parent_trial_id = parent_trial_id.replace(cls.REPLACE_UNDERSCORE, "_")
+            fork_data = {
+                "parent_trial_id": parent_trial_id,
+                "parent_training_iteration": fork_step,
+                "parent_time": None,
+            }
+        key = key.rstrip(cls.RIGHT_PAD_CHAR)  # remove padding if any
+        # Non-forked key
+        if cls.COUNT_SEPARATOR in key:
+            trial_base, trial_number = key.split(cls.COUNT_SEPARATOR, 1)
+            trial_number = trial_number.replace(cls.REPLACE_3ZEROS, "000")
+            trial_id = f"{trial_base}_{trial_number}"
+        else:
+            trial_id = key
+        return trial_id, fork_data
+
+    @classmethod
     def _make_non_fork_experiment_key(cls, trial: Trial) -> str:
         trial_base, *trial_number = trial.trial_id.split("_")
         if len(trial_number) > 1:

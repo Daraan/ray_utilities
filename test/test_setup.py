@@ -205,7 +205,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
     def test_project_name_substitution(self):
         setup = AlgorithmSetup(init_trainable=False, init_param_space=False, init_config=False)
         setup.PROJECT = "Test-<agent_type>-<env_type>"
-        self.assertEqual(setup.project_name.rstrip("-v0123456789"), "Test-mlp-CartPole")
+        self.assertEqual(setup.project.rstrip("-v0123456789"), "Test-mlp-CartPole")
 
     @pytest.mark.tuner
     @pytest.mark.length(speed="medium")  # still not that slow

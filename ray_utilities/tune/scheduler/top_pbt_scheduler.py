@@ -53,7 +53,7 @@ from ray_utilities.misc import (
     make_fork_from_csv_header,
     make_fork_from_csv_line,
 )
-from ray_utilities.typing import ForkFromData, Forktime
+from ray_utilities.typing import ForkFromData, Forktime, ForktimeTuple
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, MutableMapping
@@ -313,7 +313,8 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         """
 
         self._fork_time_data: dict[
-            tuple[Trial, tuple[Trial, int] | None], dict[Literal["child", "parent"], tuple[Forktime, Forktime]]
+            tuple[Trial, tuple[Trial, int] | None],
+            dict[Literal["child", "parent"], tuple[ForktimeTuple, ForktimeTuple]],
         ] = {}
         """
         Lookup for fork time data based on key=(trial, (parent_trial, parent_training_iteration) | None).
