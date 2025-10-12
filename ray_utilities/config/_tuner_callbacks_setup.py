@@ -121,7 +121,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         # TODO: make use of resume/resume_from/fork_from when using from_checkpoint
         # see: https://docs.wandb.ai/ref/python/sdk/functions/init/ format: {id}?_step={step}
         return AdvWandbLoggerCallback(
-            project=self._setup.project_name,
+            project=self._setup.project,
             group=self._setup.group_name,  # if not set trainable name is used
             excludes=[
                 *self.EXCLUDE_METRICS,
@@ -168,7 +168,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             api_key=api_key,
             disabled=not args.comet and args.test if disabled is None else disabled,
             online=not use_comet_offline,  # do not upload
-            workspace=self._setup.project_name,
+            workspace=self._setup.project,
             project_name=self._setup.group_name,  # "general" for Uncategorized Experiments
             save_checkpoints=False,
             tags=self.get_tags(),

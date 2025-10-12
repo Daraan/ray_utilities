@@ -69,7 +69,7 @@ The last character is the version of the run_id format. It is currently "3".
 os.environ["RUN_ID"] = RUN_ID
 
 _COMET_OFFLINE_DIRECTORY_SUGGESTION = (
-    Path("../")
+    Path("./")
     / "outputs"
     / ".cometml-runs"
     / (
@@ -110,7 +110,7 @@ COMET_OFFLINE_DIRECTORY = os.environ.get("COMET_OFFLINE_DIRECTORY", _COMET_OFFLI
 """str: Directory path for storing offline Comet ML experiments.
 
 This directory is where Comet ML stores experiment archives when running in offline mode.
-The default location is ``../outputs/.cometml-runs/<entry_point_stem>_<timestamp>``
+The default location is ``./outputs/.cometml-runs/<entry_point_stem>_<timestamp>``
 relative to the current working directory.
 The subdir is omitted if RAY_UTILITIES_SEPARATE_COMET_LOG_DIRS is set to anything other than "1".
 

@@ -14,4 +14,4 @@ pytest -k "TestMetricsRestored and test_with_tuner" --mp-only --capture=sys &
 pytest -k "test_tuner_checkpointing" -v --mp-only --timeout_method=thread --capture=sys &
 wait
 )
-rm -rf ../outputs/experiments/TESTING
+rm -rf ./outputs/experiments/TESTING

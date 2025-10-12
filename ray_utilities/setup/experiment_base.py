@@ -229,7 +229,11 @@ class ExperimentSetupBase(
     """extra tags to add"""
 
     PROJECT: str = "Unnamed Project"
-    """Base for project_name. Can consist of tags written as <args_attribute> that are substituted"""
+    """Base for project_name.
+
+    Can consist of tags written as <args_attribute> that are substituted.
+    On instances use :attr:`project` property instead
+    """
 
     use_dev_project: bool = True
     """When True the `project_name` will be "dev-workspace" in test mode"""
@@ -245,11 +249,11 @@ class ExperimentSetupBase(
     _fixed_argv: ClassVar[list[str] | None] = None
     """When using remote (no sys.args available) and checkpoints fix the args to the time of creation"""
 
-    storage_path: str | Path = "../outputs/experiments"
+    storage_path: str | Path = "./outputs/experiments"
     """Base path where experiment outputs are stored by the tuner."""
 
     @property
-    def project_name(self) -> str:
+    def project(self) -> str:
         """Name for the output folder, wandb project, and comet workspace."""
         if self.PROJECT == "Unnamed Project":
             logger.warning(
@@ -258,8 +262,8 @@ class ExperimentSetupBase(
             )
         return "dev-workspace" if self.use_dev_project and self.args.test else self._parse_project_name(self.PROJECT)
 
-    @project_name.setter
-    def project_name(self, value: str):
+    @project.setter
+    def project(self, value: str):  # pyright: ignore[reportIncompatibleVariableOverride]
         logger.warning("Setting project name to %s. Prefer creation of a new class", value)
         self.PROJECT: str = value
 
@@ -734,7 +738,7 @@ class ExperimentSetupBase(
         param_space["cli_args"] = self.clean_args_to_hparams(self.args)
         param_space["run_id"] = RUN_ID
         param_space["experiment_id"] = RUN_ID
-        param_space["experiment_name"] = self.project_name
+        param_space["experiment_name"] = self.project
         param_space["experiment_group"] = self.group_name
         self.param_space = param_space
         del self._dynamic_parameters_to_tune
