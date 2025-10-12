@@ -78,7 +78,9 @@ class WandBSessionCache:
             logger.warning("Failed to save cookies: %s", e)
             return False
 
-    def load_cookies(self, username: str, browser: str, max_age_hours: float = 24.0) -> Optional[List[Dict[str, Any]]]:
+    def load_cookies(
+        self, username: str, browser: str, max_age_hours: float = 21 * 24.0
+    ) -> Optional[List[Dict[str, Any]]]:
         """
         Load cached cookies for a specific user/browser combination.
 

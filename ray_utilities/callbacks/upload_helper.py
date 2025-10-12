@@ -81,7 +81,7 @@ class UploadHelperMixin:
     def _failure_aware_wait(
         cls,
         process: AnyPopen,
-        timeout: int = 600,
+        timeout: float = 300,
         trial_id: str = "",
         *,
         terminate_on_timeout: bool = True,
@@ -214,7 +214,7 @@ class UploadHelperMixin:
         ):
             logger.info(
                 "Successfully synced offline run %s: %s\n%s",
-                result.args[-1],
+                result.args[2:],
                 trial_info,
                 stdout,
                 stacklevel=stacklevel,
@@ -224,7 +224,7 @@ class UploadHelperMixin:
             logger.error(
                 "Could not sync run for %s %s (Is it a forked_run? - The parent needs to be uploaded first): %s",
                 trial_info,
-                result.args[-1],
+                result.args[2:],
                 result.stdout,
                 stacklevel=stacklevel,
             )
@@ -236,7 +236,7 @@ class UploadHelperMixin:
                 "(Is it a forked_run? - The parents fork step needs to be uploaded first.) "
                 "If this error persists it might be a off-by-one error:\n%s",
                 trial_info,
-                result.args[-1],
+                result.args[2:],
                 result.stdout,
                 stacklevel=stacklevel,
             )
@@ -245,7 +245,7 @@ class UploadHelperMixin:
             logger.error(
                 "Error during syncing offline run %s %s:\n%s",
                 trial_info,
-                result.args[-1],
+                result.args[2:],
                 stdout,
                 stacklevel=stacklevel,
             )
@@ -255,7 +255,7 @@ class UploadHelperMixin:
             logger.error(
                 "Failed to sync offline run %s %s (%s):\n%s",
                 trial_info,
-                result.args[-1],
+                result.args[2:],
                 result.stderr or "",
                 error_code,
                 stacklevel=stacklevel,

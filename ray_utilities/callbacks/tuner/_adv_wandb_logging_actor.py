@@ -16,9 +16,9 @@ from ray_utilities.callbacks.tuner.wandb_helpers import (
     FutureArtifact,
     FutureFile,
     get_wandb_web_monitor,
-    wandb_api,
     wandb_monitor_lock,
 )
+from ray_utilities.callbacks.wandb import wandb_api
 from ray_utilities.constants import FORK_FROM
 from ray_utilities.misc import make_fork_from_csv_header, make_fork_from_csv_line, parse_fork_from
 

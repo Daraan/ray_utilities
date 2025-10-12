@@ -18,13 +18,14 @@ from ray.util.queue import Queue
 from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor
 
 if TYPE_CHECKING:
-    from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor  # noqa: PLC0415
     from wandb.sdk.interface.interface import PolicyName
+
+    from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor
 
 
 _logger = logging.getLogger(__name__)
 try:
-    from wandb import Api
+    import wandb  # noqa: F401
 except ModuleNotFoundError:
     _logger.error("wandb.Api() not available, wandb might not be installed")
 
@@ -48,23 +49,6 @@ def create_monitor_queue(actor_options: dict[str, Any] | None = None):
         }
         | (actor_options or {}),
     )
-
-
-_wandb_api = None
-
-
-def wandb_api() -> Api:
-    global _wandb_api  # noqa: PLW0603
-    if _wandb_api is None:
-        try:
-            _wandb_api = Api()  # pyright: ignore[reportPossiblyUnboundVariable]
-        except NameError as e:
-            _logger.error("wandb.Api() not available, wandb might not be installed")
-            raise ModuleNotFoundError("wandb.Api() not found") from e
-        except Exception as e:
-            _logger.error("Failed to create wandb.Api(): %s", e)
-            raise
-    return _wandb_api
 
 
 _wandb_web_monitor: WandbRunMonitor | None = None

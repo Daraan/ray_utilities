@@ -118,7 +118,7 @@ class WandbRunMonitor:
 
         self.selenium_session: Optional[WandBSeleniumSession] = None
         self.wandb_api: Optional[wandb.Api] = wandb_api
-        self.is_initialized = False
+        self._is_initialized = False
         self.monitor_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
@@ -139,6 +139,10 @@ class WandbRunMonitor:
                 self.callback(status, data)
             except Exception as e:  # ruff: noqa: BLE001
                 logger.warning("Callback error: %s", e)
+
+    def is_initialized(self) -> bool:
+        """Check if the monitor is initialized."""
+        return self._is_initialized
 
     def initialize(self) -> bool:
         """
@@ -175,7 +179,7 @@ class WandbRunMonitor:
                     return False
 
             logger.info("Successfully initialized monitor")
-            self.is_initialized = True
+            self._is_initialized = True
             self._notify("monitor_initialized")
 
         except Exception as e:
@@ -201,7 +205,7 @@ class WandbRunMonitor:
         Returns:
             True if page visited successfully, False otherwise
         """
-        if not self.selenium_session or not self.is_initialized:
+        if not self.selenium_session or not self._is_initialized:
             logger.error("Monitor not initialized")
             return False
 
@@ -460,13 +464,16 @@ class WandbRunMonitor:
 
         Returns:
             Thread object for the monitoring process
+
+        Attention:
+            Do not call ray.get on this method as the returning thread object is not serializable.
         """
-        if self.is_monitoring():
+        if self.monitor_thread_running():
             logger.warning("Monitor thread already running")
             return cast("threading.Thread", self.monitor_thread)
 
         self.monitor_thread = threading.Thread(
-            target=self._threaded_monitor_run,
+            target=self.monitor_run,
             args=(run_id,),
             kwargs={
                 "entity": entity,
@@ -485,7 +492,7 @@ class WandbRunMonitor:
 
         return self.monitor_thread
 
-    def _threaded_monitor_run(
+    def monitor_run(
         self,
         run_id: str,
         entity: Optional[str] = None,
@@ -493,11 +500,16 @@ class WandbRunMonitor:
         version: Optional[str | int] = "latest",
         check_interval: float = 5.0,
         max_wait_time: float = 300.0,
+        monitor_artifact: bool = True,
     ) -> None:
-        """Internal method for threaded run monitoring."""
+        """
+        Monitor a WandB run for artifact availability.
+
+        Can be run via threading or directly, compatible with `ray.remote`.
+        """
         try:
             # Initialize if not already done
-            if not self.is_initialized:
+            if not self._is_initialized:
                 if not self.initialize():
                     self._notify("threaded_monitor_failed", "Initialization failed")
                     return
@@ -505,33 +517,44 @@ class WandbRunMonitor:
             # Visit the run page
             page_visited = self.visit_run_page(run_id, entity=entity, project=project)
             if not page_visited:
-                logger.warning("Failed to visit run page, but continuing with artifact monitoring")
-
-            # Monitor the artifact
-            result = self.monitor_artifact(
-                run_id,
-                version=version,
-                entity=entity,
-                project=project,
-                check_interval=check_interval,
-                max_wait_time=max_wait_time,
-            )
+                logger.warning("Failed to visit run page, but continuing with artifact monitoring.")
 
             self._notify(
-                "threaded_monitor_complete",
+                "monitor_visited_run_page",
                 {
                     "run_id": run_id,
                     "entity": entity or self.entity,
                     "project": project or self.project,
-                    "result": result,
+                    "success": page_visited,
                 },
             )
+
+            # Monitor the artifact
+            if monitor_artifact:
+                result = self.monitor_artifact(
+                    run_id,
+                    version=version,
+                    entity=entity,
+                    project=project,
+                    check_interval=check_interval,
+                    max_wait_time=max_wait_time,
+                )
+
+                self._notify(
+                    "threaded_monitor_complete",
+                    {
+                        "run_id": run_id,
+                        "entity": entity or self.entity,
+                        "project": project or self.project,
+                        "result": result,
+                    },
+                )
 
         except Exception as e:
             logger.error("Thread execution error: %s", e)
             self._notify("threaded_monitor_error", str(e))
 
-    def is_monitoring(self) -> bool:
+    def monitor_thread_running(self) -> bool:
         """Check if monitoring thread is active."""
         if self.monitor_thread is None:
             return False
@@ -561,7 +584,7 @@ class WandbRunMonitor:
             return
         logger.info("Waiting for monitoring thread to stop...")
         wait = 0
-        while self.is_monitoring() and wait < timeout:
+        while self.monitor_thread_running() and wait < timeout:
             time.sleep(1)
             wait += 1
         if wait >= timeout:
@@ -588,7 +611,7 @@ class WandbRunMonitor:
 
         # Clean up WandB API
         self.wandb_api = None
-        self.is_initialized = False
+        self._is_initialized = False
 
         # Notify cleanup completion
         try:
@@ -607,7 +630,7 @@ class WandbRunMonitor:
         """
         try:
             # Only log if we actually have resources to clean up
-            if self.selenium_session is not None or self.monitor_thread is not None or self.is_initialized:
+            if self.selenium_session is not None or self.monitor_thread is not None or self._is_initialized:
                 logger.debug("__del__ called, performing safety cleanup")
                 self.cleanup()
         except Exception:  # ruff: noqa: BLE001
@@ -623,42 +646,6 @@ class WandbRunMonitor:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit."""
         self.cleanup()
-
-
-class RemoteWandbRunMonitor(WandbRunMonitor):
-    """
-    WandB run monitor that can be used in parallel processes.
-
-    This class extends WandbRunMonitor to support usage in separate processes.
-    It overrides methods to ensure thread safety and proper resource management
-    when used in a multiprocessing context.
-    """
-
-    def __init__(
-        self,
-        credentials: WandBCredentials | None = None,
-        *,
-        project: str,
-        entity: str | None = None,
-        browser: str = "firefox",
-        headless: bool = True,
-        timeout: int = 30,
-        callback: Callable[[str, Any], None] | None = None,
-        wandb_api: wandb.Api | None = None,
-        _remote_init: bool = False,
-    ):
-        if not _remote_init:
-            raise ValueError("RemoteWandbRunMonitor must be instantiated via get_remote_monitor()")
-        super().__init__(
-            credentials,
-            project=project,
-            entity=entity,
-            browser=browser,
-            headless=headless,
-            timeout=timeout,
-            callback=callback,
-            wandb_api=wandb_api,
-        )
 
     @classmethod
     def get_remote_monitor(
@@ -676,7 +663,7 @@ class RemoteWandbRunMonitor(WandbRunMonitor):
         num_cpus: int = 1,
         name: str = "remote_wandb_run_monitor",
         actor_options: Optional[dict[str, Any]] = None,
-    ) -> "ActorHandle[RemoteWandbRunMonitor] | ActorProxy[RemoteWandbRunMonitor]":
+    ) -> "ActorHandle[WandbRunMonitor] | ActorProxy[WandbRunMonitor]":
         """Create a remote WandbRunMonitor actor."""
         if actor_options is None:
             actor_options = {
@@ -692,7 +679,7 @@ class RemoteWandbRunMonitor(WandbRunMonitor):
 
         remote_actor = (
             ray.remote(cls)
-            .options(max_concurrency=1, **actor_options)
+            .options(max_concurrency=1, get_if_exists=True, **actor_options)
             .remote(
                 credentials,
                 project=project,
@@ -702,7 +689,6 @@ class RemoteWandbRunMonitor(WandbRunMonitor):
                 timeout=timeout,
                 callback=callback,
                 wandb_api=wandb_api,
-                _remote_init=True,
             )
         )
         return remote_actor

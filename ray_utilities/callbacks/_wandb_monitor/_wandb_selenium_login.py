@@ -748,7 +748,7 @@ class WandBSeleniumSession:
         else:
             return new_tab
 
-    def visit_run_page(self, entity: str, project: str, run_id: str, *, in_new_tab: bool = False) -> bool:
+    def visit_run_page(self, entity: str, project: str, run_id: str) -> bool:
         """
         Visit a specific WandB run page, managing dedicated tabs for each run.
 
@@ -759,7 +759,6 @@ class WandBSeleniumSession:
             entity: WandB entity (username or team name)
             project: WandB project name
             run_id: WandB run ID
-            in_new_tab: Deprecated - each run always gets its own tab (kept for compatibility)
 
         Returns:
             True if run page loaded successfully, False otherwise
@@ -784,7 +783,7 @@ class WandBSeleniumSession:
                 if existing_tab in current_tabs:
                     # Switch to existing tab
                     self.switch_tab(existing_tab)
-                    logger.info("Switched to existing tab for run: %s/%s/%s", entity, project, run_id)
+                    logger.debug("Switched to existing tab for run: %s/%s/%s", entity, project, run_id)
 
                     # Wait a short bit before refreshing
                     time.sleep(2)
@@ -876,7 +875,7 @@ class WandBSeleniumSession:
 
         try:
             self.driver.switch_to.window(tab_handle)
-            logger.info("Switched to tab: %s", tab_handle)
+            logger.debug("Switched to tab: %s", tab_handle)
             self._notify("tab_switched", tab_handle)
 
         except WebDriverException as e:
@@ -1185,6 +1184,7 @@ class WandBSeleniumSession:
 
         # Clear run tab tracking
         self._run_tabs.clear()
+        breakpoint()
         logger.debug("Cleared run tab tracking")
 
         self._notify("cleanup_complete")

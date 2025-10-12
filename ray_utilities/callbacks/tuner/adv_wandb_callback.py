@@ -16,7 +16,7 @@ from ray.tune.experiment import Trial
 from ray_utilities import RUN_ID
 from ray_utilities.callbacks.tuner.new_style_logger_callback import LogMetricsDictT, NewStyleLoggerCallback
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
-from ray_utilities.callbacks.tuner.wandb_helpers import FutureArtifact, FutureFile
+from ray_utilities.callbacks.tuner.wandb_helpers import FutureFile
 from ray_utilities.callbacks.wandb import WandbUploaderMixin
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, FORK_FROM
 from ray_utilities.misc import (
@@ -25,6 +25,8 @@ from ray_utilities.misc import (
 )
 
 if TYPE_CHECKING:
+    from ray.actor import ActorProxy
+
     from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor
     from ray_utilities.typing import ForkFromData
 
@@ -67,7 +69,7 @@ class AdvWandbLoggerCallback(
 
     _logged_architectures: set[Trial]
 
-    _monitor: WandbRunMonitor | None = None
+    _monitor: ActorProxy[WandbRunMonitor] | None = None
     """The WandbRunMonitor instance used to monitor parents of forked runs and ensure history artifacts are created."""
 
     def __init__(
@@ -133,7 +135,6 @@ class AdvWandbLoggerCallback(
         # Track active trials for gather_uploads
         with self._gather_uploads_lock:
             self._active_trials_count = len([t for t in trials if t.status in ("RUNNING", "PENDING", "PAUSED")])
-        breakpoint()
 
     def log_trial_start(self, trial: "Trial"):
         config = trial.config.copy()
@@ -221,13 +222,32 @@ class AdvWandbLoggerCallback(
             trial_id = self.get_trial_id(trial)
             config.setdefault("experiment_key", make_experiment_key(trial))
 
-        # TODO: trial_id of a forked trial might be very long
-
         # Test for invalid chars
         assert not trial_id or all(c not in trial_id for c in r"/ \ # ? % :"), f"Invalid character in: {trial_id}"
         assert fork_from is None or fork_from.count("?_step=") == 1, fork_from
-        # FIXME: fork_from is not stable on WandB when there is no longer wait time, wandb.init likely raises error
         # NOTE: We never want FORK_FROM to be in the trials.config by default.
+
+        start = time.time()
+        use_monitor = self.upload_offline_experiments and fork_from
+        if use_monitor and self._monitor is None:
+            # Start the monitor to track parent runs of forked trials
+            if self.project is None:
+                _logger.warning("Cannot start WandbRunMonitor without wandb project name set. Using 'default'.")
+            else:
+                # Get singleton remote monitor
+                self._monitor = self._start_monitor()
+        if use_monitor and fork_from:
+            visit_page_future = self._monitor.visit_run_page.remote(fork_id)  # pyright: ignore[reportFunctionMemberAccess, reportOptionalMemberAccess]
+            _logger.info(
+                "Visiting WandB page of parent run %s for forked trial %s. This may take up to 60 seconds.",
+                fork_id,
+                trial.trial_id,
+            )
+            ray.get(visit_page_future, timeout=60)
+            end = time.time()
+            _logger.info(
+                "Started WandbRunMonitor actor to track parent runs of forked trials in %.1f seconds", end - start
+            )
         # --- End New Code
         wandb_init_kwargs = {
             "id": trial_id,  # change if forked? e.g. + forked_from
@@ -390,6 +410,7 @@ class AdvWandbLoggerCallback(
             # but not when we load a checkpoint, but when it initially was a checkpoint and then got forked
             if gather_uploads or self.is_trial_forked(trial):
                 _logger.info("Gathering more trials to upload to WandB in dependency order...")
+                self._start_monitor()
                 # Gather trials that are ending and upload them in dependency order
                 self._gather_and_upload_trials(trial, actor_done=done)
             else:
@@ -568,7 +589,7 @@ class AdvWandbLoggerCallback(
                 # can use Popen for non-blocking
                 upload_time_start = time.time()
                 result = subprocess.run(
-                    ["wandb", "sync", str(run_dir)],
+                    ["wandb", "sync", str(run_dir), "--append"],
                     check=False,
                     text=True,
                     timeout=600,  # timeout 10 minutes
@@ -643,8 +664,20 @@ class AdvWandbLoggerCallback(
                 for process in unfinished_from_past:
                     exit_code = self._failure_aware_wait(process, timeout=600)
                     if exit_code != 0:
+                        exit_code = self._check_with_monitor_and_retry(process)
+                    if exit_code != 0:
                         failed_uploads.append(process)
             if failed_uploads and trials and trials[0].local_path:
                 self._update_failed_upload_file(failed_uploads, Path(trials[0].local_path))
 
             # TODO: DO I need this for comet as well?
+
+    def __del__(self):
+        # do not clean on_experiment_end as we want to access it with Setup classes as well afterwards
+        try:
+            if self._monitor is not None:
+                self._monitor.cleanup.remote()  # pyright: ignore[reportFunctionMemberAccess]
+                self._monitor.__ray_terminate__.remote()  # pyright: ignore[reportAttributeAccessIssue]
+                self._monitor = None
+        finally:
+            super().__del__()
