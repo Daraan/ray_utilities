@@ -96,6 +96,7 @@ class MonitorCoordinator:
             # Create monitor with specific callback
             monitor = WandbRunMonitor(
                 credentials,
+                project="dev-workspace",
                 browser="firefox",
                 headless=True,
                 timeout=30,

@@ -36,7 +36,7 @@ RUN1_MODE = "offline"
 RUN2_MODE = "offline"
 RUN1_2_MODE = "offline"
 RUN3_MODE = "offline"
-RUN4_MODE = "online"
+RUN4_MODE = "offline"
 
 
 logger = logging.getLogger(__name__)
@@ -113,12 +113,17 @@ def setup_actor(**wandb_init_kwargs) -> tuple[ActorHandle[_WandbLoggingActorWith
     return actor_handle, run_future, queue
 
 
-def upload_run(run_id, run_dir: str | Path = "./"):
+def upload_run(run_id, run_dir: str | Path = "./", *, upload_all=True) -> None:
     # sort because there are multiple
     # Note: a wandb.Run.dir is at a different location
-    path = sorted(Path(run_dir, "wandb").glob("*run-*" + run_id))[-1]
-    print("Syncing run", run_id, "from path", path)
-    subprocess.run(["wandb", "sync", path, "--append"], check=True)
+    paths = sorted(Path(run_dir, "wandb").glob("*run-*" + run_id))
+    if not paths:
+        raise ValueError(f"No wandb run with id {run_id} found in {Path(run_dir, 'wandb')}")
+    for idx in [-1] if not upload_all else range(len(paths)):
+        path = paths[idx]
+        pidx = paths.index(path)
+        print("Syncing run", run_id, "from path", path, "part", pidx + 1, "of", len(paths))
+        subprocess.run(["wandb", "sync", path, "--append"], check=True)
 
 
 def make_history_artifact_name(run: wandb.sdk.wandb_run.Run | RunData, version: int | str = 0) -> str:
@@ -151,7 +156,7 @@ def test_concurrency(
         print("No futures completed.")
 
 
-def wait_for_artifact(
+def wait_for_artifact_tab_only(
     api: wandb.Api,
     entity: str,
     project: str,
@@ -160,6 +165,7 @@ def wait_for_artifact(
     max_wait_time: int = 90,
     *,
     version: int | str = 0,
+    open_page: bool = True,
 ) -> bool:
     history_artifact_name = make_history_artifact_name(
         SimpleNamespace(entity=entity, project=project, id=run_id),  # pyright: ignore[reportArgumentType]
@@ -167,19 +173,24 @@ def wait_for_artifact(
     )
     total_wait_time = 0
     if not api.artifact_exists(history_artifact_name):
-        future_thread = monitor.monitor_run.remote(run_id, version=version, max_wait_time=max_wait_time)
-        done, remaining = ray.wait([future_thread], timeout=0)
-        while not api.artifact_exists(history_artifact_name) and not done:
+        # future_thread = monitor.monitor_run.remote(run_id, version=version, max_wait_time=max_wait_time)
+        if open_page:
+            page_future = monitor.visit_run_page.remote(run_id)
+            # wait for page to be loaded
+            ray.get(page_future, timeout=60)
+        # else page should be handled outside
+        while not api.artifact_exists(history_artifact_name):
             print(
                 f"Artifact does not exist yet, waiting for 5 seconds (total: {total_wait_time}s)...",
             )
             time.sleep(5)
-            done, remaining = ray.wait([future_thread], timeout=1)
+            # done, remaining = ray.wait([future_thread], timeout=1)
             total_wait_time += 6
             if total_wait_time > max_wait_time - 5.2:
                 print("Timeout waiting for history artifact to appear.")
             if total_wait_time > max_wait_time:
                 break
+        done = not api.artifact_exists(history_artifact_name)
         if done:
             print("Artifact exists after", total_wait_time, "s")
         return bool(done)
@@ -198,8 +209,12 @@ def wait_for_future(future: ray.ObjectRef, timeout: int = 300) -> bool:
             print("Timeout waiting for future to complete.")
             break
     if done:
-        result = ray.get(done[0], timeout=2)
-        print("Future completed with result:", result)
+        try:
+            result = ray.get(done[0], timeout=2)
+        except ray.exceptions.ActorDiedError as e:
+            print("Actor died after completing future:", e)
+        else:
+            print("Future completed with result:", result)
         return True
     return False
 
@@ -213,40 +228,27 @@ class RunData:
 
 
 def main():
+    assert RUN1_MODE == "offline"
+    assert RUN3_MODE == "offline"
     api = wandb.Api()
     # Initialize the first run and log some metrics
-    run_1_id = "test_1_" + Trial.generate_id()
-    run1 = RunData(entity=ENTITY, project=PROJECT, id=run_1_id, mode=RUN1_MODE)
+    run1_id = "test_1_" + Trial.generate_id()
+    run1 = RunData(entity=ENTITY, project=PROJECT, id=run1_id, mode=RUN1_MODE)
     actor_handle1, future1, queue1 = setup_actor(
-        dir=RUN_DIR, id=run_1_id, entity=ENTITY, project=PROJECT, mode=RUN1_MODE
+        dir=RUN_DIR, id=run1_id, entity=ENTITY, project=PROJECT, mode=RUN1_MODE
     )
     for i in range(300):
         queue1.put((_QueueItem.RESULT, {"metric": i, TRAINING_ITERATION: i}))
     queue1.put((_QueueItem.END, None))
     global_monitor = WandbRunMonitor.get_remote_monitor(project=PROJECT)
     global_monitor.initialize.remote()
-    wait_for_future(future1)
-    queue1.shutdown()
 
-    if RUN1_MODE == "offline":
-        upload_run(run_1_id, RUN_DIR)
-        time.sleep(10)
-    print("Finished run 1", run_1_id)
+    print("Finished run 1", run1_id)
     print("\n\n===================================================\n\n")
 
-    time.sleep(1)
-    start = time.time()
-    exists = wait_for_artifact(
-        api, entity=ENTITY, project=PROJECT, run_id=run_1_id, monitor=global_monitor, version="latest"
-    )
-    total_wait_time = int(time.time() - start)
     run1_artifact_name = make_history_artifact_name(run1, version="latest")
-    logger.info(
-        f"Artifact {run1_artifact_name} {'exists' if exists else 'does NOT exist'} after {total_wait_time}s. Proceeding to fork..."
-    )
 
     print("\n\n===================================================\n\n")
-    time.sleep(2)
 
     run2_id = "test_2_" + Trial.generate_id()
     actor_handle2, future2, queue2 = setup_actor(
@@ -255,7 +257,7 @@ def main():
         entity=ENTITY,
         project=PROJECT,
         mode=RUN2_MODE,
-        fork_from=f"{run_1_id}?_step=200",
+        fork_from=f"{run1_id}?_step=200",
     )
 
     print("Started run 2, forked from run 1 at step 200", run2_id)
@@ -272,26 +274,18 @@ def main():
         data = {"metric": value, "additional_metric": i * 1.1}
         queue2.put((_QueueItem.RESULT, (data | {TRAINING_ITERATION: i})))
     queue2.put((_QueueItem.END, None))
-    wait_for_future(future2)
-    queue2.shutdown()
-    if RUN2_MODE == "offline":  # pyright: ignore[reportUnnecessaryComparison]
-        upload_run(run2_id, RUN_DIR)
 
     print("\n\n===================================================\n\n")
 
     # Resume run 1
     func1_2 = make_increasing_function(start_step=300, factor=1.5)
-    run1_2_id = run_1_id
+    run1_2_id = run1_id
     actor_handle1_2, future1_2, queue1_2 = setup_actor(
         dir=RUN_DIR, id=run1_2_id, entity=ENTITY, project=PROJECT, mode=RUN1_2_MODE
     )
     for i in range(300, 400):
         queue1_2.put((_QueueItem.RESULT, {"metric": i + func1_2(i), TRAINING_ITERATION: i}))
     queue1_2.put((_QueueItem.END, None))
-    wait_for_future(future1_2)
-    queue1_2.shutdown()
-    if RUN1_2_MODE == "offline":
-        upload_run(run1_2_id)
 
     assert run1_2_id == run1.id
     print("Finished run 1 part 2", run1_2_id)
@@ -300,19 +294,22 @@ def main():
 
     print("Waiting 2 seconds to ensure artifact is ready...")
     time.sleep(0.1)
-    artifact_exists = api.artifact_exists(run1_artifact_name)
-    print(f"Artifact {run1_artifact_name} exists: {artifact_exists}")
-    # Get the version of the history artifact
-    history_artifact = api.artifact(run1_artifact_name)
-    print("History artifact version:", history_artifact.version)
-    print("History artifact id:", history_artifact.id)
-    print("History artifact type:", history_artifact.type)
-    print("History artifact metadata:", history_artifact.metadata)
-    print("History artifact description:", history_artifact.description)
-    print("History artifact aliases:", history_artifact.aliases)
-    print("History artifact files:", history_artifact.files())
-    # if history_artifact.version == "v0":
-    # with WandBRunMonitor(entity=run1.entity, project=run1.project) as monitor:
+    try:
+        artifact_exists = api.artifact_exists(run1_artifact_name)
+        print(f"Artifact {run1_artifact_name} exists: {artifact_exists}")
+        # Get the version of the history artifact
+        history_artifact = api.artifact(run1_artifact_name)
+        print("History artifact version:", history_artifact.version)
+        print("History artifact id:", history_artifact.id)
+        print("History artifact type:", history_artifact.type)
+        print("History artifact metadata:", history_artifact.metadata)
+        print("History artifact description:", history_artifact.description)
+        print("History artifact aliases:", history_artifact.aliases)
+        print("History artifact files:", history_artifact.files())
+        # if history_artifact.version == "v0":
+        # with WandBRunMonitor(entity=run1.entity, project=run1.project) as monitor:
+    except Exception as e:
+        print("Error accessing artifact:", e)
 
     print("\n\n======================== RUN 3 =======================\n\n")
 
@@ -321,7 +318,7 @@ def main():
 
     try:
         _actor_handle3, future3, queue3 = setup_actor(
-            dir=RUN_DIR, id=run3_id, entity=ENTITY, project=PROJECT, mode=RUN3_MODE, fork_from=f"{run_1_id}?_step=350"
+            dir=RUN_DIR, id=run3_id, entity=ENTITY, project=PROJECT, mode=RUN3_MODE, fork_from=f"{run1_2_id}?_step=350"
         )
         try:
             ray.get(future3, timeout=3)  # wait a bit to ensure actor does not fail
@@ -334,15 +331,15 @@ def main():
         if not isinstance(e, wandb.errors.CommError) or "fromStep" not in str(e):
             raise
         print("Got expected error when forking online without history artifact v2:", e)
-        exists = wait_for_artifact(
-            api, entity=ENTITY, project=PROJECT, run_id=run_1_id, monitor=global_monitor, version=1, max_wait_time=180
+        exists = wait_for_artifact_tab_only(
+            api, entity=ENTITY, project=PROJECT, run_id=run1_id, monitor=global_monitor, version=1, max_wait_time=180
         )
         if exists:
             print("v1 artifact exist now")
         else:
             print("v1 artifact does not exist still trying to setup run...")
         _actor_handle3, future3, queue3 = setup_actor(
-            dir=RUN_DIR, id=run3_id, entity=ENTITY, project=PROJECT, mode=RUN3_MODE, fork_from=f"{run_1_id}?_step=350"
+            dir=RUN_DIR, id=run3_id, entity=ENTITY, project=PROJECT, mode=RUN3_MODE, fork_from=f"{run1_id}?_step=350"
         )
         try:
             ray.get(
@@ -359,11 +356,6 @@ def main():
             (_QueueItem.RESULT, {"metric": i + func1_2(i) + func3(i) + (7 * math.sin(i / 3.0)), TRAINING_ITERATION: i})
         )
     queue3.put((_QueueItem.END, None))
-    wait_for_future(future3)
-    if RUN3_MODE == "offline":  # pyright: ignore[reportUnnecessaryComparison]
-        upload_run(run3_id)
-    queue3.shutdown()
-    wait_for_artifact(api, entity=ENTITY, project=PROJECT, run_id=run3_id, monitor=global_monitor, version="latest")
 
     print("\n\n===================== Run 4 =====================\n\n")
 
@@ -387,12 +379,54 @@ def main():
             )
         )
     queue4.put((_QueueItem.END, None))
-    wait_for_future(future4)
-    if RUN4_MODE == "offline":
-        upload_run(run4_id)
-    queue4.shutdown()
 
-    test_concurrency(run4_id, run3_id, global_monitor, max_wait_time=60)
+    # Batch uploads and artifact waits after all runs
+    print("\n\n==================== Batch Uploads & Artifact Waits ====================\n\n")
+    wait_for_future(future1)
+    queue1.shutdown()
+    if RUN1_MODE == "offline":
+        # TODO: # CRITICAL this uploads part2
+        upload_run(run1_id, RUN_DIR)
+        time.sleep(10)
+    visit_page1 = global_monitor.visit_run_page.remote(run1_id)
+    ray.get(visit_page1, timeout=40)
+
+    wait_for_artifact_tab_only(
+        api, entity=ENTITY, project=PROJECT, run_id=run1_id, monitor=global_monitor, version="latest", open_page=False
+    )
+    wait_for_future(future2)
+    queue2.shutdown()
+    time.sleep(5)
+    if RUN2_MODE == "offline":
+        upload_run(run2_id, RUN_DIR)
+    visit_page2 = global_monitor.visit_run_page.remote(run2_id)
+    wait_for_future(future1_2)
+    queue1_2.shutdown()
+    if RUN1_2_MODE == "offline":
+        upload_run(run1_2_id, RUN_DIR)
+    visit_page1_2 = global_monitor.visit_run_page.remote(run1_2_id)
+    ray.get(visit_page1_2, timeout=40)
+    wait_for_artifact_tab_only(
+        api, entity=ENTITY, project=PROJECT, run_id=run1_2_id, monitor=global_monitor, version="latest", open_page=False
+    )
+    wait_for_future(future3)
+    queue3.shutdown()
+    time.sleep(5)
+
+    if RUN3_MODE == "offline":
+        upload_run(run3_id, RUN_DIR)
+    visit_page3 = global_monitor.visit_run_page.remote(run3_id)
+    ray.get(visit_page3, timeout=40)
+    wait_for_artifact_tab_only(
+        api, entity=ENTITY, project=PROJECT, run_id=run3_id, monitor=global_monitor, version="latest", open_page=False
+    )
+    wait_for_future(future4)
+    queue4.shutdown()
+    time.sleep(5)
+
+    if RUN4_MODE == "offline":
+        upload_run(run4_id, RUN_DIR)
+    # wait_for_artifact_tab_only(api, entity=ENTITY, project=PROJECT, run_id=run4_id, monitor=global_monitor, version="latest", open_page=False)
 
     print("Finished run 4", run4_id)
     print("Cleaning up monitor...")
