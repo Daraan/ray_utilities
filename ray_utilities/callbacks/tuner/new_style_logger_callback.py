@@ -39,18 +39,15 @@ class NewStyleLoggerCallback(LoggerCallback):
         result: dict[str, Any],
         **info,
     ):
-        super().on_trial_result(iteration, trials, trial, result, **info)
         if os.environ.get(RAY_UTILITIES_NEW_LOG_FORMAT, "1").lower() in ("0", "false", "off"):
-            self.log_trial_result(
-                iteration,
-                trial,
-                result,  # pyright: ignore[reportArgumentType]
-            )
+            super().on_trial_result(iteration, trials, trial, result, **info)
             return
-        self.log_trial_result(
+        super().on_trial_result(
             iteration,
+            trials,
             trial,
             log_metrics_to_new_layout(result),  # pyright: ignore[reportArgumentType]
+            **info,
         )
 
     if TYPE_CHECKING:
