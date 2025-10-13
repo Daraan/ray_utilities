@@ -131,6 +131,7 @@ class UploadHelperMixin:
                     else:
                         error_code = ExitCode.ERROR
                     process.terminate()
+                    time.sleep(2)  # give some time to terminate
                     break
             elif process.poll() is not None:
                 error_code = ExitCode.SUCCESS

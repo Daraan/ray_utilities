@@ -562,11 +562,11 @@ class WandbRunMonitor:
             return True
         return False
 
-    def stop_monitoring(self) -> bool:
+    def stop_monitoring(self, timeout: float = 10) -> bool:
         """Stop any active monitoring. Returns True if no active activity remains."""
         self._stop_event.set()
         if self.monitor_thread:
-            self.monitor_thread.join(timeout=10)
+            self.monitor_thread.join(timeout=timeout)
             logger.debug("Stopped monitoring thread")
             if not self.monitor_thread.is_alive():
                 self.monitor_thread = None
@@ -596,7 +596,7 @@ class WandbRunMonitor:
         """Clean up resources safely and thoroughly."""
         # Stop monitoring first to prevent race conditions
         try:
-            self.stop_monitoring()
+            self.stop_monitoring(timeout=0.2)
         except Exception as e:  # ruff: noqa: BLE001
             logger.warning("Error stopping monitoring: %s", e)
 
@@ -631,8 +631,10 @@ class WandbRunMonitor:
         try:
             # Only log if we actually have resources to clean up
             if self.selenium_session is not None or self.monitor_thread is not None or self._is_initialized:
-                logger.debug("__del__ called, performing safety cleanup")
                 self.cleanup()
+                logger.debug("__del__ called, performing safety cleanup")
+        except KeyboardInterrupt:
+            self.__del__()  # important that we run cleanup here
         except Exception:  # ruff: noqa: BLE001
             # Suppress all exceptions in __del__ to avoid issues during interpreter shutdown
             # This follows Python best practices for destructors

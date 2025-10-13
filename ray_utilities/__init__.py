@@ -72,7 +72,7 @@ __all__ = [
 
 
 logger = nice_logger(__name__, level=os.environ.get("RAY_UTILITIES_LOG_LEVEL", "DEBUG"))
-logger.info("Ray utilities imported")
+logger.info("Ray utilities imported. Run ID: %s", RUN_ID)
 logger.debug("Ray utilities logger debug level set")
 
 # suppress a deprecation warning from ray, by creating a RLModuleConfig once

@@ -207,7 +207,10 @@ class AdvWandbLoggerCallback(
         # we let take FORK_FROM a higher priority
         if FORK_FROM in trial.config:
             fork_data = cast("ForkFromData", trial.config[FORK_FROM])
-            fork_id = fork_data["parent_trial_id"]
+            fork_id = fork_data.get("parent_fork_id", None)
+            if fork_id is None:
+                _logger.info("No parent_fork_id in FORK_FROM data: %s. Falling back to parent_trial_id", fork_data)
+                fork_id = fork_data.get("parent_trial_id", None)
             fork_iteration = fork_data["parent_training_iteration"]
             fork_from = f"{fork_id}?_step={fork_iteration}"
             # We should not have multiple ?_step= in the id
@@ -679,5 +682,7 @@ class AdvWandbLoggerCallback(
                 self._monitor.cleanup.remote()  # pyright: ignore[reportFunctionMemberAccess]
                 self._monitor.__ray_terminate__.remote()  # pyright: ignore[reportAttributeAccessIssue]
                 self._monitor = None
+        except KeyboardInterrupt:
+            self.__del__()  # need to make sure we clean monitor
         finally:
             super().__del__()

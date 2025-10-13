@@ -70,7 +70,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         self._unfinished_gathered_uploads: list[AnyPopen] = []
         self._upload_to_trial: dict[AnyPopen, str] = {}
         self._monitor: Optional[ActorProxy[WandbRunMonitor]] = None
-        self._history_artifact: dict[str, list[wandb.Artifact]]
+        self._history_artifact: dict[str, list[wandb.Artifact]] = {}
 
     def wandb_upload_results(
         self,

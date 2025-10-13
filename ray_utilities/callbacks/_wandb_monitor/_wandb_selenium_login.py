@@ -1184,7 +1184,6 @@ class WandBSeleniumSession:
 
         # Clear run tab tracking
         self._run_tabs.clear()
-        breakpoint()
         logger.debug("Cleared run tab tracking")
 
         self._notify("cleanup_complete")
@@ -1203,6 +1202,8 @@ class WandBSeleniumSession:
         """Destructor to ensure cleanup."""
         try:
             self.cleanup()
+        except KeyboardInterrupt:
+            self.__del__()
         except Exception:  # noqa: BLE001
             pass
 

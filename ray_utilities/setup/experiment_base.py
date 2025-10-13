@@ -1438,7 +1438,7 @@ class ExperimentSetupBase(
             logger.warning(
                 "Having __init_config__=True in the state while also restoring a config ignores "
                 "the restored config object. You can control the behavior and disable this warning "
-                "by setting init_config=True/False in the :meth:`from_saved` method. "
+                "by setting init_config=True/False in the `from_saved` method. "
                 "Or, by removing/changing the keys of the state dict before calling this function."
             )
         unchecked_keys.remove("param_space")
