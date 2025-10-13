@@ -475,6 +475,7 @@ class ExperimentKey(str, Enum):
         else:
             fork_number = ""
 
+        # fork_data["parent_training_iteration"] might be set to None
         if parent_iteration is None:  # pyright: ignore[reportUnnecessaryComparison]
             iteration_data = cls.NO_ITERATION_DATA  # rare chance that NaN is actually encoded
             r_pad = 0

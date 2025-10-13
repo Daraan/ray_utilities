@@ -15,6 +15,8 @@ grid search mutations and more flexible population management strategies.
 
 from __future__ import annotations
 
+# pyright: enableExperimentalFeatures=true
+
 import logging
 import math
 import random
@@ -36,6 +38,7 @@ from typing import (
     cast,
     overload,
 )
+from typing_extensions import Sentinel
 
 from ray.train._internal.session import _FutureTrainingResult, _TrainingResult
 from ray.tune.experiment import Trial
@@ -132,6 +135,40 @@ def _debug_dump_new_config(new_config: dict, mutation_keys: list[str]):
     logger.info("New config after perturbation %s", new_config)
     new_config[PERTURBED_HPARAMS] = {k: new_config[k] for k in mutation_keys}
     return new_config
+
+
+def _dummy_pass_through(new_config: dict) -> dict:
+    return new_config
+
+
+class KeepMutation(Generic[_T]):
+    # need to be serializable
+    _NOT_SET = Sentinel("_NOT_SET") if TYPE_CHECKING else object()
+    NOT_FOUND = Sentinel("NOT_FOUND") if TYPE_CHECKING else object()
+
+    def __init__(self, value: "_T | _NOT_SET" = _NOT_SET):
+        self.value = value
+
+    def set_value(self, new_value: _T):
+        assert new_value not in (KeepMutation._NOT_SET, KeepMutation.NOT_FOUND), new_value
+        self.value = new_value
+
+    def __call__(self) -> _T:
+        if self.value is KeepMutation._NOT_SET:
+            raise ValueError("KeepMutation value not set. call set_value first.")
+        return cast("_T", self.value)
+
+    @staticmethod
+    def get_config_value(config: dict[str, Any], path: tuple[str, ...]) -> _T | NOT_FOUND:
+        """Given a config dict and a path (tuple of keys), return the value at that path."""
+        current = config
+        for key in path:
+            if not isinstance(current, dict) or key not in current:
+                return KeepMutation.NOT_FOUND
+            current = current[key]
+        if isinstance(current, dict):
+            logger.warning("KeepMutation path %s points to a dict, expected a value.", path)
+        return current  # pyright: ignore[reportReturnType]
 
 
 class CyclicMutation(Generic[_T]):
@@ -275,10 +312,12 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         require_attrs: bool = True,
         synch: bool = False,
     ):
-        if custom_explore_fn is None:  # Otherwise use a wrapper
+        # if not hyperparam_mutations and custom_explore_fn is None:
+        #    # Use a dummy function to log the perturbed hyperparams
+        #    custom_explore_fn = _dummy_pass_through
+        if custom_explore_fn is None and hyperparam_mutations:  # Otherwise use a wrapper
             # XXX
-            if hyperparam_mutations:
-                custom_explore_fn = partial(_debug_dump_new_config, mutation_keys=list(hyperparam_mutations.keys()))
+            custom_explore_fn = partial(_debug_dump_new_config, mutation_keys=list(hyperparam_mutations.keys()))
         # TODO: Do we want to reload the env_seed?
         self._trial_state: dict[Trial, _PBTTrialState2]  # pyright: ignore[reportIncompatibleVariableOverride]
         if hyperparam_mutations:  # either hyperparam_mutations or custom_explore_fn must be passed
@@ -325,6 +364,56 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         """
 
         self._fork_data_file: Path | None = None
+
+    @classmethod
+    def _deep_update_mutation(
+        cls,
+        mutations: dict[str, CyclicMutation[_T] | KeepMutation[_T] | dict[str, Any] | Any],
+        new_skip: Optional[dict[str, Container[_T] | dict[str, Any] | None]] = None,
+        keep_value: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Update mutation parameters for both CyclicMutation and KeepMutation.
+
+        Args:
+            mutations: Dictionary of mutations to update
+            new_skip: Optional dictionary with skip values for CyclicMutation instances
+            keep_value: Optional dictionary with values to set for KeepMutation instances
+        """
+        # Unified iteration through mutations
+        for key, distribution in mutations.items():
+            # Process nested dictionaries
+            if isinstance(distribution, dict):
+                # Prepare deeper parameters for recursion
+                deeper_skip = None
+                deeper_keep = None
+
+                if new_skip is not None and key in new_skip and isinstance(new_skip[key], dict):
+                    deeper_skip = cast("dict[str, Any]", new_skip[key])
+
+                if keep_value is not None and key in keep_value and isinstance(keep_value[key], dict):
+                    deeper_keep = keep_value[key]
+
+                # Recurse if we have anything to process deeper
+                if deeper_skip is not None or deeper_keep is not None:
+                    cls._deep_update_mutation(
+                        distribution,
+                        new_skip=deeper_skip,
+                        keep_value=deeper_keep,
+                    )
+
+            # Update CyclicMutation
+            elif isinstance(distribution, CyclicMutation) and new_skip is not None and key in new_skip:
+                deeper_skip = new_skip[key]
+                # Skip values should not be dictionaries
+                assert not isinstance(deeper_skip, dict)
+                distribution.update_skip(deeper_skip)
+
+            # Update KeepMutation
+            elif isinstance(distribution, KeepMutation) and keep_value is not None and key in keep_value:
+                deeper_value = keep_value[key]
+                # Keep values for leaf mutations should not be dictionaries
+                assert not isinstance(deeper_value, dict)
+                distribution.set_value(cast("_T", deeper_value))
 
     @overload
     def get_fork_ids(self, trial: Trial, parent: None = None, step: None = None) -> tuple[str, None]: ...
@@ -432,24 +521,6 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         logger.debug("Exploitation distribution: %s", distribution)
         return assignments
 
-    @classmethod
-    def _deep_update_cyclic_mutation(
-        cls,
-        mutations: dict[str, CyclicMutation[_T] | dict[str, Any] | Any],
-        new_skip: Optional[dict[str, Container[_T] | dict[str, Any] | None]],
-    ) -> None:
-        if new_skip is None:
-            return
-        for key, distribution in mutations.items():
-            if isinstance(distribution, dict) and key in new_skip:
-                deeper_skip = new_skip[key]
-                assert isinstance(deeper_skip, dict)
-                cls._deep_update_cyclic_mutation(distribution, cast("dict[str, Any]", deeper_skip))
-            elif isinstance(distribution, CyclicMutation):
-                deeper_skip = new_skip[key]
-                assert not isinstance(deeper_skip, dict)
-                cast("CyclicMutation[_T]", distribution).update_skip(deeper_skip)
-
     def _get_current_best_mutations(self, upper_quantile: list[Trial]):
         """
         Get the values of hyperparameter mutations for the best trials.
@@ -497,7 +568,14 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         # Update any CyclicMutation skip lists based on current top trials, to not resample these values.
         new_skips = self._get_current_best_mutations(upper_quantile)
         logger.debug("Updating CyclicMutation skip lists to %s", new_skips)
-        self._deep_update_cyclic_mutation(self._hyperparam_mutations, new_skip=new_skips)
+        import tree
+
+        flat_mutations = tree.flatten_with_path(self._hyperparam_mutations)
+        keep_mutations = [(path, m) for path, m in flat_mutations if isinstance(m, KeepMutation)]
+        for path, mutation in keep_mutations:
+            value = KeepMutation.get_config_value(trial.config, path)
+            mutation.set_value(value)
+        self._deep_update_mutation(self._hyperparam_mutations, new_skip=new_skips)
         # TODO: a trial should just use the batch size assigned that it already has, i.e. actually no mutation, just load best checkpoint
         # FIXME: next perturbation interval does not increase linearly. Trials train longer and longer as well
 
@@ -578,6 +656,7 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
                 trial.config.pop(k, None)
             # Set info which trial was forked from
             parent_iteration = self._trial_state[trial_to_clone].last_training_iteration
+            assert parent_iteration == self._trial_state[trial_to_clone].last_result[TRAINING_ITERATION]
             fork_data: ForkFromData = {
                 "parent_trial_id": trial_to_clone.trial_id,  # NOTE: This is the pure trial_id, does not support
                 "parent_trial": trial_to_clone,

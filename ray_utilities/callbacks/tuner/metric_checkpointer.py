@@ -57,7 +57,7 @@ class MetricCheckpointer(Callback):
             self._last_checkpoint_iteration = iteration
             self._last_checkpoint_value = result.get(self.metric_name, None)
             self._last_checkpoint_step = current_step
-            result[SHOULD_CHECKPOINT] = True  # XXX # NOTE: That this is a copy and does NOT WORK
+            result[SHOULD_CHECKPOINT] = True  # Needs ray 2.50.0+ to work, else result is a copy.
             _logger.info(
                 "Checkpointing trial %s at iteration %s, step %d with: metric '%s' = %s%s",
                 trial.trial_id if trial else "",

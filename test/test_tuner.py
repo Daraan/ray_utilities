@@ -66,7 +66,7 @@ from ray_utilities.testing_utils import (
 from ray_utilities.training.default_class import DefaultTrainable
 from ray_utilities.training.helpers import make_divisible
 from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
-from ray_utilities.tune.scheduler.top_pbt_scheduler import CyclicMutation, TopPBTTrialScheduler
+from ray_utilities.tune.scheduler.top_pbt_scheduler import CyclicMutation, KeepMutation, TopPBTTrialScheduler
 
 if TYPE_CHECKING:
     from ray.tune.execution.tune_controller import TuneController
@@ -1202,7 +1202,10 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             )
 
             setup.args.set_hyperparam_mutations(
-                {"train_batch_size_per_learner": CyclicMutation(Setup.batch_size_sample_space["grid_search"])}
+                {
+                    "train_batch_size_per_learner": CyclicMutation(Setup.batch_size_sample_space["grid_search"]),
+                    "fcnet_hiddens": KeepMutation(),
+                }
             )
             results = run_tune(setup)
             print("Num exploits:", num_exploits)

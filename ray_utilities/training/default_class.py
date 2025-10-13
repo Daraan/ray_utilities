@@ -1520,7 +1520,7 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
             _logger.info(
                 "Current step %s exceeds total steps. Expecting the trainable to have stopped.", self._current_step
             )
-        # HACK: as long as tune does not allow custom result checkpointing use this
+        # HACK: For ray < 2.50.0 where result is copied in for the callbacks
         # see for example: https://github.com/ray-project/ray/pull/55527
         if (
             TUNE_RESULT_IS_A_COPY

@@ -218,8 +218,8 @@ class WandbUploaderMixin(UploadHelperMixin):
         if exit_code != 0:
             logger.error(
                 "Retry of upload for trial %s also failed with exit code %d",
-                Path(process.args[2]).name,
-                exit_code,  # pyright: ignore[reportArgumentType, reportIndexIssue]
+                Path(process.args[2:]).name,  # pyright: ignore[reportArgumentType, reportIndexIssue]
+                exit_code,
             )
         return exit_code
 
@@ -704,7 +704,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         self._monitor = WandbRunMonitor.get_remote_monitor(
             project=self.project, num_cpus=1, actor_options=actor_options
         )
-        if not ray.get(self._monitor.is_initialized.remote()):  # pyright: ignore[reportAttributeAccessIssue]
+        if not ray.get(self._monitor.is_initialized.remote()):  # pyright: ignore[reportFunctionMemberAccess]
             _init_future = self._monitor.initialize.remote()  # pyright: ignore[reportFunctionMemberAccess]
             try:
                 ray.get(_init_future, timeout=10)

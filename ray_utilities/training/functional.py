@@ -270,13 +270,13 @@ def training_step(
         :func:`~ray_utilities.training.helpers.create_running_reward_updater`: Reward tracking
     """
     # Prevent unbound variables
-    metrics: TrainableReturnData | LogMetricsDict = {}  # type: ignore[assignment]
     disc_eval_mean = None
     disc_running_eval_reward = None
     # Train and get results
     result = cast("StrictAlgorithmReturnData", algo.train())
 
     # Reduce to key-metrics
+    metrics: TrainableReturnData | LogMetricsDict = {}  # type: ignore[assignment]
     metrics = create_log_metrics(result, discrete_eval=discrete_eval, log_stats=log_stats)
     # Possibly use if train.get_context().get_local/global_rank() == 0 to save videos
     # Unknown if should save video here and clean from metrics or save in a callback later is faster.
