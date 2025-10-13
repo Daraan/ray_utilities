@@ -470,9 +470,21 @@ class CometArchiveTracker(UploadHelperMixin):
 
     @classmethod
     def upload_zip_file(
-        cls, zip_file: str, *, blocking: bool = True, move: bool = True
+        cls, zip_file: str, *, blocking: bool = True, move: bool = True, tracker: Optional[CometArchiveTracker] = None
     ) -> bool | subprocess.Popen[str]:
-        """Uploads a single Comet ML offline experiment ZIP file."""
+        """
+        Uploads a single Comet ML offline experiment ZIP file.
+
+        Args:
+            zip_file: Path to the Comet ML offline experiment ZIP file.
+            blocking: If True, creates a `comet upload ...` subprocess and waits for it to finish.
+                If False, starts the subprocess and returns it immediately.
+            move: If True, moves the ZIP file to an `uploaded/` subdirectory after successful upload.
+                If blocking is False and move is True, starts a thread to wait for the process to finish
+                and then move the file.
+            tracker: Optional CometArchiveTracker instance to track the upload thread if move is True
+                and blocking is False. If None, uses the default global tracker.
+        """
         if blocking:
             process = subprocess.Popen(
                 ["comet", "upload", zip_file], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
@@ -493,7 +505,9 @@ class CometArchiveTracker(UploadHelperMixin):
                 name=f"Thread-_finish_upload_by_process({zip_file})",
             )
             wait_and_move_thread.start()
-            _default_comet_archive_tracker._wait_and_move_threads.append(wait_and_move_thread)
+            if tracker is None:
+                tracker = _default_comet_archive_tracker
+            tracker._wait_and_move_threads.append(wait_and_move_thread)
         return process
 
     def __del__(self):

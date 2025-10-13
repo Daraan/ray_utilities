@@ -486,6 +486,7 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         For trials in the lower quantile, evenly distribute which top trial
         they exploit to ensure balanced exploitation.
         """
+        # Note, is iterated in order: upper_quantile, not in quantiles, lower_quantile
         state = self._trial_state[trial]
         # Remove any fork controlling keys from the config
         for k in self.additional_config_keys:
