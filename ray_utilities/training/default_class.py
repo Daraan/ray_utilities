@@ -1509,6 +1509,7 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
             discrete_eval=self.discrete_eval,
             disable_report=True,
             log_stats=self.log_stats,
+            last_result=getattr(self, "_last_result", None),
         )
         self._current_step = get_current_step(result)
         if (

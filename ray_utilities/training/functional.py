@@ -221,6 +221,7 @@ def training_step(
     discrete_eval: bool = False,
     disable_report: bool = False,
     log_stats: LogStatsChoices = "minimal",
+    last_result: Optional[dict[str, Any]] = None,
 ) -> tuple["StrictAlgorithmReturnData", "LogMetricsDict", "RewardsDict"]:
     """Execute a single training step with comprehensive metrics processing.
 
@@ -244,6 +245,9 @@ def training_step(
             debugging or when using custom result handling. Defaults to ``False``.
         log_stats: Level of detail for metrics logging. Controls which metrics are
             included in the processed output. Defaults to ``"minimal"``.
+        last_result: Optional previous training result. If provided and evaluation was not
+            performed in the current step, evaluation metrics from this result will be carried
+            over to maintain continuity after checkpoint restoration. Defaults to ``None``.
 
     Returns:
         A tuple containing:
@@ -275,6 +279,18 @@ def training_step(
     disc_running_eval_reward = None
     # Train and get results
     result = cast("StrictAlgorithmReturnData", algo.train())
+
+    # Carry over evaluation metrics from last result if evaluation was not performed this step
+    if (
+        last_result is not None
+        and EVALUATION_RESULTS in last_result
+        and (
+            EVALUATION_RESULTS not in result
+            or not result[EVALUATION_RESULTS].get(EVALUATED_THIS_STEP, False)
+        )
+    ):
+        # Evaluation was not performed this step, carry over from last result
+        result[EVALUATION_RESULTS] = last_result[EVALUATION_RESULTS]
 
     # Reduce to key-metrics
     metrics = create_log_metrics(result, discrete_eval=discrete_eval, log_stats=log_stats)
