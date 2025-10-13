@@ -44,6 +44,12 @@ class ExitCode(IntEnum):
     Solution: Visit the run page of the parent to trigger creation of the history artifact. Potentially wait and retry.
     """
 
+    WANDB_FILE_EMPTY = auto()
+    """
+    Upload process failed because of an empty header: "wandb file is empty".
+    This can happen if the files are not fully synced yet or a data loss occurred.
+    """
+
     WANDB_UNKNOWN_ERROR = auto()
     """Process failed due to an unknown WandB specific error."""
 
@@ -131,6 +137,8 @@ class UploadHelperMixin:
                         error_code = ExitCode.WANDB_PARENT_NOT_FOUND
                     elif "fromStep is greater than the run's last step" in line:
                         error_code = ExitCode.WANDB_BEHIND_STEP
+                    elif "wandb file is empty" in line:
+                        error_code = ExitCode.WANDB_FILE_EMPTY
                     else:
                         error_code = ExitCode.ERROR
                     process.terminate()

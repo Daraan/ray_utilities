@@ -53,6 +53,8 @@ class _LogMetricsEnvRunnersResultsDict(BaseEnvRunnersResultsDict):
 
     episode_return_max: NotRequired[float]
     episode_return_min: NotRequired[float]
+    episode_len_max: NotRequired[float]
+    episode_len_min: NotRequired[float]
     num_env_steps_sampled_lifetime: NotRequired[int]
     num_env_steps_sampled: NotRequired[int]
     num_env_steps_passed_to_learner: NotRequired[int]

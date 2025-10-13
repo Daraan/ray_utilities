@@ -41,6 +41,9 @@ class BaseEnvRunnersResultsDict(TypedDict):
     episode_return_mean: float
     """Always required - primary performance metric"""
 
+    episode_len_mean: NotRequired[float]
+    """Mean length of episodes in the current batch"""
+
 
 class VideoTypes:
     """Common video type definitions used across the type hierarchy."""

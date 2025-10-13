@@ -186,7 +186,7 @@ class TrackForkedTrialsMixin(LoggerCallback):
             self._forked_trials[trial].append(fork_data)
             self.add_forked_trial_id(trial, fork_data=fork_data)
             self._currently_not_forked_trials.discard(trial)
-            _logger.info(
+            _logger.debug(
                 "Trial %s was forked from %s, fork_id of this trial %s, parent data: %s",
                 trial.trial_id,
                 parent_trial_id,
