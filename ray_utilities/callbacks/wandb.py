@@ -100,7 +100,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         uploads = self.upload_paths(wandb_paths, wait=wait, parallel_uploads=parallel_uploads)
         return uploads
 
-    def _monitor_check_trial(self, trial_id: str, timeout: float = 40) -> bool | None:
+    def _monitor_check_parent_trial(self, trial_id: str, timeout: float = 40) -> bool | None:
         parent_id = self.fork_relationships.get(trial_id, (None, None))[0]
         if not parent_id:
             # we might check a trial with no parent here
@@ -163,8 +163,11 @@ class WandbUploaderMixin(UploadHelperMixin):
             return False, False
         entity_path = entity + "/" if entity else ""
         artifact = api.artifact(artifact_name)
-        run: wandb.Run = api.run(f"{entity_path}{self.project}/{trial_id}")
+
         artifact_run = artifact.logged_by()
+        if artifact_run is None:
+            logger.warning("Artifact %s has no logged_by run, cannot verify", artifact_name)
+            return True, False
         aliases = artifact.aliases
         digest = artifact.digest
         if trial_id not in self._history_artifact or all(a.digest != digest for a in self._history_artifact[trial_id]):
@@ -188,14 +191,17 @@ class WandbUploaderMixin(UploadHelperMixin):
 
         start = time.time()
         trial_id = self._upload_to_trial.get(process, "")
-        breakpoint()
-        found_before, new_artifact = self._check_for_artifact(trial_id)
-        self._monitor_check_trial(trial_id=trial_id, timeout=timeout)
+        parent_id = self.fork_relationships.get(trial_id, (None, None))[0]
+        if parent_id is None:
+            logger.warning("Found no parent for %s cannot check again", trial_id)
+            return ExitCode.NO_PARENT_FOUND
+        found_before, artifact_is_new = self._check_for_artifact(parent_id)
+        self._monitor_check_parent_trial(trial_id=trial_id, timeout=timeout)
         time.sleep(2)
-        found_after, new_artifact_after = self._check_for_artifact(trial_id)
-        while not (new_artifact or new_artifact_after) and (time.time() - start) < timeout:
+        found_after, new_artifact_after = self._check_for_artifact(parent_id)
+        while not (artifact_is_new or new_artifact_after) and (time.time() - start) < timeout:
             time.sleep(5)
-            found_after, new_artifact_after = self._check_for_artifact(trial_id)
+            found_after, new_artifact_after = self._check_for_artifact(parent_id)
         process_retry = subprocess.Popen(
             ["wandb", "sync", *cast("Iterable[str]", process.args[2:])],  # pyright: ignore[reportIndexIssue]
             stdout=subprocess.PIPE,
@@ -231,10 +237,8 @@ class WandbUploaderMixin(UploadHelperMixin):
             trial_runs = []  # (trial_id, run_dir)
 
             for wandb_dir in wandb_paths:
-                # Find offline run directories
+                # Find offline run directories, there might be multiple because of resuming
                 offline_runs = list(wandb_dir.glob("offline-run-*"))
-                if len(offline_runs) > 1:
-                    logger.warning("Multiple wandb offline directories found in %s: %s", wandb_dir, offline_runs)
 
                 if not offline_runs:
                     logger.error(
@@ -242,15 +246,15 @@ class WandbUploaderMixin(UploadHelperMixin):
                     )
                     continue
 
-                for run_dir in offline_runs:
-                    trial_id = self._extract_trial_id_from_wandb_run(run_dir)
+                for run_dirs in offline_runs:
+                    trial_id = self._extract_trial_id_from_wandb_run(run_dirs)
                     if trial_id:
-                        trial_runs.append((trial_id, run_dir))
+                        trial_runs.append((trial_id, run_dirs))
                     else:
                         logger.warning(
-                            "Could not extract trial ID from %s, will upload without dependency ordering", run_dir
+                            "Could not extract trial ID from %s, will upload without dependency ordering", run_dirs
                         )
-                        trial_runs.append((run_dir.name, run_dir))
+                        trial_runs.append((run_dirs.name, run_dirs))
 
         if not trial_runs:
             logger.info("No wandb offline runs found to upload.")
@@ -261,7 +265,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         logger.debug("Found %d fork relationships: %s", len(self.fork_relationships), self.fork_relationships)
 
         # Step 4: Build dependency-ordered upload groups
-        upload_groups: list[list[tuple[str, Path]]] = self._build_upload_dependency_graph(
+        upload_groups: list[list[tuple[str, list[Path]]]] = self._build_upload_dependency_graph(
             trial_runs, self.fork_relationships
         )
         logger.debug("Created %d upload groups with dependency ordering", len(upload_groups))
@@ -271,7 +275,6 @@ class WandbUploaderMixin(UploadHelperMixin):
         finished_uploads: set[AnyPopen] = set()
         failed_uploads: list[AnyPopen] = []
         total_uploaded = 0
-
         if self._unfinished_gathered_uploads:
             self._unfinished_gathered_uploads = unfinished_from_past = [
                 p for p in self._unfinished_gathered_uploads if p.poll() is None
@@ -312,7 +315,7 @@ class WandbUploaderMixin(UploadHelperMixin):
                 uploads = [p for p in uploads if p not in finished_or_failed]
 
             # Upload trials in current group (can be parallel within group)
-            for trial_id, run_dir in group:
+            for trial_id, run_dirs in group:
                 # Manage parallel upload limit within group
                 if len(uploads) >= parallel_uploads:
                     logger.info(
@@ -350,20 +353,20 @@ class WandbUploaderMixin(UploadHelperMixin):
 
                 # if the run has a parent we want to check it with the monitor first
                 logger.debug("Checking with monitor before uploading trial %s", trial_id)
-                if (visit_success := self._monitor_check_trial(trial_id, timeout=40)) is not None:
+                if (visit_success := self._monitor_check_parent_trial(trial_id, timeout=40)) is not None:
                     logger.debug("Monitor visit for parent of trial %s was %s", trial_id, visit_success)
                     time.sleep(5)
                 logger.info(
-                    "Uploading offline wandb run for trial %s from: %s (group %d/%d, trial %d/%d in group)",
+                    "Uploading offline wandb run for trial %s (group %d/%d, trial %d/%d in group) from dirs:\n%s",
                     trial_id,
-                    run_dir,
                     group_idx + 1,
                     len(upload_groups),
-                    group.index((trial_id, run_dir)) + 1,
+                    group.index((trial_id, run_dirs)) + 1,
                     len(group),
+                    run_dirs,
                 )
                 process = subprocess.Popen(
-                    ["wandb", "sync", run_dir.as_posix(), "--append"],
+                    ["wandb", "sync", *[d.as_posix() for d in run_dirs], "--append"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -608,38 +611,53 @@ class WandbUploaderMixin(UploadHelperMixin):
 
     def _build_upload_dependency_graph(
         self, trial_runs: list[tuple[str, Path]], fork_relationships: Mapping[str, tuple[str | None, int | None]]
-    ) -> list[list[tuple[str, Path]]]:
+    ) -> list[list[tuple[str, list[Path]]]]:
         """Build dependency-ordered groups for uploading trials.
 
         Returns:
             List of groups where each group can be uploaded in parallel,
             but groups must be uploaded sequentially (earlier groups before later ones).
+
+            Each group is a list of (trial_id, [run_path1, run_path2, ...]) tuples.
+
+            While it should not happen by construction, in cases of circular dependencies or missing parents,
+            all remaining trials are grouped together and uploaded in the same batch.
         """
         # Build adjacency lists for dependencies
         dependents: dict[str, list[str]] = {}  # parent_id -> [child_id1, child_id2, ...]
         dependencies: dict[str, set[str]] = {}  # child_id -> {parent_id1, parent_id2, ...}
 
-        trial_id_to_run = dict(trial_runs)
+        # Create a mapping from trial_id to all paths for that ID
+        trial_id_to_runs: dict[str, list[Path]] = {}
+        for trial_id, run_path in trial_runs:
+            if trial_id not in trial_id_to_runs:
+                trial_id_to_runs[trial_id] = []
+            trial_id_to_runs[trial_id].append(run_path)
 
-        # Initialize dependency tracking, trial_runs might be not complete
-        for trial_id, _ in trial_runs:
+        # Initialize dependency tracking, using unique trial IDs
+        unique_trial_ids = list(trial_id_to_runs.keys())
+        for trial_id in unique_trial_ids:
             dependencies[trial_id] = set()
             dependents[trial_id] = []
 
         # Build dependency graph from fork relationships, which should be complete
         for trial_id, (parent_id, _) in fork_relationships.items():
-            if parent_id and parent_id in trial_id_to_run:
-                if trial_id not in dependencies:
-                    dependencies[trial_id] = set()
+            if trial_id not in dependencies:
+                dependencies[trial_id] = set()
+            if parent_id and parent_id in unique_trial_ids:
                 dependencies[trial_id].add(parent_id)
+                if parent_id not in dependents:
+                    logger.warning("Parent ID %s not in trial runs, this should not happen", parent_id)
+                    dependents[parent_id] = []
                 dependents[parent_id].append(trial_id)
 
         # Topological sort to create upload groups
-        upload_groups: list[list[tuple[str, Path]]] = []
-        remaining_trials = {trial_id for trial_id, _ in trial_runs}
+        upload_groups: list[list[tuple[str, list[Path]]]] = []
+        remaining_trials = set(unique_trial_ids)
 
         while remaining_trials:
             # Find trials with no remaining dependencies
+            # A trial is ready if it has no dependencies, or all its dependencies are not in remaining_trials.
             ready_trials = [
                 trial_id
                 for trial_id in remaining_trials
@@ -654,9 +672,13 @@ class WandbUploaderMixin(UploadHelperMixin):
                     remaining_trials,
                 )
                 ready_trials = list(remaining_trials)
+            # Create group for this batch, including all paths for each ready trial
+            # Create group for this batch, grouping all paths for each ready trial_id
+            group = [
+                (trial_id, sorted(trial_id_to_runs[trial_id]))
+                for trial_id in ready_trials
+            ]  # fmt: skip
 
-            # Create group for this batch
-            group = [(trial_id, trial_id_to_run[trial_id]) for trial_id in ready_trials]
             upload_groups.append(group)
 
             # Remove completed trials from remaining and update dependencies
@@ -675,8 +697,13 @@ class WandbUploaderMixin(UploadHelperMixin):
         if self.project is None:
             raise ValueError("Cannot start WandbRunMonitor without wandb project name set.")
         from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor  # noqa: PLC0415
+        from ray_utilities import runtime_env  # noqa: PLC0415
 
-        self._monitor = WandbRunMonitor.get_remote_monitor(project=self.project)
+        actor_options = {"runtime_env": runtime_env}
+
+        self._monitor = WandbRunMonitor.get_remote_monitor(
+            project=self.project, num_cpus=1, actor_options=actor_options
+        )
         if not ray.get(self._monitor.is_initialized.remote()):  # pyright: ignore[reportAttributeAccessIssue]
             _init_future = self._monitor.initialize.remote()  # pyright: ignore[reportFunctionMemberAccess]
             try:

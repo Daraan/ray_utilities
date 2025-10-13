@@ -47,6 +47,9 @@ class ExitCode(IntEnum):
     WANDB_UNKNOWN_ERROR = auto()
     """Process failed due to an unknown WandB specific error."""
 
+    NO_PARENT_FOUND = 499
+    """No parent found for the current run, but one was expected - this points at a implementation error."""
+
 
 class UploadHelperMixin:
     error_patterns: ClassVar[set[str]] = {"error", "failed", "exception", "traceback", "critical"}
