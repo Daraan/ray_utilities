@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, cast
@@ -149,6 +150,9 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
                     self._wandb.log_artifact(artifact)
                 except (HTTPError, Exception):
                     logger.exception("Failed to log artifact: %s")
+            elif isinstance(v, float) and math.isnan(v):
+                # HACK: Currently wandb fails to log metric on forks if the parent has NaN metrics; do not upload to wandb
+                continue
             elif not _is_allowed_type_patch(v):
                 continue
             else:
