@@ -224,6 +224,9 @@ class AdvWandbLoggerCallback(
             # Use get_trial_id to get the consistent trial ID
             trial_id = self.get_trial_id(trial)
             config.setdefault("experiment_key", make_experiment_key(trial))
+        if self.is_trial_forked(trial) and FORK_FROM not in trial.config:
+            assert trial in self._currently_not_forked_trials
+            trial_name = None  # keep name from parent trial when continuing a fork
 
         # Test for invalid chars
         assert not trial_id or all(c not in trial_id for c in r"/ \ # ? % :"), f"Invalid character in: {trial_id}"

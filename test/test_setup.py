@@ -2,23 +2,17 @@
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import math
 import os
-import random
 import tempfile
-import threading
-import time
 import unittest
 import unittest.mock
 from ast import literal_eval
 from copy import deepcopy
 from inspect import isclass
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Final, Optional, cast
-from unittest.mock import MagicMock, patch
 
 import cloudpickle
 import pyarrow as pa
@@ -36,12 +30,8 @@ from ray.rllib.utils.metrics import (
     NUM_ENV_STEPS_SAMPLED,
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
-from ray.tune.experiment import Trial
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import NUM_ENV_RUNNERS_0_1_EQUAL
-from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
-from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
-from ray_utilities.callbacks.upload_helper import UploadHelperMixin
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config import logger as parser_logger
 from ray_utilities.config.parser.mlp_argument_parser import SimpleMLPParser
@@ -53,11 +43,9 @@ from ray_utilities.constants import (
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
 )
 from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
-from ray_utilities.misc import is_pbar, make_experiment_key, raise_tune_errors
+from ray_utilities.misc import is_pbar, raise_tune_errors
 from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.random import seed_everything
-from ray_utilities.runfiles import run_tune
-from ray_utilities.setup._experiment_uploader import WandbUploaderMixin
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup, PPOMLPSetup
@@ -66,8 +54,6 @@ from ray_utilities.testing_utils import (
     TWO_ENV_RUNNER_CASES,
     Cases,
     InitRay,
-    MockPopenClass,
-    MockTrial,
     SetupDefaults,
     SetupWithCheck,
     TestHelpers,
@@ -79,7 +65,6 @@ from ray_utilities.testing_utils import (
 from ray_utilities.training.default_class import DefaultTrainable, TrainableBase
 from ray_utilities.training.helpers import make_divisible
 from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultIterationStopper
-from ray_utilities.typing import ForkFromData, Forktime
 
 if TYPE_CHECKING:
     import numpy as np
@@ -98,6 +83,7 @@ if "RAY_DEBUG" not in os.environ:
 
 class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
     @pytest.mark.basic
+    @mock_trainable_algorithm
     def test_basic(self):
         with patch_args():
             setup = AlgorithmSetup()
@@ -114,9 +100,13 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
     def test_argument_usage(self):
         # Test warning and failure
         with patch_args("--batch_size", "1234"):
-            self.assertEqual(AlgorithmSetup().config.train_batch_size_per_learner, 1234)
+            self.assertEqual(
+                AlgorithmSetup(init_trainable=False, init_param_space=False).config.train_batch_size_per_learner, 1234
+            )
         with patch_args("--train_batch_size_per_learner", "456"):
-            self.assertEqual(AlgorithmSetup().config.train_batch_size_per_learner, 456)
+            self.assertEqual(
+                AlgorithmSetup(init_trainable=False, init_param_space=False).config.train_batch_size_per_learner, 456
+            )
 
     def test_tags(self):
         with tempfile.NamedTemporaryFile("w+") as f:
@@ -561,6 +551,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 self.assertNotEqual(setup2.config.evaluation_duration_unit, eval_unit_other)
                 self.assertEqual(setup2.config.evaluation_duration_unit, eval_unit_default)
 
+    @mock_trainable_algorithm
     def test_parser_restore_annotations(self):
         with patch_args(
             "--batch_size", "1234",
@@ -676,6 +667,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             module = str(setup.config.rl_module_spec.build())
             self.assertIn("in_features=8, out_features=8", module)
 
+    @mock_trainable_algorithm(mock_learner=False, mock_env_runners=False)
     def test_lr_loading(self):
         with patch_args("--lr", "0.123"):
             setup = MLPSetup(init_param_space=False, init_trainable=False)

@@ -161,7 +161,6 @@ class WandbUploaderMixin(UploadHelperMixin):
         artifact_name = self._get_history_artifact_name(trial_id, version=version, entity=entity)
         if not api.artifact_exists(artifact_name):
             return False, False
-        entity_path = entity + "/" if entity else ""
         artifact = api.artifact(artifact_name)
 
         artifact_run = artifact.logged_by()
@@ -218,7 +217,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         if exit_code != 0:
             logger.error(
                 "Retry of upload for trial %s also failed with exit code %d",
-                Path(process.args[2:]).name,  # pyright: ignore[reportArgumentType, reportIndexIssue]
+                Path(process.args[2]).name,  # pyright: ignore[reportArgumentType, reportIndexIssue]
                 exit_code,
             )
         return exit_code

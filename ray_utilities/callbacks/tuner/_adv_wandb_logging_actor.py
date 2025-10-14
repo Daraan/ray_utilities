@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import logging
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from urllib.error import HTTPError
 
+import ray
 from ray.air.integrations import wandb as ray_wandb
 from ray.air.integrations.wandb import _WandbLoggingActor
 from ray.tune.utils import flatten_dict
@@ -15,11 +15,8 @@ import wandb.errors
 from ray_utilities.callbacks.tuner.wandb_helpers import (
     FutureArtifact,
     FutureFile,
-    get_wandb_web_monitor,
-    wandb_monitor_lock,
 )
 from ray_utilities.callbacks.wandb import wandb_api
-from ray_utilities.constants import FORK_FROM
 from ray_utilities.misc import make_fork_from_csv_header, make_fork_from_csv_line, parse_fork_from
 
 if TYPE_CHECKING:
@@ -43,21 +40,6 @@ ray_wandb._is_allowed_type = _is_allowed_type_patch
 
 class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
     def run(self, retries=0):
-        if False:
-            from ray_utilities.callbacks.tuner.wandb_helpers import _wandb_web_monitor
-
-            logger.warning(f"wandb web monitor at import: {_wandb_web_monitor}")
-            try:
-                with get_wandb_web_monitor(
-                    entity=self.kwargs.get("entity", wandb_api().default_entity), project=self.kwargs["project"]
-                ) as monitor:
-                    logger.warning(f"wandb web monitor in context: {monitor}")
-                    ...
-            except Exception as e:
-                logger.exception("Failed to get wandb web monitor: %s", str(e))
-            from ray_utilities.callbacks.tuner.wandb_helpers import _wandb_web_monitor as wb2
-
-            logger.warning(f"wandb web monitor after import: {wb2}")
         fork_from = self.kwargs.get("fork_from", None) is not None
         if fork_from:
             # Write info about forked trials, to know in which order to upload trials
@@ -88,21 +70,27 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
         except wandb.errors.CommError as e:  # pyright: ignore[reportPossiblyUnboundVariable]
             # NOTE: its possible that wandb is stuck because of async logging and we never reach here :/
             online = self.kwargs.get("mode", "online") == "online"
-            if "fromStep is greater than the run's last step" in str(e):
-                # This can happen if the parent run is not yet fully synced, we need to wait for the newest history artifact
+            # Note: the error might only be a log message and the actual error is just a timeout
+            if (
+                "fromStep is greater than the run's last step" in str(e)
+                or "contact support" in str(e)
+                or (online and fork_from)
+            ):
+                # Happens if the parent run is not yet fully synced, we need to wait for the newest history artifact
                 if not fork_from:
                     raise  # should only happen on forks
-                if retries >= 5:
+                if retries >= 4:
                     logger.error(
                         "WandB communication error. online mode: %s, fork_from: %s - Error: %s", online, fork_from, e
                     )
                     if not online:
                         raise
-                    logger.warning("Switching to offline mode")
+                    logger.warning("Retries failed for wandb. Switching wandb to offline mode")
                     self.kwargs["mode"] = "offline"
                     return super().run()
-                logger.warning("WandB communication error, retrying after 10s: %s", e)
-                time.sleep(10)
+                logger.warning("WandB communication error, using browser to open parent run: %s", e)
+                self._wait_for_missing_parent_data(timeout=20)
+
                 return self.run(retries=retries + 1)
             if not online:
                 logger.exception("WandB communication error in offline mode. Cannot recover.")
@@ -111,7 +99,7 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
                 logger.error("WandB communication error when using fork_from")
             logger.exception("WandB communication error. Trying to switch to offline mode.")
             self.kwargs["mode"] = "offline"
-            super().run()
+            return super().run()
             # TODO: communicate to later upload offline run
 
     def _handle_result(self, result: dict) -> tuple[dict, dict]:
@@ -147,8 +135,8 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
                     artifact.add_reference(**ref_dict)
                 try:
                     self._wandb.log_artifact(artifact)
-                except (HTTPError, Exception) as e:
-                    logger.error("Failed to log artifact: %s", e)
+                except (HTTPError, Exception):
+                    logger.exception("Failed to log artifact: %s")
             elif not _is_allowed_type_patch(v):
                 continue
             else:
@@ -157,10 +145,12 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
         config_update.pop("callbacks", None)  # Remove callbacks
         return log, config_update
 
-    def _wait_for_missing_parent_data(self):
-        with wandb_monitor_lock:
-            monitor = get_wandb_web_monitor(
-                entity=self.kwargs.get("entity", wandb_api().default_entity), project=self.kwargs["project"]
-            )
-            if FORK_FROM in self.kwargs:
-                ...
+    def _wait_for_missing_parent_data(self, timeout=20):
+        from ray_utilities.callbacks.wandb import WandbRunMonitor  # noqa: PLC0415
+
+        monitor = WandbRunMonitor.get_remote_monitor(
+            entity=self.kwargs.get("entity", wandb_api().default_entity), project=self.kwargs["project"]
+        )
+        page_visit = monitor.visit_run_page.remote(self.kwargs["fork_from"].split("?")[0])  # pyright: ignore[reportFunctionMemberAccess]
+        done, _ = ray.wait([page_visit], timeout=timeout)  # wait for page visit to finish
+        return bool(done)

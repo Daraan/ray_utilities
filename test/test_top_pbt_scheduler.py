@@ -267,7 +267,7 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
             state.last_checkpoint = None
             state.last_perturbation_time = 1
             state.last_train_time = 0
-            state.last_result = {"reward": score}
+            state.last_result = {"reward": score, "training_iteration": 1}
             state.last_training_iteration = 1
 
             trials.append(trial)

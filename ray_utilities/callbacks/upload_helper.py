@@ -48,6 +48,9 @@ class ExitCode(IntEnum):
     """
     Upload process failed because of an empty header: "wandb file is empty".
     This can happen if the files are not fully synced yet or a data loss occurred.
+
+    Attention:
+        It is likely that the `_WandbLoggingActor` crashed - this can happen silently.
     """
 
     WANDB_UNKNOWN_ERROR = auto()
@@ -132,6 +135,10 @@ class UploadHelperMixin:
                         line.strip(),
                     )
                     if "contact support" in line and "500" in line:
+                        # When forking the run-*-history artifact is not yet available
+                        # this file is ONLY created when viewing the run on the website
+                        # its possible that this error is raised while the file is still built
+                        # it *might* be resolved after some wait time.
                         error_code = ExitCode.WANDB_SERVER_ERROR
                     elif "not found (<Response [404]>)" in line:
                         error_code = ExitCode.WANDB_PARENT_NOT_FOUND
