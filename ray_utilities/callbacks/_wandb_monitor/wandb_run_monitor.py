@@ -240,6 +240,26 @@ class WandbRunMonitor:
             self._notify("run_page_visit_failed", {"url": run_url})
             return False
 
+    def close_run_tab(self, run_id: str, entity: Optional[str] = None, project: Optional[str] = None) -> bool:
+        """Close the WandB run tab in the Selenium session if available."""
+        if not self.selenium_session or not self._is_initialized:
+            logger.error("Monitor not initialized or Selenium session missing")
+            return False
+        entity = entity or self.entity
+        project = project or self.project
+        if entity is None or project is None:  # pyright: ignore[reportUnnecessaryComparison]
+            logger.error("Entity and project must be set to close run tab")
+            return False
+        try:
+            result = self.selenium_session.close_run_tab(entity, project, run_id)
+        except Exception as e:
+            logger.exception("Error closing run tab: %s")
+            self._notify("close_run_tab_error", str(e))
+            return False
+        else:
+            self._notify("run_tab_closed")
+            return result
+
     def get_history_artifact_name(self, run_id: str, version: Optional[str | int] = "latest") -> str:
         """Get the full name of the history artifact for a given run ID and version."""
         if not self.entity or not self.project:

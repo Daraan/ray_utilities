@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
 from urllib.error import HTTPError
 
 import ray
@@ -20,6 +21,10 @@ from ray_utilities.callbacks.wandb import wandb_api
 from ray_utilities.misc import make_fork_from_csv_header, make_fork_from_csv_line, parse_fork_from
 
 if TYPE_CHECKING:
+    from ray_utilities.typing import ForkFromData
+    from ray.actor import ActorProxy
+
+    from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor
     from ray_utilities.typing.metrics import AnyFlatLogMetricsDict
 
 __all__ = ["_WandbLoggingActorWithArtifactSupport"]
@@ -39,6 +44,8 @@ ray_wandb._is_allowed_type = _is_allowed_type_patch
 
 
 class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
+    _monitor: Optional[ActorProxy[WandbRunMonitor]] = None
+
     def run(self, retries=0):
         fork_from = self.kwargs.get("fork_from", None) is not None
         if fork_from:
@@ -65,6 +72,9 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
                 else:
                     logger.error("Could not parse fork_from: %s", self.kwargs["fork_from"])
                     f.write(f"{self.kwargs['id']}, {self.kwargs['fork_from']}\n")
+            # proactively check parent before trying to get run
+            self._wait_for_missing_parent_data(timeout=50)
+            time.sleep(2)
         try:
             return super().run()
         except wandb.errors.CommError as e:  # pyright: ignore[reportPossiblyUnboundVariable]
@@ -87,6 +97,7 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
                         raise
                     logger.warning("Retries failed for wandb. Switching wandb to offline mode")
                     self.kwargs["mode"] = "offline"
+                    self.kwargs["reinit"] = "create_new"
                     return super().run()
                 logger.warning("WandB communication error, using browser to open parent run: %s", e)
                 self._wait_for_missing_parent_data(timeout=20)
@@ -99,6 +110,7 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
                 logger.error("WandB communication error when using fork_from")
             logger.exception("WandB communication error. Trying to switch to offline mode.")
             self.kwargs["mode"] = "offline"
+            self.kwargs["reinit"] = "create_new"
             return super().run()
             # TODO: communicate to later upload offline run
 
@@ -146,11 +158,19 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
         return log, config_update
 
     def _wait_for_missing_parent_data(self, timeout=20):
-        from ray_utilities.callbacks.wandb import WandbRunMonitor  # noqa: PLC0415
+        if not self._monitor:
+            from ray_utilities.callbacks._wandb_monitor import WandbRunMonitor  # noqa: PLC0415
 
-        monitor = WandbRunMonitor.get_remote_monitor(
-            entity=self.kwargs.get("entity", wandb_api().default_entity), project=self.kwargs["project"]
-        )
-        page_visit = monitor.visit_run_page.remote(self.kwargs["fork_from"].split("?")[0])  # pyright: ignore[reportFunctionMemberAccess]
+            self._monitor = WandbRunMonitor.get_remote_monitor(
+                entity=self.kwargs.get("entity", wandb_api().default_entity), project=self.kwargs["project"]
+            )
+            self._monitor.initialize.remote()  # pyright: ignore[reportFunctionMemberAccess]
+        parent_id = self.kwargs["fork_from"].split("?")[0]
+        if "config" in self.kwargs:
+            assert parent_id == cast("ForkFromData", self.kwargs["config"]["fork_from"]).get(
+                "parent_fork_id", parent_id
+            )
+        logger.debug("Checking run page of parent %s from %s", parent_id, self.kwargs["id"])
+        page_visit = self._monitor.visit_run_page.remote(parent_id)  # pyright: ignore[reportFunctionMemberAccess]
         done, _ = ray.wait([page_visit], timeout=timeout)  # wait for page visit to finish
         return bool(done)

@@ -139,6 +139,11 @@ class UploadHelperMixin:
                         # this file is ONLY created when viewing the run on the website
                         # its possible that this error is raised while the file is still built
                         # it *might* be resolved after some wait time.
+                        if timeout > 15:
+                            # try again recursively with less time
+                            return cls._failure_aware_wait(
+                                process, timeout=max(10, timeout - (count - start) - 10), terminate_on_timeout=True
+                            )
                         error_code = ExitCode.WANDB_SERVER_ERROR
                     elif "not found (<Response [404]>)" in line:
                         error_code = ExitCode.WANDB_PARENT_NOT_FOUND

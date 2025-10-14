@@ -342,6 +342,10 @@ class AdvWandbLoggerCallback(
         elif is_fork:
             # Forking - the fork_from is already set in wandb_init_kwargs
             _logger.info("Forking WandB run: new ID %s from parent %s", new_trial_id, wandb_init_kwargs["fork_from"])
+            # close monitor tab of old run:
+            actual_previous_id = self._past_trial_ids[trial][-1]
+            _logger.debug("Closing tab of %s", actual_previous_id)
+            self._start_monitor().close_run_tab.remote(actual_previous_id)  # pyright: ignore[reportFunctionMemberAccess]
         else:
             # Starting a new trial (shouldn't normally happen in restart)
             _logger.warning(
@@ -654,6 +658,7 @@ class AdvWandbLoggerCallback(
         self._trial_queues[trial].put((_QueueItem.RESULT, result_clean))
 
     def on_experiment_end(self, trials: list[Trial], **info):
+        _logger.info("Ending experiment and closing logger actors this can take a moment. Info %s", info)
         super().on_experiment_end(trials, **info)
         # wait and report any remaining uploads
         failed_uploads = []
@@ -675,8 +680,20 @@ class AdvWandbLoggerCallback(
                         failed_uploads.append(process)
             if failed_uploads and trials and trials[0].local_path:
                 self._update_failed_upload_file(failed_uploads, Path(trials[0].local_path))
-
-            # TODO: DO I need this for comet as well?
+        # Close all open monitor tabs
+        try:
+            if self._monitor:
+                for trial in trials:
+                    trial_id = self._trial_ids.get(trial)
+                    if trial_id is None:  # possibly already cleaned on_trial_complete
+                        continue
+                    self._monitor.close_run_tab.remote(self._trial_ids[trial])  # pyright: ignore[reportFunctionMemberAccess]
+                # close possible old tabs
+                for trial in trials:
+                    for old_id in self._past_trial_ids[trial]:
+                        self._monitor.close_run_tab.remote(old_id)  # pyright: ignore[reportFunctionMemberAccess]
+        except Exception:
+            _logger.exception("Error during tab clearing:")
 
     def __del__(self):
         # do not clean on_experiment_end as we want to access it with Setup classes as well afterwards

@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from ray.actor import ActorProxy
     from ray.tune import ResultGrid
 
-    from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor
+    from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor as _WandbRunMonitor
 
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         super().__init__(*args, **kwargs)
         self._unfinished_gathered_uploads: list[AnyPopen] = []
         self._upload_to_trial: dict[AnyPopen, str] = {}
-        self._monitor: Optional[ActorProxy[WandbRunMonitor]] = None
+        self._monitor: Optional[ActorProxy[_WandbRunMonitor]] = None
         self._history_artifact: dict[str, list[wandb.Artifact]] = {}
 
     def wandb_upload_results(
@@ -104,7 +104,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         parent_id = self.fork_relationships.get(trial_id, (None, None))[0]
         if not parent_id:
             # we might check a trial with no parent here
-            logger.info("No parent_id found for trial %s, cannot check with monitor", trial_id)
+            logger.debug("No parent_id found for trial %s, cannot check with monitor", trial_id)
             return None
             # extract parent id from trial_id if possible
             _, fork_data = ExperimentKey.parse_experiment_key(trial_id)
@@ -285,7 +285,7 @@ class WandbUploaderMixin(UploadHelperMixin):
                     unfinished_from_past,
                 )
                 for process in unfinished_from_past:
-                    exit_code = self._failure_aware_wait(process, timeout=300)
+                    exit_code = self._failure_aware_wait(process, timeout=300, terminate_on_timeout=False)
                     if exit_code in (ExitCode.WANDB_BEHIND_STEP, ExitCode.WANDB_SERVER_ERROR):
                         # use monitor to check on parent, try again
                         # how do I get the parent id?
@@ -689,7 +689,7 @@ class WandbUploaderMixin(UploadHelperMixin):
 
         return upload_groups
 
-    def _start_monitor(self, project: Optional[str] = None) -> ActorProxy[WandbRunMonitor]:
+    def _start_monitor(self, project: Optional[str] = None) -> ActorProxy[_WandbRunMonitor]:
         """Gets or starts the WandbRunMonitor actor to monitor parent runs of forked trials."""
         if self._monitor is not None:
             return self._monitor

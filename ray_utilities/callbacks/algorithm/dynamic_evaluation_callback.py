@@ -36,7 +36,7 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         env_steps = algorithm.config.train_batch_size_per_learner
         new_eval_interval = self._evaluation_intervals.get(env_steps, None)
         if new_eval_interval is None:
-            logger.error(
+            logger.warning(
                 "No evaluation interval for current step %s in %s. "
                 "Expected a value in the dictionary for global step %s. Not changing it, stays: %d",
                 env_steps,

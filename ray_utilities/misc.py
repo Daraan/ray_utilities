@@ -17,6 +17,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, cast
 
 import base62
+import ray
+import ray.exceptions
 from ray.experimental import tqdm_ray
 from ray.rllib.utils.metrics import (
     ALL_MODULES,  # pyright: ignore[reportPrivateImportUsage]
@@ -48,6 +50,7 @@ if TYPE_CHECKING:
 
     from ray.tune.experiment import Trial
 
+    from ray_utilities.callbacks._wandb_monitor import WandbRunMonitor
     from ray_utilities.typing import ForkFromData, StrictAlgorithmReturnData
     from ray_utilities.typing.metrics import LogMetricsDict
 
@@ -810,3 +813,22 @@ def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict | dict[s
             NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]
         )
     )
+
+
+def shutdown_monitor() -> None:
+    """Shutdown the WandbRunMonitor and its associated selenium process. Cannot be interrupted by KeyboardInterrupt"""
+    while True:
+        try:
+            try:
+                if not ray.is_initialized():
+                    return None
+                monitor: WandbRunMonitor = ray.get_actor(name="remote_wandb_run_monitor")
+            except (ValueError, ray.exceptions.RayActorError):
+                return None
+            else:
+                monitor.cleanup.remote()  # pyright: ignore[reportAttributeAccessIssue]
+                monitor.__ray_terminate__.remote()  # pyright: ignore[reportAttributeAccessIssue]
+                return None
+        except KeyboardInterrupt:  # noqa: PERF203
+            _logger.warning("shutdown monitor has not completed yet")
+            return shutdown_monitor()

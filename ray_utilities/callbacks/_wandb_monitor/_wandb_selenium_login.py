@@ -6,10 +6,14 @@ for visiting other WandB websites and using the WandB API.
 
 from __future__ import annotations
 
+import atexit
 import logging
 import os
+import signal
+import subprocess
 import threading
 import time
+import weakref
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -28,6 +32,93 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+# Global registry to track active WebDriver sessions for cleanup
+_active_sessions: weakref.WeakSet[WandBSeleniumSession] = weakref.WeakSet()
+_cleanup_registered = False
+
+
+def _emergency_cleanup():
+    """Emergency cleanup function called at exit to kill orphaned driver processes."""
+    logger.debug("Emergency cleanup: checking for orphaned WebDriver sessions")
+    for session in list(_active_sessions):
+        try:
+            if session.driver:
+                logger.warning("Emergency cleanup: force killing WebDriver for session %s", id(session))
+                session._force_kill_driver()
+        except Exception as e:  # noqa: BLE001, PERF203
+            logger.debug("Error during emergency cleanup: %s", e)
+
+
+def _register_exit_cleanup():
+    """Register the emergency cleanup function to run at exit."""
+    global _cleanup_registered  # noqa: PLW0603
+    if not _cleanup_registered:
+        atexit.register(_emergency_cleanup)
+        _cleanup_registered = True
+        logger.debug("Registered emergency cleanup handler")
+
+
+def _get_process_children(pid: int) -> list[int]:
+    """Get child process IDs for a given parent PID."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-P", str(pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return [int(child_pid) for child_pid in result.stdout.strip().split("\n") if child_pid]
+    except (subprocess.SubprocessError, ValueError, OSError):
+        return []
+    else:
+        return []
+
+
+def _kill_process_tree(pid: int) -> bool:
+    """Kill a process and all its children."""
+    try:
+        # First check if process exists
+        try:
+            os.kill(pid, 0)  # Signal 0 just checks if process exists
+        except (OSError, ProcessLookupError):
+            logger.debug("Process %s does not exist", pid)
+            return False  # Process doesn't exist
+
+        # Get all child processes first
+        children = _get_process_children(pid)
+
+        # Kill children first
+        for child_pid in children:
+            try:
+                os.kill(child_pid, signal.SIGTERM)
+                logger.debug("Killed child process %s", child_pid)
+            except (OSError, ProcessLookupError):  # noqa: PERF203
+                pass  # Process already dead
+
+        # Kill main process
+        try:
+            os.kill(pid, signal.SIGTERM)
+            logger.debug("Sent SIGTERM to process %s", pid)
+
+            # Wait a bit and then use SIGKILL if still alive
+            time.sleep(0.5)
+            try:
+                os.kill(pid, 0)  # Check if still alive
+                os.kill(pid, signal.SIGKILL)
+                logger.debug("Sent SIGKILL to process %s", pid)
+            except (OSError, ProcessLookupError):
+                pass  # Process already dead from SIGTERM
+
+        except (OSError, ProcessLookupError):
+            pass  # Process already dead
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Error killing process tree for PID %s: %s", pid, e)
+        return False
+    else:
+        return True
 
 
 @dataclass
@@ -91,6 +182,7 @@ class WandBSeleniumSession:
         self.session_cache = WandBSessionCache(cache_dir) if use_cache else None
 
         self.driver: Optional[webdriver.Remote] = None
+        self._driver_pid: Optional[int] = None  # Track driver process ID for force cleanup
         self.is_logged_in = False
         self.thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -98,6 +190,10 @@ class WandBSeleniumSession:
 
         # Track run page tabs: {run_url: tab_handle}
         self._run_tabs: dict[str, str] = {}
+
+        # Register this session for global cleanup tracking
+        _active_sessions.add(self)
+        _register_exit_cleanup()
 
     def _notify(self, status: str, data: Any = None) -> None:
         """Send notification via callback if available."""
@@ -118,6 +214,7 @@ class WandBSeleniumSession:
             options.add_argument("--disable-gpu")
             options.add_argument("--window-size=1920,1080")
             self.driver = webdriver.Chrome(options=options)
+            self._capture_driver_pid()
             return self.driver
 
         if self.browser == "firefox":
@@ -136,9 +233,61 @@ class WandBSeleniumSession:
                     options.binary_location = path
                     break
             self.driver = webdriver.Firefox(options=options)
+            self._capture_driver_pid()
             return self.driver
 
         raise ValueError(f"Unsupported browser: {self.browser}")
+
+    def _capture_driver_pid(self) -> None:
+        """Capture the process ID of the driver for later cleanup."""
+        if not self.driver:
+            return
+
+        try:
+            # Try to get the service/process from the driver
+            if hasattr(self.driver, "service") and hasattr(self.driver.service, "process"):
+                if self.driver.service.process:
+                    self._driver_pid = self.driver.service.process.pid
+                    logger.debug("Captured driver PID: %s", self._driver_pid)
+                    return
+
+            # Fallback: try to find the browser process by name
+            browser_process_name = "chrome" if self.browser == "chrome" else "firefox"
+            try:
+                result = subprocess.run(
+                    ["pgrep", "-f", browser_process_name],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    # Get the most recent process (last in the list)
+                    pids = [int(pid) for pid in result.stdout.strip().split("\n") if pid]
+                    if pids:
+                        self._driver_pid = pids[-1]  # Use the most recent one
+                        logger.debug("Found %s process PID via pgrep: %s", browser_process_name, self._driver_pid)
+            except (subprocess.SubprocessError, ValueError, OSError) as e:
+                logger.debug("Failed to find driver PID via pgrep: %s", e)
+
+        except Exception as e:  # ruff: noqa: BLE001
+            logger.debug("Failed to capture driver PID: %s", e)
+
+    def _force_kill_driver(self) -> bool:
+        """Force kill the WebDriver process and any child processes."""
+        if not self._driver_pid:
+            logger.debug("No driver PID to kill")
+            return False
+
+        logger.warning("Force killing WebDriver process %s", self._driver_pid)
+        try:
+            success = _kill_process_tree(self._driver_pid)
+            if success:
+                logger.debug("Successfully force killed driver process %s", self._driver_pid)
+                self._driver_pid = None
+        except Exception as e:  # ruff: noqa: BLE001
+            logger.warning("Error force killing driver: %s", e)
+            return False
+        return success
 
     def _wait_for_element(
         self,
@@ -1005,7 +1154,7 @@ class WandBSeleniumSession:
         run_url = f"https://wandb.ai/{entity}/{project}/runs/{run_id}"
 
         if run_url not in self._run_tabs:
-            logger.warning("No tab found for run: %s/%s/%s", entity, project, run_id)
+            logger.info("No tab found for run: %s/%s/%s", entity, project, run_id)
             return False
 
         if not self.driver:
@@ -1050,7 +1199,6 @@ class WandBSeleniumSession:
 
             logger.info("Successfully closed tab for run: %s/%s/%s", entity, project, run_id)
             self._notify("run_tab_closed", {"entity": entity, "project": project, "run_id": run_id})
-            return True
 
         except WebDriverException as e:
             logger.error("Failed to close tab for run %s/%s/%s: %s", entity, project, run_id, e)
@@ -1058,6 +1206,8 @@ class WandBSeleniumSession:
                 "run_tab_close_failed", {"entity": entity, "project": project, "run_id": run_id, "error": str(e)}
             )
             return False
+        else:
+            return True
 
     def initialize_wandb_api(self) -> bool:
         """
@@ -1171,16 +1321,30 @@ class WandBSeleniumSession:
         return cached_cookies is not None
 
     def cleanup(self) -> None:
-        """Clean up resources."""
+        """Clean up resources safely and thoroughly."""
         with self._lock:
             if self.driver:
                 try:
+                    # First try graceful shutdown
                     self.driver.quit()
+                    logger.debug("Driver quit gracefully")
                 except (WebDriverException, ConnectionError) as e:
-                    logger.warning("Error during driver cleanup: %s", e)
+                    logger.warning("Error during graceful driver cleanup: %s", e)
+                    # If graceful shutdown failed, try force kill
+                    logger.info("Attempting force kill of driver process")
+                    self._force_kill_driver()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("Unexpected error during driver cleanup: %s", e)
+                    # Try force kill as last resort
+                    self._force_kill_driver()
                 finally:
                     self.driver = None
                     self.is_logged_in = False
+
+            # Always try force kill as safety net if we have a PID
+            elif self._driver_pid:
+                logger.warning("Driver object is None but PID exists, force killing")
+                self._force_kill_driver()
 
         # Clear run tab tracking
         self._run_tabs.clear()
@@ -1199,13 +1363,24 @@ class WandBSeleniumSession:
         self.cleanup()
 
     def __del__(self):
-        """Destructor to ensure cleanup."""
+        """
+        Destructor to ensure cleanup happens even if explicitly not called.
+
+        This is a safety net for resource cleanup in case the object is
+        garbage collected without proper cleanup being called.
+        """
         try:
-            self.cleanup()
-        except KeyboardInterrupt:
-            self.__del__()
-        except Exception:  # noqa: BLE001
-            pass
+            # Only log if we actually have resources to clean up
+            if self.driver is not None or self._driver_pid is not None:
+                logger.debug("__del__ called, performing cleanup")
+                self.cleanup()
+        except Exception:
+            try:
+                if self._driver_pid:
+                    self._force_kill_driver()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
 
 
 def example_usage():

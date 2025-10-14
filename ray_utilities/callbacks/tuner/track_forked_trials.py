@@ -59,6 +59,9 @@ class TrackForkedTrialsMixin(LoggerCallback):
         self._current_fork_ids: dict[Trial, str] = {}
         """fork_id of currently running forked trials"""
 
+        self._past_trial_ids: defaultdict[Trial, list[str]] = defaultdict(list)
+        """Store history of trial ids when :attr:`_trial_ids` is updated."""
+
         self._trial_ids: dict[Trial, str] = {}
         """Mapping of trials to their current trial ID (experiment_key). Tracks all trials, not just forked ones."""
 
@@ -120,6 +123,7 @@ class TrackForkedTrialsMixin(LoggerCallback):
             fork_id = trial.trial_id
         # Every trial can have only one fork_id as it is currently running
         self._current_fork_ids[trial] = fork_id
+        self._past_trial_ids[trial].append(self._trial_ids[trial])
         self._trial_ids[trial] = fork_id  # Also track in the general trial IDs dict
         return fork_id
 
