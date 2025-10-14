@@ -339,6 +339,16 @@ class CometArchiveTracker(UploadHelperMixin):
             self.archives.extend(new_archives)
         self.archives = [p for p in set(self.archives) if p.exists()]
 
+    def _check_already_uploaded(self):
+        for archive in self.archives.copy():
+            if not archive.exists() and (archive.parent / "uploaded" / archive.name).exists():
+                _LOGGER.info(
+                    "Archive %s has already been uploaded and moved to %s",
+                    archive,
+                    archive.parent / "uploaded" / archive.name,
+                )
+                self.archives.remove(archive)
+
     def _upload(self, archives: Optional[Sequence[Path]] = None):
         self._called_upload = True
         if archives and self._auto:
@@ -354,6 +364,7 @@ class CometArchiveTracker(UploadHelperMixin):
         if not archives:
             _LOGGER.info("No archives to upload - might have already been moved.")
             return [], []
+        self._check_already_uploaded()
         archives_str = [str(p) for p in self.archives]
         _LOGGER.info("Uploading Archives: %s", archives_str)
 
