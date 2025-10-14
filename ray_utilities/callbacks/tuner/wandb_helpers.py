@@ -15,7 +15,6 @@ import ray
 from ray.air.util.node import _force_on_current_node
 from ray.util.queue import Queue
 
-from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor
 
 if TYPE_CHECKING:
     from wandb.sdk.interface.interface import PolicyName
