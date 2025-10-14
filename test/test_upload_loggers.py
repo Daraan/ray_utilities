@@ -355,8 +355,12 @@ class TestLoggerIntegration(TestHelpers):
         self.assertFalse(mock_aware_wait.called, "Should not gather and therefore not wait.")
 
     @MockPopenClass.mock
-    def test_wandb_upload_dependency_ordering(self, mock_popen_class, mock_popen):
+    @patch.multiple("ray", remote=MagicMock(), get=MagicMock(), get_actor=MagicMock())
+    @patch("ray.wait")
+    @patch("time.sleep", new=MagicMock())
+    def test_wandb_upload_dependency_ordering(self, mock_popen_class, mock_popen, ray_wait):
         # randomize this test
+        ray_wait.side_effect = lambda futures, *args, **kwargs: ([1], [])
         random.seed(22)
         id_counter = 1
 
@@ -455,7 +459,7 @@ class TestLoggerIntegration(TestHelpers):
             self.maxDiff = None
 
             def mock_fork_relationships(wandb_paths):
-                result = WandbUploaderMixin._parse_wandb_fork_relationships(uploader, wandb_paths)
+                result = WandbUploaderMixin._parse_wandb_fork_relationships(wandb_paths)
                 self.assertDictEqual(
                     {child: parent for child, parent in parent_lookup.items() if parent is not None},
                     {child: parent_data[0] for child, parent_data in result.items()},
@@ -490,6 +494,7 @@ class TestLoggerIntegration(TestHelpers):
             mock_popen.stdout = io.StringIO("MOCK: wandb: Syncing files...")
             mock_popen.returncode = 0
             mock_popen.args = ["wandb", "sync", mock_results[0].path]
+            uploader.project = "testing"
             uploader.wandb_upload_results(mock_results)  # pyright: ignore[reportArgumentType]
             self.assertTrue(mock_fork_called, "wandb fork relationships mock was not called")
             self.assertTrue(mock_graph_build_called, "wandb graph build mock was not called")
