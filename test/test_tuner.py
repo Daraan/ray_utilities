@@ -1204,7 +1204,7 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             setup.args.set_hyperparam_mutations(
                 {
                     "train_batch_size_per_learner": CyclicMutation(Setup.batch_size_sample_space["grid_search"]),
-                    "fcnet_hiddens": KeepMutation(),
+                    "fcnet_hiddens": KeepMutation([2]),
                 }
             )
             results = run_tune(setup)
@@ -1216,6 +1216,7 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             self.assertEqual(num_exploits, max(batch_sizes) * (3 - 1) // perturbation_interval * 2)
             # Check that at most one race condition happened
             self.assertLessEqual(race_conditions, 1)
+            self.assertTrue(all(r.config["fcnet_hiddens"] == [2] for r in results))  # pyright: ignore[reportAttributeAccessIssue, reportOptionalSubscript]
 
 
 class DummyTrial:

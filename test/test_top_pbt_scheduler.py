@@ -268,11 +268,12 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
             state.last_perturbation_time = 1
             state.last_train_time = 0
             state.last_result = {"reward": score, "training_iteration": 1}
-            state.last_training_iteration = 1
 
             trials.append(trial)
             scheduler._trial_state[trial] = state
             scheduler.on_trial_add(mock_controller, trial)
+            # this is set to 0 on_trial_add
+            state.last_training_iteration = 1
 
         # Mock controller methods
         mock_controller._schedule_trial_save.return_value = "checkpoint_path"
