@@ -98,6 +98,7 @@ from typing_extensions import Final, NotRequired, Required, Sentinel, TypeAliasT
 import ray_utilities.callbacks.algorithm.model_config_saver_callback
 import ray_utilities.config.create_algorithm
 from ray_utilities import runtime_env
+from ray_utilities.callbacks.wandb import WandbUploaderMixin
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.parser.mlp_argument_parser import MLPArgumentParser
 from ray_utilities.constants import ENVIRONMENT_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
@@ -623,8 +624,9 @@ class TestHelpers(unittest.TestCase):
         )
         self.mock_reduced_model.start()
         self._env_seed_rng = random.Random(111)
-        self._mock_monitor = mock.patch(
-            "ray_utilities.callbacks.tuner.adv_wandb_callback.AdvWandbLoggerCallback._start_monitor"
+        self._mock_monitor = mock.patch.object(
+            WandbUploaderMixin,
+            "_start_monitor",
         )
         self._mock_monitor.start()
         atexit.register(self._clean_output_dir)
