@@ -115,6 +115,14 @@ class UploadHelperMixin:
         while True:
             line = process.stdout.readline() if process.stdout else None
             count = time.time()
+            if count - last_count > 10:
+                logger.info(
+                    "Still uploading trial %s to %s after %.1f seconds...",
+                    trial_id,
+                    cls._upload_service_name,
+                    count - start,
+                )
+                last_count = count
             if line:
                 if isinstance(line, bytes):
                     stdout_type = bytes
@@ -140,9 +148,18 @@ class UploadHelperMixin:
                         # its possible that this error is raised while the file is still built
                         # it *might* be resolved after some wait time.
                         if timeout > 15:
-                            # try again recursively with less time
+                            # try again recursively with less time. Then continue if still fails.
+                            time.sleep(5)
+                            logger.info(
+                                "Still uploading trial %s to %s after error max time until timeout %.1f. "
+                                "Encountered error: %s retrying...",
+                                trial_id,
+                                cls._upload_service_name,
+                                timeout,
+                                line.strip(),
+                            )
                             return cls._failure_aware_wait(
-                                process, timeout=max(10, timeout - (count - start) - 10), terminate_on_timeout=True
+                                process, timeout=max(10, timeout - (count - start) - 10), terminate_on_timeout=False
                             )
                         error_code = ExitCode.WANDB_SERVER_ERROR
                     elif "not found (<Response [404]>)" in line:
@@ -173,14 +190,6 @@ class UploadHelperMixin:
                 break
             else:
                 time.sleep(0.2)  # Avoid busy waiting
-            if count - last_count > 10:
-                logger.info(
-                    "Still uploading trial %s to %s after %.1f seconds...",
-                    trial_id,
-                    cls._upload_service_name,
-                    count - start,
-                )
-                last_count = count
         if process.stdout is not None:
             try:
                 rest = process.stdout.read()

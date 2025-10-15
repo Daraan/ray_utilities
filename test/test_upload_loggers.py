@@ -15,10 +15,11 @@ import shutil
 import tempfile
 import threading
 import time
-from types import SimpleNamespace
-from typing import Optional
 import unittest
+from collections import defaultdict
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Optional, cast
 from unittest import mock
 from unittest.mock import MagicMock, Mock, patch
 
@@ -746,6 +747,7 @@ class TestLoggerIntegration(TestHelpers):
             self.assertNotIn("resume", start_call_kwargs)
             self.assertEqual(start_call_kwargs.get("fork_from"), "trial_123?_step=100")
 
+    @mock.patch.object(AdvWandbLoggerCallback, "_start_monitor", new=MagicMock())
     def test_restart_logging_actor_with_forked_trial_resume(self):
         """Test that _restart_logging_actor correctly handles resuming a trial that was previously forked.
 
@@ -778,6 +780,7 @@ class TestLoggerIntegration(TestHelpers):
         callback._trial_queues = {trial: MagicMock()}
         callback._trial_logging_futures = {trial: MagicMock()}
         callback._trial_logging_actors = {trial: MagicMock()}
+        callback._past_trial_ids = defaultdict(list, {cast("Trial", trial): ["id_before_fork"]})
 
         # Mock log_trial_end to not actually end the trial
         with patch.object(callback, "log_trial_end"):

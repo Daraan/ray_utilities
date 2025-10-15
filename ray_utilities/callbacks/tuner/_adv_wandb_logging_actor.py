@@ -151,7 +151,8 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
                 except (HTTPError, Exception):
                     logger.exception("Failed to log artifact: %s")
             elif isinstance(v, float) and math.isnan(v):
-                # HACK: Currently wandb fails to log metric on forks if the parent has NaN metrics; do not upload to wandb
+                # HACK: Currently wandb fails to log metric on forks if the parent has NaN metrics
+                # # see https://github.com/wandb/wandb/issues/1069 until then do not upload to wandb
                 continue
             elif not _is_allowed_type_patch(v):
                 continue
