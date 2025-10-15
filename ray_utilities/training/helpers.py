@@ -14,18 +14,14 @@ from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core import COMPONENT_LEARNER, COMPONENT_METRICS_LOGGER, COMPONENT_RL_MODULE
 from ray.rllib.utils.metrics import (
-    ALL_MODULES,  # pyright: ignore[reportPrivateImportUsage]
     ENV_RUNNER_RESULTS,
     EVALUATION_RESULTS,
-    LEARNER_RESULTS,
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
-from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 from typing_extensions import Sentinel, TypeAliasType
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
 from ray_utilities.config import seed_environments_for_config
-from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, calculate_steps
 from ray_utilities.misc import AutoInt
 from ray_utilities.warn import (
@@ -51,7 +47,6 @@ if TYPE_CHECKING:
     from ray_utilities.typing.algorithm_return import EvalEnvRunnersResultsDict
     from ray_utilities.typing.metrics import (
         AnyLogMetricsDict,
-        LogMetricsDict,
         _LogMetricsEnvRunnersResultsDict,
         _LogMetricsEvalEnvRunnersResultsDict,
         _NewLogMetricsEvaluationResultsDict,
@@ -85,34 +80,6 @@ def episode_iterator(args: dict[str, Any], hparams: dict[str, Any], *, use_pbar:
     if use_pbar:
         return tqdm_ray.tqdm(range(args["iterations"]), position=hparams.get("process_number", None))
     return range(args["iterations"])
-
-
-def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict | dict[str, Any] | MetricsLogger) -> int:
-    # requires exact_sampling_callback to be set in the results, otherwise fallback
-    if isinstance(result, MetricsLogger):
-        # For peek do not use None as default as this triggers KeyError
-        current_step = result.peek((LEARNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=_NOT_FOUND)
-        if current_step is not _NOT_FOUND:
-            return current_step
-        current_step = result.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=_NOT_FOUND)
-        if current_step is not _NOT_FOUND:
-            return current_step
-        return result.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=0)
-
-    current_step = result.get("current_step")  # likely not present
-    if current_step is not None:  # LogMetricsDict
-        return current_step
-    result = cast("StrictAlgorithmReturnData", result)
-    if LEARNER_RESULTS in result:
-        current_step = result[LEARNER_RESULTS][ALL_MODULES].get(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)
-        if current_step is not None:
-            return current_step
-    # try metric logged on env runner; else defaults to NUM_ENV_STEPS_SAMPLED_LIFETIME
-    return int(
-        result[ENV_RUNNER_RESULTS].get(
-            NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]
-        )
-    )
 
 
 def patch_model_config(config: AlgorithmConfig, model_config: dict[str, Any] | DefaultModelConfig):

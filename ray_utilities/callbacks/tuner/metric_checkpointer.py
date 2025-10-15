@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-from functools import partial
 import logging
 import sys
+from functools import partial
 from typing import TYPE_CHECKING, Any, List, Optional, cast
 
 from ray.rllib.utils.annotations import override
 from ray.tune.callback import Callback
 from ray.tune.experiment import Trial
 from ray.tune.result import SHOULD_CHECKPOINT
-from typing_extensions import deprecated, Self
+from typing_extensions import Self, deprecated
 
-from ray_utilities.training.helpers import get_current_step
+from ray_utilities.constants import TUNE_RESULT_IS_A_COPY
+from ray_utilities.misc import get_current_step
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -22,17 +23,6 @@ if TYPE_CHECKING:
     from ray_utilities.typing.metrics import LogMetricsDict
 
 _logger = logging.getLogger(__name__)
-
-
-TUNE_RESULT_IS_A_COPY = True  # NOTE: This is not a dynamic or checked value.
-"""
-Tuner does not allow to modify the result dict as it is a copy. As long as this is True
-use the callback on an Algorithm. Or the HACK in the DefaultTrainable class to trigger
-checkpointing.
-
-See Also:
-    - https://github.com/ray-project/ray/pull/55527
-"""
 
 
 # todo: do not derive from RLlibCallback when tuner checkpoint is actually working.
@@ -67,7 +57,7 @@ class MetricCheckpointer(Callback):
             self._last_checkpoint_iteration = iteration
             self._last_checkpoint_value = result.get(self.metric_name, None)
             self._last_checkpoint_step = current_step
-            result[SHOULD_CHECKPOINT] = True  # XXX # NOTE: That this is a copy and does NOT WORK
+            result[SHOULD_CHECKPOINT] = True  # Needs ray 2.50.0+ to work, else result is a copy.
             _logger.info(
                 "Checkpointing trial %s at iteration %s, step %d with: metric '%s' = %s%s",
                 trial.trial_id if trial else "",

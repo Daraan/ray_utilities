@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import atexit
 import difflib
+import io
 import logging
 import math
 import os
@@ -37,6 +38,7 @@ from copy import deepcopy
 from functools import partial, wraps
 from types import MappingProxyType
 from typing import (
+    IO,
     TYPE_CHECKING,
     Any,
     Callable,
@@ -96,6 +98,7 @@ from typing_extensions import Final, NotRequired, Required, Sentinel, TypeAliasT
 import ray_utilities.callbacks.algorithm.model_config_saver_callback
 import ray_utilities.config.create_algorithm
 from ray_utilities import runtime_env
+from ray_utilities.callbacks.wandb import WandbUploaderMixin
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.parser.mlp_argument_parser import MLPArgumentParser
 from ray_utilities.constants import ENVIRONMENT_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
@@ -599,11 +602,13 @@ class TestHelpers(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._disable_ray_auto_init()
+        sys.modules["selenium"] = mock.MagicMock()
         super().setUpClass()
 
     @classmethod
     def tearDownClass(cls):
         cls._enable_ray_auto_init()
+        del sys.modules["selenium"]
         super().tearDownClass()
 
     def setUp(self):
@@ -619,14 +624,20 @@ class TestHelpers(unittest.TestCase):
         )
         self.mock_reduced_model.start()
         self._env_seed_rng = random.Random(111)
+        self._mock_monitor = mock.patch.object(
+            WandbUploaderMixin,
+            "_start_monitor",
+        )
+        self._mock_monitor.start()
         atexit.register(self._clean_output_dir)
 
     def tearDown(self):
-        super().tearDown()
         TrainableBase.cls_model_config = None
         self.mock_reduced_model.stop()
         for trainable in self._created_trainables:
             trainable.stop()
+        self._mock_monitor.stop()
+        super().tearDown()
 
     @staticmethod
     def _clean_output_dir():
@@ -785,6 +796,7 @@ class TestHelpers(unittest.TestCase):
             mock.patch.object(ray_utilities.callbacks.progress_bar, "update_pbar"),
             mock.patch.object(ray_utilities.training.default_class, "update_pbar"),
             mock.patch.object(ray_utilities.training.functional, "update_pbar"),
+            mock.patch.object(TrainableBase, "use_pbar", False),
         ]
         for pbar_update in pbar_updates:
             pbar_update.start()
@@ -1898,6 +1910,7 @@ class _TrainableWithCheckProto(Protocol):
 def SetupWithCheck(check: type["TrainableWithChecks"], base=AlgorithmSetup):  # noqa: N802
     class SetupWithCheck(base):
         _check_class = check
+        PROJECT = "TESTING"
 
         def _create_trainable(self):
             return self._check_class.define(self)
@@ -2138,7 +2151,13 @@ class _MockTrialRunner:
 
 
 class MockTrial(Trial):
-    def __init__(self, i, config=None, storage=None):
+    def __init__(
+        self,
+        i,
+        config=None,
+        storage=None,
+        status=None,
+    ):
         self.trainable_name = "trial_{}".format(i)
         self.trial_id = str(i)
         self.config = config or {}
@@ -2150,6 +2169,7 @@ class MockTrial(Trial):
         self.placement_group_factory = PlacementGroupFactory([{"CPU": 1}])
         self.custom_trial_name = None
         self.custom_dirname = None
+        self.status = status or Trial.PENDING
         # ray missing coverage here,  if attr not in trial.config: i.e. config not provided by searcher
         # self.evaluated_params = {}  # XXX: Added by us; why does ray not raise error here
         self._legacy_local_experiment_path = None
@@ -2176,3 +2196,78 @@ class MockTrial(Trial):
             assert result.checkpoint
             return result.checkpoint.path
         return self._restored_checkpoint
+
+
+class MockPopen(mock.MagicMock):
+    returncode = 1
+    _stdout: IO[str] = io.StringIO("MOCK: wandb: Syncing files...")
+    _stderr: IO[str] | None = io.StringIO("MOCK: stderr - its expected you see this message")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._poll_count = 0
+
+    def poll(self) -> int | None:
+        self._poll_count += 1
+        if self._poll_count > 0:
+            self.returncode = 0
+            return 0
+        return None
+
+    @property
+    def stdout(self) -> IO[str]:
+        return self._stdout
+
+    @stdout.setter
+    def stdout(self, value: IO[str]) -> None:
+        # Something in the back sets this to -1, ignore
+        pass
+
+    @property
+    def stderr(self) -> IO[str] | None:
+        return self._stderr
+
+    @stderr.setter
+    def stderr(self, value: IO[str] | None) -> None:
+        pass
+
+
+class MockPopenClassMeta(type):
+    def __instancecheck__(cls, instance):
+        return isinstance(instance, (mock.MagicMock, MockPopen))
+
+    def __getattr__(cls, name: str) -> Any:
+        return getattr(cls._class_mock, name)
+
+
+class MockPopenClass(mock.MagicMock, metaclass=MockPopenClassMeta):
+    _mock_opened: MockPopen | None = None
+
+    @classmethod
+    def _set_mock(cls, mock: MockPopen | None = None):
+        if mock is None:
+            mock = MockPopen()
+        cls._mock_opened = mock
+        cls._class_mock = mock.MagicMock()
+        cls._class_mock.return_value = cls._mock_opened
+        return cls._mock_opened
+
+    def __new__(cls, *args, **kwargs):
+        if cls._mock_opened is None:
+            raise RuntimeError("MockPopenClass not initialized, use MockPopenClass._set_mock() first")
+        return cls._class_mock(*args, **kwargs)
+
+    @classmethod
+    def mock(cls, func):
+        def wrapper(*args, **kwargs):
+            mock_instance = cls._set_mock(MockPopen())
+            mocked_func = mock.patch("subprocess.Popen", new=cls)
+            with mocked_func:
+                r = func(*args, cls._class_mock, mock_instance, **kwargs)
+            cls._mock_opened = None
+            cls._class_mock = None
+            del cls._class_mock
+            del cls._mock_opened
+            return r
+
+        return wrapper

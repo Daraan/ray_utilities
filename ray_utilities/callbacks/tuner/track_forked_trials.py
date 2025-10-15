@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from ray.tune.experiment.trial import Trial
 from ray.tune.logger import LoggerCallback
 
 from ray_utilities.constants import FORK_FROM
 from ray_utilities.misc import extract_trial_id_from_checkpoint, make_experiment_key
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ray_utilities.typing import ForkFromData
@@ -60,6 +59,12 @@ class TrackForkedTrialsMixin(LoggerCallback):
         self._current_fork_ids: dict[Trial, str] = {}
         """fork_id of currently running forked trials"""
 
+        self._past_trial_ids: defaultdict[Trial, list[str]] = defaultdict(list)
+        """Store history of trial ids when :attr:`_trial_ids` is updated."""
+
+        self._trial_ids: dict[Trial, str] = {}
+        """Mapping of trials to their current trial ID (experiment_key). Tracks all trials, not just forked ones."""
+
         self._currently_not_forked_trials: set[Trial] = set()
         """
         Trials that are (re-)started but are *currently* not forked.
@@ -93,7 +98,7 @@ class TrackForkedTrialsMixin(LoggerCallback):
     @staticmethod
     def make_forked_trial_name(trial: Trial, fork_data: ForkFromData) -> str:
         trial_name = str(trial)
-        parent_id = fork_data["parent_id"]
+        parent_id = fork_data["parent_trial_id"]  # non-fork id
         ft = fork_data.get("parent_time", None)
         if ft is not None:  # pyright: ignore[reportUnnecessaryComparison]
             trial_name += f"_forkof_{parent_id}_{ft[0]}={ft[1]}"  # type: ignore[index]
@@ -118,11 +123,22 @@ class TrackForkedTrialsMixin(LoggerCallback):
             fork_id = trial.trial_id
         # Every trial can have only one fork_id as it is currently running
         self._current_fork_ids[trial] = fork_id
+        self._past_trial_ids[trial].append(self._trial_ids[trial])
+        self._trial_ids[trial] = fork_id  # Also track in the general trial IDs dict
         return fork_id
 
     def get_forked_trial_id(self, trial: Trial) -> str | None:
         """Get the forked_id of a trial, if it was already added."""
         return self._current_fork_ids.get(trial, None)
+
+    def get_trial_id(self, trial: Trial) -> str:
+        """Get the trial ID (experiment_key) for any trial, forked or not.
+
+        Returns the custom trial ID that represents this trial in logging systems.
+        For forked trials, this is the experiment_key with fork information.
+        For non-forked trials, this is the trial.trial_id.
+        """
+        return self._trial_ids.get(trial, trial.trial_id)
 
     def should_restart_logging(self, trial: Trial) -> bool:
         """
@@ -152,7 +168,7 @@ class TrackForkedTrialsMixin(LoggerCallback):
                 # need to load the checkpoint first too see more information
                 self._forked_trials[trial].append(
                     {
-                        "parent_id": extracted_id,
+                        "parent_trial_id": extracted_id,
                         "controller": "from_checkpoint",
                     }
                 )
@@ -161,7 +177,7 @@ class TrackForkedTrialsMixin(LoggerCallback):
             self.add_forked_trial_id(trial, fork_data=None)
         if FORK_FROM in trial.config:
             fork_data: ForkFromData = trial.config[FORK_FROM]
-            parent_trial_id = fork_data["parent_id"]
+            parent_trial_id = fork_data["parent_trial_id"]
             # Could be a live or past trial
             if "forkof" in parent_trial_id or "_step=" in parent_trial_id or "fork_from" in parent_trial_id:
                 _logger.error("Unexpected parent trial id format: %s", parent_trial_id)
@@ -174,7 +190,7 @@ class TrackForkedTrialsMixin(LoggerCallback):
             self._forked_trials[trial].append(fork_data)
             self.add_forked_trial_id(trial, fork_data=fork_data)
             self._currently_not_forked_trials.discard(trial)
-            _logger.info(
+            _logger.debug(
                 "Trial %s was forked from %s, fork_id of this trial %s, parent data: %s",
                 trial.trial_id,
                 parent_trial_id,
@@ -184,6 +200,9 @@ class TrackForkedTrialsMixin(LoggerCallback):
         else:
             # trial does continue and is NOT forked
             self._currently_not_forked_trials.add(trial)
+            # Still track the trial ID for non-forked trials
+            if trial not in self._trial_ids:
+                self._trial_ids[trial] = trial.trial_id
 
         # calls log_trial_start
         super().on_trial_start(iteration, trials, trial, **info)
@@ -208,4 +227,9 @@ class TrackForkedTrialsMixin(LoggerCallback):
 
     def on_trial_complete(self, iteration: int, trials: list[Trial], trial: Trial, **info):
         super().on_trial_complete(iteration, trials, trial, **info)
+        # Clean up all tracking data for completed trial
         self._current_fork_ids.pop(trial, None)
+        self._trial_ids.pop(trial, None)
+        self._forked_trials.pop(trial, None)
+        self._currently_not_forked_trials.discard(trial)
+        self.parent_trial_lookup.pop(trial, None)

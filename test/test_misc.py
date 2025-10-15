@@ -1,16 +1,14 @@
 from __future__ import annotations
 
+import io
 import os
 import random
 import re
 import sys
-import tempfile
-from pathlib import Path
+import unittest
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest import TestCase
-import unittest
-from unittest.mock import MagicMock, patch
 
 import pytest
 import ray.tune.logger
@@ -18,17 +16,20 @@ from ray import tune
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 from ray.runtime_env import RuntimeEnv
 
-from ray_utilities.callbacks.tuner.adv_comet_callback import AdvCometLoggerCallback
-from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.constants import COMET_OFFLINE_DIRECTORY, RE_PARSE_FORK_FROM
-from ray_utilities.misc import RE_GET_TRIAL_ID, parse_fork_from
+from ray_utilities.constants import (
+    COMET_OFFLINE_DIRECTORY,
+    FORK_DATA_KEYS,
+    FORK_FROM_CSV_KEY_MAPPING,
+    RE_PARSE_FORK_FROM,
+)
+from ray_utilities.misc import RE_GET_TRIAL_ID, make_experiment_key, parse_fork_from
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.testing_utils import (
     Cases,
     DisableLoggers,
-    MockTrial,
-    TestHelpers,
+    MockPopen,
+    MockPopenClass,
     check_args,
     iter_cases,
     mock_trainable_algorithm,
@@ -36,9 +37,10 @@ from ray_utilities.testing_utils import (
     patch_args,
 )
 from ray_utilities.training.helpers import make_divisible
+from ray_utilities.typing import ForkFromData
 
 if TYPE_CHECKING:
-    from ray_utilities.typing import ForkFromData, Forktime
+    from ray_utilities.typing import Forktime
 
 if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
@@ -87,6 +89,7 @@ class TestMeta(TestCase):
 
 
 class TestNoLoggers(DisableLoggers):
+    @mock_trainable_algorithm
     def test_no_loggers(self):
         # This test is just to ensure that the DisableLoggers context manager works.
         # It does not need to do anything, as the context manager will disable loggers.
@@ -164,16 +167,15 @@ class TestMisc(TestCase):
     def test_experiment_key_length(self):
         trial1 = SimpleNamespace(trial_id="abcd0000")
         trial2 = SimpleNamespace(trial_id="abcd0000_00001")
-        from ray_utilities.misc import make_experiment_key
 
-        self.assertTrue(32 <= len(make_experiment_key(trial1)) <= 50)
-        self.assertTrue(32 <= len(make_experiment_key(trial2)) <= 50)
+        self.assertTrue(32 <= len(make_experiment_key(trial1)) <= 50)  # pyright: ignore[reportArgumentType]
+        self.assertTrue(32 <= len(make_experiment_key(trial2)) <= 50)  # pyright: ignore[reportArgumentType]
         for t1 in [trial1, trial2]:
             for t2_id in [trial1.trial_id, trial2.trial_id]:
                 for step in [None, 2_000_000]:
                     with self.subTest(t1=t1, t2_id=t2_id, step=step):
                         fork_data: ForkFromData = {
-                            "parent_id": t2_id,
+                            "parent_trial_id": t2_id,
                             "parent_training_iteration": step,
                             "parent_time": cast("Forktime", ("training_iteration", step)),
                         }
@@ -336,201 +338,40 @@ class TestMisc(TestCase):
         self.assertEqual(result.get_best_result().metrics["return_value"], 1)  # pyright: ignore[reportOptionalSubscript]
         ray.shutdown()
 
+    def test_mock_popen_class(self):
+        cls1 = None
+        cls2 = None
 
-class TestCallbackUploads(DisableLoggers, TestHelpers):
-    """Test callback upload behavior after trial completion."""
+        @MockPopenClass.mock
+        def foo1(mock_popen_class, mock_popen):
+            assert hasattr(MockPopenClass().stdout, "read")
+            assert hasattr(MockPopenClass(), "poll")
+            assert MockPopenClass() is mock_popen
+            nonlocal cls1
+            cls1 = mock_popen_class
 
-    def test_comet_callback_on_trial_complete_online(self):
-        """Test that on_trial_complete works correctly for online Comet experiments."""
-        callback = AdvCometLoggerCallback(online=True)
-        trial = MockTrial("test_trial_001")
+        @MockPopenClass.mock
+        def foo2(mock_popen_class, mock_popen):
+            assert hasattr(MockPopenClass().stdout, "read")
+            assert hasattr(MockPopenClass(), "poll")
+            assert MockPopenClass() is mock_popen
+            nonlocal cls2
+            cls2 = mock_popen_class
 
-        # Mock the parent method
-        with patch.object(callback.__class__.__bases__[1], "on_trial_complete") as mock_parent:
-            callback.on_trial_complete(1, [trial], trial)
-            # Should call parent method
-            mock_parent.assert_called_once_with(1, [trial], trial)
+        foo1()  # pyright: ignore[reportCallIssue]
+        foo2()  # pyright: ignore[reportCallIssue]
+        assert cls1 is not None and cls2 is not None
+        self.assertEqual(cls1.call_count, 3)
+        self.assertIsNot(cls1, cls2)
 
-            # Should not try to upload for online mode
-            # (no upload method should be called since we're online)
+        mocked_popen = MockPopen()
+        assert isinstance(mocked_popen, MockPopenClass)
+        assert isinstance(mocked_popen.stdout, (io.StringIO, io.BytesIO)), type(mocked_popen.stdout)
+        assert mocked_popen.args
 
-    def test_comet_callback_on_trial_complete_offline(self):
-        """Test that on_trial_complete triggers upload for offline Comet experiments."""
-        callback = AdvCometLoggerCallback(online=False, upload_offline_experiments=True)
-        trial = MockTrial("test_trial_001")
-
-        with (
-            patch.object(callback.__class__.__bases__[1], "on_trial_complete") as mock_parent,
-            patch.object(callback, "_upload_offline_experiment_if_available") as mock_upload,
-        ):
-            callback.on_trial_complete(1, [trial], trial)
-
-            # Should call parent method
-            mock_parent.assert_called_once_with(1, [trial], trial)
-            # Should call upload method for offline mode
-            mock_upload.assert_called_once_with(trial)
-
-    def test_comet_upload_offline_experiment_no_directory(self):
-        """Test Comet upload behavior when offline directory doesn't exist."""
-        callback = AdvCometLoggerCallback(online=False, upload_offline_experiments=True)
-        trial = MockTrial("test_trial_001")
-
-        with (
-            patch("ray_utilities.callbacks.tuner.adv_comet_callback.COMET_OFFLINE_DIRECTORY", "/non/existent/dir"),
-            patch("ray_utilities.callbacks.tuner.adv_comet_callback._LOGGER") as mock_logger,
-            patch("time.sleep"),  # Speed up test
-        ):
-            callback._upload_offline_experiment_if_available(trial)
-
-            mock_logger.debug.assert_called_once()
-            self.assertIn("does not exist", mock_logger.debug.call_args[0][0])
-
-    def test_comet_upload_offline_experiment_with_files(self):
-        """Test Comet upload behavior when offline files exist."""
-        callback = AdvCometLoggerCallback(online=False, upload_offline_experiments=True)
-        trial = MockTrial("test_trial_001")
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a mock zip file
-            zip_file = Path(tmpdir) / "test_trial_001.zip".replace("_", "xx")
-            zip_file.touch()
-
-            with (
-                patch("ray_utilities.callbacks.tuner.adv_comet_callback.COMET_OFFLINE_DIRECTORY", tmpdir),
-                patch("ray_utilities.callbacks.tuner.adv_comet_callback.CometArchiveTracker") as mock_tracker_class,
-                patch("ray_utilities.callbacks.tuner.adv_comet_callback._LOGGER") as mock_logger,
-                patch("time.sleep"),  # Speed up test
-                patch("comet_ml.offline"),
-            ):
-                mock_tracker = MagicMock()
-                mock_tracker_class.return_value = mock_tracker
-
-                callback._upload_offline_experiment_if_available(trial)
-
-                # Should create tracker with the zip file
-                mock_tracker_class.assert_called_once()
-                args = mock_tracker_class.call_args[1]
-                self.assertFalse(args["auto"])
-                self.assertEqual(len(args["track"]), 1)
-                self.assertTrue(str(args["track"][0]).endswith("test_trial_001.zip".replace("_", "xx")))
-
-                # Should call upload_and_move
-                mock_tracker.upload_and_move.assert_called_once()
-
-                # Should log attempt
-                mock_logger.info.assert_called_once()
-                self.assertIn("Attempting to upload", mock_logger.info.call_args[0][0])
-
-    def test_wandb_callback_on_trial_complete(self):
-        """Test that on_trial_complete triggers sync for WandB runs."""
-        callback = AdvWandbLoggerCallback(mode="offline+upload", upload_offline_experiments=True)
-        trial = MockTrial("test_trial_001")
-
-        with (
-            patch.object(callback.__class__.__bases__[1], "on_trial_complete") as mock_parent,
-            patch.object(callback, "_sync_offline_run_if_available") as mock_sync,
-            patch("ray.wait") as ray_wait,
-        ):
-            ray_wait.side_effect = lambda futures, *args, **kwargs: (futures, [])
-            callback.on_trial_complete(1, [trial], trial)
-
-            # Should call parent method
-            mock_parent.assert_called_once_with(1, [trial], trial)
-            # Should call sync method
-            mock_sync.assert_called_once_with(trial)
-
-    def test_wandb_sync_offline_run_not_offline_mode(self):
-        """Test WandB sync behavior when not in offline mode and no offline runs."""
-        callback = AdvWandbLoggerCallback(mode="offline+upload", upload_offline_experiments=True)
-        trial = MockTrial("test_trial_001", storage=MagicMock())
-
-        with (
-            patch.dict(os.environ, {"WANDB_MODE": "online"}, clear=False),
-            patch("ray_utilities.callbacks.tuner.adv_wandb_callback.Path") as mock_path_class,
-            patch("ray_utilities.callbacks.tuner.adv_wandb_callback._logger") as mock_logger,
-        ):
-            # Mock Path.home().glob to return no offline runs
-            mock_path_class.__truediv__ = lambda self, other: self
-            # Ensure both the class and its instances return the mocked glob result
-            mock_path_class.return_value = mock_path_class
-            mock_path_class.glob.return_value = []
-
-            callback._sync_offline_run_if_available(trial)
-
-            mock_logger.error.assert_called_once()
-            self.assertIn("No wandb offline experiments found", mock_logger.error.call_args[0][0])
-
-    def test_wandb_sync_offline_run_with_files(self):
-        """Test WandB sync behavior when offline runs exist."""
-        callback = AdvWandbLoggerCallback(mode="offline+upload", upload_offline_experiments=True)
-        trial = MockTrial("test_trial_001", storage=MagicMock())
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create mock offline run directory
-            offline_run_dir = Path(tmpdir) / "wandb" / "offline-run-20240101_120000-abcd1234"
-            offline_run_dir.mkdir(parents=True)
-
-            with (
-                patch.dict(os.environ, {"WANDB_MODE": "offline"}, clear=False),
-                patch("ray_utilities.callbacks.tuner.adv_wandb_callback.Path") as mock_path_class,
-                patch("ray_utilities.callbacks.tuner.adv_wandb_callback.subprocess.run") as mock_subprocess,
-                patch("ray_utilities.callbacks.tuner.adv_wandb_callback._logger") as mock_logger,
-            ):
-                # Mock Path.home() to return our temp directory
-                mock_path_class.home.return_value = offline_run_dir
-                mock_path_class.__truediv__ = lambda self, other: self
-                mock_path_class.return_value = mock_path_class
-                mock_path_class.glob.return_value = [offline_run_dir]
-
-                # Mock subprocess.run to return success
-                mock_result = MagicMock()
-                mock_result.returncode = 0
-                mock_subprocess.return_value = mock_result
-
-                callback._sync_offline_run_if_available(trial)
-
-                # Should call wandb sync
-                mock_subprocess.assert_called_once()
-                args = mock_subprocess.call_args[0][0]
-                self.assertEqual(args[0], "wandb")
-                self.assertEqual(args[1], "sync")
-                self.assertTrue(str(args[2]).endswith("offline-run-20240101_120000-abcd1234"))
-
-                # Should log success
-                mock_logger.info.assert_called()
-                log_calls = [call[0][0] for call in mock_logger.info.call_args_list]
-                self.assertTrue(any("Successfully synced" in msg for msg in log_calls))
-
-    def test_wandb_sync_offline_run_subprocess_error(self):
-        """Test WandB sync behavior when subprocess fails."""
-        callback = AdvWandbLoggerCallback(mode="offline+upload", upload_offline_experiments=True)
-        trial = MockTrial("test_trial_001", storage=MagicMock())
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create mock offline run directory
-            offline_run_dir = Path(tmpdir) / "wandb" / "offline-run-20240101_120000-abcd1234"
-            offline_run_dir.mkdir(parents=True)
-
-            with (
-                patch.dict(os.environ, {"WANDB_MODE": "offline"}, clear=False),
-                patch("ray_utilities.callbacks.tuner.adv_wandb_callback.Path") as mock_path_class,
-                patch("ray_utilities.callbacks.tuner.adv_wandb_callback.subprocess.run") as mock_subprocess,
-                patch("ray_utilities.callbacks.tuner.adv_wandb_callback._logger") as mock_logger,
-            ):
-                # Mock Path.home() to return our temp directory
-                mock_path_class.home.return_value = offline_run_dir
-                mock_path_class.__truediv__ = lambda self, other: self
-                mock_path_class.return_value = mock_path_class
-                mock_path_class.glob.return_value = [offline_run_dir]
-
-                # Mock subprocess.run to return failure
-                mock_result = MagicMock()
-                mock_result.returncode = 1
-                mock_result.stderr = "Mock error message"
-                mock_subprocess.return_value = mock_result
-
-                callback._sync_offline_run_if_available(trial)
-
-                # Should log failure
-                mock_logger.error.assert_called()
-                self.assertIn("Failed to sync offline run", mock_logger.error.call_args[0][0])
+    def test_fork_from_data_keys(self):
+        """Test key membership between FORK_DATA_KEYS, ForkFromData and FORK_FROM_DATA_TO_FORK_DATA_KEYS."""
+        fork_dict_keys = ForkFromData.__required_keys__ | ForkFromData.__optional_keys__
+        self.assertSetEqual(set(FORK_DATA_KEYS), set(FORK_FROM_CSV_KEY_MAPPING.keys()))
+        # The keys in FORK_FROM_DATA_TO_FORK_DATA_KEYS can be a subset of fork_dict_keys
+        self.assertTrue({v for v in FORK_FROM_CSV_KEY_MAPPING.values() if v is not None}.issubset(fork_dict_keys))

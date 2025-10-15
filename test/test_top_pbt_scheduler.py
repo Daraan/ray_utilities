@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import random
+import shutil
+import tempfile
 import unittest
+from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock, patch
 
 from ray.tune.experiment import Trial
@@ -18,6 +21,9 @@ from ray_utilities.tune.scheduler.top_pbt_scheduler import (
     _debug_dump_new_config,
     _grid_search_sample_function,
 )
+
+if TYPE_CHECKING:
+    from ray_utilities.tune.scheduler.top_pbt_scheduler import _PBTTrialState2
 
 
 class TestPBTParser(unittest.TestCase):
@@ -167,7 +173,7 @@ class TestTopTrialScheduler(DisableLoggers, TestHelpers):
         lower_scores = [scheduler._trial_state[t].last_score for t in lower]
         # Filter out None values for min()
         lower_scores_filtered = [s for s in lower_scores if s is not None]
-        # Verify all upper scores are greater than any lower score
+        # Verify all upper scores are greater than any lower score. Remember for min mode the sign is switched.
         self.assertTrue(all(u > max(lower_scores_filtered) for u in upper_scores))
 
     def test_distribute_exploitation(self):
@@ -226,7 +232,8 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
     """Integration tests for TopTrialScheduler."""
 
     @patch("ray.tune.execution.tune_controller.TuneController")
-    def test_checkpoint_or_exploit(self, mock_controller):
+    @patch("ray.tune.schedulers.pbt.PopulationBasedTraining.on_trial_add")
+    def test_checkpoint_or_exploit(self, mock_controller, _on_trial_mock):
         """Test the checkpoint_or_exploit method."""
         scheduler = TopPBTTrialScheduler(
             metric="reward",
@@ -234,6 +241,10 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
             quantile_fraction=0.3,
             hyperparam_mutations={"dummy": [1, 2]},
         )
+
+        temp_dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+        mock_controller.experiment_path = temp_dir
 
         # Create trials and states
         trials = []
@@ -250,14 +261,18 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
             else:
                 score = 10 + i
 
-            state = MagicMock()
+            state = cast("_PBTTrialState2", MagicMock())
             state.last_score = score
             state.last_checkpoint = None
-            state.last_perturbation_time = 0
-            state.last_result = {"reward": score}
+            state.last_perturbation_time = 1
+            state.last_train_time = 0
+            state.last_result = {"reward": score, "training_iteration": 1}
 
             trials.append(trial)
             scheduler._trial_state[trial] = state
+            scheduler.on_trial_add(mock_controller, trial)
+            # this is set to 0 on_trial_add
+            state.last_training_iteration = 1
 
         # Mock controller methods
         mock_controller._schedule_trial_save.return_value = "checkpoint_path"

@@ -5,7 +5,7 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "ray_utilities"
-version = "0.5.1"
+version = "0.6.0"
 readme = "README.md"
 description = "Utilities for Ray RLlib and related workflows. Includes experiment setup, callbacks, and JAX model utilities."
 license = { file = "LICENSE" }
@@ -141,7 +141,6 @@ ignore = [
   "TRY003", "TRY400",  # To long error messages, use logging.exception over error
 
   "PLR2004",  # Magic Values
-  "PD901",  # Use generic df as DataFrame variable
   "NPY002",  # Use random generator
 ]
 exclude = [

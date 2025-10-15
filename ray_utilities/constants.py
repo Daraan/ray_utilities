@@ -17,9 +17,10 @@ Example:
     ...     # Use new Ray API features
     ...     pass
 """
-# pyright: enableExperimentalFeatures=true
 
-import logging
+# pyright: enableExperimentalFeatures=true
+from __future__ import annotations
+
 import re
 from typing import Final
 
@@ -57,8 +58,6 @@ __all__ += [
     "RAY_UTILITIES_INITIALIZATION_TIMESTAMP",
     "RUN_ID",
 ]
-
-_logger = logging.getLogger(__name__)
 
 # region runtime constants
 
@@ -101,6 +100,19 @@ See Also:
     `Ray RLlib New API Stack Migration Guide
     <https://docs.ray.io/en/latest/rllib/new-api-stack-migration-guide.html>`_
 """
+
+TUNE_RESULT_IS_A_COPY = RAY_VERSION < Version("2.50.0")
+"""
+Before Ray version `2.50.0`
+
+Tuner does not allow to modify the result dict as it is a copy. As long as this is True
+use the callback on an Algorithm. Or the HACK in the DefaultTrainable class to trigger
+checkpointing.
+
+See Also:
+    - https://github.com/ray-project/ray/pull/55527
+"""
+
 
 # endregion
 
@@ -356,4 +368,30 @@ RE_PARSE_FORK_FROM = re.compile(r"^(?P<fork_id>[^?]*?)(?:\?_step=(?P<fork_step>\
 Regex pattern to parse the value of :const:`FORK_FROM` into trial id and step.
 
 The ``fork_id`` will be everything before the first ``?``, the ``?_step=<fork_step>`` part is optional.
+"""
+
+OPTIONAL_FORK_DATA_KEYS = ("current_step", "controller")
+FORK_DATA_KEYS = (
+    "trial_id",
+    "parent_id",
+    "parent_training_iteration",
+    "step_metric",
+    "step_metric_value",
+    *OPTIONAL_FORK_DATA_KEYS,
+)
+
+FORK_FROM_CSV_KEY_MAPPING: dict[str, str | None] = {
+    "parent_id": "parent_trial_id",
+    "parent_training_iteration": "parent_training_iteration",
+    "step_metric": "parent_time",
+    "step_metric_value": None,
+    "trial_id": "fork_id_this_trial",
+    "controller": "controller",
+    "current_step": "parent_env_steps",
+}
+"""
+Maps :const:`FORK_DATA_KEYS` to keys used in the :class:`ForkFromData` dict.
+
+A None value indicates a skip when the header is written to CSV.
+For example, "parent_time" should be extracted into two columns: "step_metric" and "step_metric_value"
 """

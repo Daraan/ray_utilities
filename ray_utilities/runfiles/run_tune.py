@@ -31,7 +31,7 @@ from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.misc import raise_tune_errors
+from ray_utilities.misc import raise_tune_errors, shutdown_monitor
 from ray_utilities.random import seed_everything
 from ray_utilities.training.default_class import TrainableBase
 
@@ -179,22 +179,27 @@ def run_tune(
     tuner = setup.create_tuner()
     try:
         results = tuner.fit()
-    except (KeyboardInterrupt, Exception) as e:
-        if isinstance(e, KeyboardInterrupt):
-            # In case we do not want to upload results
-            logger.info(
-                "Tuning interrupted. Will try to upload gathered results now. "
-                "Waiting 2 sec before continuing... "
-                "Press Ctrl + C again to exit immediately."
-            )
-            time.sleep(2)
-        fit_error = e
-        logger.error("Error occurred during tuning: %s", fit_error)
+    except (KeyboardInterrupt, Exception) as e:  # noqa: BLE001
         try:
-            results = tuner.get_results()
-        except (RuntimeError, Exception) as e2:
-            logger.error("Error occurred while getting results: %s", e)
-            fallback_error = e2
+            fit_error = e
+            if isinstance(e, KeyboardInterrupt):
+                # In case we do not want to upload results
+                logger.info(
+                    "Tuning interrupted. Will try to upload gathered results now. "
+                    "Waiting 2 sec before continuing... "
+                    "Press Ctrl + C again to exit immediately."
+                )
+                time.sleep(2)
+            logger.error("Error occurred during tuning: %s", fit_error)
+            try:
+                results = tuner.get_results()
+            except (RuntimeError, Exception) as e2:  # noqa: BLE001
+                logger.error("Error occurred while getting results: %s", e)
+                fallback_error = e2
+        except (KeyboardInterrupt, Exception) as e3:  # cleanup monitor first  # noqa: BLE001
+            shutdown_monitor()  # cleanup monitor before exiting
+            fallback_error = e3
+
     if not results:
         logger.warning("No results returned from the tuner.")
     setup.upload_offline_experiments(results, tuner)
@@ -202,6 +207,9 @@ def run_tune(
         raise_tune_errors(results)
     if fallback_error and fit_error:
         # Use Base in case of KeyboardInterrupt
+        if isinstance(fit_error, KeyboardInterrupt) and "experiment has not been run" in str(fallback_error):
+            # Just raise the KeyboardInterrupt
+            raise fit_error
         raise BaseExceptionGroup(
             f"Encountered an error {fit_error} and could not call get_results {fallback_error!r}",
             [fit_error, fallback_error],

@@ -22,6 +22,7 @@ Example:
 
 from __future__ import annotations
 
+import atexit
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -44,7 +45,7 @@ from ray_utilities.constants import (
     RAY_UTILITIES_INITIALIZATION_TIMESTAMP,
     RUN_ID,
 )
-from ray_utilities.misc import get_trainable_name, is_pbar, trial_name_creator
+from ray_utilities.misc import get_trainable_name, is_pbar, shutdown_monitor, trial_name_creator
 from ray_utilities.nice_logger import nice_logger
 from ray_utilities.random import seed_everything
 from ray_utilities.runfiles.run_tune import run_tune
@@ -72,7 +73,7 @@ __all__ = [
 
 
 logger = nice_logger(__name__, level=os.environ.get("RAY_UTILITIES_LOG_LEVEL", "DEBUG"))
-logger.info("Ray utilities imported")
+logger.info("Ray utilities imported. Run ID: %s", RUN_ID)
 logger.debug("Ray utilities logger debug level set")
 
 # suppress a deprecation warning from ray, by creating a RLModuleConfig once
@@ -107,7 +108,8 @@ runtime_env = _RuntimeEnv(
 )
 """A suggestion of environment variables to set in Ray tasks and actors."""
 
+atexit.register(shutdown_monitor)
 
 if not TYPE_CHECKING:
     del Any
-del os, TYPE_CHECKING
+del os, TYPE_CHECKING, atexit

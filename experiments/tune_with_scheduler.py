@@ -9,8 +9,12 @@ from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
 from ray_utilities.misc import extend_trial_name
 from ray_utilities.setup.scheduled_tuner_setup import PPOMLPWithPBTSetup
+from ray_utilities.tune.scheduler.top_pbt_scheduler import KeepMutation
 
 os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
+
+# print all messages from comet when we upload from a worker
+os.environ.setdefault("RAY_DEDUP_LOGS_ALLOW_REGEX", "COMET|wandb")
 
 if __name__ == "__main__":
     ray.init(object_store_memory=4 * 1024**3, runtime_env=runtime_env)  # 4 GB
@@ -41,6 +45,8 @@ if __name__ == "__main__":
             trial_name_creator=extend_trial_name(insert=["<batch_size>"], prepend="Tune_BatchSize_WithScheduler"),
         )
         setup.args.set_hyperparam_mutations(
-            {"train_batch_size_per_learner": PPOMLPWithPBTSetup.batch_size_sample_space["grid_search"]}  # pyright: ignore[reportArgumentType]
+            {
+                "train_batch_size_per_learner": KeepMutation(),
+            }
         )
         results = run_tune(setup)

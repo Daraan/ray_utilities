@@ -53,6 +53,8 @@ class _LogMetricsEnvRunnersResultsDict(BaseEnvRunnersResultsDict):
 
     episode_return_max: NotRequired[float]
     episode_return_min: NotRequired[float]
+    episode_len_max: NotRequired[float]
+    episode_len_min: NotRequired[float]
     num_env_steps_sampled_lifetime: NotRequired[int]
     num_env_steps_sampled: NotRequired[int]
     num_env_steps_passed_to_learner: NotRequired[int]
@@ -127,7 +129,12 @@ class _LogMetricsBase(TypedDict):
 
 
 class LogMetricsDict(_LogMetricsBase):
-    """Stays true to RLlib's naming."""
+    """
+    Dictionary structure for metrics logged via `train.report()`.
+
+    Stays true to RLlib's naming unlike :class:`NewLogMetricsDict`
+    which is more user friendly.
+    """
 
     env_runners: _LogMetricsEnvRunnersResultsDict
     evaluation: _LogMetricsEvaluationResultsDict
@@ -228,6 +235,9 @@ NewFlatLogMetricsDict = TypedDict(
         "training_iteration": int,
         "training/episode_return_mean": float,
         "evaluation/episode_return_mean": float,
+        "evaluation/episode_len_min": NotRequired[float],
+        "evaluation/episode_len_mean": NotRequired[float],
+        "evaluation/episode_len_max": NotRequired[float],
         "evaluation/episode_videos_best": NotRequired["str | NDArray"],
         "evaluation/episode_videos_best/reward": NotRequired[float],
         "evaluation/episode_videos_best/video": NotRequired["NDArray"],

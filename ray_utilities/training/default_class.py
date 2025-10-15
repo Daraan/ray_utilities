@@ -39,21 +39,18 @@ from ray.rllib.env.env_runner_group import EnvRunnerGroup
 from ray.rllib.utils import force_list
 from ray.rllib.utils.annotations import override
 from ray.rllib.utils.checkpoints import Checkpointable
-from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME
 from ray.tune.result import SHOULD_CHECKPOINT
 from typing_extensions import Self, TypeAliasType
 
 from ray_utilities.callbacks.progress_bar import restore_pbar, save_pbar_state, update_pbar
-from ray_utilities.callbacks.tuner.metric_checkpointer import TUNE_RESULT_IS_A_COPY
 from ray_utilities.config.parser.default_argument_parser import LOG_STATS, LogStatsChoices
-from ray_utilities.constants import FORK_FROM, PERTURBED_HPARAMS
-from ray_utilities.misc import AutoInt, is_pbar
+from ray_utilities.constants import FORK_FROM, PERTURBED_HPARAMS, TUNE_RESULT_IS_A_COPY
+from ray_utilities.misc import AutoInt, get_current_step, is_pbar
 from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.training.functional import training_step
 from ray_utilities.training.helpers import (
     create_running_reward_updater,
     episode_iterator,
-    get_current_step,
     get_total_steps,
     patch_model_config,
     setup_trainable,
@@ -1523,7 +1520,7 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
             _logger.info(
                 "Current step %s exceeds total steps. Expecting the trainable to have stopped.", self._current_step
             )
-        # HACK: as long as tune does not allow custom result checkpointing use this
+        # HACK: For ray < 2.50.0 where result is copied in for the callbacks
         # see for example: https://github.com/ray-project/ray/pull/55527
         if (
             TUNE_RESULT_IS_A_COPY

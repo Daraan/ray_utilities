@@ -121,7 +121,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         # TODO: make use of resume/resume_from/fork_from when using from_checkpoint
         # see: https://docs.wandb.ai/ref/python/sdk/functions/init/ format: {id}?_step={step}
         return AdvWandbLoggerCallback(
-            project=self._setup.project_name,
+            project=self._setup.project,
             group=self._setup.group_name,  # if not set trainable name is used
             excludes=[
                 *self.EXCLUDE_METRICS,
@@ -159,6 +159,8 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             "use_comet_offline",
             self._setup.args.comet and self._setup.args.comet.lower().startswith("offline"),
         )
+        # Possibly raise a warning if a pbt scheduler is used but not viewer credentials are setup
+        _viewer_vars_set = self._set_wandb_viewer_credentials()
 
         return AdvCometLoggerCallback(
             # new key
@@ -166,7 +168,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             api_key=api_key,
             disabled=not args.comet and args.test if disabled is None else disabled,
             online=not use_comet_offline,  # do not upload
-            workspace=self._setup.project_name,
+            workspace=self._setup.project,
             project_name=self._setup.group_name,  # "general" for Uncategorized Experiments
             save_checkpoints=False,
             tags=self.get_tags(),
@@ -210,6 +212,15 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             return True
         logger.debug("COMET_API_KEY not in environment variables, trying to load from ~/.comet_api_key.env")
         return load_dotenv(Path("~/.comet_api_key.env").expanduser())
+
+    @staticmethod
+    def _set_wandb_viewer_credentials() -> bool:
+        if "WANDB_VIEWER_MAIL" in os.environ and "WANDB_VIEWER_PW" in os.environ:
+            return True
+        logger.debug(
+            "WANDB_VIEWER_MAIL or WANDB_VIEWER_PW not in environment variables, trying to load from ~/.wandb_viewer.env"
+        )
+        return load_dotenv(Path("~/.wandb_viewer.env").expanduser())
 
     def create_callbacks(self, *, adv_loggers: bool | None = None) -> list[Callback]:
         """

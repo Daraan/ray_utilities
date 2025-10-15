@@ -52,7 +52,7 @@ from typing_extensions import NotRequired, Self, TypedDict, TypeVar, deprecated
 from ray_utilities import RUN_ID
 from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
-from ray_utilities.comet import CometArchiveTracker
+from ray_utilities.callbacks.comet import CometArchiveTracker
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.parser.default_argument_parser import ConfigFilePreParser, SupportsMetaAnnotations
 from ray_utilities.environment import create_env
@@ -229,7 +229,11 @@ class ExperimentSetupBase(
     """extra tags to add"""
 
     PROJECT: str = "Unnamed Project"
-    """Base for project_name. Can consist of tags written as <args_attribute> that are substituted"""
+    """Base for project_name.
+
+    Can consist of tags written as <args_attribute> that are substituted.
+    On instances use :attr:`project` property instead
+    """
 
     use_dev_project: bool = True
     """When True the `project_name` will be "dev-workspace" in test mode"""
@@ -245,8 +249,11 @@ class ExperimentSetupBase(
     _fixed_argv: ClassVar[list[str] | None] = None
     """When using remote (no sys.args available) and checkpoints fix the args to the time of creation"""
 
+    storage_path: str | Path = "./outputs/experiments"
+    """Base path where experiment outputs are stored by the tuner."""
+
     @property
-    def project_name(self) -> str:
+    def project(self) -> str:
         """Name for the output folder, wandb project, and comet workspace."""
         if self.PROJECT == "Unnamed Project":
             logger.warning(
@@ -255,8 +262,8 @@ class ExperimentSetupBase(
             )
         return "dev-workspace" if self.use_dev_project and self.args.test else self._parse_project_name(self.PROJECT)
 
-    @project_name.setter
-    def project_name(self, value: str):
+    @project.setter
+    def project(self, value: str):  # pyright: ignore[reportIncompatibleVariableOverride]
         logger.warning("Setting project name to %s. Prefer creation of a new class", value)
         self.PROJECT: str = value
 
@@ -697,7 +704,7 @@ class ExperimentSetupBase(
             if module_spec.module_class is not None:
                 module = module_spec.module_class.__name__
             else:
-                module = f"RLModule({self.args.agent_type})"
+                module = f"RLModule={self.args.agent_type}"
         else:
             module = None
         # Arguments reported on the CLI
@@ -731,7 +738,7 @@ class ExperimentSetupBase(
         param_space["cli_args"] = self.clean_args_to_hparams(self.args)
         param_space["run_id"] = RUN_ID
         param_space["experiment_id"] = RUN_ID
-        param_space["experiment_name"] = self.project_name
+        param_space["experiment_name"] = self.project
         param_space["experiment_group"] = self.group_name
         self.param_space = param_space
         del self._dynamic_parameters_to_tune
@@ -1431,7 +1438,7 @@ class ExperimentSetupBase(
             logger.warning(
                 "Having __init_config__=True in the state while also restoring a config ignores "
                 "the restored config object. You can control the behavior and disable this warning "
-                "by setting init_config=True/False in the :meth:`from_saved` method. "
+                "by setting init_config=True/False in the `from_saved` method. "
                 "Or, by removing/changing the keys of the state dict before calling this function."
             )
         unchecked_keys.remove("param_space")

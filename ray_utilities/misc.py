@@ -13,19 +13,33 @@ import logging
 import os
 import re
 import sys
-from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, cast
 
 import base62
+import ray
+import ray.exceptions
 from ray.experimental import tqdm_ray
+from ray.rllib.utils.metrics import (
+    ALL_MODULES,  # pyright: ignore[reportPrivateImportUsage]
+    ENV_RUNNER_RESULTS,
+    LEARNER_RESULTS,
+    NUM_ENV_STEPS_SAMPLED_LIFETIME,
+)
+from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 from ray.tune.error import TuneError
 from ray.tune.result_grid import ResultGrid
 from tqdm import tqdm
-from typing_extensions import Iterable, TypeIs
+from typing_extensions import Iterable, Sentinel, TypeIs
 
 from ray_utilities.constants import (
     DEFAULT_EVAL_METRIC,
     EVAL_METRIC_RETURN_MEAN,
+    FORK_DATA_KEYS,
+    FORK_FROM_CSV_KEY_MAPPING,
     NEW_LOG_EVAL_METRIC,
+    NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
+    OPTIONAL_FORK_DATA_KEYS,
     RAY_UTILITIES_INITIALIZATION_TIMESTAMP,
     RE_PARSE_FORK_FROM,
     RUN_ID,
@@ -36,12 +50,16 @@ if TYPE_CHECKING:
 
     from ray.tune.experiment import Trial
 
-    from ray_utilities.typing import ForkFromData
+    from ray_utilities.callbacks._wandb_monitor import WandbRunMonitor
+    from ray_utilities.typing import ForkFromData, StrictAlgorithmReturnData
+    from ray_utilities.typing.metrics import LogMetricsDict
 
 if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
 
 _T = TypeVar("_T")
+_NOT_FOUND = Sentinel("_NOT_FOUND")
+
 
 _logger = logging.getLogger(__name__)
 
@@ -113,6 +131,58 @@ def parse_fork_from(fork_from: str) -> tuple[str, int | None] | None:
     step_str = match.group("fork_step")
     step = int(step_str) if step_str is not None else None
     return trial_id, step
+
+
+def make_fork_from_csv_header(*, optional: bool = True) -> str:
+    """Create a CSV header string for forked trial information.
+
+    This function generates a CSV header string that includes the keys
+    used to log forked trial information. The keys are defined in the
+    :attr:`FORK_DATA_KEYS` constant.
+
+    Args:
+        optional: If ``True``, includes all keys in the header.
+            If ``False``, excludes optional keys defined in :attr:`OPTIONAL_FORK_DATA_KEYS`.
+            Defaults to ``True``.
+
+    Returns:
+        A comma-separated string representing the CSV header for forked trial data.
+        Ends with a newline character.
+
+    Example:
+        >>> make_fork_from_csv_header()
+        'trial_id, parent_id, parent_step, step_metric, current_step, controller\n'
+    """
+    if optional:
+        return ", ".join(FORK_DATA_KEYS) + "\n"
+    return ", ".join([key for key in FORK_DATA_KEYS if key not in OPTIONAL_FORK_DATA_KEYS]) + "\n"
+
+
+def make_fork_from_csv_line(fork_data: ForkFromData, *, trial_id: Optional[str] = None, optional: bool = True) -> str:
+    keys = FORK_DATA_KEYS if optional else [key for key in FORK_DATA_KEYS if key not in OPTIONAL_FORK_DATA_KEYS]
+    contents = ""
+    for key in keys:
+        mapping_key = FORK_FROM_CSV_KEY_MAPPING[key]
+        if mapping_key is None:  # skip step_metric_value
+            continue
+        if trial_id is not None and key == "trial_id":
+            if trial_id != fork_data.get(mapping_key, _NOT_FOUND):
+                _logger.warning(
+                    "Keyword trial_id does not match with %s: %s != %s to write the csv file line.",
+                    mapping_key,
+                    trial_id,
+                    fork_data[mapping_key],
+                )
+            data = trial_id
+        else:
+            data = fork_data.get(mapping_key, _NOT_FOUND)
+        if mapping_key == "parent_time" and data is not _NOT_FOUND:
+            assert key == "step_metric"
+            metric, value = cast("tuple[str, str]", data)
+            contents += f"{metric}, {value}, "
+        elif data is not _NOT_FOUND:
+            contents += f"{data}, "
+    return contents.rstrip(", ") + "\n"
 
 
 def trial_name_creator(trial: Trial) -> str:
@@ -274,78 +344,190 @@ def get_trainable_name(trainable: Callable) -> str:
     return trainable.__name__
 
 
-def _make_non_fork_experiment_key(trial: Trial) -> str:
-    trial_base, *trial_number = trial.trial_id.split("_")
-    if len(trial_number) > 1:
-        _logger.warning(
-            "Unexpected trial_id format '%s'. Expected format '<id>_<number>'.",
-            trial.trial_id,
-        )
-    if trial_number:
-        trial_number = "C" + "".join(trial_number).replace("000", "")
-    else:  # empty list
-        trial_number = ""
-    base_key = f"{RUN_ID}X{trial_base}{trial_number}".replace("_", "")
-    # Pad at the end with Z to be at least 32 characters long.
-    # Use uppercase letters as trial_id is lowercase alphanumeric only.
-    base_key = f"{base_key:Z<32}"
-    return base_key
+class ExperimentKey(str, Enum):
+    """Lookup for replacements in experiment keys when using :func:`make_experiment_key`."""
 
+    REPLACE_UNDERSCORE = ""
+    """All underscores in the trial ID are replaced by this string."""
 
-def _make_fork_experiment_key(base_key: str, fork_data: ForkFromData) -> str:
-    base_key = base_key.rstrip("Z")
-    parent_id = fork_data["parent_id"]
-    # Prefer training iteration for experiment key (stable across frameworks)
-    ft = fork_data.get("parent_time")
-    # ft is a NamedTuple[time_attr, time]; only use numeric time
-    parent_iteration = ft[1] if ft[0] == "current_step" else fork_data["parent_training_iteration"]
+    REPLACE_3ZEROS = ""  # noqa: PIE796
+    """All occurrences of "000" in the trial ID's count part are replaced by this string to shorten it."""
 
-    fork_base, *fork_number = parent_id.split("_")
-    if fork_number:
-        fork_number = "C" + "".join(fork_number).replace("000", "")
-    else:
-        fork_number = ""
+    RIGHT_PAD_CHAR = "Z"
+    """Right padding character to reach at least 32 characters in length."""
 
-    if parent_iteration is None:
-        iteration_data = "NONE"  # rare chance that NONE is actually encoded
-        _logger.warning("parent_iteration is None, using 'NONE' in experiment key.")
-    else:
-        iteration_data = base62.encode(parent_iteration)
-    return f"{base_key}F{fork_base}{fork_number}S{iteration_data:0>4}".replace("_", "")
-
-
-def make_experiment_key(trial: Trial, fork_data: Optional[ForkFromData] = None) -> str:
+    MIN_LENGTH = 32
     """
-    Build a unique experiment key for a trial, making use of the :attr:`RUN_ID`,
-    :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`, and optional fork information.
-
-    It has the format of two forms:
-        - If not forked: "<RUN_ID of 21 chars>X<trial_id>[Z* up to 32 chars in total]"
-          it is prolonged by ``Z`` to be at least 32 chars long.
-        - If forked: "<RUN_ID of 21 chars>X<trial_id>F<trial_id>S<step>"
-          The <step> is in base62 encoded and right aligned to 4 characters with leading zeros.
-
-        Both have in common that the potential underscore in the trial ID is replaced by C and all "000" in the trials
-        count part of the trial ID are removed, e.g. ``abcd0001_00005`` becomes ``abcd0001C05``.
-
-    References:
-        - :attr:`RUN_ID <ray_utilities.constants.RUN_ID>`: A unique identifier for the current execution.
-        - :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`: The unique ID of the trial.
-
-    Note:
-        The resulting key underscores replaced by C. For compatibility it should only contain
-        numbers and letters.
-        For comet it must be between 32 and 50 characters long. This is not enforced here.
-
-        For comet support, to not exceed 50 characters, only 99 parallel trials are supported, e.g. <trial_id>_00099.
-        The highest supported forking step is 14_776_335.
-
-        It is assumed that the trial ID contains only lowercase alphanumeric characters and underscores.
+    Minimum length of the experiment key for non-forks. :attr:`RIGHT_PAD_CHAR` is used to pad the key to this length.
+    Should be at least 32 characters long to be valid for Comet.
     """
-    base_key = _make_non_fork_experiment_key(trial)
-    if not fork_data:
+
+    NO_ITERATION_DATA = "NaN"
+    """
+    String to use when no iteration data is available.
+
+    Key will end with "SNaN" in this case instead of "S####"
+    """
+
+    RUN_ID_SEPARATOR = "X"
+    """Separator between RUN_ID and trial ID."""
+
+    FORK_SEPARATOR = "F"
+    """Separator between trial ID and fork information."""
+
+    COUNT_SEPARATOR = "C"
+    """Separator between trial ID and trial count part."""
+
+    STEP_SEPARATOR = "S"
+
+    @classmethod
+    def parse_experiment_key(cls, key: str):
+        """Parse an experiment key back into its components.
+
+        This function reverses the transformation applied by :func:`make_experiment_key`,
+        extracting the original trial ID, fork information, and step from the experiment key.
+
+        Args:
+            key: The experiment key string to parse.
+        Returns:
+            A tuple containing:
+                - The original trial ID as a string.
+                - A dictionary with fork information if the key represents a forked trial, otherwise ``None``.
+                - The step as an integer if available, otherwise ``None``.
+        """
+        if len(key) < cls.MIN_LENGTH.value:
+            _logger.warning("Experiment key '%s' is shorter than expected minimum length of 32.", key)
+        run_id_part, key = key.split(cls.RUN_ID_SEPARATOR, 1)
+        if not run_id_part.startswith(RUN_ID):
+            _logger.debug("Experiment key '%s' does not start with expected RUN_ID prefix '%s'.", key, RUN_ID + "X")
+        fork_data = None
+        if cls.FORK_SEPARATOR in key:
+            key, fork_part = key.split(cls.FORK_SEPARATOR, 1)
+            if cls.STEP_SEPARATOR in fork_part:
+                fork_id_part, step_part = fork_part.split(cls.STEP_SEPARATOR, 1)
+                fork_step = None
+                if step_part != cls.NO_ITERATION_DATA:
+                    try:
+                        fork_step = base62.decode(step_part.lstrip("0"))
+                    except ValueError as e:
+                        _logger.warning("Failed to decode step part '%s' from experiment key: %s", step_part, e)
+                else:
+                    _logger.info("No iteration data available in experiment key '%s'.", key)
+            else:
+                fork_id_part = fork_part
+                fork_step = None
+                _logger.warning(
+                    "No step separator '%s' found in fork part of experiment key '%s'.",
+                    ExperimentKey.STEP_SEPARATOR,
+                    key,
+                )
+            # Reconstruct original trial ID from fork_id_part
+            if cls.COUNT_SEPARATOR in fork_id_part:
+                fork_base, fork_number = fork_id_part.split(cls.COUNT_SEPARATOR, 1)
+                # Reinsert "000" into the count part
+                fork_number = fork_number.replace(cls.REPLACE_3ZEROS, "000")
+                parent_trial_id = f"{fork_base}_{fork_number}"
+            else:
+                parent_trial_id = fork_id_part
+            parent_trial_id = parent_trial_id.replace(cls.REPLACE_UNDERSCORE, "_")
+            fork_data = {
+                "parent_trial_id": parent_trial_id,
+                "parent_training_iteration": fork_step,
+                "parent_time": None,
+            }
+        key = key.rstrip(cls.RIGHT_PAD_CHAR)  # remove padding if any
+        # Non-forked key
+        if cls.COUNT_SEPARATOR in key:
+            trial_base, trial_number = key.split(cls.COUNT_SEPARATOR, 1)
+            trial_number = trial_number.replace(cls.REPLACE_3ZEROS, "000")
+            trial_id = f"{trial_base}_{trial_number}"
+        else:
+            trial_id = key
+        return trial_id, fork_data
+
+    @classmethod
+    def _make_non_fork_experiment_key(cls, trial: Trial) -> str:
+        trial_base, *trial_number = trial.trial_id.split("_")
+        if len(trial_number) > 1:
+            _logger.warning(
+                "Unexpected trial_id format '%s'. Expected format '<id>_<number>'.",
+                trial.trial_id,
+            )
+        if trial_number:
+            trial_number = cls.COUNT_SEPARATOR + "".join(trial_number).replace("000", cls.REPLACE_UNDERSCORE)
+        else:  # empty list
+            trial_number = ""
+        base_key = f"{RUN_ID}{cls.RUN_ID_SEPARATOR}{trial_base}{trial_number}".replace("_", cls.REPLACE_UNDERSCORE)
+        # Pad at the end with Z to be at least 32 characters long.
+        # Use uppercase letters as trial_id is lowercase alphanumeric only.
+        base_key = f"{base_key:{cls.RIGHT_PAD_CHAR}<{cls.MIN_LENGTH}}"
         return base_key
-    return _make_fork_experiment_key(base_key, fork_data)
+
+    @classmethod
+    def _make_fork_experiment_key(cls, base_key: str, fork_data: ForkFromData) -> str:
+        base_key = base_key.rstrip(cls.RIGHT_PAD_CHAR)
+        parent_id = fork_data["parent_trial_id"]  # non-forked key
+        # Prefer training iteration for experiment key (stable across frameworks)
+        ft = fork_data.get("parent_time")
+        # ft is a NamedTuple[time_attr, time]; only use numeric time
+        parent_iteration = ft[1] if ft[0] == "current_step" else fork_data["parent_training_iteration"]
+
+        fork_base, *fork_number = parent_id.split("_")
+        if fork_number:
+            fork_number = cls.COUNT_SEPARATOR + "".join(fork_number).replace("000", cls.REPLACE_3ZEROS)
+        else:
+            fork_number = ""
+
+        # fork_data["parent_training_iteration"] might be set to None
+        if parent_iteration is None:  # pyright: ignore[reportUnnecessaryComparison]
+            iteration_data = cls.NO_ITERATION_DATA  # rare chance that NaN is actually encoded
+            r_pad = 0
+            _logger.warning("parent_iteration is None, using 'NaN' in experiment key.")
+        else:
+            r_pad = 4
+            iteration_data = base62.encode(parent_iteration)
+        return (
+            f"{base_key}{cls.FORK_SEPARATOR}{fork_base}{fork_number}{cls.STEP_SEPARATOR}{iteration_data:0>{r_pad}}"
+        ).replace("_", cls.REPLACE_UNDERSCORE)
+
+    @classmethod
+    def make_experiment_key(cls, trial: Trial, fork_data: Optional[ForkFromData] = None) -> str:
+        """
+        Build a unique experiment key for a trial, making use of the :attr:`RUN_ID`,
+        :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`, and optional fork information.
+
+        It has the format of two forms:
+            - If not forked: "<RUN_ID of 21 chars>X<trial_id>[Z* up to 32 chars in total]"
+            it is prolonged by ``Z`` (:attr:``RIGHT_PAD``) to be at least 32 chars long.
+            - If forked: "<RUN_ID of 21 chars>X<trial_id>F<trial_id>S<step>"
+            The <step> is in base62 encoded and right aligned to 4 characters with leading zeros.
+
+            Both have in common that the potential underscore in the trial ID is removed
+
+            and all "000" in the trials
+            count part of the trial ID are removed, e.g. ``abcd0001_00005`` becomes ``abcd0001C05``.
+
+        References:
+            - :attr:`RUN_ID <ray_utilities.constants.RUN_ID>`: A unique identifier for the current execution.
+            - :attr:`~ray.tune.experiment.Trial.trial_id <Trial.trial_id>`: The unique ID of the trial.
+
+        Note:
+            The resulting key underscores replaced by C. For compatibility it should only contain
+            numbers and letters.
+            For comet it must be between 32 and 50 characters long. This is not enforced here.
+
+            For comet support, to not exceed 50 characters, only 99 parallel trials are supported, e.g. <trial_id>_00099.
+            The highest supported forking step is 14_776_335.
+
+            It is assumed that the trial ID contains only lowercase alphanumeric characters and underscores.
+        """
+        base_key = cls._make_non_fork_experiment_key(trial)
+        if not fork_data:
+            return base_key
+        return cls._make_fork_experiment_key(base_key, fork_data)
+
+
+make_experiment_key = ExperimentKey.make_experiment_key
 
 
 def is_pbar(pbar: Iterable[_T]) -> TypeIs[tqdm_ray.tqdm | tqdm[_T]]:
@@ -596,3 +778,57 @@ def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, An
         if key_orig != k:
             del nested_metrics[key_orig]
     return nested_metrics
+
+
+def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict | dict[str, Any] | MetricsLogger) -> int:
+    """
+    Get the current step from the result dictionary. This will prefer the exact steps as logged by
+    the :func:`exact_sampling_callback` or a ``Learner`` connector logging to the
+    :const:`NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME` metric.
+
+    It will fallback to the :const:`NUM_ENV_STEPS_SAMPLED_LIFETIME` metric if the exact step is not found.
+    """
+    # requires exact_sampling_callback to be set in the results, otherwise fallback
+    if isinstance(result, MetricsLogger):
+        # For peek do not use None as default as this triggers KeyError
+        current_step = result.peek((LEARNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=_NOT_FOUND)
+        if current_step is not _NOT_FOUND:
+            return current_step
+        current_step = result.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=_NOT_FOUND)
+        if current_step is not _NOT_FOUND:
+            return current_step
+        return result.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=0)
+
+    current_step = result.get("current_step")  # likely not present
+    if current_step is not None:  # LogMetricsDict
+        return current_step
+    result = cast("StrictAlgorithmReturnData", result)
+    if LEARNER_RESULTS in result:
+        current_step = result[LEARNER_RESULTS][ALL_MODULES].get(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)
+        if current_step is not None:
+            return current_step
+    # try metric logged on env runner; else defaults to NUM_ENV_STEPS_SAMPLED_LIFETIME
+    return int(
+        result[ENV_RUNNER_RESULTS].get(
+            NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME]
+        )
+    )
+
+
+def shutdown_monitor() -> None:
+    """Shutdown the WandbRunMonitor and its associated selenium process. Cannot be interrupted by KeyboardInterrupt"""
+    while True:
+        try:
+            try:
+                if not ray.is_initialized():
+                    return None
+                monitor: WandbRunMonitor = ray.get_actor(name="remote_wandb_run_monitor")
+            except (ValueError, ray.exceptions.RayActorError):
+                return None
+            else:
+                monitor.cleanup.remote()  # pyright: ignore[reportAttributeAccessIssue]
+                monitor.__ray_terminate__.remote()  # pyright: ignore[reportAttributeAccessIssue]
+                return None
+        except KeyboardInterrupt:  # noqa: PERF203
+            _logger.warning("shutdown monitor has not completed yet")
+            return shutdown_monitor()

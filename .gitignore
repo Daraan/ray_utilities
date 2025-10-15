@@ -175,5 +175,5 @@ cython_debug/
 # Project related files
 model_architecture.json
 comments.md
-
+/outputs/
 /wandb

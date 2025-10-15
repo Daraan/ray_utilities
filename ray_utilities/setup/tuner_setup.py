@@ -33,7 +33,8 @@ from ray.tune.search.optuna import OptunaSearch
 from ray.tune.stopper import CombinedStopper, FunctionStopper
 from typing_extensions import TypeVar
 
-from ray_utilities.callbacks.tuner.metric_checkpointer import TUNE_RESULT_IS_A_COPY, StepCheckpointer
+from ray_utilities._runtime_constants import RUN_ID
+from ray_utilities.callbacks.tuner.metric_checkpointer import StepCheckpointer
 from ray_utilities.config._tuner_callbacks_setup import TunerCallbackSetup
 from ray_utilities.constants import (
     CLI_REPORTER_PARAMETER_COLUMNS,
@@ -41,10 +42,11 @@ from ray_utilities.constants import (
     EVAL_METRIC_RETURN_MEAN,
     FORK_FROM,
     NEW_LOG_EVAL_METRIC,
+    TUNE_RESULT_IS_A_COPY,
 )
-from ray_utilities.misc import new_log_format_used, trial_name_creator as default_trial_name_creator
+from ray_utilities.misc import get_current_step, new_log_format_used
+from ray_utilities.misc import trial_name_creator as default_trial_name_creator
 from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner, create_search_algo
-from ray_utilities.training.helpers import get_current_step
 from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultIterationStopper
 
 if TYPE_CHECKING:
@@ -160,7 +162,18 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         self._stopper: Optional[OptunaSearchWithPruner | Stopper | Literal["not_set"]] = "not_set"
 
     def get_experiment_name(self) -> str:
-        return self._setup.project_name
+        """
+        Get the experiment name for organizing tuning results.
+        This will be the subdir or the storage_path the tuner uses.
+        """
+        return f"{self._setup.project}-{RUN_ID}"
+
+    def get_storage_path(self) -> str:
+        """
+        Get the storage path for organizing tuning results.
+        This will be the base directory where the tuner saves outputs.
+        """
+        return str(Path(self._setup.storage_path).resolve())
 
     def create_stoppers(self) -> list[Stopper]:
         """Create stopping criteria for hyperparameter optimization trials.
@@ -342,7 +355,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             checkpoint_frequency = self._setup.args.checkpoint_frequency
         return RunConfig(
             # Trial artifacts are uploaded periodically to this directory
-            storage_path=Path("../outputs/experiments").resolve(),  # pyright: ignore[reportArgumentType]
+            storage_path=str(self.get_storage_path()),
             name=self.get_experiment_name(),
             log_to_file=False,  # True for hydra like logging to files; or (stoud, stderr.log) files
             # JSON, CSV, and Tensorboard loggers are created automatically by Tune

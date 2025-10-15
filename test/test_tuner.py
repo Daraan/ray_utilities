@@ -10,6 +10,7 @@ import time
 import unittest
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
+from unittest import mock
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -66,7 +67,7 @@ from ray_utilities.testing_utils import (
 from ray_utilities.training.default_class import DefaultTrainable
 from ray_utilities.training.helpers import make_divisible
 from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
-from ray_utilities.tune.scheduler.top_pbt_scheduler import CyclicMutation, TopPBTTrialScheduler
+from ray_utilities.tune.scheduler.top_pbt_scheduler import CyclicMutation, KeepMutation, TopPBTTrialScheduler
 
 if TYPE_CHECKING:
     from ray.tune.execution.tune_controller import TuneController
@@ -1052,6 +1053,7 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
     # Some tests taken from ray's testing suite
 
     @pytest.mark.length(speed="medium")
+    @mock.patch("wandb.Api", new=MagicMock())
     def test_run_tune_with_top_trial_scheduler(self):
         original_exploit = TopPBTTrialScheduler._exploit
         perturbation_interval = 100
@@ -1202,7 +1204,10 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             )
 
             setup.args.set_hyperparam_mutations(
-                {"train_batch_size_per_learner": CyclicMutation(Setup.batch_size_sample_space["grid_search"])}
+                {
+                    "train_batch_size_per_learner": CyclicMutation(Setup.batch_size_sample_space["grid_search"]),
+                    "fcnet_hiddens": KeepMutation([2]),
+                }
             )
             results = run_tune(setup)
             print("Num exploits:", num_exploits)
@@ -1213,6 +1218,7 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             self.assertEqual(num_exploits, max(batch_sizes) * (3 - 1) // perturbation_interval * 2)
             # Check that at most one race condition happened
             self.assertLessEqual(race_conditions, 1)
+            self.assertTrue(all(r.config["fcnet_hiddens"] == [2] for r in results))  # pyright: ignore[reportAttributeAccessIssue, reportOptionalSubscript]
 
 
 class DummyTrial:

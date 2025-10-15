@@ -22,7 +22,7 @@ from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LI
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.stopper.maximum_iteration import MaximumIterationStopper as _RayMaximumIterationStopper
 
-from ray_utilities.training.helpers import get_current_step
+from ray_utilities.misc import get_current_step
 
 if TYPE_CHECKING:
     from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict

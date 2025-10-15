@@ -10,7 +10,7 @@ from ray.rllib.utils.annotations import override
 from ray.tune.result import SHOULD_CHECKPOINT
 from typing_extensions import Self
 
-from ray_utilities.training.helpers import get_current_step
+from ray_utilities.misc import get_current_step
 
 if TYPE_CHECKING:
     from collections.abc import Callable
