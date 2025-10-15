@@ -22,7 +22,7 @@ authors = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
   ]
 dependencies = [
-  "ray[tune,rllib]",
+  "ray[tune,rllib] < '2.50.0'",
   "typed-argument-parser",
   "tqdm",
   "colorlog",
