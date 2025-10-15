@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, Optional, TypeVar, cast, overload
 
 import ray
-from pkg_resources import parse_version
+from packaging.version import Version
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core import COMPONENT_LEARNER, COMPONENT_METRICS_LOGGER, COMPONENT_RL_MODULE
@@ -481,7 +481,7 @@ def nan_to_zero_hist_leaves(
     path: tuple[str, ...] = (),
     parent=None,
     *,
-    key: Optional[str] = "_hist" if RAY_VERSION < parse_version("2.50.0") else "_last_reduced",
+    key: Optional[str] = "_hist" if RAY_VERSION < Version("2.50.0") else "_last_reduced",
     remove_all: bool = False,
     replace: Any = 0.0,
 ) -> Any:

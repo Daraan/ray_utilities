@@ -17,6 +17,7 @@ import pathlib
 import pickle
 import sys
 from abc import ABCMeta
+from collections import defaultdict
 from copy import copy
 from inspect import isclass
 from pathlib import Path
@@ -26,6 +27,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Collection, Generic, Optional, 
 import git
 import pyarrow.fs
 import ray
+import tree
 from ray import get_runtime_context, tune
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.callbacks.utils import make_callback
@@ -69,6 +71,7 @@ if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
     from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
     from ray.rllib.env.env_runner import EnvRunner
+    from ray.rllib.utils.metrics.stats import Stats
     from ray.rllib.utils.typing import StateDict
     from ray.runtime_context import RuntimeContext
     from tqdm import tqdm
@@ -1199,6 +1202,17 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         if self._algorithm is not None:  # Otherwise algorithm will be created later
             self._rebuild_algorithm_if_necessary(new_algo_config)
             sync_env_runner_states_after_reload(self.algorithm)  # NEW, Test, sync states here
+            if self.algorithm.metrics:
+                for stat in tree.flatten(self.algorithm.metrics.stats):
+                    stat = cast("Stats", stat)
+                    if (
+                        stat._reduce_method == "sum"
+                        and stat._inf_window
+                        and stat._clear_on_reduce is False
+                        and len(stat.values) > 0
+                        and not stat._prev_merge_values  # TODO recheck with ray >2.50.0
+                    ):
+                        stat._prev_merge_values = defaultdict(lambda s=stat: s.values[-1])
         if False and self._algorithm.env_runner_group:
             # TODO: remove block
             # Passing config here likely has no effect at all; possibly sync metrics with custom function
