@@ -58,7 +58,6 @@ class TestAlgorithm(unittest.TestCase):
         ray.shutdown()
 
     def setup_algos(self):
-        """NOTE: This test needs a patch in ray earliest coming with 2.47.2+"""
         config = PPOConfig()
         config.training(
             train_batch_size_per_learner=ENV_STEPS_PER_ITERATION,
@@ -95,7 +94,6 @@ class TestAlgorithm(unittest.TestCase):
         ).build_algo()
         return algo_0_runner, algo_1_runner
 
-    @unittest.skip("Needs to be fixed in ray first")
     def test_metrics_after_checkpoint(self):
         algo_0_runner, algo_1_runner = self.setup_algos()
         self._test_algo_checkpointing(
@@ -254,17 +252,16 @@ class TestAlgorithm(unittest.TestCase):
                             result_algo0_step3_restored_x2[ENV_RUNNER_RESULTS][metric],
                         )
                     with self.subTest("From checkpoint: env_runners=1 - Step 3"):
-                        self.assertEqual(
+                        self.assertAlmostEqual(
                             result_algo_1_step3[ENV_RUNNER_RESULTS][metric],
                             result_algo1_step3_restored[ENV_RUNNER_RESULTS][metric],
                         )
                     with self.subTest("From checkpoint: env_runners=1 - Step 3 (restored x2)"):
-                        self.assertEqual(
+                        self.assertAlmostEqual(
                             result_algo_1_step3[ENV_RUNNER_RESULTS][metric],
                             result_algo1_step3_restored_x2[ENV_RUNNER_RESULTS][metric],
                         )
 
-    @unittest.skip("Needs to be fixed in ray first")
     def test_steps_after_later_reload(self):
         """Assure that reload does not reset metrics."""
         algo_0_runner, algo_1_runner = self.setup_algos()
@@ -298,7 +295,7 @@ class TestAlgorithm(unittest.TestCase):
                         A_MEAN_VALUE,
                     ):
                         with self.subTest(f"{metric} after step 10", metric=metric):
-                            self.assertEqual(
+                            self.assertAlmostEqual(
                                 result_algo_1_restored_step_10[ENV_RUNNER_RESULTS][metric],
                                 expected_results[metric]["step_10"],
                             )

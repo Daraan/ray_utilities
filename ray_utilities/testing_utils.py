@@ -558,6 +558,8 @@ def _fix_throughput_stats(stats: dict[str, Any]) -> dict[str, Any]:
         stats[k] = stat = stat.copy()  # noqa: PLW2901
         t_stat = Stats.from_state(stat["throughput_stats"])
         stat["throughput_stats"]["values"] = t_stat.peek()
+        if math.isnan(stat["throughput_stats"]["values"]):
+            stat["throughput_stats"]["values"] = 0.0
     return stats
 
 

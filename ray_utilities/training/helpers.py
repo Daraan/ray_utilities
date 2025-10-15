@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, Optional, TypeVar, cast, overload
 
 import ray
+from pkg_resources import parse_version
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core import COMPONENT_LEARNER, COMPONENT_METRICS_LOGGER, COMPONENT_RL_MODULE
@@ -22,6 +23,7 @@ from typing_extensions import Sentinel, TypeAliasType
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
 from ray_utilities.config import seed_environments_for_config
+from ray_utilities.constants import RAY_VERSION
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, calculate_steps
 from ray_utilities.misc import AutoInt
 from ray_utilities.warn import (
@@ -429,13 +431,18 @@ def _set_env_runner_state(
             env_runner.make_env()
 
 
-def _clear_nan_stats(stat: dict[str, Any | list[list[float]]]):
+def _clear_nan_stats(stat: dict[str, Any | list[list[float]]] | dict[str, Any | list[float]]):
     for k, v in stat.items():
-        if k != "_hist":
+        if k not in ("_hist", "_last_reduced"):
             continue
-        hist: list[list[float]] = v
-        for i, h in enumerate(hist):
-            hist[i] = [0.0 if (isinstance(x, float) and math.isnan(x)) else x for x in h]
+        if k == "_hist":  # change in ray 2.50 to _last_reduced
+            hist: list[list[float]] = v  # pyright: ignore[reportAssignmentType]
+            for i, h in enumerate(hist):
+                hist[i] = [0.0 if (isinstance(x, float) and math.isnan(x)) else x for x in h]
+        else:  # 2.50.0+
+            red: list[float] = v  # pyright: ignore[reportAssignmentType]
+            for i, r in enumerate(red):
+                red[i] = 0.0 if (isinstance(r, float) and math.isnan(r)) else r
     return stat
 
 
@@ -462,7 +469,9 @@ def split_sum_stats_over_env_runners(
     if isinstance(struct, list):
         return [split_sum_stats_over_env_runners(v, path, parent, num_env_runners=num_env_runners) for v in struct]
     if parent is not None and parent["reduce"] == "sum" and parent["clear_on_reduce"] is False:
-        if path[-1] == "values" or (path[-1] == "_hist" and parent["window"] in (None, float("inf"))):
+        if path[-1] == "values" or (
+            path[-1] in ("_hist", "_last_reduced") and parent["window"] in (None, float("inf"))
+        ):
             return struct / num_env_runners
     return struct
 
@@ -472,7 +481,7 @@ def nan_to_zero_hist_leaves(
     path: tuple[str, ...] = (),
     parent=None,
     *,
-    key: Optional[str] = "_hist",
+    key: Optional[str] = "_hist" if RAY_VERSION < parse_version("2.50.0") else "_last_reduced",
     remove_all: bool = False,
     replace: Any = 0.0,
 ) -> Any:

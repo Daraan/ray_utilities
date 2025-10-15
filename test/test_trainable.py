@@ -445,7 +445,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
 
     @pytest.mark.env_runner_cases
     @pytest.mark.basic
-    @Cases([0])
+    @Cases([0])  # XXX increase to [0, 1, 2] again
     def test_1_get_set_state(self, cases):
         # If this test fails all others will most likely fail too, run it first.
         self.maxDiff = None
