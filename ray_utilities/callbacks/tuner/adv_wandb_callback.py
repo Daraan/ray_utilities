@@ -343,9 +343,12 @@ class AdvWandbLoggerCallback(
             # Forking - the fork_from is already set in wandb_init_kwargs
             _logger.info("Forking WandB run: new ID %s from parent %s", new_trial_id, wandb_init_kwargs["fork_from"])
             # close monitor tab of old run:
-            actual_previous_id = self._past_trial_ids[trial][-1]
-            _logger.debug("Closing tab of %s", actual_previous_id)
-            self._start_monitor().close_run_tab.remote(actual_previous_id)  # pyright: ignore[reportFunctionMemberAccess]
+            if len(self._past_trial_ids.get(trial, ())) == 0:  # might appear during testing when init is skipped
+                _logger.warning("BUG: No past trial IDs found for trial %s", trial.trial_id)
+            else:
+                actual_previous_id = self._past_trial_ids[trial][-1]
+                _logger.debug("Closing tab of %s", actual_previous_id)
+                self._start_monitor().close_run_tab.remote(actual_previous_id)  # pyright: ignore[reportFunctionMemberAccess]
         else:
             # Starting a new trial (shouldn't normally happen in restart)
             _logger.warning(

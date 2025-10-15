@@ -118,7 +118,7 @@ ForktimeTuple = TypeAliasType("ForktimeTuple", tuple[str, int | float] | Forktim
 
 class ForkFromData(TypedDict):
     parent_trial_id: str
-    """Trial id of the run to fork. This is the pure trial_id of the ``Trial`` object, without  any fork info."""
+    """Trial id of the run to fork. This is the pure trial_id of the ``Trial`` object, without any fork info."""
 
     parent_training_iteration: int
     """Training iteration the fork is at. This is needed for example for WandB's fork_from feature"""

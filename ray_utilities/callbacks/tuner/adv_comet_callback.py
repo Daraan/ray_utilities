@@ -497,18 +497,22 @@ class AdvCometLoggerCallback(
         total_count = 0
         for thread in self._threads:
             count = 0
-            while (count <= 40 or total_count < 600) and (
+            while (count <= 40 * 4 or total_count < 600 * 4) and (
                 (isinstance(thread, threading.Thread) and thread.is_alive())
                 or (isinstance(thread, subprocess.Popen) and thread.poll() is None)
             ):
-                time.sleep(1)
+                time.sleep(0.25)
                 total_count += 1
                 count += 1
                 if total_count % 20 == 0:
                     if isinstance(thread, subprocess.Popen):
+                        try:
+                            # process should be line buffered to allow communicate
+                            stdout, stderr = thread.communicate(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            continue
                         out = ""
                         err = ""
-                        stdout, stderr = thread.communicate(timeout=0.1)
                         if isinstance(stdout, bytes):
                             out += stdout.decode("utf-8", errors="ignore")
                             err += stderr.decode("utf-8", errors="ignore")  # pyright: ignore[reportAttributeAccessIssue]
@@ -518,7 +522,8 @@ class AdvCometLoggerCallback(
                         out = color_comet_log_strings(out)
                         err = color_comet_log_strings(err)
                         _LOGGER.info(
-                            "Waiting for Comet offline upload process to finish (process %s/40s total timeout: %ss/600s) output:\n%s\n%s",
+                            "Waiting for Comet offline upload process to finish "
+                            "(process %s/40s total timeout: %ss/600s) output:\n%s\n%s",
                             count,
                             total_count,
                             out,

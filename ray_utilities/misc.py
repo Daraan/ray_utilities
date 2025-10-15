@@ -166,7 +166,7 @@ def make_fork_from_csv_line(fork_data: ForkFromData, *, trial_id: Optional[str] 
         if mapping_key is None:  # skip step_metric_value
             continue
         if trial_id is not None and key == "trial_id":
-            if trial_id != fork_data.get(mapping_key, _NOT_FOUND) is not _NOT_FOUND:
+            if trial_id != fork_data.get(mapping_key, _NOT_FOUND):
                 _logger.warning(
                     "Keyword trial_id does not match with %s: %s != %s to write the csv file line.",
                     mapping_key,

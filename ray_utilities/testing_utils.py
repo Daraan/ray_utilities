@@ -601,11 +601,13 @@ class TestHelpers(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._disable_ray_auto_init()
+        sys.modules["selenium"] = mock.MagicMock()
         super().setUpClass()
 
     @classmethod
     def tearDownClass(cls):
         cls._enable_ray_auto_init()
+        del sys.modules["selenium"]
         super().tearDownClass()
 
     def setUp(self):
@@ -621,14 +623,19 @@ class TestHelpers(unittest.TestCase):
         )
         self.mock_reduced_model.start()
         self._env_seed_rng = random.Random(111)
+        self._mock_monitor = mock.patch(
+            "ray_utilities.callbacks.tuner.adv_wandb_callback.AdvWandbLoggerCallback._start_monitor"
+        )
+        self._mock_monitor.start()
         atexit.register(self._clean_output_dir)
 
     def tearDown(self):
-        super().tearDown()
         TrainableBase.cls_model_config = None
         self.mock_reduced_model.stop()
         for trainable in self._created_trainables:
             trainable.stop()
+        self._mock_monitor.stop()
+        super().tearDown()
 
     @staticmethod
     def _clean_output_dir():

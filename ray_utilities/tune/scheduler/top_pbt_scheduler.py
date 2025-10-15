@@ -16,7 +16,6 @@ grid search mutations and more flexible population management strategies.
 from __future__ import annotations
 
 # pyright: enableExperimentalFeatures=true
-
 import logging
 import math
 import random
@@ -38,12 +37,13 @@ from typing import (
     cast,
     overload,
 )
-from typing_extensions import Sentinel
 
+import tree
 from ray.train._internal.session import _FutureTrainingResult, _TrainingResult
 from ray.tune.experiment import Trial
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.schedulers.pbt import PopulationBasedTraining
+from typing_extensions import Sentinel
 
 from ray_utilities._runtime_constants import RUN_ID
 from ray_utilities.constants import FORK_FROM, PERTURBED_HPARAMS
@@ -277,8 +277,10 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         ... )
 
     Note:
-        Grid search spaces in hyperparam_mutations are automatically converted to
-        sampling functions that cycle through the provided values.
+        - Grid search spaces in ``hyperparam_mutations`` are automatically converted to
+          sampling functions that cycle through the provided values.
+        - When the time attr is the default ``"current_step"`` the ``perturbation_interval`` should be divisible by all
+          batch_size that appear in the search space to not overstep perturbation points.
 
     See Also:
         :class:`ray.tune.schedulers.pbt.PopulationBasedTraining`: Base PBT scheduler
@@ -568,7 +570,6 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         # Update any CyclicMutation skip lists based on current top trials, to not resample these values.
         new_skips = self._get_current_best_mutations(upper_quantile)
         logger.debug("Updating CyclicMutation skip lists to %s", new_skips)
-        import tree
 
         flat_mutations = tree.flatten_with_path(self._hyperparam_mutations)
         keep_mutations = [(path, m) for path, m in flat_mutations if isinstance(m, KeepMutation)]
@@ -576,8 +577,6 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
             value = KeepMutation.get_config_value(trial.config, path)
             mutation.set_value(value)
         self._deep_update_mutation(self._hyperparam_mutations, new_skip=new_skips)
-        # TODO: a trial should just use the batch size assigned that it already has, i.e. actually no mutation, just load best checkpoint
-        # FIXME: next perturbation interval does not increase linearly. Trials train longer and longer as well
 
         # Create a checkpoint for all trials
         logger.debug("Instructing %s to save.", trial)

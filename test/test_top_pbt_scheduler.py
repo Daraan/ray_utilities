@@ -6,10 +6,9 @@ import random
 import shutil
 import tempfile
 import unittest
-from typing import cast
+from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock, patch
 
-from git import TYPE_CHECKING
 from ray.tune.experiment import Trial
 from ray.tune.schedulers.pbt import _PBTTrialState
 
