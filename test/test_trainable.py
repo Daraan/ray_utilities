@@ -664,6 +664,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             "--batch_size", make_divisible(32, DefaultArgumentParser.num_envs_per_env_runner),
             "--minibatch_size", make_divisible(16, DefaultArgumentParser.num_envs_per_env_runner),
             "--num_envs_per_env_runner", 1,  # Stuck when using more
+            "--fcnet_hiddens", "[8]",
         ):  # fmt: skip
             for num_env_runners in iter_cases(cases):
                 with self.subTest(num_env_runners=num_env_runners):
@@ -673,6 +674,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                         minibatch_size=make_divisible(32, DefaultArgumentParser.num_envs_per_env_runner)
                     )  # insert some noise
                     setup.create_trainable()
+                    setup.trainable_class.use_pbar = False
                     tuner = setup.create_tuner()
                     assert tuner._local_tuner
                     tuner._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(

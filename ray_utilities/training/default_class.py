@@ -28,6 +28,7 @@ import git
 import pyarrow.fs
 import ray
 import tree
+from packaging.version import Version
 from ray import get_runtime_context, tune
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.callbacks.utils import make_callback
@@ -46,7 +47,7 @@ from typing_extensions import Self, TypeAliasType
 
 from ray_utilities.callbacks.progress_bar import restore_pbar, save_pbar_state, update_pbar
 from ray_utilities.config.parser.default_argument_parser import LOG_STATS, LogStatsChoices
-from ray_utilities.constants import FORK_FROM, PERTURBED_HPARAMS, TUNE_RESULT_IS_A_COPY
+from ray_utilities.constants import FORK_FROM, PERTURBED_HPARAMS, RAY_VERSION, TUNE_RESULT_IS_A_COPY
 from ray_utilities.misc import AutoInt, get_current_step, is_pbar
 from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.training.functional import training_step
@@ -1202,7 +1203,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         if self._algorithm is not None:  # Otherwise algorithm will be created later
             self._rebuild_algorithm_if_necessary(new_algo_config)
             sync_env_runner_states_after_reload(self.algorithm)  # NEW, Test, sync states here
-            if self.algorithm.metrics:
+            if self.algorithm.metrics and RAY_VERSION >= Version("2.50.0"):
                 for stat in tree.flatten(self.algorithm.metrics.stats):
                     stat = cast("Stats", stat)
                     if (
@@ -1212,7 +1213,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                         and len(stat.values) > 0
                         and not stat._prev_merge_values  # TODO recheck with ray >2.50.0
                     ):
-                        stat._prev_merge_values = defaultdict(lambda s=stat: s.values[-1])
+                        last_value = stat.values[-1]
+                        stat._prev_merge_values = defaultdict(lambda val=last_value: val)
         if False and self._algorithm.env_runner_group:
             # TODO: remove block
             # Passing config here likely has no effect at all; possibly sync metrics with custom function
