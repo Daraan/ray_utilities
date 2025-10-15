@@ -668,7 +668,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
         ):  # fmt: skip
             for num_env_runners in iter_cases(cases):
                 with self.subTest(num_env_runners=num_env_runners):
-                    setup = AlgorithmSetup(init_trainable=False)
+                    setup = MLPSetup(init_trainable=False)
                     setup.config.env_runners(num_env_runners=num_env_runners)
                     setup.config.training(
                         minibatch_size=make_divisible(32, DefaultArgumentParser.num_envs_per_env_runner)
