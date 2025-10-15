@@ -10,6 +10,7 @@ import time
 import unittest
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
+from unittest import mock
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -1052,6 +1053,7 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
     # Some tests taken from ray's testing suite
 
     @pytest.mark.length(speed="medium")
+    @mock.patch("wandb.Api", new=MagicMock())
     def test_run_tune_with_top_trial_scheduler(self):
         original_exploit = TopPBTTrialScheduler._exploit
         perturbation_interval = 100

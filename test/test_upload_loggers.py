@@ -702,6 +702,7 @@ class TestLoggerIntegration(TestHelpers):
             if "upload" in thread.name.lower():
                 thread.join()
 
+    @mock.patch("wandb.Api", new=MagicMock())
     def test_restart_logging_actor_with_resume(self):
         """Test that _restart_logging_actor properly sets resume parameter."""
 
@@ -723,6 +724,7 @@ class TestLoggerIntegration(TestHelpers):
         callback._trial_queues = {trial: MagicMock()}
         callback._trial_logging_futures = {trial: MagicMock()}
         callback._trial_logging_actors = {trial: MagicMock()}
+        callback._past_trial_ids = defaultdict(list, {cast("Trial", trial): ["id_before"]})
 
         # Mock log_trial_end to not actually end the trial
         with patch.object(callback, "log_trial_end"):
