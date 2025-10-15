@@ -1,8 +1,8 @@
-"""Tests for restarting experiments with the Comet callback logger.
+"""Tests for Comet and WandB callback loggers, including experiment restarting and upload functionality.
 
-This module tests the experiment restarting functionality of AdvCometLoggerCallback,
-including forked trials, experiment recreation, and proper handling of offline/online
-modes during restarts.
+This module contains tests for both AdvCometLoggerCallback and AdvWandbLoggerCallback,
+covering experiment restarting, forked trials, experiment recreation, upload handling,
+and proper handling of offline/online modes for both Comet and WandB loggers.
 """
 
 from __future__ import annotations
