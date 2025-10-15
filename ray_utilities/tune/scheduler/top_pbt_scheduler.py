@@ -142,7 +142,7 @@ def _dummy_pass_through(new_config: dict) -> dict:
 
 
 class KeepMutation(Generic[_T]):
-    # need to be serializable
+    # need to be serializable, use just object at runtime
     _NOT_SET = Sentinel("_NOT_SET") if TYPE_CHECKING else object()
     NOT_FOUND = Sentinel("NOT_FOUND") if TYPE_CHECKING else object()
 

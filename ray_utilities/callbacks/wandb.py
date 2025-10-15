@@ -106,7 +106,7 @@ class WandbUploaderMixin(UploadHelperMixin):
             # we might check a trial with no parent here
             logger.debug("No parent_id found for trial %s, cannot check with monitor", trial_id)
             return None
-            # extract parent id from trial_id if possible
+            # TODO: Possibly extract parent id from trial_id if possible
             _, fork_data = ExperimentKey.parse_experiment_key(trial_id)
             if fork_data:
                 # contains only the pure trial id not the experiment key of the parent
