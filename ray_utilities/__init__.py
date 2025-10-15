@@ -84,7 +84,10 @@ except ImportError:  # might not exist anymore in the future
 else:
     import logging
 
-    from ray.rllib.utils.deprecation import logger as __deprecation_logger
+    try:
+        from ray._common.deprecation import logger as __deprecation_logger
+    except ModuleNotFoundError:
+        from ray.rllib.utils.deprecation import logger as __deprecation_logger  # pyright: ignore[reportMissingImports]
 
     # This suppresses a deprecation warning from RLModuleConfig
     __old_level = __deprecation_logger.getEffectiveLevel()
