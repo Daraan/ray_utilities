@@ -14,7 +14,10 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Optional, cast
 
-from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback, make_seeded_env_callback
+from ray_utilities.callbacks.algorithm.seeded_env_callback import (
+    SeedEnvsCallbackBase,
+    make_seeded_env_callback,
+)
 
 from .parser.default_argument_parser import DefaultArgumentParser
 
@@ -181,7 +184,7 @@ if TYPE_CHECKING:
 
 def _remove_existing_seeded_envs(cb: Any) -> bool:
     """Returns True if the passed callback is a SeedEnvsCallback or a subclass of it."""
-    return isinstance(cb, SeedEnvsCallback) or (isinstance(cb, type) and issubclass(cb, SeedEnvsCallback))
+    return isinstance(cb, SeedEnvsCallbackBase) or (isinstance(cb, type) and issubclass(cb, SeedEnvsCallbackBase))
 
 
 def seed_environments_for_config(config: AlgorithmConfig, env_seed: int | None):
@@ -205,5 +208,5 @@ def seed_environments_for_config(config: AlgorithmConfig, env_seed: int | None):
     if not (env_seed is None or isinstance(env_seed, (int, float, tuple, list))):
         # tuple, or list of int might be ok too
         raise TypeError(f"{type(env_seed)} is not a valid type for env_seed. If it is a Distribution sample first.")
-    seed_envs_cb = make_seeded_env_callback(env_seed)
-    add_callbacks_to_config(config, on_environment_created=seed_envs_cb, remove_existing=_remove_existing_seeded_envs)
+    seed_envs_cb = make_seeded_env_callback(env_seed, seed_env_directly=False)
+    add_callbacks_to_config(config, seed_envs_cb, remove_existing=_remove_existing_seeded_envs)
