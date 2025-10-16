@@ -200,22 +200,28 @@ def run_tune(
             shutdown_monitor()  # cleanup monitor before exiting
             fallback_error = e3
 
-    if not results:
-        logger.warning("No results returned from the tuner.")
-    setup.upload_offline_experiments(results, tuner)
-    if raise_errors and results is not None:
-        raise_tune_errors(results)
-    if fallback_error and fit_error:
-        # Use Base in case of KeyboardInterrupt
-        if isinstance(fit_error, KeyboardInterrupt) and "experiment has not been run" in str(fallback_error):
-            # Just raise the KeyboardInterrupt
+    try:
+        if not results:
+            logger.warning("No results returned from the tuner.")
+        setup.upload_offline_experiments(results, tuner)
+    except KeyboardInterrupt:
+        pass
+    except Exception:  # noqa: BLE001
+        logger.exception("Error occurred during offline experiment upload:")
+    finally:
+        if raise_errors and results is not None:
+            raise_tune_errors(results)
+        if fallback_error and fit_error:
+            # Use Base in case of KeyboardInterrupt
+            if isinstance(fit_error, KeyboardInterrupt) and "experiment has not been run" in str(fallback_error):
+                # Just raise the KeyboardInterrupt
+                raise fit_error
+            raise BaseExceptionGroup(
+                f"Encountered an error {fit_error} and could not call get_results {fallback_error!r}",
+                [fit_error, fallback_error],
+            )
+        if fit_error:
             raise fit_error
-        raise BaseExceptionGroup(
-            f"Encountered an error {fit_error} and could not call get_results {fallback_error!r}",
-            [fit_error, fallback_error],
-        )
-    if fit_error:
-        raise fit_error
     assert results is not None
 
     return results

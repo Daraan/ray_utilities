@@ -108,6 +108,7 @@ def add_callbacks_to_config(
                 callback_list = [callback] if callable(callback) else callback
                 if callable(present_callbacks):
                     present_name = present_callbacks.__name__.split(".")[-1]
+                    remove_present_callback = remove_existing(present_callbacks)
                     for cb in callback_list:
                         if cb.__name__.split(".")[-1] == present_name:
                             # NOTE: With cloudpickle an identical, but not by id, callback might be added
@@ -116,14 +117,14 @@ def add_callbacks_to_config(
                                     "A equal callback with the same name as %s already exists. Ignoring.",
                                     present_callbacks.__name__,
                                 )
-                            else:
+                            elif not remove_present_callback:
                                 logger.warning(
                                     "A non-equal callback with the same name as %s already exists. "
                                     "This might be a duplicate by cloudpickle. Still adding second callback %s",
                                     present_callbacks.__name__,
                                     cb.__name__,
                                 )
-                    if remove_existing(present_callbacks) or present_callbacks in callback_list:
+                    if remove_present_callback or present_callbacks in callback_list:
                         logger.debug(
                             "Replacing existing callback %s with new one(s) %s for event %s%s",
                             present_callbacks,
