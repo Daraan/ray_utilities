@@ -112,10 +112,10 @@ _MaybeNone = Any
 
 
 class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, AlgorithmType_co]):
-    """Type definition for experiment setup checkpoint data.
+    """Type definition for experiment setup state data used for checkpointing.
 
-    This :class:`typing.TypedDict` defines the structure of checkpoint data saved
-    and restored by :class:`ExperimentSetupBase` instances. It ensures type safety
+    This :class:`typing.TypedDict` defines the structure of state data saved
+    and restored to create :class:`ExperimentSetupBase` instances. It ensures type safety
     and consistency when serializing experiment configurations for restoration.
 
     The checkpoint contains all necessary information to recreate an experiment
@@ -128,8 +128,8 @@ class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, Algor
         AlgorithmType_co: Type of the RLlib algorithm
 
     See Also:
-        :meth:`ExperimentSetupBase.save_checkpoint`: Method that creates these checkpoints
-        :meth:`ExperimentSetupBase.restore_checkpoint`: Method that restores from these checkpoints
+        :meth:`ExperimentSetupBase.get_state`: Method that creates a state dict
+        :meth:`ExperimentSetupBase.from_saved`: Method that creates a setup from a state dict
     """
 
     args: ParserType_co

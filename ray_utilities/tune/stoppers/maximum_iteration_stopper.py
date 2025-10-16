@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.stopper.maximum_iteration import MaximumIterationStopper as _RayMaximumIterationStopper
 

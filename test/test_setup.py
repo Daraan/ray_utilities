@@ -806,8 +806,8 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
             state_on_learner = learner_module.get_state()
             state_on_algo = algo_module.get_state()
             # algo might not have critic states:
-            critic_keys_learner = {k for k in state_on_learner.keys() if k.startswith(("encoder.critic_encoder", "vf"))}
-            critic_keys_algo = {k for k in state_on_algo.keys() if k.startswith(("encoder.critic_encoder", "vf"))}
+            critic_keys_learner = {k for k in state_on_learner if k.startswith(("encoder.critic_encoder", "vf"))}
+            critic_keys_algo = {k for k in state_on_algo if k.startswith(("encoder.critic_encoder", "vf"))}
             # remove weights that are only on learner
             learner_weights = {
                 k: v for k, v in state_on_learner.items() if k not in critic_keys_learner - critic_keys_algo

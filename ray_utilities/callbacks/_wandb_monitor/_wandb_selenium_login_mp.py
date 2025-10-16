@@ -1106,7 +1106,7 @@ class WandBSeleniumSession:
 
         # Clean up queues
         if self.command_queue:
-            try:
+            try:  # noqa: SIM105
                 # Clear any remaining items
                 while not self.command_queue.empty():
                     self.command_queue.get_nowait()
@@ -1115,7 +1115,7 @@ class WandBSeleniumSession:
             self.command_queue = None
 
         if self.status_queue:
-            try:
+            try:  # noqa: SIM105
                 # Process any remaining status updates
                 self._process_status_updates()
             except Exception:  # ruff: noqa: BLE001
@@ -1140,7 +1140,7 @@ class WandBSeleniumSession:
 
     def __del__(self):
         """Destructor to ensure cleanup."""
-        try:
+        try:  # noqa: SIM105
             self.cleanup()
         except Exception:  # noqa: BLE001
             pass

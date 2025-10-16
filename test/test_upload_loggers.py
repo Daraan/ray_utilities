@@ -166,10 +166,10 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
 
         with (
             patch("ray.wait") as ray_wait,
-            patch("ray.remote") as ray_remote,
+            patch("ray.remote"),
             patch("ray.get"),
             patch("ray.kill"),
-            patch("ray.get_runtime_context") as mock_runtime_context,
+            patch("ray.get_runtime_context"),
             patch.object(callback, "_sync_offline_run_if_available") as mock_subprocess_run,
             patch.object(callback, "_wait_for_trial_actor"),
         ):
@@ -216,7 +216,7 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
                 patch.dict(os.environ, {"WANDB_MODE": "offline"}, clear=False),
                 patch("ray_utilities.callbacks.tuner.adv_wandb_callback.Path") as mock_path_class,
                 patch("ray_utilities.callbacks.tuner.adv_wandb_callback.subprocess.run") as mock_subprocess,
-                patch("ray_utilities.callbacks.tuner.adv_wandb_callback._logger") as mock_logger,
+                patch("ray_utilities.callbacks.tuner.adv_wandb_callback._logger") as _mock_logger,
                 patch("ray_utilities.callbacks.upload_helper.logger") as mock_logger_upload,
             ):
                 # Mock Path.home() to return our temp directory

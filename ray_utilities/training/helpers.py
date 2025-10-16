@@ -468,11 +468,16 @@ def split_sum_stats_over_env_runners(
         }
     if isinstance(struct, list):
         return [split_sum_stats_over_env_runners(v, path, parent, num_env_runners=num_env_runners) for v in struct]
-    if parent is not None and parent["reduce"] == "sum" and parent["clear_on_reduce"] is False:
-        if path[-1] == "values" or (
-            path[-1] in ("_hist", "_last_reduced") and parent["window"] in (None, float("inf"))
-        ):
-            return struct / num_env_runners
+    if (
+        parent is not None
+        and parent["reduce"] == "sum"
+        and parent["clear_on_reduce"] is False
+        and (
+            path[-1] == "values"
+            or (path[-1] in ("_hist", "_last_reduced") and parent["window"] in (None, float("inf")))
+        )
+    ):
+        return struct / num_env_runners
     return struct
 
 
@@ -481,7 +486,7 @@ def nan_to_zero_hist_leaves(
     path: tuple[str, ...] = (),
     parent=None,
     *,
-    key: Optional[str] = "_hist" if RAY_VERSION < Version("2.50.0") else "_last_reduced",
+    key: Optional[str] = "_hist" if RAY_VERSION < Version("2.50.0") else "_last_reduced",  # noqa: SIM300
     remove_all: bool = False,
     replace: Any = 0.0,
 ) -> Any:
@@ -500,15 +505,21 @@ def nan_to_zero_hist_leaves(
         return [
             nan_to_zero_hist_leaves(v, path, parent, key=key, remove_all=remove_all, replace=replace) for v in struct
         ]
-    if path and (key is None or path[-1] == key):
-        # Only modify if parent has "reduce" == "sum"
-        if remove_all or (
-            parent is not None
-            and parent["reduce"] == "sum"
-            and parent["clear_on_reduce"] is False
-            and parent["window"] in (None, float("inf"))
-        ):
-            return replace if (isinstance(struct, float) and math.isnan(struct)) else struct
+    # Only modify if parent has "reduce" == "sum"
+    if (
+        path
+        and (key is None or path[-1] == key)
+        and (
+            remove_all
+            or (
+                parent is not None
+                and parent["reduce"] == "sum"
+                and parent["clear_on_reduce"] is False
+                and parent["window"] in (None, float("inf"))
+            )
+        )
+    ):
+        return replace if (isinstance(struct, float) and math.isnan(struct)) else struct
     return struct
 
 

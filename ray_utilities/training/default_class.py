@@ -1353,11 +1353,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 self._pbar.close()
         except:  # noqa: E722
             pass
-        try:
+        try:  # noqa: SIM105
             self.cleanup()
         except:  # noqa: E722
             pass
-        try:
+        try:  # noqa: SIM105
             self.stop()
         except:  # noqa: E722
             pass

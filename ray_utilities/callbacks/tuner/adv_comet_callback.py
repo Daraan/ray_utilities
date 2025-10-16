@@ -554,7 +554,7 @@ class AdvCometLoggerCallback(
                     process: subprocess.Popen[str] = thread  # pyright: ignore[reportAssignmentType]
                     if (retcode := process.poll()) is None:
                         _LOGGER.info("Comet offline is still in progress (%s)", process.args)
-                        try:
+                        try:  # noqa: SIM105
                             # subprocess does continue after exit, but might be attached to a thread to move the files
                             process.wait(timeout=5)
                         except subprocess.TimeoutExpired:

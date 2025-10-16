@@ -574,15 +574,17 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
 
         for num_env_runners in iter_cases(cases):
             with self.subTest(num_env_runners=num_env_runners):
-                with patch_args(
-                    "--num_samples", "1",
-                    "--num_jobs", 1,
-                    "--batch_size", batch_size,  # overwrite
-                    "--minibatch_size", MINIBATCH_SIZE,  # keep
-                    "--iterations", "1",  # overwrite
+                with (
+                    patch_args(
+                        "--num_samples", "1",
+                        "--num_jobs", 1,
+                        "--batch_size", batch_size,  # overwrite
+                        "--minibatch_size", MINIBATCH_SIZE,  # keep
+                        "--iterations", "1",  # overwrite
+                    ),
+                    AlgorithmSetup() as setup1,
                 ):  # fmt: skip
-                    with AlgorithmSetup() as setup1:
-                        setup1.config.env_runners(num_env_runners=num_env_runners)
+                    setup1.config.env_runners(num_env_runners=num_env_runners)
                 tuner1 = setup1.create_tuner()
                 assert tuner1._local_tuner
                 tuner1._local_tuner.get_run_config().checkpoint_config = tune.CheckpointConfig(

@@ -11,7 +11,6 @@ from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.learners import mix_learners
 from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import PPOTorchLearnerWithGradientAccumulation
 from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
-from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup
 from ray_utilities.testing_utils import DisableLoggers, InitRay, TestHelpers, no_parallel_envs, patch_args
 from ray_utilities.training.helpers import is_algorithm_callback_added, make_divisible
@@ -110,15 +109,17 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
         total_steps = sum(s * 2**i for s, i in zip(step_sizes, range(len(step_sizes) - 1, -1, -1)))
 
         self.assertEqual(DefaultArgumentParser.accumulate_gradients_every, 1)
-        with (patch_args(
-            "-a", "mlp",
-            "--dynamic_batch",
-            "--batch_size", lower_step_size,  # is fixed
-            "--minibatch_size", lower_step_size,
-            "--total_steps", total_steps,  # 1x128 + 2x64 + 4x32 = 3x128, 4+2*2+4 = 12 iterations
-            "--min_step_size", lower_step_size,
-            "--max_step_size", step_sizes[-1],
-            "--fcnet_hiddens", "[8, 8]",
+        with (
+            patch_args(
+                "-a", "mlp",
+                "--dynamic_batch",
+                "--batch_size", lower_step_size,  # is fixed
+                "--minibatch_size", lower_step_size,
+                "--total_steps", total_steps,  # 1x128 + 2x64 + 4x32 = 3x128, 4+2*2+4 = 12 iterations
+                "--min_step_size", lower_step_size,
+                "--max_step_size", step_sizes[-1],
+                "--fcnet_hiddens", "[8, 8]",
+                "--num_envs_per_env_runner", "4",
             ),
             MLPSetup(init_trainable=False) as setup,
         ):  # fmt: skip

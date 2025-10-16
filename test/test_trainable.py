@@ -73,7 +73,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
             return _a_trainable_function
 
         with mock.patch.object(PPOSetup, "_create_trainable", _create_trainable):
-            with self.subTest("With parameters"):
+            with self.subTest("With parameters"):  # noqa: SIM117
                 setup = PPOSetup(init_param_space=True, init_trainable=False)
                 setup.config.evaluation(evaluation_interval=1)
                 setup.config.training(num_epochs=2, train_batch_size_per_learner=64, minibatch_size=32)
@@ -388,21 +388,20 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     def test_save_restore_dict(self, cases):
         for num_env_runners in iter_cases(cases):
             trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
-            with self.subTest(num_env_runners=num_env_runners):
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    training_result: _TrainingResult = trainable.save(tmpdir)  # pyright: ignore[reportInvalidTypeForm] # calls save_checkpoint
-                    with patch_args(
-                        "--num_env_runners",
-                        num_env_runners,
-                        "--no_dynamic_eval_interval",
-                    ):  # make sure that args do not influence the restore
-                        trainable2 = self.TrainableClass()
-                        with self.subTest("Restore trainable from dict"):
-                            if _TrainingResult is not None:
-                                self.assertIsInstance(training_result, _TrainingResult)
-                            trainable2.restore(deepcopy(training_result))  # calls load_checkpoint
-                            self.compare_trainables(trainable, trainable2, "from dict", num_env_runners=num_env_runners)
-                            trainable2.stop()
+            with self.subTest(num_env_runners=num_env_runners), tempfile.TemporaryDirectory() as tmpdir:
+                training_result: _TrainingResult = trainable.save(tmpdir)  # pyright: ignore[reportInvalidTypeForm] # calls save_checkpoint
+                with patch_args(
+                    "--num_env_runners",
+                    num_env_runners,
+                    "--no_dynamic_eval_interval",
+                ):  # make sure that args do not influence the restore
+                    trainable2 = self.TrainableClass()
+                    with self.subTest("Restore trainable from dict"):
+                        if _TrainingResult is not None:
+                            self.assertIsInstance(training_result, _TrainingResult)
+                        trainable2.restore(deepcopy(training_result))  # calls load_checkpoint
+                        self.compare_trainables(trainable, trainable2, "from dict", num_env_runners=num_env_runners)
+                        trainable2.stop()
             trainable.stop()
 
     @pytest.mark.env_runner_cases
@@ -410,19 +409,18 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     def test_save_restore_path(self, cases):
         for num_env_runners in iter_cases(cases):
             trainable, _ = self.get_trainable(num_env_runners=num_env_runners)
-            with self.subTest(num_env_runners=num_env_runners):
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    trainable.save(tmpdir)  # calls save_checkpoint
-                    with patch_args(
-                        "--num_env_runners",
-                        num_env_runners,
-                        "--no_dynamic_eval_interval",
-                    ):  # make sure that args do not influence the restore
-                        trainable3 = self.TrainableClass()
-                        self.assertIsInstance(tmpdir, str)
-                        trainable3.restore(tmpdir)  # calls load_checkpoint
-                        self.compare_trainables(trainable, trainable3, "from path", num_env_runners=num_env_runners)
-                        trainable3.stop()
+            with self.subTest(num_env_runners=num_env_runners), tempfile.TemporaryDirectory() as tmpdir:
+                trainable.save(tmpdir)  # calls save_checkpoint
+                with patch_args(
+                    "--num_env_runners",
+                    num_env_runners,
+                    "--no_dynamic_eval_interval",
+                ):  # make sure that args do not influence the restore
+                    trainable3 = self.TrainableClass()
+                    self.assertIsInstance(tmpdir, str)
+                    trainable3.restore(tmpdir)  # calls load_checkpoint
+                    self.compare_trainables(trainable, trainable3, "from path", num_env_runners=num_env_runners)
+                    trainable3.stop()
             trainable.stop()
 
     def test_fork_from_restore(self):
