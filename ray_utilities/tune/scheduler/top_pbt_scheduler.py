@@ -32,6 +32,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Sequence,
     Tuple,
     TypeVar,
     cast,
@@ -171,6 +172,29 @@ class KeepMutation(Generic[_T]):
         return current  # pyright: ignore[reportReturnType]
 
 
+class _SeedInt(int):
+    pass
+
+
+class _ReseedEnv:
+    def __init__(self, wrap: Optional[Callable[[dict], dict]] = None, add_seed: Optional[int] = None):
+        self.wrap = wrap
+        self.add_seed = add_seed
+
+    def __call__(self, config: dict) -> dict:
+        config = self.wrap(config) if self.wrap else config
+        if self.add_seed is None or "env_seed" not in config or config["env_seed"] is None:
+            return config
+        if isinstance(config["env_seed"], int):
+            config["env_seed"] = (config["env_seed"], _SeedInt(self.add_seed))
+            return config
+        # clean auto int from sequence
+        env_seed: Sequence[int] = config["env_seed"]
+        cleaned_seed = (s for s in env_seed if not isinstance(s, _SeedInt))
+        config["env_seed"] = (*cleaned_seed, _SeedInt(self.add_seed))
+        return config
+
+
 class CyclicMutation(Generic[_T]):
     def __init__(self, values: Iterable[_T], skip: Optional[Container[_T]] = None, *, disable_skip: bool = False):
         self._cycler = cycle(values)
@@ -263,6 +287,9 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         log_config: Whether to log configuration changes.
         require_attrs: Whether to require time_attr and metric in results.
         synch: Whether to use synchronous perturbation.
+        reseed: When trials are perturbed the config key "env_seed" is updated to (original_seed, current_step).
+            Otherwise when using seeded environments they likely start at the same first observation
+            the trial has seen before. Does nothing if there is no "env_seed" in the config.
 
     Example:
         >>> scheduler = ReTuneScheduler(
@@ -313,6 +340,7 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         log_config: bool = True,
         require_attrs: bool = True,
         synch: bool = False,
+        reseed: bool = True,
     ):
         # if not hyperparam_mutations and custom_explore_fn is None:
         #    # Use a dummy function to log the perturbed hyperparams
@@ -320,7 +348,9 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         if custom_explore_fn is None and hyperparam_mutations:  # Otherwise use a wrapper
             # XXX
             custom_explore_fn = partial(_debug_dump_new_config, mutation_keys=list(hyperparam_mutations.keys()))
-        # TODO: Do we want to reload the env_seed?
+        self._reseed = reseed
+        if reseed:
+            custom_explore_fn = _ReseedEnv(wrap=custom_explore_fn)
         self._trial_state: dict[Trial, _PBTTrialState2]  # pyright: ignore[reportIncompatibleVariableOverride]
         if hyperparam_mutations:  # either hyperparam_mutations or custom_explore_fn must be passed
             for k, v in hyperparam_mutations.items():
@@ -649,6 +679,11 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
             if not last_checkpoint:
                 logger.info("[pbt]: no checkpoint for trial %s. Skip exploit for Trial %s", trial_to_clone, trial)
                 return
+            # Add current env step to seed data
+            if not isinstance(self._custom_explore_fn, _ReseedEnv):
+                logger.warning("Custom explore function is not wrapped with _ReseedEnv, reseed will not work.")
+            else:
+                self._custom_explore_fn.add_seed = None  # self._trial_state[trial_to_clone].current_env_steps
             self._exploit(tune_controller, trial, trial_to_clone)
             # Mark trial as perturbed
             for k in self.additional_config_keys:
@@ -699,6 +734,9 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
             for k in self.additional_config_keys:
                 trial.config.pop(k, None)
             trial.config["_top_pbt_perturbed"] = False
+            # Add current env step to seed data
+            if self._reseed and trial.config.get("env_seed") is not None:
+                trial.config = _ReseedEnv(add_seed=self._trial_state[trial].current_env_steps)(trial.config)
 
     def _save_trial_state(
         self, state: _PBTTrialState | _PBTTrialState2, time: int, result: AlgorithmReturnData | dict, trial: Trial
