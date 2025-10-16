@@ -221,4 +221,4 @@ def seed_environments_for_config(
         # tuple, or list of int might be ok too
         raise TypeError(f"{type(env_seed)} is not a valid type for env_seed. If it is a Distribution sample first.")
     seed_envs_cb = make_seeded_env_callback(env_seed, seed_env_directly=seed_env_directly, **kwargs)
-    add_callbacks_to_config(config, seed_envs_cb, remove_existing=_remove_existing_seeded_envs)
+    add_callbacks_to_config(config, on_environment_created=seed_envs_cb, remove_existing=_remove_existing_seeded_envs)

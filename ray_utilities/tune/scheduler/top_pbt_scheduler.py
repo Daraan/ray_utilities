@@ -172,8 +172,8 @@ class KeepMutation(Generic[_T]):
         return current  # pyright: ignore[reportReturnType]
 
 
-class _SeedInt(int):
-    pass
+class _PerturbationSeed(int):
+    """Represents a seed value added during environment reseeding for perturbation tracking."""
 
 
 class _ReseedEnv:
@@ -186,12 +186,12 @@ class _ReseedEnv:
         if self.add_seed is None or "env_seed" not in config or config["env_seed"] is None:
             return config
         if isinstance(config["env_seed"], int):
-            config["env_seed"] = (config["env_seed"], _SeedInt(self.add_seed))
+            config["env_seed"] = (config["env_seed"], _PerturbationSeed(self.add_seed))
             return config
         # clean auto int from sequence
         env_seed: Sequence[int] = config["env_seed"]
-        cleaned_seed = (s for s in env_seed if not isinstance(s, _SeedInt))
-        config["env_seed"] = (*cleaned_seed, _SeedInt(self.add_seed))
+        cleaned_seed = (s for s in env_seed if not isinstance(s, _PerturbationSeed))
+        config["env_seed"] = (*cleaned_seed, _PerturbationSeed(self.add_seed))
         return config
 
 
@@ -683,7 +683,7 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
             if not isinstance(self._custom_explore_fn, _ReseedEnv):
                 logger.warning("Custom explore function is not wrapped with _ReseedEnv, reseed will not work.")
             else:
-                self._custom_explore_fn.add_seed = None  # self._trial_state[trial_to_clone].current_env_steps
+                self._custom_explore_fn.add_seed = self._trial_state[trial_to_clone].current_env_steps
             self._exploit(tune_controller, trial, trial_to_clone)
             # Mark trial as perturbed
             for k in self.additional_config_keys:
