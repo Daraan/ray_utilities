@@ -581,10 +581,12 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     "WARNING",
                 ) as context:
                     AlgorithmSetup()
-                self.assertIn(
-                    "Restoring AlwaysRestore argument 'agent_type' from checkpoint: "
-                    "replacing a new value (explicitly passed) with mlp",
-                    context.output[0],
+                self.assertTrue(
+                    any(
+                        "Restoring AlwaysRestore argument 'agent_type' from checkpoint: "
+                        "replacing a new value (explicitly passed) with mlp" in msg
+                        for msg in context.output
+                    ),
                     msg=context.output,
                 )
             with patch_args(
