@@ -240,6 +240,7 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
             perturbation_interval=10,
             quantile_fraction=0.3,
             hyperparam_mutations={"dummy": [1, 2]},
+            reseed=True,
         )
 
         temp_dir = tempfile.mkdtemp()
@@ -253,7 +254,7 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
             trial.trial_id = f"trial_{i}"
             trial.is_finished.return_value = False
             trial.status = Trial.RUNNING
-            trial.config = {"dummy": -i}
+            trial.config = {"dummy": -i, "env_seed": 0}
 
             # For testing the temporary_state for paused trials
             if i < 3:  # Make first 3 trials be in upper quantile
@@ -272,6 +273,7 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
             scheduler._trial_state[trial] = state
             scheduler.on_trial_add(mock_controller, trial)
             # this is set to 0 on_trial_add
+            state.current_env_steps = 12
             state.last_training_iteration = 1
 
         # Mock controller methods
@@ -285,6 +287,8 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
             # Test with a trial in the upper quantile
             upper_trial = upper[0]
             scheduler._checkpoint_or_exploit(upper_trial, mock_controller, upper, lower)
+
+            self.assertEqual(upper_trial.config["env_seed"], (0, 12))
 
             # Verify upper trial gets a checkpoint but doesn't exploit
             mock_controller._schedule_trial_save.assert_called_with(
@@ -305,6 +309,8 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
                 scheduler._trial_state[trial].last_checkpoint = "upper_checkpoint"
 
             scheduler._checkpoint_or_exploit(lower_trial, mock_controller, upper, lower)
+
+            self.assertEqual(upper_trial.config["env_seed"], (0, 12))
 
             # Verify lower trial gets a checkpoint and exploits
             mock_controller._schedule_trial_save.assert_called_with(

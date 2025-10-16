@@ -736,7 +736,7 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
             trial.config["_top_pbt_perturbed"] = False
             # Add current env step to seed data
             if self._reseed and trial.config.get("env_seed") is not None:
-                trial.config = _ReseedEnv(add_seed=self._trial_state[trial].current_env_steps)(trial.config)
+                trial.set_config(_ReseedEnv(add_seed=self._trial_state[trial].current_env_steps)(trial.config))
 
     def _save_trial_state(
         self, state: _PBTTrialState | _PBTTrialState2, time: int, result: AlgorithmReturnData | dict, trial: Trial
