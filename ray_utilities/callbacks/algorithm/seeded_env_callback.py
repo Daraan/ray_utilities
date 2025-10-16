@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import logging
-import os
 from inspect import isclass
-from typing import TYPE_CHECKING, Any, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Sequence
 
 import numpy as np
+import ray
 from ray.rllib.env.env_runner import EnvRunner
 from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 
@@ -26,12 +26,11 @@ if TYPE_CHECKING:
     import gymnasium as gym
     from ray.rllib.env.env_context import EnvContext
     from ray.rllib.env.env_runner import EnvRunner
-    from ray.rllib.env.multi_agent_episode import MultiAgentEpisode
-    from ray.rllib.env.single_agent_episode import SingleAgentEpisode
-    from ray.rllib.policy.sample_batch import SampleBatch
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
-    from ray.rllib.utils.typing import EpisodeType
+    from ray.runtime_context import RuntimeContext
     from typing_extensions import TypeIs
+
+    from ray_utilities.training.default_class import TrainableBase
 
 NUM_ENV_RUNNERS_0_1_EQUAL = True
 FIX_EVAL_SEED = True
@@ -48,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 
 class _SeededEnvCallbackMeta(_CallbackMeta):  # pyright: ignore[reportGeneralTypeIssues]  # base is union type
-    env_seed: ClassVar[int | None] = 0
+    env_seed: ClassVar[int | None | Sequence[int]] = 0
 
     def __eq__(cls, value):  # pyright: ignore[reportSelfClsParameterName]
         if not isclass(value):
@@ -74,7 +73,7 @@ class SeedEnvsCallbackBase(RLlibCallback):
     Subclasses should implement the seed_environment method.
     """
 
-    env_seed: ClassVar[int | None] = 0
+    env_seed: ClassVar[int | None | Sequence[int]] = 0
     """A common seed that is used for all workers and vector indices.
 
     If None, the environment will not be seeded. Making this callback a no-op.
@@ -313,7 +312,7 @@ class SeedEnvsCallback(ResetSeedEnvsCallback):
 
 
 def make_seeded_env_callback(
-    env_seed_: int | None, *, seed_env_directly: bool = False
+    env_seed_: int | None | Sequence[int], *, seed_env_directly: bool = False
 ) -> type[SeedEnvsCallbackBase | ResetSeedEnvsCallback | DirectRngSeedEnvsCallback]:
     """Create a callback that seeds the environment.
 

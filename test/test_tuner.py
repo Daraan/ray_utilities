@@ -186,6 +186,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             "--batch_size", batch_size,
             "--iterations", "3",
             "--fcnet_hiddens", "[4]",
+            "--num_envs_per_env_runner", "4",
         ):  # fmt: skip
             with MLPSetup(init_trainable=False) as setup:
                 setup.config.training(num_epochs=2, minibatch_size=batch_size)

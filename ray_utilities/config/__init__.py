@@ -12,7 +12,7 @@ Main Components:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional, Sequence, cast
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import (
     SeedEnvsCallbackBase,
@@ -187,7 +187,9 @@ def _remove_existing_seeded_envs(cb: Any) -> bool:
     return isinstance(cb, SeedEnvsCallbackBase) or (isinstance(cb, type) and issubclass(cb, SeedEnvsCallbackBase))
 
 
-def seed_environments_for_config(config: AlgorithmConfig, env_seed: int | None, *, seed_env_directly=False, **kwargs):
+def seed_environments_for_config(
+    config: AlgorithmConfig, env_seed: int | Sequence[int] | None, *, seed_env_directly=False, **kwargs
+):
     """
     Adds/replaces a common deterministic seeding that is used to seed all environments created
     when config is build.

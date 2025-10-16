@@ -23,7 +23,7 @@ from typing_extensions import Sentinel, TypeAliasType
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
 from ray_utilities.config import seed_environments_for_config
-from ray_utilities.constants import ENVIRONMENT_RESULTS, RAY_VERSION, SEEDS
+from ray_utilities.constants import ENVIRONMENT_RESULTS, RAY_VERSION, SEED, SEEDS
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, calculate_steps
 from ray_utilities.misc import AutoInt
 from ray_utilities.warn import (
@@ -556,6 +556,9 @@ def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
     # Do not sync EnvRunner seeds here as they are already set (or will be reset)
     env_runner_metrics_state[COMPONENT_METRICS_LOGGER]["stats"].pop(
         f"{ENVIRONMENT_RESULTS}--{SEEDS}--seed_sequence", None
+    )
+    env_runner_metrics_state[COMPONENT_METRICS_LOGGER]["stats"].pop(
+        f"{ENVIRONMENT_RESULTS}--{SEED}--initial_seed", None
     )
     eval_stats = {
         k.removeprefix(EVALUATION_RESULTS + "--" + ENV_RUNNER_RESULTS + "--"): split_sum_stats_over_env_runners(

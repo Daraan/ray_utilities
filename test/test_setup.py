@@ -735,7 +735,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 self.assertTrue(check_np_random_seed(trainable.algorithm.env_runner))
                 # when async these are not equal to the ones from the callback, but still based on them
                 self.assertTrue(check_np_random_generator(trainable.algorithm.env_runner))
-                logged_seed = trainable.algorithm.env_runner.metrics.peek(
+                _logged_seed = trainable.algorithm.env_runner.metrics.peek(
                     (ENVIRONMENT_RESULTS, SEEDS, "seed_sequence"), compile=False
                 )
             else:
