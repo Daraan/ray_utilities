@@ -52,9 +52,11 @@ class _SeededEnvCallbackMeta(_CallbackMeta):  # pyright: ignore[reportGeneralTyp
     def __eq__(cls, value):  # pyright: ignore[reportSelfClsParameterName]
         if not isclass(value):
             return False
-        if SeedEnvsCallbackBase in value.__bases__ and (
+        if SeedEnvsCallbackBase in value.mro() and (
             # check subclass type equality
-            cls is value or issubclass(value, cls) or issubclass(cls, value)
+            cls is value
+            # Compare class bases directly without recursive issubclass calls
+            or cls.__bases__ == value.__bases__
         ):
             return cls.env_seed == value.env_seed
         return False

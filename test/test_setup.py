@@ -624,7 +624,6 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             def check_np_random_generator(runner: SingleAgentEnvRunner | Any, env_seed, logged_seeds):
                 rngs: list[np.random.Generator] = runner.env.np_random
                 logged_seed = logged_seeds[runner.worker_index]
-                # breakpoint()
                 if isinstance(logged_seed, deque):
                     logged_seed = list(logged_seed)
                     assert len(logged_seed) == 1
