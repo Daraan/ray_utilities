@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import logging
 from inspect import isclass
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Optional, Sequence, overload
 
 import numpy as np
-import ray
 from ray.rllib.env.env_runner import EnvRunner
 from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 
@@ -52,12 +51,11 @@ class _SeededEnvCallbackMeta(_CallbackMeta):  # pyright: ignore[reportGeneralTyp
     def __eq__(cls, value):  # pyright: ignore[reportSelfClsParameterName]
         if not isclass(value):
             return False
-        if SeedEnvsCallbackBase in value.mro() and (
-            # check subclass type equality
-            cls is value
-            # Compare class bases directly without recursive issubclass calls
-            or cls.__bases__ == value.__bases__
-        ):
+        if SeedEnvsCallbackBase in (b for b in value.mro() if not isinstance(b, _SeededEnvCallbackMeta)):
+            real_base = next(b for b in cls.mro() if not isinstance(b, _SeededEnvCallbackMeta))
+            other_real_base = next(b for b in value.mro() if not isinstance(b, _SeededEnvCallbackMeta))
+            if real_base is not other_real_base:
+                return False
             return cls.env_seed == value.env_seed
         return False
 
@@ -311,6 +309,18 @@ class SeedEnvsCallback(ResetSeedEnvsCallback):
     Use make_seeded_env_callback(fixed_seed) to create reproducible runs.
     make_seeded_env_callback(0) is equivalent to using this class directly.
     """
+
+
+@overload
+def make_seeded_env_callback(
+    env_seed_: int | None | Sequence[int], *, seed_env_directly: Literal[False] = False
+) -> type[SeedEnvsCallbackBase | ResetSeedEnvsCallback]: ...
+
+
+@overload
+def make_seeded_env_callback(
+    env_seed_: int | None | Sequence[int], *, seed_env_directly: Literal[True]
+) -> type[DirectRngSeedEnvsCallback]: ...
 
 
 def make_seeded_env_callback(

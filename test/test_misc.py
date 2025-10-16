@@ -16,6 +16,11 @@ from ray import tune
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 from ray.runtime_env import RuntimeEnv
 
+from ray_utilities.callbacks.algorithm.seeded_env_callback import (
+    DirectRngSeedEnvsCallback,
+    make_seeded_env_callback,
+    ResetSeedEnvsCallback,
+)
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.constants import (
     COMET_OFFLINE_DIRECTORY,
@@ -375,3 +380,27 @@ class TestMisc(TestCase):
         self.assertSetEqual(set(FORK_DATA_KEYS), set(FORK_FROM_CSV_KEY_MAPPING.keys()))
         # The keys in FORK_FROM_DATA_TO_FORK_DATA_KEYS can be a subset of fork_dict_keys
         self.assertTrue({v for v in FORK_FROM_CSV_KEY_MAPPING.values() if v is not None}.issubset(fork_dict_keys))
+
+    @pytest.mark.basic
+    def test_env_seed_eq(self):
+        direct_env = make_seeded_env_callback(0, seed_env_directly=True)
+        other_direct_env = make_seeded_env_callback(0, seed_env_directly=True)
+        direct_env2 = make_seeded_env_callback(None, seed_env_directly=True)
+
+        reset_env = make_seeded_env_callback(0, seed_env_directly=False)
+        other_reset_env = make_seeded_env_callback(0, seed_env_directly=False)
+        reset_env2 = make_seeded_env_callback(None, seed_env_directly=False)
+
+        self.assertNotEqual(direct_env, reset_env)
+        self.assertNotEqual(direct_env, direct_env2)
+        self.assertNotEqual(reset_env, reset_env2)
+        self.assertNotEqual(direct_env2, reset_env2)
+
+        self.assertEqual(direct_env, direct_env)
+        self.assertEqual(direct_env, other_direct_env)
+        self.assertNotEqual(direct_env, ResetSeedEnvsCallback)
+
+        self.assertEqual(reset_env, reset_env)
+        self.assertEqual(reset_env, other_reset_env)
+        self.assertNotEqual(reset_env, DirectRngSeedEnvsCallback)
+        self.assertEqual(reset_env, ResetSeedEnvsCallback)

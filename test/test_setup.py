@@ -690,10 +690,10 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     trainable.algorithm.evaluation_config, env_seed=None, seed_env_directly=True
                 )
 
-            callbacks = trainable.algorithm_config.callbacks_class
-            if not isinstance(callbacks, list):
+            callbacks = trainable.algorithm_config.callbacks_on_environment_created
+            if not isinstance(callbacks, (tuple, list)):
                 callbacks = [callbacks]
-                assert isinstance(callbacks[0], type)
+            callbacks = [cb for cb in callbacks if isinstance(cb, type)]
             self.assertTrue(any(issubclass(cb, DirectRngSeedEnvsCallback) for cb in callbacks))
 
             assert trainable.algorithm_config.num_envs_per_env_runner is not None
