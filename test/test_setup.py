@@ -9,7 +9,9 @@ import tempfile
 import unittest
 import unittest.mock
 from ast import literal_eval
+from collections import deque
 from copy import deepcopy
+from functools import partial
 from inspect import isclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Optional, cast
@@ -31,8 +33,8 @@ from ray.rllib.utils.metrics import (
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
 
-from ray_utilities.callbacks.algorithm.seeded_env_callback import NUM_ENV_RUNNERS_0_1_EQUAL
-from ray_utilities.config import DefaultArgumentParser
+from ray_utilities.callbacks.algorithm.seeded_env_callback import NUM_ENV_RUNNERS_0_1_EQUAL, DirectRngSeedEnvsCallback
+from ray_utilities.config import DefaultArgumentParser, seed_environments_for_config
 from ray_utilities.config import logger as parser_logger
 from ray_utilities.config.parser.mlp_argument_parser import SimpleMLPParser
 from ray_utilities.constants import (
@@ -598,60 +600,176 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 self.assertNotEqual(setup2.args.log_level, "WARNING")
                 self.assertEqual(setup2.args.num_jobs, DefaultArgumentParser.num_jobs)
 
-    @mock_trainable_algorithm(mock_env_runners=False)
-    def test_seeded_env(self):
-        with patch_args("--seed", "1234", "--num_env_runners", 2), AlgorithmSetup(init_trainable=False) as setup:
-            # NOTE: if async the np_random generator is changed by gymnasium
-            setup.config.env_runners(gym_env_vectorize_mode="SYNC")
-        trainable = setup.trainable_class({"env_seed": 2222})
-        assert trainable.algorithm_config.num_envs_per_env_runner is not None
-        num_envs = trainable.algorithm_config.num_envs_per_env_runner
+    @mock_trainable_algorithm(mock_env_runners=False, parallel_envs=3)
+    @Cases([0, 2])
+    def test_seeding_env(self, cases):
+        for num_env_runners in iter_cases(cases):
+            with (
+                patch_args("--seed", "1234", "--num_env_runners", num_env_runners),
+                AlgorithmSetup(init_trainable=False) as setup,
+            ):
+                # NOTE: if async the np_random generator is changed by gymnasium
+                setup.config.env_runners(gym_env_vectorize_mode="SYNC")
+                seed_environments_for_config(setup.config, env_seed=123, seed_env_directly=False)
 
-        def check_np_random_seed(runner: SingleAgentEnvRunner | Any):
-            return runner.env.np_random_seed == (-1,) * num_envs
+            trainable = setup.trainable_class({"env_seed": 2222})
+            assert trainable.algorithm_config.num_envs_per_env_runner is not None
+            num_envs = trainable.algorithm_config.num_envs_per_env_runner
+            num_workers = setup.config.num_env_runners
 
-        def check_np_random_generator(runner: SingleAgentEnvRunner | Any):
-            rngs: list[np.random.Generator] = runner.env.np_random
-            return all(
-                rng.bit_generator.seed_seq.spawn_key[:-1]  # pyright: ignore[reportAttributeAccessIssue]
-                == (1 if runner.worker_index == 0 and NUM_ENV_RUNNERS_0_1_EQUAL else runner.worker_index, 0, False)
-                for rng in rngs
-            ) and all(rng.bit_generator.seed_seq.entropy == 2222 for rng in rngs)  # pyright: ignore[reportAttributeAccessIssue]
+            def check_np_random_seed(runner: SingleAgentEnvRunner | Any):
+                # here seeds must be != 0 as env.reset was called
+                return runner.env.np_random_seed != (-1,) * num_envs
 
-        if setup.config.num_env_runners == 0:
-            self.assertTrue(check_np_random_seed(trainable.algorithm.env_runner))
-            # when async these are not equal to the ones from the callback, but still based on them
-            self.assertTrue(check_np_random_generator(trainable.algorithm.env_runner))
-            logged_seed = trainable.algorithm.env_runner.metrics.peek(
-                (ENVIRONMENT_RESULTS, SEEDS, "seed_sequence"), compile=False
-            )
-        else:
-            # Cannot pickle generators => cannot pickle envs
-            assert trainable.algorithm.env_runner_group
-            self.assertTrue(
-                all(
+            def check_np_random_generator(runner: SingleAgentEnvRunner | Any, env_seed, logged_seeds):
+                rngs: list[np.random.Generator] = runner.env.np_random
+                logged_seed = logged_seeds[runner.worker_index]
+                # breakpoint()
+                if isinstance(logged_seed, deque):
+                    logged_seed = list(logged_seed)
+                    assert len(logged_seed) == 1
+                    logged_seed = logged_seed[0]
+                return rngs[0].bit_generator.seed_seq.entropy == logged_seed  # pyright: ignore[reportAttributeAccessIssue]
+
+            if setup.config.num_env_runners == 0:
+                self.assertTrue(check_np_random_seed(trainable.algorithm.env_runner))
+                # when async these are not equal to the ones from the callback, but still based on them
+                logged_seed = trainable.algorithm.env_runner.metrics.peek(
+                    (ENVIRONMENT_RESULTS, SEED, "initial_seed"), compile=False
+                )
+                self.assertTrue(
+                    check_np_random_generator(trainable.algorithm.env_runner, env_seed=2222, logged_seeds=[logged_seed])
+                )
+            else:
+                # Cannot pickle generators => cannot pickle envs
+                assert trainable.algorithm.env_runner_group
+                check_ok = all(
                     trainable.algorithm.env_runner_group.foreach_env_runner(
                         check_np_random_seed, local_env_runner=False
                     )
                 )
-            )
-            self.assertTrue(
-                all(
-                    trainable.algorithm.env_runner_group.foreach_env_runner(
-                        check_np_random_generator, local_env_runner=False
+                if not check_ok:
+                    data = trainable.algorithm.env_runner_group.foreach_env_runner(
+                        lambda r: r.env.np_random_seed,  # pyright: ignore[reportAttributeAccessIssue]
+                        local_env_runner=False,
+                    )
+                    self.fail(f"Unexpected np_random_seed: {data}. expected (-1, -1, ...)")
+                logged_seeds = trainable.algorithm.env_runner_group.foreach_env_runner(
+                    lambda r: r.metrics.peek((ENVIRONMENT_RESULTS, SEED, "initial_seed")), local_env_runner=False
+                )
+                self.assertEqual(len(logged_seeds), setup.config.num_env_runners)
+                self.assertTrue(
+                    all(
+                        trainable.algorithm.env_runner_group.foreach_env_runner(
+                            partial(check_np_random_generator, env_seed=2222, logged_seeds=[None, *logged_seeds]),
+                            local_env_runner=False,
+                        )
                     )
                 )
+            trainable.stop()
+
+    @mock_trainable_algorithm(mock_env_runners=False)
+    @Cases([0, 2])
+    def test_seeding_env_rng_directly(self, cases):
+        for num_env_runners in iter_cases(cases):
+            with (
+                patch_args("--seed", "1234", "--num_env_runners", num_env_runners),
+                AlgorithmSetup(init_trainable=False) as setup,
+            ):
+                # NOTE: if async the np_random generator is changed by gymnasium
+                setup.config.env_runners(gym_env_vectorize_mode="SYNC")
+                setup.config.callbacks_class = []
+                # Does not work as in create_args_and_config this is called with default seed_env_directly=False
+
+            trainable = setup.trainable_class({"env_seed": 2222})
+
+            # Exchange callback class
+            trainable.algorithm_config._is_frozen = False
+            seed_environments_for_config(trainable.algorithm_config, env_seed=2222, seed_env_directly=True)
+            if trainable.algorithm.evaluation_config is not None:
+                trainable.algorithm.evaluation_config._is_frozen = False
+                seed_environments_for_config(
+                    trainable.algorithm.evaluation_config, env_seed=None, seed_env_directly=True
+                )
+
+            callbacks = trainable.algorithm_config.callbacks_class
+            if not isinstance(callbacks, list):
+                callbacks = [callbacks]
+                assert isinstance(callbacks[0], type)
+            self.assertTrue(any(issubclass(cb, DirectRngSeedEnvsCallback) for cb in callbacks))
+
+            assert trainable.algorithm_config.num_envs_per_env_runner is not None
+            num_envs = trainable.algorithm_config.num_envs_per_env_runner
+            num_workers = setup.config.num_env_runners
+
+            def change_setting(env_runner, *args, **kwargs):
+                """Necessary setting for this test"""
+                from ray.rllib.env.env_context import EnvContext  # noqa: PLC0415
+
+                cb = DirectRngSeedEnvsCallback()
+                cb.env_seed = 2222  # pyright: ignore[reportAttributeAccessIssue]
+                cb.on_environment_created(
+                    env_runner=env_runner,
+                    metrics_logger=env_runner.metrics,
+                    env=env_runner.env.unwrapped,
+                    env_context=EnvContext({}, env_runner.worker_index, num_workers=num_workers),
+                )
+
+            # Workaround as as callback cannot be changed so easily currently
+            trainable.algorithm.env_runner_group.foreach_env_runner(
+                change_setting, local_env_runner=setup.config.num_env_runners == 0
             )
-            logged_seeds = trainable.algorithm.env_runner_group.foreach_env_runner(
-                lambda r: r.metrics.peek((ENVIRONMENT_RESULTS, SEEDS, "seed_sequence")), local_env_runner=False
-            )
-            self.assertEqual(len(logged_seeds), setup.config.num_env_runners)
-            # Assert that the deques in logged_seeds are pairwise different
-            for i in range(len(logged_seeds)):
-                for j in range(i + 1, len(logged_seeds)):
-                    self.assertNotEqual(
-                        logged_seeds[i], logged_seeds[j], f"Deque at index {i} is equal to deque at index {j}"
+
+            def check_np_random_seed(runner: SingleAgentEnvRunner | Any):
+                return runner.env.np_random_seed == (-1,) * num_envs
+
+            def check_np_random_generator(runner: SingleAgentEnvRunner | Any):
+                rngs: list[np.random.Generator] = runner.env.np_random
+                return all(
+                    rng.bit_generator.seed_seq.spawn_key[:-1]  # pyright: ignore[reportAttributeAccessIssue]
+                    == (1 if runner.worker_index == 0 and NUM_ENV_RUNNERS_0_1_EQUAL else runner.worker_index, 0, False)
+                    for rng in rngs
+                ) and all(rng.bit_generator.seed_seq.entropy == 2222 for rng in rngs)  # pyright: ignore[reportAttributeAccessIssue]
+
+            if setup.config.num_env_runners == 0:
+                self.assertTrue(check_np_random_seed(trainable.algorithm.env_runner))
+                # when async these are not equal to the ones from the callback, but still based on them
+                self.assertTrue(check_np_random_generator(trainable.algorithm.env_runner))
+                logged_seed = trainable.algorithm.env_runner.metrics.peek(
+                    (ENVIRONMENT_RESULTS, SEEDS, "seed_sequence"), compile=False
+                )
+            else:
+                # Cannot pickle generators => cannot pickle envs
+                assert trainable.algorithm.env_runner_group
+                check_ok = all(
+                    trainable.algorithm.env_runner_group.foreach_env_runner(
+                        check_np_random_seed, local_env_runner=False
                     )
+                )
+                if not check_ok:
+                    data = trainable.algorithm.env_runner_group.foreach_env_runner(
+                        lambda r: r.env.np_random_seed,  # pyright: ignore[reportAttributeAccessIssue]
+                        local_env_runner=False,
+                    )
+                    self.fail(f"Unexpected np_random_seed: {data}. expected (-1, -1, ...)")
+                self.assertTrue(
+                    all(
+                        trainable.algorithm.env_runner_group.foreach_env_runner(
+                            check_np_random_generator, local_env_runner=False
+                        )
+                    )
+                )
+                logged_seeds = trainable.algorithm.env_runner_group.foreach_env_runner(
+                    lambda r: r.metrics.peek((ENVIRONMENT_RESULTS, SEEDS, "seed_sequence")), local_env_runner=False
+                )
+                self.assertEqual(len(logged_seeds), setup.config.num_env_runners)
+                # Assert that the deques in logged_seeds are pairwise different
+                for i in range(len(logged_seeds)):
+                    for j in range(i + 1, len(logged_seeds)):
+                        self.assertNotEqual(
+                            logged_seeds[i], logged_seeds[j], f"Deque at index {i} is equal to deque at index {j}"
+                        )
+            trainable.stop()
 
     def test_cfg_loading(self):
         with tempfile.NamedTemporaryFile("w+") as f, patch_args("-cfg", f.name):
