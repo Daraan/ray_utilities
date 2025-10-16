@@ -23,8 +23,7 @@ from typing_extensions import Sentinel, TypeAliasType
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
 from ray_utilities.config import seed_environments_for_config
-from ray_utilities.constants import RAY_VERSION
-from ray_utilities.constants import ENVIRONMENT_RESULTS, SEEDS
+from ray_utilities.constants import ENVIRONMENT_RESULTS, RAY_VERSION, SEEDS
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, calculate_steps
 from ray_utilities.misc import AutoInt
 from ray_utilities.warn import (
