@@ -45,9 +45,11 @@ test = [
   "pytest-subtests",
   "debugpy",
   "testfixtures",
+  "flaky",
 ]
 wandb = [
-  "wandb",
+  "wandb>=0.16.5",
+  "selenium>=4.15.0",  # wandb server limitation; for fork uploading
 ]
 comet = [
   "comet_ml",

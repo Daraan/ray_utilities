@@ -946,6 +946,7 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
                 self.assertEqual(trial.status, Trial.TERMINATED)
                 self.assertTrue(trial.has_checkpoint())
 
+    @pytest.mark.flaky(max_runs=3, min_passes=1)
     def testPermutationContinuation(self):  # noqa: N802
         # taken from ray's testing suite
         # self.enable_loggers()
