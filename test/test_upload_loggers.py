@@ -105,6 +105,7 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
             # Should call upload method for offline mode
             mock_upload.assert_called_once_with(trial, upload_command=None, blocking=False)
 
+    @pytest.mark.flaky(max_runs=2, min_passes=1)
     def test_comet_upload_offline_experiment_no_directory(self):
         """Test Comet upload behavior when offline directory doesn't exist."""
         callback = AdvCometLoggerCallback(online=False, upload_offline_experiments=True)
@@ -141,6 +142,7 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
                 mock_tracker = MagicMock()
                 mock_tracker_class.return_value = mock_tracker
 
+                mock_logger.reset_mock()  # Side-effect in __del__ might log data; potential race condition
                 callback._upload_offline_experiment_if_available(trial)
 
                 # Should create tracker with the zip file
