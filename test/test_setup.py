@@ -615,10 +615,9 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             trainable = setup.trainable_class({"env_seed": 2222})
             assert trainable.algorithm_config.num_envs_per_env_runner is not None
             num_envs = trainable.algorithm_config.num_envs_per_env_runner
-            num_workers = setup.config.num_env_runners
 
-            def check_np_random_seed(runner: SingleAgentEnvRunner | Any):
-                # here seeds must be != 0 as env.reset was called
+            def check_np_random_seed(runner: SingleAgentEnvRunner | Any, num_envs=num_envs):
+                # here seeds must be != -1 as env.reset was called
                 return runner.env.np_random_seed != (-1,) * num_envs
 
             def check_np_random_generator(runner: SingleAgentEnvRunner | Any, env_seed, logged_seeds):

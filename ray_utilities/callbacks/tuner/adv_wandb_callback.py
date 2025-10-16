@@ -208,6 +208,7 @@ class AdvWandbLoggerCallback(
         if FORK_FROM in trial.config:
             fork_data = cast("ForkFromData", trial.config[FORK_FROM])
             fork_id = fork_data.get("parent_fork_id", None)
+            # We should always have a fork_id currently, but if not, fall back below.
             if fork_id is None:  # pyright: ignore[reportUnnecessaryComparison]
                 _logger.warning("No parent_fork_id in FORK_FROM data: %s. Falling back to parent_trial_id", fork_data)
                 fork_id = fork_data.get("parent_trial_id", None)
