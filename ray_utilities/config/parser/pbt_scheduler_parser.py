@@ -107,7 +107,7 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
     log_config: bool = True
     time_attr: str = "current_step"
     quantile_fraction: float = 0.1
-    perturbation_interval: float = 100_000
+    perturbation_interval: float = 8192 * 14  # (114688) Total should be divisible by total steps
     resample_probability: float = 1.0  # always resample
 
     # custom_args, remove before passing to PopulationBasedTraining
