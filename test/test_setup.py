@@ -1253,6 +1253,7 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
             "--seed", str(cli_seed),
             "--fcnet_hiddens", "[4]",
             "--num_envs_per_env_runner", 1,
+            "--no_dynamic_eval_interval",
         ):  # fmt: skip
             assert OTHER_MINI_BATCH_SIZE != ENV_STEPS_PER_ITERATION
 

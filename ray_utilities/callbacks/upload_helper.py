@@ -105,7 +105,7 @@ class UploadHelperMixin:
         If an error pattern is detected in the process output or if the timeout is reached
         and `terminate_on_timeout` is ``True``, this method forcibly terminates the process.
         """
-        start = last_count = time.time()
+        start = last_time = time.time()
 
         stdout_accum = ""
         error_occurred = False
@@ -114,15 +114,15 @@ class UploadHelperMixin:
         error_code = ExitCode.SUCCESS
         while True:
             line = process.stdout.readline() if process.stdout else None
-            count = time.time()
-            if count - last_count > 10:
+            time_now = time.time()
+            if time_now - last_time > 10:
                 logger.info(
                     "Still uploading trial %s to %s after %.1f seconds...",
                     trial_id,
                     cls._upload_service_name,
-                    count - start,
+                    time_now - start,
                 )
-                last_count = count
+                last_time = time_now
             if line:
                 if isinstance(line, bytes):
                     stdout_type = bytes
@@ -159,7 +159,7 @@ class UploadHelperMixin:
                                 line.strip(),
                             )
                             return cls._failure_aware_wait(
-                                process, timeout=max(10, timeout - (count - start) - 10), terminate_on_timeout=False
+                                process, timeout=max(10, timeout - (time_now - start) - 10), terminate_on_timeout=False
                             )
                         error_code = ExitCode.WANDB_SERVER_ERROR
                     elif "not found (<Response [404]>)" in line:
@@ -176,12 +176,12 @@ class UploadHelperMixin:
             elif process.poll() is not None:
                 error_code = ExitCode.SUCCESS
                 break  # Process finished
-            elif count - start > timeout:
+            elif time_now - start > timeout:
                 logger.warning(
                     "Timeout reached while uploading trial %s to %s. %s",
                     trial_id,
                     cls._upload_service_name,
-                    "Killing process." if terminate_on_timeout else "Not killing process as.",
+                    "Killing process." if terminate_on_timeout else "Not killing process, but not tracking anymore.",
                 )
                 if terminate_on_timeout:
                     process.terminate()

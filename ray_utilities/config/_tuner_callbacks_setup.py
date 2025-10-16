@@ -184,9 +184,9 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             # Subkeys of env details:
             log_env_network=False,
             log_env_disk=False,
-            log_env_gpu=args.num_jobs <= 5 and args.gpu,
+            log_env_gpu=args.num_jobs <= 5 and args.gpu and (not args.comet or "offline" in args.comet),
             log_env_host=False,
-            log_env_cpu=args.num_jobs <= 5,
+            log_env_cpu=args.num_jobs <= 5 and (not args.comet or "offline" in args.comet),
             # ---
             auto_log_co2=False,  # needs codecarbon
             auto_histogram_weight_logging=False,  # Default False

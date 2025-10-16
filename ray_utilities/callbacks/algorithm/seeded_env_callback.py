@@ -26,10 +26,8 @@ if TYPE_CHECKING:
     from ray.rllib.env.env_context import EnvContext
     from ray.rllib.env.env_runner import EnvRunner
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
-    from ray.runtime_context import RuntimeContext
     from typing_extensions import TypeIs
 
-    from ray_utilities.training.default_class import TrainableBase
 
 NUM_ENV_RUNNERS_0_1_EQUAL = True
 FIX_EVAL_SEED = True

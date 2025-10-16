@@ -655,7 +655,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     def cleanup(self):
         # call stop to fully free resources
         super().cleanup()
-        if self._algorithm is not None:
+        if hasattr(self, "_algorithm") and self._algorithm is not None:
             self._algorithm.cleanup()
         if is_pbar(self._pbar):
             self._pbar.close()
@@ -1211,30 +1211,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                         and stat._inf_window
                         and stat._clear_on_reduce is False
                         and len(stat.values) > 0
-                        and not stat._prev_merge_values  # TODO recheck with ray >2.50.0
+                        and not stat._prev_merge_values  # TODO recheck with ray >2.50.0 # pyright: ignore[reportAttributeAccessIssue]  # noqa: E501
                     ):
                         last_value = stat.values[-1]
-                        stat._prev_merge_values = defaultdict(lambda val=last_value: val)
-        if False and self._algorithm.env_runner_group:
-            # TODO: remove block
-            # Passing config here likely has no effect at all; possibly sync metrics with custom function
-            # Does not sync config!, recreate env_runner_group or force sync. Best via reference
-            self.algorithm.env_runner_group.sync_env_runner_states(config=self.algorithm_config)
-            if recreate_envs and self.algorithm.env_runner and self.algorithm_config.num_env_runners == 0:
-                self.algorithm.env_runner.make_env()
-            if (self.algorithm_config.num_env_runners or 0) > 0:
-                remote_config_ref = ray.put(self.algorithm_config)
-                self.algorithm.env_runner_group._remote_config_obj_ref = remote_config_ref
-                self.algorithm.env_runner_group._remote_config = self.algorithm_config.copy(copy_frozen=True)
-
-                def set_env_runner_config(
-                    r: EnvRunner, remote_config_ref=remote_config_ref, recreate_envs=recreate_envs
-                ):
-                    r.config = ray.get(remote_config_ref)
-                    if recreate_envs:
-                        r.make_env()
-
-                self.algorithm.env_runner_group.foreach_env_runner(set_env_runner_config, local_env_runner=False)
+                        stat._prev_merge_values = defaultdict(lambda val=last_value: val)  # pyright: ignore[reportAttributeAccessIssue]
         keys_to_process.remove("algorithm_config")
         keys_to_process.remove("algorithm_overrides")
         # endregion

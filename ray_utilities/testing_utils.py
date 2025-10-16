@@ -911,8 +911,10 @@ class TestHelpers(unittest.TestCase):
                 seq1 = list(seeds_data1.pop("seed_sequence"))  # A B
             elif SEED in metrics_0[ENVIRONMENT_RESULTS]:
                 assert SEED in metrics_1[ENVIRONMENT_RESULTS]
-                seq0 = metrics_0[ENVIRONMENT_RESULTS][SEED]
-                seq1 = metrics_1[ENVIRONMENT_RESULTS][SEED]
+                seeds_data0: dict[str, Iterable[int]] = metrics_0[ENVIRONMENT_RESULTS][SEED]
+                seeds_data1: dict[str, Iterable[int]] = metrics_1[ENVIRONMENT_RESULTS][SEED]
+                seq0 = list(seeds_data0.pop("initial_seed"))  # A
+                seq1 = list(seeds_data1.pop("initial_seed"))  # A B
             else:
                 self.fail(
                     f"No {SEEDS} or {SEED} key found in metrics: "
@@ -926,7 +928,7 @@ class TestHelpers(unittest.TestCase):
             self.assertEqual(len(seq1), len(seeds1), f"Seeds are not unique: {seq1}")
             if seed_subset_ok:
                 self.assertTrue(
-                    seq0 <= seq1 or seq0 >= seq1,
+                    seeds0 <= seeds1 or seeds0 >= seeds1,
                     f"One seed sequences should be a subset of the other: {seq0} vs {seq1}",
                 )
             else:
