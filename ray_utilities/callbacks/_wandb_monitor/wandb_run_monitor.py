@@ -152,6 +152,11 @@ class WandbRunMonitor:
             True if initialization successful, False otherwise
         """
         try:
+            if self.is_initialized():
+                logger.warning(
+                    "Monitor already initialized - should not call initialize again. Call refresh/cleanup first."
+                )
+                return True
             self._notify("initializing_monitor")
 
             # Initialize Selenium session

@@ -712,3 +712,13 @@ class WandbUploaderMixin(UploadHelperMixin):
                 # if there is a serious exception during init it will be raised now
                 logger.debug("Timed out while starting WandbRunMonitor actor.")
         return self._monitor
+
+    def __del__(self):
+        # do not clean on_experiment_end as we want to access it with Setup classes as well afterwards
+        try:
+            if getattr(self, "_monitor", None) is not None:
+                self._monitor.cleanup.remote()  # pyright: ignore[reportOptionalMemberAccess, reportFunctionMemberAccess]
+                self._monitor.__ray_terminate__.remote()  # pyright: ignore[reportOptionalMemberAccess, reportAttributeAccessIssue]
+                self._monitor = None
+        except KeyboardInterrupt:
+            WandbUploaderMixin.__del__(self)  # need to make sure we clean monitor, do not go back to self

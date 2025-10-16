@@ -699,15 +699,3 @@ class AdvWandbLoggerCallback(
                         self._monitor.close_run_tab.remote(old_id)  # pyright: ignore[reportFunctionMemberAccess]
         except Exception:
             _logger.exception("Error during tab clearing:")
-
-    def __del__(self):
-        # do not clean on_experiment_end as we want to access it with Setup classes as well afterwards
-        try:
-            if self._monitor is not None:
-                self._monitor.cleanup.remote()  # pyright: ignore[reportFunctionMemberAccess]
-                self._monitor.__ray_terminate__.remote()  # pyright: ignore[reportAttributeAccessIssue]
-                self._monitor = None
-        except KeyboardInterrupt:
-            self.__del__()  # need to make sure we clean monitor
-        finally:
-            super().__del__()
