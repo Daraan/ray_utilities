@@ -41,6 +41,8 @@ from ray_utilities.constants import (
     EVAL_METRIC_RETURN_MEAN,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
+    SEED,
+    SEEDS,
 )
 from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
 from ray_utilities.misc import is_pbar, raise_tune_errors
@@ -621,7 +623,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             # when async these are not equal to the ones from the callback, but still based on them
             self.assertTrue(check_np_random_generator(trainable.algorithm.env_runner))
             logged_seed = trainable.algorithm.env_runner.metrics.peek(
-                (ENVIRONMENT_RESULTS, "seeds", "seed_sequence"), compile=False
+                (ENVIRONMENT_RESULTS, SEEDS, "seed_sequence"), compile=False
             )
         else:
             # Cannot pickle generators => cannot pickle envs
@@ -641,7 +643,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 )
             )
             logged_seeds = trainable.algorithm.env_runner_group.foreach_env_runner(
-                lambda r: r.metrics.peek((ENVIRONMENT_RESULTS, "seeds", "seed_sequence")), local_env_runner=False
+                lambda r: r.metrics.peek((ENVIRONMENT_RESULTS, SEEDS, "seed_sequence")), local_env_runner=False
             )
             self.assertEqual(len(logged_seeds), setup.config.num_env_runners)
             # Assert that the deques in logged_seeds are pairwise different

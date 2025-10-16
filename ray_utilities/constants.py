@@ -181,6 +181,12 @@ See Also:
     :class:`SeededEnvsCallback`
 """
 
+SEEDS = "seeds"
+"""Logs details seed information for each parallel environment. Expects a subkey ``seed_sequence``."""
+
+SEED = "seed"
+"""Logs the single seed used for ``env.reset(seed)`` used by this EnvRunner / Environment creator."""
+
 # Video Recording Constants
 EPISODE_VIDEO_PREFIX = "episode_videos_"
 """str: Prefix used for all episode video metric keys."""

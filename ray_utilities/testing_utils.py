@@ -101,7 +101,7 @@ from ray_utilities import runtime_env
 from ray_utilities.callbacks.wandb import WandbUploaderMixin
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.parser.mlp_argument_parser import MLPArgumentParser
-from ray_utilities.constants import ENVIRONMENT_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
+from ray_utilities.constants import ENVIRONMENT_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, SEED, SEEDS
 from ray_utilities.dynamic_config.dynamic_buffer_update import logger as dynamic_buffer_logger
 from ray_utilities.misc import is_pbar, raise_tune_errors
 from ray_utilities.nice_logger import change_log_level
@@ -903,10 +903,21 @@ class TestHelpers(unittest.TestCase):
         if ENVIRONMENT_RESULTS in metrics_0:
             metrics_0 = deepcopy(metrics_0)
             metrics_1 = deepcopy(metrics_1)
-            seeds_data0: dict[str, Iterable[int]] = metrics_0[ENVIRONMENT_RESULTS]["seeds"]
-            seeds_data1: dict[str, Iterable[int]] = metrics_1[ENVIRONMENT_RESULTS]["seeds"]
-            seq0 = list(seeds_data0.pop("seed_sequence"))  # A
-            seq1 = list(seeds_data1.pop("seed_sequence"))  # A B
+            if SEEDS in metrics_0[ENVIRONMENT_RESULTS]:
+                assert SEEDS in metrics_1[ENVIRONMENT_RESULTS]
+                seeds_data0: dict[str, Iterable[int]] = metrics_0[ENVIRONMENT_RESULTS][SEEDS]
+                seeds_data1: dict[str, Iterable[int]] = metrics_1[ENVIRONMENT_RESULTS][SEEDS]
+                seq0 = list(seeds_data0.pop("seed_sequence"))  # A
+                seq1 = list(seeds_data1.pop("seed_sequence"))  # A B
+            elif SEED in metrics_0[ENVIRONMENT_RESULTS]:
+                assert SEED in metrics_1[ENVIRONMENT_RESULTS]
+                seq0 = metrics_0[ENVIRONMENT_RESULTS][SEED]
+                seq1 = metrics_1[ENVIRONMENT_RESULTS][SEED]
+            else:
+                self.fail(
+                    f"No {SEEDS} or {SEED} key found in metrics: "
+                    f"{metrics_0[ENVIRONMENT_RESULTS]} vs. {metrics_1[ENVIRONMENT_RESULTS]}"
+                )
             seeds0 = set(seq0)
             seeds1 = set(seq1)
             # when having multiple env runners the logged seeds in the restored one are merged

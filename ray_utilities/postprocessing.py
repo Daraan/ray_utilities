@@ -117,6 +117,7 @@ from ray_utilities.constants import (
     ENVIRONMENT_RESULTS,
     EPISODE_BEST_VIDEO,
     EPISODE_WORST_VIDEO,
+    SEEDS,
 )
 from ray_utilities.misc import deep_update, get_current_step
 from ray_utilities.temp_dir import TEMP_DIR_PATH
@@ -572,9 +573,9 @@ def create_log_metrics(
         eval_mean = float("nan")
         disc_eval_mean = float("nan")
     environment_results = result[ENV_RUNNER_RESULTS].get(ENVIRONMENT_RESULTS, {})
-    if environment_results:  # turn to a list
-        s_seq: Deque = environment_results["seeds"]["seed_sequence"]
-        environment_results["seeds"]["seed_sequence"] = list(s_seq)
+    if environment_results and SEEDS in environment_results:
+        s_seq: Deque = environment_results[SEEDS]["seed_sequence"]
+        environment_results[SEEDS]["seed_sequence"] = list(s_seq)
 
     current_step = get_current_step(result)
     metrics: LogMetricsDict = {
