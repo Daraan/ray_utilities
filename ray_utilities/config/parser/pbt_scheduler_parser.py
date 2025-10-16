@@ -200,3 +200,16 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
             **args,
             hyperparam_mutations=self.hyperparam_mutations,
         )
+
+    def process_args(self) -> None:
+        super().process_args()
+        max_step_size = getattr(self, "max_step_size", None)
+        if max_step_size is None:
+            return
+        if self.perturbation_interval % max_step_size != 0:
+            logger.warning(
+                "The perturbation_interval (%s) is not a multiple of max_step_size (%s). "
+                "This will lead to overstepping behavior and uneven perturbation intervals.",
+                self.perturbation_interval,
+                max_step_size,
+            )

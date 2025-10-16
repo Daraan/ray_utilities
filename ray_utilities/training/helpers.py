@@ -197,7 +197,11 @@ def get_args_and_config(
     # Seeded environments - sequential seeds have to be set here, env_seed comes from Tuner
     if args["env_seeding_strategy"] == "sequential":
         # Warn if a seed is set but no env_seed is present
-        if env_seed in (None, _NOT_FOUND) and "cli_args" in hparams and hparams["cli_args"]["seed"] is not None:
+        if (
+            (env_seed is None or env_seed is _NOT_FOUND)
+            and "cli_args" in hparams
+            and hparams["cli_args"]["seed"] is not None
+        ):
             logger.warning(
                 "cli_args has a seed(%d) set but env_seed is None, sequential seeding will not work. "
                 "Assure that env_seed is passed as a parameter when creating the Trainable, "
@@ -205,6 +209,8 @@ def get_args_and_config(
                 hparams["cli_args"]["seed"],
             )
             env_seed = hparams["cli_args"]["seed"]
+        elif env_seed is _NOT_FOUND:
+            env_seed = None
         assert env_seed is not _NOT_FOUND
         seed_environments_for_config(config, env_seed)
     elif args["env_seeding_strategy"] == "same":
