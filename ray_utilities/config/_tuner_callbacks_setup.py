@@ -91,7 +91,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         """
         args = self._setup.args
         mode: Literal["offline", "disabled", "online"]
-        if args.wandb in (False, "disabled"):
+        if args.wandb in (False, 0, "disabled"):
             mode = "disabled"
         else:
             mode = args.wandb.split("+")[0]  # pyright: ignore[reportAssignmentType]

@@ -208,6 +208,7 @@ class AdvWandbLoggerCallback(
         if FORK_FROM in trial.config:
             fork_data = cast("ForkFromData", trial.config[FORK_FROM])
             fork_id = fork_data.get("parent_fork_id", None)
+            assert fork_id  # XXX DEBUG: we should always have a fork_id currently
             if fork_id is None:  # pyright: ignore[reportUnnecessaryComparison]
                 _logger.warning("No parent_fork_id in FORK_FROM data: %s. Falling back to parent_trial_id", fork_data)
                 fork_id = fork_data.get("parent_trial_id", None)
@@ -234,7 +235,7 @@ class AdvWandbLoggerCallback(
         # NOTE: We never want FORK_FROM to be in the trials.config by default.
 
         start = time.time()
-        use_monitor = self.upload_offline_experiments and fork_from
+        use_monitor = self.upload_offline_experiments and fork_from and self.kwargs["mode"] != "disabled"
         if use_monitor and self._monitor is None:
             # Start the monitor to track parent runs of forked trials
             if self.project is None:
@@ -345,7 +346,7 @@ class AdvWandbLoggerCallback(
             # close monitor tab of old run:
             if len(self._past_trial_ids.get(trial, ())) == 0:  # might appear during testing when init is skipped
                 _logger.warning("BUG: No past trial IDs found for trial %s", trial.trial_id)
-            else:
+            elif wandb_init_kwargs.get("mode") != "disabled":
                 actual_previous_id = self._past_trial_ids[trial][-1]
                 _logger.debug("Closing tab of %s", actual_previous_id)
                 self._start_monitor().close_run_tab.remote(actual_previous_id)  # pyright: ignore[reportFunctionMemberAccess]
@@ -423,7 +424,8 @@ class AdvWandbLoggerCallback(
             # but not when we load a checkpoint, but when it initially was a checkpoint and then got forked
             if gather_uploads or self.is_trial_forked(trial):
                 _logger.info("Gathering more trials to upload to WandB in dependency order...")
-                self._start_monitor()
+                if self.kwargs.get("mode") != "disabled":
+                    self._start_monitor()
                 # Gather trials that are ending and upload them in dependency order
                 self._gather_and_upload_trials(trial, actor_done=done)
             else:

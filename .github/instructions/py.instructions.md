@@ -9,13 +9,14 @@ applyTo: "**/*.py"
 
 - Write clear and concise comments for each function.
 - Ensure functions have descriptive names and include type hints.
-- Use the `typing` module for type annotations (e.g., `list[str]`, `dict[str, int]`).
+- Use the `typing` module for type annotations (e.g., `list[str]`, `dict[str, int]`). Do not use the uppercase versions like `List` or `Dict`.
+- When working with `dicts` create a `TypedDict` if the structure is known.
 - Break down complex functions into smaller, more manageable functions.
 
 ## General Instructions
 
 - Always prioritize readability and clarity.
-- For algorithm-related code, include explanations of the approach used.
+- For mathematical or algorithm-related code, include explanations of the approach used.
 - Write code with good maintainability practices, including comments on why certain design decisions were made.
 - Handle edge cases and write clear exception handling.
 - For libraries or external dependencies, mention their usage and purpose in comments.
