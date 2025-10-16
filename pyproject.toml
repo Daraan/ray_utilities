@@ -178,7 +178,7 @@ allowed-unused-imports = ["hvplot.pandas", "default_arguments.PYTHON_ARGCOMPLETE
 "docs".msg = "Importing from docs is not allowed."
 
 [tool.ruff.lint.per-file-ignores]
-"test/**/*.py" = ["ARG", "D"]
+"test/**/*.py" = ["ARG", "D", "SIM117"]
 "ray_utilities/testing_utils.py" = ["D"]
 "ray_utilities/callbacks/**/*.py" = ["ARG"]
 "ray_utilities/jax/ppo/jax_ppo_learner.py" = ["B018"]  # blank expression for IDE references for now

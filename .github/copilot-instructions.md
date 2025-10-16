@@ -8,178 +8,173 @@ For the response, always follow these instructions:
 3. Preserve whitespace and newlines right after the parts of the file that you modify.
 4. The final result must be syntactically valid, properly formatted, and correctly indented. Do not use any ...existing code... comments.
 5. Finally, provide the fully rewritten file. You must output the complete file.
-Further context and instructions are given below:
+
+When writing in chat:
+- If I tell you that you are wrong, think about whether or not you think that's true and respond with facts.
+- Avoid apologizing or making conciliatory statements.
+- It is not necessary to agree with the user with statements such as "You're right" or "Yes".
+- Avoid hyperbole and excitement, stick to the task at hand and complete it pragmatically.
+- Do not wait for user permission or confirmation when suggesting changes. First apply the edits, the user will review it afterwards.
+
+Further details on this project and instructions are given below:
 <SYSTEM>
 
-Follow this short guide to get short, high-value knowledge to be productive in the ray_utilities repository: architecture, project conventions, and notable integration points.
-The core dependency of ray_utilities is `ray` focusing on rays submodules `tune` and `rllib`. The project provides extensions, utilities and abstractions to simplify working with Ray's RLlib and Tune frameworks.
-However, its main goal is the run experiments to academic research on hyperparameter tuning
-and population based training of RL agents.
 
-General Instructions that always apply:
-- Follow Clean Code principles of Python
-- Avoid comments when the code is self-explanatory, but be not too strict when deleting existing comments. Provide comments when the code and logic is complex.
-- Keep your response focused on the solution and include code suggestions when appropriate.
-- when defining functions or classes use appropriate type hints and annotations.
+# Ray Utilities Development Guide
 
-Supported Versions and Environment
-- Python: 3.10+
-- Ray: latest stable
-- OS: Linux (primary)
-- Optional dependencies: comet_ml, wandb, optuna, jax (see integration notes)
+## Project Purpose
 
-Quick Actions
-- Install: `pip install -e .` (for editable install during development)
-- To also install test dependencies: `pip install -e ".[test]"`
-- For testing use `pytest` use verbose mode and do not supress output.
+Research framework for RL experiments with Ray RLlib/Tune. Focus: reproducible hyperparameter tuning, population-based training, and experiment management for academic research.
 
-Before every commit run
-- `pip install ruff pyright pre-commit` (if not already installed)
-- `ruff format .`
-- `pyright -p .basic_pyright_check.json`
-- `pre-commit run --all-files` (if pre-commit is installed)
+**Stack:** Python 3.10+, Ray (latest), Linux | **Optional:** comet_ml, wandb, optuna, jax
 
-Project Structure and Directory Guidance
-- **`callbacks/`**: New RLlib `RLlibCallback` or Tune `Callback` implementations. These are used to hook into the training lifecycle to add custom logic like logging, checkpointing, or altering the experiment state. The `RLlibCallback` is used with `Algorithms` and `Trainables` in RLlib, while the Tune `Callback` is used with `ray.tune.Tuner`.
-- **`config/`**: Contains argument parsing and configuration management logic. This is where you'll find `DefaultArgumentParser` and its extensions, which define the command-line interface for experiments.
-- **`connectors/`**: Code for pipelines between environments (e.g. `gym/gymnasium.Env`) and `RLModules` as well as passing samples by the `EnvRunner` to the `Learner`. This includes custom, preprocessors, and environment adapters.
-- **`jax/`**: JAX-specific code, likely for custom models or training logic that leverages JAX for performance.
-- **`setup/`**: High-level experiment setup and orchestration. This includes classes like `ExperimentSetupBase` and `AlgorithmSetup` that piece together the algorithm, configuration, and other components to define a trainable experiment.
-- **`training/`**: Core logic related to the training process itself, such as custom `Trainable` classes or functions that define the training step.
-- **`training/default_class.py`**: Defines the `TrainableBase` and `DefaultTrainable` classes that are the main classes used in this project to train `Algorithms` from RLlib.
-- **`training/helpers.py`**: Utility functions and classes that assist with the training process, such as metric logging or result processing.
-- **`tune/`**: Utilities and components specifically for `ray.tune`, like custom trial schedulers, search algorithms, or stoppers.
-- **`test/`**: Contains the actual test files. The structure within `test/` should mirror the `ray_utilities/` directory structure.
-- **`docs/`**: Sphinx documentation source files.
-- **`.github/`**: GitHub-specific files, including CI/CD workflows and this instruction file.
-- **`pyproject.toml`**: Project metadata, dependencies, and tool configurations (ruff, pyright, etc.).
-- **`__init__.py`**: Initializes the `ray_utilities` package and sets up logging.
-- **`postprocessing.py`**: Functions for post-processing results from training and simplifying the format of results to be better understandable and easier to log. The log metrics are passed to the comet and wandb loggers.
-- **`constants.py`**: Project-wide constants, especially commonly used strings, for example metric and result keys.
-- **`misc.py`**: General-purpose utility functions and classes that are used across the repository and don't fit into a more specific category. Examples include `nice_logger` for logging setup and dictionary manipulation functions.
-- **`testing_utils.py`**: Utilities specifically for testing, such as test case base classes (`TestHelper`), decorators (`patch_args`), and context managers (`DisableLoggers`).
-- Note: there are other files and folders not listed here.
+## Core Architecture
 
-Editing Rules
-- Only edit files under `ray_utilities/` (and project docs/ and `tests/`); never touch site-packages or env directories
-- Place new code in the correct folder (see section: Project Structure and Directory Guidance)
+### The Setup → Trainable → Tuner Pipeline
+
+1. **Setup Phase** (`ExperimentSetupBase`): Parse CLI args → build `AlgorithmConfig` → freeze config
+2. **Trainable Creation** (`DefaultTrainable`): Wrap frozen config in trainable class for distributed execution
+3. **Execution** (`run_tune()`): Create `Tuner` → execute trials → upload offline logs
+
+### Why This Matters for Development
+
+- **Adding new args:** Must understand which parser class to extend and which annotation (`AlwaysRestore`, `NeverRestore`) controls checkpoint behavior
+- **Creating callbacks:** Choose `RLlibCallback` (runs in training loop) vs Tune `Callback` (runs in Tuner, sees all trials)
+- **Checkpoint restoration:** Setup, args, and config_files are all checkpointed together - changes must be backward compatible
+
+
+## Quick Commands. Run before every commit
+
+```bash
+# Format all files
+ruff format .
+
+# Check linting of currently edited file
+ruff check path/to/file.py --select E,F,W,B,PERF,SIM --ignore E501,SIM108
+```
+
+## Project Structure & Key Files
+
+### Where to Add Code
+
+| Adding... | Go to... | Notes |
+|-----------|----------|-------|
+| New CLI argument | `config/parser/default_argument_parser.py` | Extend appropriate parser class, use `AlwaysRestore`/`NeverRestore` annotations |
+| Training intervention | `callbacks/algorithm/*.py` | Create `RLlibCallback` subclass, runs in Algorithm training loop |
+| Cross-trial logic | `callbacks/tuner/*.py` | Create Tune `Callback` subclass, sees all trials |
+| Experiment template | `setup/` | Extend `AlgorithmSetup` or create Setup subclass |
+| Trial scheduler | `tune/` | Extend `PopulationBasedTraining` or `TrialScheduler` |
+| Env preprocessing | `connectors/` | Create connector or preprocessor for `EnvRunner` |
+| Metric processing | `postprocessing.py` | Functions to flatten/format metrics for loggers |
+| Test utilities | `testing_utils.py` | Context managers, decorators, helper mixins |
+
+### Critical Files (Read These First)
+
+**Core Flow:**
+1. `config/parser/default_argument_parser.py` (650 lines) - All CLI args, inheritance chain with annotations
+2. `setup/experiment_base.py` (1500+ lines) - Setup lifecycle: parse → config → trainable → tuner
+3. `training/default_class.py` (1500+ lines) - Trainable implementation: algorithm creation, checkpointing, progress tracking
+
+**Key Helpers:**
+- `training/helpers.py` - Checkpoint restoration, config copying, metric processing
+- `constants.py` - Metric keys, result keys, project-wide constants
+- `misc.py` - Utility functions used across codebase
+
+## Coding Conventions
+
+### Mandatory Rules
+
+**Logging (Strictly Enforced):**
+- No print() statements: Always use logger. Print statements don't respect log levels and aren't captured properly in distributed Ray workers.
+
+```python
+logger = logging.getLogger(__name__)
+logger.info("Step %s: loss=%s", step, loss)  # ✓ REQUIRED: %s formatting
+logger.info(f"Step {step}: loss={loss}")      # ✗ FORBIDDEN: f-strings break lazy evaluation
+```
+
+**Type Hints:** Required on all public functions/methods. Use `from __future__ import annotations` for forward references.
+
+**Exception Handling:** Never use bare `except:` - always catch specific exceptions.
+
+**Optional Dependencies:** Guard with `TYPE_CHECKING` or try/except:
+
+```python
+try:
+    import optuna
+except ImportError:
+    optuna = None  # type: ignore
+```
+
+**Editing Rules**
+- Only edit files under `ray_utilities/` (and project `docs/` and `tests/`); never touch site-packages or env directories
+- Place new code in the correct folder (see sections: Quick Reference: When Working On..., and Project Structure & Key Files)
 - Prefer minimal diffs; keep changes localized
-- Do not move code unless necessary
+- Do not move code unless necessary or instructed
 - Keep public APIs stable; update tests and pyproject.toml extras if changed
 - Use type annotations for all public functions and methods
-- Avoid broad `except`; use specific exceptions
-- Keep imports top-level or under `TYPE_CHECKING` if optional
 - Prefer `pathlib.Path` over `os.path` for new code
-- Do not use `print()`; use the in the file defined logger
-- Follow ruff/black/pyright settings in pyproject.toml; do not change lint rules
 
-Logging and Metrics Conventions
-- Use `%s` for logging calls; do not use f-strings or other formatting (e.g., `logger.info("message: %s", value)`)
-- Prefer `logger = logging.getLogger(__name__)` and avoid adding duplicate handlers
-- Use `change_log_level` utilities when adjusting levels
-- Metrics: keep keys flat with slashes (e.g., `eval/return_mean`); use `flat_dict_to_nested` if needed
+### Testing Workflow
 
-Testing Guidance
-- for pytest also install `pytest-timeout`; ignore any PytestConfigWarning warnings
-- Use test markers: `basic` for very essential tests
-- Use test utilities: `patch_args`, `DisableLoggers`, `InitRay`, `TestHelpers`, the later classes inherit from `unittest.TestCase`, so no need to inherit from it again.
-- Avoid network I/O in tests; `wandb`/`comet` should be used in offline mode. Mock the modules if needed.
+Tests are stored in the `test/` directory. Use `pytest` with verbose output for running tests. Example:
 
-Minimal test template
+```bash
+pytest test/test_trainable.py -v
+```
+
+**Test Utilities** (`testing_utils.py`): Use `TestHelper`, `DisableLoggers`, `InitRay`, `patch_args` for test isolation. Example:
 
 ```python
-import unittest
-from ray_utilities.testing_utils import DisableLoggers, TestHelper, InitRay, patch_args
+from ray_utilities.testing_utils import DisableLoggers, InitRay, TestHelper, patch_args
 
-# Base classes inherit from unittest.TestCase
-class MyTest(DisableLoggers, InitRay, TestHelper, num_cpus=1):
+class MyTest(DisableLoggers, InitRay, TestHelper, num_cpus=4):
     @patch_args("--iterations", 1)
     def test_something(self):
-        # Arrange/Act/Assert
-        self.assertTrue(True)
+        # Test code here
+        pass
 ```
 
-Common Pitfalls
-- Do not catch bare `Exception`; use specific exceptions
-- Keep imports top-level; lazy-load only when needed
-- Respect `ruff` ignores in the code (e.g. `# ruff: noqa: F401`)
-- Avoid global side effects in tests and at import time
-
-Optional Dependencies
-- Guard optional imports with `if TYPE_CHECKING:` or `try...except ImportError:`
-- Keep `wandb`/`comet` in offline mode for tests; avoid network I/O
-- Be aware of top-level import side effects (e.g., `comet_ml` in `__init__.py`)
-
-Callback Guidance
-- Use `RLlibCallback` for RLlib experiments, `Tune Callback` for Tune experiments
-- Preferred RLlibCallback hooks: `on_algorithm_init`, `on_train_result`, etc.
-- Example: set log level from `algorithm.config` in `RLlibCallback.on_algorithm_init`
-
-CI/CD Expectations
-- Workflows: see `.github/workflows/`
-- Required checks: lint, type, test
-- Coverage: maintain or improve coverage. Use `coverage.py` to check.
-- Trigger: push, PR, manual
-
-Documentation guidance
-- Use Google-style docstrings
-- The `napoleon` and `sphinx-autodoc-typehints` Sphinx extensions are enabled. Have this in mind when suggesting changes, for example because of autodoc typehints are type-hints in docstrings not needed
-- Use `<name>: <description>` for attribute listing in the Attributes section of docstrings.
-- Always use cross referencing when appropriate; to internal and external objects (e.g., ``:class:`~ray.rllib.algorithms.algorithm.Algorithm` ``)
-- Do not add type-hints in the attribute listing of docstrings
-- Keep line length to 100 characters, up to 120 can be an exception
-- Sphinx is used for docs generation
-- Do not remove todo notes in docstrings
-- For examples use code blocks and avoid inline code or shell snippets, i.e. avoid `>>>` and `...` in front of code.
-
-
-Example Snippets
-Minimal RLlibCallback:
+### Entry Point Pattern
 
 ```python
-from ray.rllib.callbacks.callbacks import RLlibCallback
-class MyCallback(RLlibCallback):
-    def on_algorithm_init(self, *, algorithm, **kwargs):
-        ...
+# experiments/default_training.py pattern
+if __name__ == "__main__":
+    ray.init(runtime_env=runtime_env)
+    with DefaultArgumentParser.patch_args("--seed", "42", "--wandb", "offline+upload"):
+        with PPOSetup(config_files=["experiments/default.cfg"]) as setup:
+            setup.config.training(num_epochs=10)  # Adjust config in with-block
+        results = run_tune(setup)  # Executes the experiment
 ```
 
-Minimal AlgorithmSetup subclass:
+**Why `with setup:`?** Config changes inside the block are tracked for checkpoint reloads. After `__exit__`, config is frozen and trainable is created.
 
-```python
-from ray_utilities.setup.experiment_base import AlgorithmSetup
-class MyExperimentSetup(AlgorithmSetup):
-    # Set Algorithm class
-    # define AlgorithmConfig
-    ...
+
+## Common Pitfalls
+
+| Mistake | Symptom | Fix |
+|---------|---------|-----|
+| Modifying frozen config | `AttributeError: Cannot set attribute ... already frozen` | Use `with setup:` or `setup.unset_trainable()` |
+| Using `print()` | Output not in logs, breaks distributed execution | Use `logger = logging.getLogger(__name__)` |
+| F-strings in logging | Performance issues, breaks filtering | Use `logger.info("msg: %s", var)` |
+| Bare `except:` | Catches KeyboardInterrupt, masks bugs | Catch specific exceptions |
+| Forgetting `with setup:` | Config not frozen, trainable not created | Always use context manager or call `create_trainable()` |
+| global variable usage on remote | (silently) wrong configuration chosen | Avoid modifying globals that are used by remote classes (`RLlibCallback`, `ray.remote`, `DefaultTrainable`). Tuner `Callback` and `ExperimentSetupBase` classes are fine. | Pass via config or pass with `ray.put/get` or `ray.remote` |
+| Online WandB/Comet in tests | Tests hang, is slow | mock to avoid network I/O
+
+- **Don't modify config after `with setup:` block** - changes won't be tracked for checkpoint restoration
+- **Don't call `run_in_terminal` for Python execution** - use `mcp_pylance_mcp_s_pylanceRunCodeSnippet` for cleaner output
+
+## Quick Reference: When Working On...
+
+| Task | Primary Files | Key Considerations |
+|------|---------------|-------------------|
+| New CLI arg | `config/parser/default_argument_parser.py` | Choose correct parser class, add restoration annotation |
+| New Setup class | `setup/` directory | Extend `AlgorithmSetup`, override `_create_config()` |
+| Training callback | `callbacks/algorithm/` | Extend `RLlibCallback`, runs per-algorithm |
+| Tuner callback | `callbacks/tuner/` | Extend Tune `Callback`, sees all trials |
+| Checkpoint bug | `training/helpers.py`, `setup/experiment_base.py::from_saved()` | Check restoration logic, config copying |
+| Metric formatting | `postprocessing.py` | Flatten nested dicts, use slash separators |
+| Dynamic hyperparameters | `callbacks/algorithm/dynamic_hyperparameter.py` | Frozen config workaround: `object.__setattr__()` |
+| PBT/forking | `tune/top_pbt_scheduler.py`, `callbacks/tuner/*callback.py` | Fork tracking via `FORK_FROM`, WandB/Comet integration |
 ```
-
-Usage of AlgorithmSetup and ExperimentSetupBase
-
-```python
-from ray_utilities.setup.algorithm_setup import AlgorithmSetup
-with AlgorithmSetup() as setup:
-    # Adjust config in with block, afterwards the config is frozen and the setup.trainable / setup.trainable_class created
-    setup.config.attribute = "value"
-```
-
-Minimal DefaultArgumentParser extension:
-
-```python
-from ray_utilities.config import DefaultArgumentParser
-class MyParser(DefaultArgumentParser):
-    net_attribute: type_hint = "default_value"
-```
-
-PR Checklist
-- Run `ruff format .`, `ruff check .`, `pyright`
-- Add tests for new behavior
-- Update docs/README/examples if needed
-- Keep PRs small and focused
-
-When you are in the role of a reviewer instead of editing the code, follow these guidelines when you provide feedback:
-- Verify code correctness and functionality
-- Are there bugs or logical errors or other mistakes? Point them out.
-- Provide constructive feedback and suggestions for improvement
-- Ensure adherence to project conventions and best practices
-- Check for code clarity and maintainability
-- Review tests for coverage and effectiveness
