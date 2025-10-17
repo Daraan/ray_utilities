@@ -21,16 +21,15 @@ if __name__ == "__main__":
     PPOMLPWithPBTSetup.group_name = "pbt:batch_size"  # pyright: ignore
     PPOMLPWithPBTSetup.batch_size_sample_space = {"grid_search": [64, 128, 256, 512, 1024, 2048, 4096, 8192]}
     with (
-        #ray.init(num_cpus=11, object_store_memory=4 * 1024**3, runtime_env=runtime_env),   # 4 GB
+        ray.init(num_cpus=11, object_store_memory=4 * 1024**3, runtime_env=runtime_env),   # 4 GB
         DefaultArgumentParser.patch_args(
             # main args for this experiment
-            "--perturbation_interval", 8192 * 14,
             "--tune", "batch_size",
             # Meta / less influential arguments for the experiment.
             "--num_samples", 1, # NOTE: is multiplied by grid_search samples
             "--max_step_size", max(MAX_DYNAMIC_BATCH_SIZE, *PPOMLPWithPBTSetup.batch_size_sample_space["grid_search"]), # pyright: ignore
             "--tags", "pbt:batch_size", # per default includes "<env_type>", "<agent_type>",
-            "--comment", "Default training run. Tune batch size",
+            "--comment", "Tune with Top PBT scheduler over different batch sizes.",
             "--env_seeding_strategy", "same",
             # constant
             "-a", DefaultArgumentParser.agent_type,
@@ -38,8 +37,10 @@ if __name__ == "__main__":
             "--wandb", "online",
             "--comet", "online",
             "--log_level", "INFO",
-            "--log_stats", "more",
-            #"pbt",
+            "--log_stats", "learners",
+            # PBT arguments at the end
+            "pbt",
+            "--perturbation_interval", 1/10,
             config_files=["experiments/pbt.cfg"]
         )
     ):  # fmt: skip
