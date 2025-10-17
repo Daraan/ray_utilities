@@ -655,7 +655,7 @@ class WandbRunMonitor:
         """
         try:
             # Only log if we actually have resources to clean up
-            if logger is not None:  # pyright: ignore[reportUnnecessaryComparison]
+            if logger is not None:  # pyright: ignore[reportUnnecessaryComparison] check if gc cleaned logger
                 logger.debug("__del__ called, performing safety cleanup")
             if self.selenium_session is not None or self.monitor_thread is not None or self._is_initialized:
                 self.cleanup()

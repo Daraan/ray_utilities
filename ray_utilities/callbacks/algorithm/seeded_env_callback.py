@@ -49,7 +49,8 @@ class _SeededEnvCallbackMeta(_CallbackMeta):  # pyright: ignore[reportGeneralTyp
     def __eq__(cls, value):  # pyright: ignore[reportSelfClsParameterName]
         if not isclass(value):
             return False
-        if SeedEnvsCallbackBase in (b for b in value.mro() if not isinstance(b, _SeededEnvCallbackMeta)):
+        if issubclass(value, SeedEnvsCallbackBase):
+            # Check for first non metaclassed base, i.e. first non-local defined class
             real_base = next(b for b in cls.mro() if not isinstance(b, _SeededEnvCallbackMeta))
             other_real_base = next(b for b in value.mro() if not isinstance(b, _SeededEnvCallbackMeta))
             if real_base is not other_real_base:

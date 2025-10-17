@@ -63,7 +63,7 @@ class DummyWandbUploader(WandbUploaderMixin):
         # Write failed file
         grand_path = Path(wandb_paths[0]).parent.parent
         failed_file = grand_path / f"failed_wandb_uploads-{RUN_ID}.txt"
-        with open(failed_file, "a") as f:
+        with open(failed_file, "w") as f:
             f.write("trial_1 : wandb sync /fake/path\n")
 
 

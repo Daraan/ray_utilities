@@ -235,7 +235,7 @@ class AdvWandbLoggerCallback(
         # NOTE: We never want FORK_FROM to be in the trials.config by default.
 
         start = time.time()
-        use_monitor = self.upload_offline_experiments and fork_from and self.kwargs["mode"] != "disabled"
+        use_monitor = self.upload_offline_experiments and fork_from and self.is_wandb_enabled(self.kwargs)
         if use_monitor and self._monitor is None:
             # Start the monitor to track parent runs of forked trials
             if self.project is None:
@@ -296,6 +296,10 @@ class AdvWandbLoggerCallback(
             self._start_logging_actor(trial, exclude_results, **wandb_init_kwargs)
         self._trials_started += 1
 
+    def is_wandb_enabled(self, wandb_init_kwargs: dict[str, Any]) -> bool:
+        """Helper to check if WandB logging is enabled based on mode."""
+        return wandb_init_kwargs.get("mode") != "disabled"
+
     def _restart_logging_actor(self, trial: "Trial", **wandb_init_kwargs):
         """Ends the current logging actor and starts a new one. Useful for resuming with a new ID / settings.
 
@@ -346,7 +350,7 @@ class AdvWandbLoggerCallback(
             # close monitor tab of old run:
             if len(self._past_trial_ids.get(trial, ())) == 0:  # might appear during testing when init is skipped
                 _logger.warning("BUG: No past trial IDs found for trial %s", trial.trial_id)
-            elif wandb_init_kwargs.get("mode") != "disabled":
+            elif self.is_wandb_enabled(wandb_init_kwargs):
                 actual_previous_id = self._past_trial_ids[trial][-1]
                 _logger.debug("Closing tab of %s", actual_previous_id)
                 self._start_monitor().close_run_tab.remote(actual_previous_id)  # pyright: ignore[reportFunctionMemberAccess]
@@ -424,7 +428,7 @@ class AdvWandbLoggerCallback(
             # but not when we load a checkpoint, but when it initially was a checkpoint and then got forked
             if gather_uploads or self.is_trial_forked(trial):
                 _logger.info("Gathering more trials to upload to WandB in dependency order...")
-                if self.kwargs.get("mode") != "disabled":
+                if self.is_wandb_enabled(self.kwargs):
                     self._start_monitor()
                 # Gather trials that are ending and upload them in dependency order
                 self._gather_and_upload_trials(trial, actor_done=done)

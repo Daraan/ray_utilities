@@ -38,7 +38,7 @@ class TestPBTParser(unittest.TestCase):
             self.assertEqual(args.quantile_fraction, 0.1)
             # TODO: Add some "auto" mode that chooses depending on total_steps or max_step size.
             # Use a float value to split total_steps into a fraction
-            self.assertEqual(args.perturbation_interval, 8192 * 14)
+            self.assertEqual(args.perturbation_interval, PopulationBasedTrainingParser.perturbation_interval)
             self.assertEqual(args.resample_probability, 1.0)
             self.assertEqual(args.mode, "max")
 

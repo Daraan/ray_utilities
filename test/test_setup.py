@@ -570,6 +570,14 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         assert isclass(Trainable)
         trainable = Trainable()
         assert trainable.algorithm_config.minibatch_size is not None
+
+        def has_restore_warning(logs: list[str]) -> bool:
+            return any(
+                "Restoring AlwaysRestore argument 'agent_type' from checkpoint: "
+                "replacing a new value (explicitly passed) with mlp" in msg
+                for msg in logs
+            )
+
         with tempfile.TemporaryDirectory() as tmpdir:
             trainable.save_to_path(tmpdir)
             with patch_args(
@@ -581,12 +589,11 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     "WARNING",
                 ) as context:
                     AlgorithmSetup()
+                # Helper to check if the expected warning message is present in logs.
+
+                # The assertion logic is extracted for clarity and maintainability.
                 self.assertTrue(
-                    any(
-                        "Restoring AlwaysRestore argument 'agent_type' from checkpoint: "
-                        "replacing a new value (explicitly passed) with mlp" in msg
-                        for msg in context.output
-                    ),
+                    has_restore_warning(context.output),
                     msg=context.output,
                 )
             with patch_args(
