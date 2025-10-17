@@ -619,7 +619,9 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             num_envs = trainable.algorithm_config.num_envs_per_env_runner
 
             def check_np_random_seed(runner: SingleAgentEnvRunner | Any, num_envs=num_envs):
-                # here seeds must be != -1 as env.reset was called
+                # The value -1 is used as a sentinel to indicate that the environment has not yet been seeded.
+                # After env.reset is called, the environment's random seed is set to a specific value,
+                # so np_random_seed should no longer be (-1, ..., -1).
                 return runner.env.np_random_seed != (-1,) * num_envs
 
             def check_np_random_generator(runner: SingleAgentEnvRunner | Any, env_seed, logged_seeds):
