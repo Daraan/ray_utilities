@@ -362,9 +362,9 @@ class PatchArgsMixin(Tap):
 
         new_args = []
         # Move subparser actions to the end:
-        used_actions = {k: v for k, v in used_actions.items() if not isinstance(k, argparse._SubParsersAction)} | {
-            k: v for k, v in used_actions.items() if isinstance(k, argparse._SubParsersAction)
-        }
+        used_actions: dict[argparse.Action, Any] = {
+            k: v for k, v in used_actions.items() if not isinstance(k, argparse._SubParsersAction)
+        } | {k: v for k, v in used_actions.items() if isinstance(k, argparse._SubParsersAction)}
         for action, value in used_actions.items():
             cls._recus_add_actions(
                 action,
@@ -498,7 +498,10 @@ class SubcommandHandlerBase(
     def command(self, value: Subparsers) -> None:
         self.__command = value
 
-    _skip_subparser_fields = ["help", "description"]  # noqa: RUF012
+    _skip_subparser_fields = ["help", "description", "_parsed"]  # noqa: RUF012
+
+    class __NO_VALUE:  # noqa: N801
+        """Serilizable NO_VALUE Sentinel for Delegator classes."""
 
     def configure(self) -> None:
         super().configure()
@@ -524,7 +527,11 @@ class SubcommandHandlerBase(
         DelegatorCommand = type(
             subparser.__class__.__name__ + "Delegator",
             (subparser.__class__,),
-            {"_parsed": True, "help": getattr(subparser, "help", None)},
+            {
+                "_parsed": True,
+                "help": getattr(subparser, "help", None),
+                "description": getattr(subparser, "description", self.__doc__),
+            },
         )
         for action in subparser._actions:
             if action.dest in self._skip_subparser_fields:
@@ -532,7 +539,15 @@ class SubcommandHandlerBase(
 
             @property
             def delegator_getter(_delegator: Any, dest=action.dest) -> Any:  # noqa: PLR0206
-                return getattr(self, dest)
+                attr = getattr(self, dest, self.__NO_VALUE)
+                if attr is self.__NO_VALUE:
+                    if hasattr(_delegator.__class__, dest):
+                        # we are possibly in __setstate__ where attributes are not yet set
+                        return self.__NO_VALUE
+                    raise AttributeError(
+                        f"'{dest}' not found on '{self.__class__}' or delegator.__class__ '{_delegator.__class__}'"
+                    )
+                return attr
 
             @delegator_getter.setter
             def delegator_setter(_delegator: Any, value: Any, dest=action.dest) -> None:
@@ -543,7 +558,7 @@ class SubcommandHandlerBase(
         def attr_gettr(_delegator: Any, key: str) -> Any:
             # Optional: remove check for full Delegator -> main parser forwarding
             if not hasattr(subparser, key):
-                raise AttributeError(f"'{key}' not found on subparser {subparser!r}")
+                raise AttributeError(f"'{key}' not found on subparser {subparser}")
             return getattr(self, key)
 
         DelegatorCommand.__getattr__ = attr_gettr
@@ -555,9 +570,12 @@ class SubcommandHandlerBase(
         if isinstance(subparser, Tap):
             # subparser.process_args()
             # Process args on parser, choose one:
+            subparser._parsed = True
             # type(subparser).process_args(parser)
             DelegatorCommand.process_args(self)
-        return DelegatorCommand()
+        delegator = DelegatorCommand()
+        delegator._parsed = True
+        return delegator
 
 
 class _GoalParser(Tap):
@@ -838,6 +856,7 @@ class DefaultLoggingArgParser(Tap):
 
     def __setstate__(self, d: dict[str, Any]) -> None:
         d.pop("use_comet_offline", None)  # do not set property
+        d.pop("command_str")
         return super().__setstate__(d)
 
     def _parse_logger_choices(  # noqa: PLR6301  # could be static

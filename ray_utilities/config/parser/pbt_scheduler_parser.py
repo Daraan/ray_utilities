@@ -132,6 +132,10 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
             default=None,
             help="Hyperparameter mutations for PopulationBasedTraining.",
         )
+        self.add_argument(
+            "--perturbation_interval",
+            type=lambda x: float(x) if "." in x else int(x),
+        )
         # As long as Sentinel cannot be pickled do not add it as default
         # self.add_argument(
         #    "--metric",
@@ -177,7 +181,8 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
 
     def to_scheduler(self) -> PopulationBasedTraining:
         if not self._parsed:
-            args = self.parse_args().as_dict()
+            # When used as subparser we should not end up here
+            args = self.parse_args(known_only=True).as_dict()
         else:
             args = self.as_dict()
         args.pop("hyperparam_mutations", None)  # will be set below

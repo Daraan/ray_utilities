@@ -516,6 +516,10 @@ class TestSubparsers(unittest.TestCase):
             parser = DefaultArgumentParser[DefaultArgumentParser]().parse_args()
             self.assertEqual(parser.command.perturbation_interval, parser.total_steps * 0.5)  # pyright: ignore[reportAttributeAccessIssue]
 
+        with patch_args("pbt", "--perturbation_interval", "0.5"):
+            parser = DefaultArgumentParser[DefaultArgumentParser]().parse_args()
+            self.assertEqual(parser.command.perturbation_interval, parser.total_steps * 0.5)  # pyright: ignore[reportAttributeAccessIssue]
+
 
 if __name__ == "__main__":
     unittest.main()
