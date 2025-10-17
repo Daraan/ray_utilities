@@ -906,14 +906,14 @@ class _ScalingPopulationBasedTrainingParser(OptionalExtensionsArgs, PopulationBa
                         "When passing perturbation_interval as fraction (float in [0,1]), "
                         f"the iterations argument must be numerical, not {self.iterations}"
                     )
-                perturbation_interval = math.ceil(self.perturbation_interval * self.total_steps)
+                relative_interval = math.ceil(self.perturbation_interval * self.total_steps)
                 logger.info(
                     "Interpreting perturbation_interval=%s as fraction of total steps: "
                     "Setting perturbation_interval=%s",
                     self.perturbation_interval,
-                    perturbation_interval,
+                    relative_interval,
                 )
-                self.perturbation_interval = perturbation_interval
+                self.perturbation_interval = relative_interval
             # Else assume it is some float time attr
 
         max_step_size = getattr(self, "max_step_size", None)

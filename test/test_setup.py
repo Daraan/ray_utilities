@@ -589,9 +589,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     "WARNING",
                 ) as context:
                     AlgorithmSetup()
-                # Helper to check if the expected warning message is present in logs.
-
-                # The assertion logic is extracted for clarity and maintainability.
+                # Check all logged outputs
                 self.assertTrue(
                     has_restore_warning(context.output),
                     msg=context.output,
