@@ -342,7 +342,8 @@ class TestProcessing(unittest.TestCase):
                 # The order of arguments might be changed by patch_args
                 self.assertTrue(
                     sys.argv[1:] == ["-a", "no_actor_by_patch", "--log_level", "DEBUG"]
-                    or sys.argv[1:] == ["--log_level", "DEBUG", "-a", "no_actor_by_patch"]
+                    or sys.argv[1:] == ["--log_level", "DEBUG", "-a", "no_actor_by_patch"],
+                    f"Not patched correctly: {sys.argv[1:]}",
                 )
                 args = DefaultArgumentParser().parse_args()
                 self.assertEqual(args.comet, False)
@@ -410,6 +411,7 @@ class TestProcessing(unittest.TestCase):
             args = DefaultArgumentParser().parse_args()
             self.assertTrue(args.total_steps, 100)
 
+    def test_class_patch_args_complex(self):
         with patch_args("--comet", "--no_exact_sampling", "-n", 4, "--log_level", "DEBUG"):
             with DefaultArgumentParser.patch_args(
                 # main args for this experiment
@@ -427,9 +429,11 @@ class TestProcessing(unittest.TestCase):
                 "--comet", "offline+upload",
                 "--log_level", "INFO",
                 "--use_exact_total_steps",
+                "pbt",
+                "--perturbation_interval", "0.5",
             ):  # fmt: skip
                 args = AlgorithmSetup().args
-                self.assertListEqual(args.tune, ["batch_size"])  # pyright: ignore[reportArgumentType]
+                self.assertListEqual(args.tune, ["batch_size"], f"is {args.tune}")  # pyright: ignore[reportArgumentType]
                 self.assertEqual(args.max_step_size, 16_000)
                 self.assertEqual(args.tags, ["tune-batch_size", "mlp"])
                 self.assertEqual(args.comment, "Default training run. Tune batch size")
@@ -442,6 +446,7 @@ class TestProcessing(unittest.TestCase):
                 self.assertEqual(args.num_samples, 4)
                 self.assertEqual(args.comet, "online")
                 self.assertIs(args.no_exact_sampling, True)
+                self.assertEqual(args.command.perturbation_interval, 0.5 * args.total_steps)  # pyright: ignore[reportOptionalMemberAccess]
             args = AlgorithmSetup().args
             self.assertIs(args.use_exact_total_steps, False)
             self.assertIs(args.wandb, False)
