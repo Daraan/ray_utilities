@@ -36,7 +36,9 @@ class TestPBTParser(unittest.TestCase):
             args = parser.parse_args(known_only=True)
             self.assertEqual(args.time_attr, "current_step")
             self.assertEqual(args.quantile_fraction, 0.1)
-            self.assertEqual(args.perturbation_interval, 100_000)
+            # TODO: Add some "auto" mode that chooses depending on total_steps or max_step size.
+            # Use a float value to split total_steps into a fraction
+            self.assertEqual(args.perturbation_interval, PopulationBasedTrainingParser.perturbation_interval)
             self.assertEqual(args.resample_probability, 1.0)
             self.assertEqual(args.mode, "max")
 
@@ -150,7 +152,7 @@ class TestTopTrialScheduler(DisableLoggers, TestHelpers):
         lower_scores_filtered = [s for s in lower_scores if s is not None]
 
         # Verify all upper scores are higher than any lower score
-        self.assertTrue(all(u > max(lower_scores_filtered) for u in upper_scores))
+        self.assertTrue(all(u > max(lower_scores_filtered) for u in upper_scores))  # pyright: ignore[reportOptionalOperand]
 
     def test_quantiles_min_mode(self):
         """Test quantile calculation with min mode."""
@@ -174,7 +176,7 @@ class TestTopTrialScheduler(DisableLoggers, TestHelpers):
         # Filter out None values for min()
         lower_scores_filtered = [s for s in lower_scores if s is not None]
         # Verify all upper scores are greater than any lower score. Remember for min mode the sign is switched.
-        self.assertTrue(all(u > max(lower_scores_filtered) for u in upper_scores))
+        self.assertTrue(all(u > max(lower_scores_filtered) for u in upper_scores))  # pyright: ignore[reportOptionalOperand]
 
     def test_distribute_exploitation(self):
         """Test exploitation distribution among trials."""
@@ -240,6 +242,7 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
             perturbation_interval=10,
             quantile_fraction=0.3,
             hyperparam_mutations={"dummy": [1, 2]},
+            reseed=True,
         )
 
         temp_dir = tempfile.mkdtemp()
@@ -253,7 +256,7 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
             trial.trial_id = f"trial_{i}"
             trial.is_finished.return_value = False
             trial.status = Trial.RUNNING
-            trial.config = {"dummy": -i}
+            trial.config = {"dummy": -i, "env_seed": 0}
 
             # For testing the temporary_state for paused trials
             if i < 3:  # Make first 3 trials be in upper quantile
@@ -272,6 +275,7 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
             scheduler._trial_state[trial] = state
             scheduler.on_trial_add(mock_controller, trial)
             # this is set to 0 on_trial_add
+            state.current_env_steps = 12
             state.last_training_iteration = 1
 
         # Mock controller methods
@@ -285,6 +289,8 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
             # Test with a trial in the upper quantile
             upper_trial = upper[0]
             scheduler._checkpoint_or_exploit(upper_trial, mock_controller, upper, lower)
+
+            self.assertEqual(upper_trial.config["env_seed"], (0, 12))
 
             # Verify upper trial gets a checkpoint but doesn't exploit
             mock_controller._schedule_trial_save.assert_called_with(
@@ -302,9 +308,11 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
 
             # Need to have checkpoints for upper trials
             for trial in upper:
-                scheduler._trial_state[trial].last_checkpoint = "upper_checkpoint"
+                scheduler._trial_state[trial].last_checkpoint = "upper_checkpoint"  # pyright: ignore[reportAttributeAccessIssue]
 
             scheduler._checkpoint_or_exploit(lower_trial, mock_controller, upper, lower)
+
+            self.assertEqual(upper_trial.config["env_seed"], (0, 12))
 
             # Verify lower trial gets a checkpoint and exploits
             mock_controller._schedule_trial_save.assert_called_with(

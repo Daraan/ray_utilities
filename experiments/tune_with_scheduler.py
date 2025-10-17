@@ -17,16 +17,17 @@ os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
 os.environ.setdefault("RAY_DEDUP_LOGS_ALLOW_REGEX", "COMET|wandb")
 
 if __name__ == "__main__":
-    ray.init(object_store_memory=4 * 1024**3, runtime_env=runtime_env)  # 4 GB
+    ray.init(num_cpus=11, object_store_memory=4 * 1024**3, runtime_env=runtime_env)  # 4 GB
     PPOMLPWithPBTSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
     PPOMLPWithPBTSetup.group_name = "pbt:batch_size"  # pyright: ignore
-    PPOMLPWithPBTSetup.batch_size_sample_space = {"grid_search": [64, 128, 256, 512, 1024]}
+    PPOMLPWithPBTSetup.batch_size_sample_space = {"grid_search": [64, 128, 256, 512, 1024, 2048, 4096, 8192]}
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
         "--tune", "batch_size",
         "--perturbation_interval", 100_000,
         # Meta / less influential arguments for the experiment.
         "--num_samples", 1, # NOTE: is multiplied by grid_search samples
+        "--num_jobs", 0,  # use 0 to use all available resources
         "--max_step_size", max(MAX_DYNAMIC_BATCH_SIZE, *PPOMLPWithPBTSetup.batch_size_sample_space["grid_search"]), # pyright: ignore
         "--tags", "pbt:batch_size", # per default includes "<env_type>", "<agent_type>",
         "--comment", "Default training run. Tune batch size",

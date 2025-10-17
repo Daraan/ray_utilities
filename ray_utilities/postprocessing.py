@@ -117,6 +117,7 @@ from ray_utilities.constants import (
     ENVIRONMENT_RESULTS,
     EPISODE_BEST_VIDEO,
     EPISODE_WORST_VIDEO,
+    SEEDS,
 )
 from ray_utilities.misc import deep_update, get_current_step
 from ray_utilities.temp_dir import TEMP_DIR_PATH
@@ -572,9 +573,9 @@ def create_log_metrics(
         eval_mean = float("nan")
         disc_eval_mean = float("nan")
     environment_results = result[ENV_RUNNER_RESULTS].get(ENVIRONMENT_RESULTS, {})
-    if environment_results:  # turn to a list
-        s_seq: Deque = environment_results["seeds"]["seed_sequence"]
-        environment_results["seeds"]["seed_sequence"] = list(s_seq)
+    if environment_results and SEEDS in environment_results:
+        s_seq: Deque = environment_results[SEEDS]["seed_sequence"]
+        environment_results[SEEDS]["seed_sequence"] = list(s_seq)
 
     current_step = get_current_step(result)
     metrics: LogMetricsDict = {
@@ -731,8 +732,9 @@ def create_log_metrics(
     elif "learners" not in log_stats and LEARNER_RESULTS in merged_result:
         merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_IN)
         merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_OUT)
-        merged_result[LEARNER_RESULTS][ALL_MODULES].pop(NUM_ENV_STEPS_TRAINED_LIFETIME + "_throughput")
-        merged_result[LEARNER_RESULTS][ALL_MODULES].pop(NUM_MODULE_STEPS_TRAINED + "_throughput")
+        if "timers" not in log_stats:  # not timers+learners case
+            merged_result[LEARNER_RESULTS][ALL_MODULES].pop(NUM_ENV_STEPS_TRAINED_LIFETIME + "_throughput")
+            merged_result[LEARNER_RESULTS][ALL_MODULES].pop(NUM_MODULE_STEPS_TRAINED + "_throughput")
     _remove_less_interesting_keys(merged_result)
     return merged_result  # type: ignore[return-value]
 

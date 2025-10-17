@@ -70,7 +70,7 @@ class ExperimentUploader(WandbUploaderMixin, CometUploaderMixin[ParserType_co]):
         unfinished_wandb_uploads = None
         if self.args.wandb and "upload" in self.args.wandb:
             if results is None:
-                logger.error(
+                logger.warning(
                     "Wandb upload requested, but no results provided. This will not upload any offline experiments."
                 )
             try:  # if no results (due to a failure) get them in a more hacky way.

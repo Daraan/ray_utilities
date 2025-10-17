@@ -539,10 +539,20 @@ class RLlibArgumentParser(_EnvRunnerParser):
 
 class DefaultResourceArgParser(Tap):
     num_jobs: NotAModelParameter[NeverRestore[int]] = 5
-    """Trials to run in parallel"""
+    """
+    Trials to run in parallel
+
+    Use 0 to apply no limit and use the available resources.
+
+    Note:
+        When using PBT, you should set the limit via cpu limits and set this to 0.
+    """
 
     num_samples: NotAModelParameter[NeverRestore[int]] = 1
-    """Number of samples to run in parallel, if None, same as num_jobs"""
+    """
+    Number of times to sample from hyperparameter space for grid search this value is multiplied by grid options.
+    If None, same as num_jobs
+    """
 
     gpu: NeverRestore[bool] = False
 

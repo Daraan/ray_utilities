@@ -169,7 +169,8 @@ class _WandbLoggingActorWithArtifactSupport(_WandbLoggingActor):
             self._monitor = WandbRunMonitor.get_remote_monitor(
                 entity=self.kwargs.get("entity", wandb_api().default_entity), project=self.kwargs["project"]
             )
-            self._monitor.initialize.remote()  # pyright: ignore[reportFunctionMemberAccess]
+            if not ray.get(self._monitor.is_initialized.remote()):  # pyright: ignore[reportFunctionMemberAccess]
+                self._monitor.initialize.remote()  # pyright: ignore[reportFunctionMemberAccess]
         parent_id = self.kwargs["fork_from"].split("?")[0]
         if "config" in self.kwargs:
             assert parent_id == cast("ForkFromData", self.kwargs["config"]["fork_from"]).get(

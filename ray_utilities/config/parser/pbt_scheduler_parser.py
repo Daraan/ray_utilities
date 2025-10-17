@@ -107,7 +107,7 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
     log_config: bool = True
     time_attr: str = "current_step"
     quantile_fraction: float = 0.1
-    perturbation_interval: float = 100_000
+    perturbation_interval: int | float = 8192 * 14  # (114688) Total should be divisible by total steps
     resample_probability: float = 1.0  # always resample
 
     # custom_args, remove before passing to PopulationBasedTraining
@@ -200,3 +200,16 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
             **args,
             hyperparam_mutations=self.hyperparam_mutations,
         )
+
+    def process_args(self) -> None:
+        super().process_args()
+        max_step_size = getattr(self, "max_step_size", None)
+        if max_step_size is None:
+            return
+        if self.perturbation_interval % max_step_size != 0:
+            logger.warning(
+                "The perturbation_interval (%s) is not a multiple of max_step_size (%s). "
+                "This will lead to overstepping behavior and uneven perturbation intervals.",
+                self.perturbation_interval,
+                max_step_size,
+            )

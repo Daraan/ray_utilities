@@ -12,9 +12,12 @@ Main Components:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional, Sequence, cast
 
-from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback, make_seeded_env_callback
+from ray_utilities.callbacks.algorithm.seeded_env_callback import (
+    SeedEnvsCallbackBase,
+    make_seeded_env_callback,
+)
 
 from .parser.default_argument_parser import DefaultArgumentParser
 
@@ -105,6 +108,7 @@ def add_callbacks_to_config(
                 callback_list = [callback] if callable(callback) else callback
                 if callable(present_callbacks):
                     present_name = present_callbacks.__name__.split(".")[-1]
+                    remove_present_callback = remove_existing(present_callbacks)
                     for cb in callback_list:
                         if cb.__name__.split(".")[-1] == present_name:
                             # NOTE: With cloudpickle an identical, but not by id, callback might be added
@@ -113,14 +117,14 @@ def add_callbacks_to_config(
                                     "A equal callback with the same name as %s already exists. Ignoring.",
                                     present_callbacks.__name__,
                                 )
-                            else:
+                            elif not remove_present_callback:
                                 logger.warning(
                                     "A non-equal callback with the same name as %s already exists. "
                                     "This might be a duplicate by cloudpickle. Still adding second callback %s",
                                     present_callbacks.__name__,
                                     cb.__name__,
                                 )
-                    if remove_existing(present_callbacks) or present_callbacks in callback_list:
+                    if remove_present_callback or present_callbacks in callback_list:
                         logger.debug(
                             "Replacing existing callback %s with new one(s) %s for event %s%s",
                             present_callbacks,
@@ -181,10 +185,12 @@ if TYPE_CHECKING:
 
 def _remove_existing_seeded_envs(cb: Any) -> bool:
     """Returns True if the passed callback is a SeedEnvsCallback or a subclass of it."""
-    return isinstance(cb, SeedEnvsCallback) or (isinstance(cb, type) and issubclass(cb, SeedEnvsCallback))
+    return isinstance(cb, SeedEnvsCallbackBase) or (isinstance(cb, type) and issubclass(cb, SeedEnvsCallbackBase))
 
 
-def seed_environments_for_config(config: AlgorithmConfig, env_seed: int | None):
+def seed_environments_for_config(
+    config: AlgorithmConfig, env_seed: int | Sequence[int] | None, *, seed_env_directly=False, **kwargs
+):
     """
     Adds/replaces a common deterministic seeding that is used to seed all environments created
     when config is build.
@@ -201,9 +207,19 @@ def seed_environments_for_config(config: AlgorithmConfig, env_seed: int | None):
     - Random seeding across trials:
 
         seed_environments_for_config(config, None)  # <-- always random
+
+    Args:
+        config: The config to add the callback to.
+        env_seed: If int, the constant seed used for all environments across all trials.
+            If None, no seeding is done (random seeding).
+            If a Distribution, it is sampled by tune and passed here.
+        seed_env_directly: If True, the random number generators (``env.np_random``) are set directly
+            without calling `env.reset(seed=...)`. The default is False, which calls `env.reset(seed=...)`
+            with a seed constructed from the base seed, worker index and env index.
+        **kwargs: Additional arguments passed to the :func`make_seeded_env_callback`.
     """
     if not (env_seed is None or isinstance(env_seed, (int, float, tuple, list))):
         # tuple, or list of int might be ok too
         raise TypeError(f"{type(env_seed)} is not a valid type for env_seed. If it is a Distribution sample first.")
-    seed_envs_cb = make_seeded_env_callback(env_seed)
+    seed_envs_cb = make_seeded_env_callback(env_seed, seed_env_directly=seed_env_directly, **kwargs)
     add_callbacks_to_config(config, on_environment_created=seed_envs_cb, remove_existing=_remove_existing_seeded_envs)

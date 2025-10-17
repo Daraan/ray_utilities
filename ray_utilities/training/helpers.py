@@ -7,7 +7,7 @@ import math
 from copy import deepcopy
 from functools import partial
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Literal, Optional, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, TypeVar, cast, overload
 
 import ray
 from packaging.version import Version
@@ -23,7 +23,7 @@ from typing_extensions import Sentinel, TypeAliasType
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
 from ray_utilities.config import seed_environments_for_config
-from ray_utilities.constants import RAY_VERSION
+from ray_utilities.constants import ENVIRONMENT_RESULTS, RAY_VERSION, SEED, SEEDS
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, calculate_steps
 from ray_utilities.misc import AutoInt
 from ray_utilities.warn import (
@@ -193,11 +193,15 @@ def get_args_and_config(
 
     # region seeding
 
-    env_seed = hparams.get("env_seed", None)
+    env_seed: int | Sequence[int] | None = hparams.get("env_seed", _NOT_FOUND)
     # Seeded environments - sequential seeds have to be set here, env_seed comes from Tuner
     if args["env_seeding_strategy"] == "sequential":
         # Warn if a seed is set but no env_seed is present
-        if env_seed is None and "cli_args" in hparams and hparams["cli_args"]["seed"] is not None:
+        if (
+            (env_seed is None or env_seed is _NOT_FOUND)
+            and "cli_args" in hparams
+            and hparams["cli_args"]["seed"] is not None
+        ):
             logger.warning(
                 "cli_args has a seed(%d) set but env_seed is None, sequential seeding will not work. "
                 "Assure that env_seed is passed as a parameter when creating the Trainable, "
@@ -205,10 +209,14 @@ def get_args_and_config(
                 hparams["cli_args"]["seed"],
             )
             env_seed = hparams["cli_args"]["seed"]
+        elif env_seed is _NOT_FOUND:
+            env_seed = None
+        assert env_seed is not _NOT_FOUND
         seed_environments_for_config(config, env_seed)
     elif args["env_seeding_strategy"] == "same":
-        seed_environments_for_config(config, args["seed"])
-    elif args["env_seeding_strategy"] == "constant":
+        # prefer seed coming from tuner
+        seed_environments_for_config(config, env_seed if env_seed is not _NOT_FOUND else args["seed"])
+    elif args["env_seeding_strategy"] == "constant":  # use default seed of class
         seed_environments_for_config(config, SeedEnvsCallback.env_seed)
     else:  # random
         seed_environments_for_config(config, None)
@@ -554,7 +562,12 @@ def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
         }
     }
     # Do not sync EnvRunner seeds here as they are already set (or will be reset)
-    env_runner_metrics_state[COMPONENT_METRICS_LOGGER]["stats"].pop("environments--seeds--seed_sequence", None)
+    env_runner_metrics_state[COMPONENT_METRICS_LOGGER]["stats"].pop(
+        f"{ENVIRONMENT_RESULTS}--{SEEDS}--seed_sequence", None
+    )
+    env_runner_metrics_state[COMPONENT_METRICS_LOGGER]["stats"].pop(
+        f"{ENVIRONMENT_RESULTS}--{SEED}--initial_seed", None
+    )
     eval_stats = {
         k.removeprefix(EVALUATION_RESULTS + "--" + ENV_RUNNER_RESULTS + "--"): split_sum_stats_over_env_runners(
             nan_to_zero_hist_leaves(v), num_env_runners=algorithm.config.num_env_runners or 1

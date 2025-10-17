@@ -152,6 +152,11 @@ class WandbRunMonitor:
             True if initialization successful, False otherwise
         """
         try:
+            if self.is_initialized():
+                logger.warning(
+                    "Monitor already initialized - should not call initialize again. Call refresh/cleanup first."
+                )
+                return True
             self._notify("initializing_monitor")
 
             # Initialize Selenium session
@@ -650,12 +655,14 @@ class WandbRunMonitor:
         """
         try:
             # Only log if we actually have resources to clean up
+            if logger is not None:  # pyright: ignore[reportUnnecessaryComparison] check if gc cleaned logger
+                logger.debug("__del__ called, performing safety cleanup")
             if self.selenium_session is not None or self.monitor_thread is not None or self._is_initialized:
                 self.cleanup()
-                logger.debug("__del__ called, performing safety cleanup")
+                logger.debug("__del__ cleanup done")
         except KeyboardInterrupt:
             self.__del__()  # important that we run cleanup here
-        except Exception:  # ruff: noqa: BLE001
+        except Exception:  # noqa: BLE001
             # Suppress all exceptions in __del__ to avoid issues during interpreter shutdown
             # This follows Python best practices for destructors
             pass

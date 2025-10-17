@@ -835,7 +835,7 @@ class WandBSeleniumSession:
                 else:
                     logger.info("Run page fully loaded with 'Run details' button verified: %s", url)
 
-            logger.info("Successfully visited: %s", url)
+            logger.debug("Successfully visited: %s", url)
             self._notify("page_visited", url)
 
         except (TimeoutException, WebDriverException) as e:
@@ -984,7 +984,7 @@ class WandBSeleniumSession:
             if success:
                 # Track this tab for this run
                 self._run_tabs[run_url] = new_tab
-                logger.info("Successfully visited run page: %s/%s/%s in tab %s", entity, project, run_id, new_tab)
+                logger.debug("Successfully visited run page: %s/%s/%s in tab %s", entity, project, run_id, new_tab)
                 self._notify(
                     "run_page_visited",
                     {
