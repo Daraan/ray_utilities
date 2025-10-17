@@ -23,6 +23,7 @@ if __name__ == "__main__":
     PPOMLPWithPBTSetup.batch_size_sample_space = {"grid_search": [64, 128, 256, 512, 1024, 2048, 4096, 8192]}
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
+        "pbt", # command
         "--tune", "batch_size",
         "--perturbation_interval", 100_000,
         # Meta / less influential arguments for the experiment.
@@ -45,7 +46,7 @@ if __name__ == "__main__":
             # TODO: Trials are reused, trial name might be wrong then
             trial_name_creator=extend_trial_name(insert=["<batch_size>"], prepend="Tune_BatchSize_WithScheduler"),
         )
-        setup.args.set_hyperparam_mutations(
+        setup.args.command.set_hyperparam_mutations(
             {
                 "train_batch_size_per_learner": KeepMutation(),
             }
