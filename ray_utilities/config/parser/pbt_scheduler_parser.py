@@ -127,7 +127,7 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
     def configure(self) -> None:
         super().configure()
         self.add_argument(
-            "--hyperparam-mutations",
+            "--hyperparam_mutations",
             type=_to_hyperparam_mutations,
             default=None,
             help="Hyperparameter mutations for PopulationBasedTraining.",

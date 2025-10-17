@@ -14,12 +14,13 @@ from __future__ import annotations
 import argparse
 import logging
 import math
+import shlex
 import sys
 from ast import literal_eval
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Generic, Optional
 
-from typing_extensions import TypeVar
+from typing_extensions import Self, TypeIs, TypeVar
 
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 
@@ -62,6 +63,7 @@ def _auto_int_transform(x) -> int | Literal["auto"]:
 
 
 _T = TypeVar("_T")
+_ParserT = TypeVar("_ParserT", bound="argparse.ArgumentParser | Tap")
 
 _NO_DEFAULT = Sentinel("_NO_DEFAULT")
 NO_VALUE = Sentinel("NO_VALUE")
@@ -283,7 +285,7 @@ class PatchArgsMixin(Tap):
 
     @classmethod
     @contextmanager
-    def patch_args(cls, *args: str | Any):
+    def patch_args(cls, *args: str | Any, config_files: Optional[Iterable[str]] = None):
         """Context manager to temporarily merge additional arguments with sys.argv.
 
         Arguments present in the original :data:`sys.argv` will take higher priority
@@ -306,25 +308,42 @@ class PatchArgsMixin(Tap):
             :func:`ray_utilities.testing_utils.patch_args`: Alternative implementation
                 for testing scenarios.
         """
-        original_argv = sys.argv[:]
+        original_argv = sys.argv.copy()
         # Parse the original and patch args separately
-        parser_argv = cls()
-        patch_parser = cls()
+        parser_argv = cls(config_files=config_files)
+        patch_parser = cls(config_files=config_files)
         NO_VALUE = object()
+        subparser_dests = set()
         for action in patch_parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                subparser_dests.add(action.dest)
             action.default = NO_VALUE
+        if patch_parser._subparsers:
+            for subparser in patch_parser._subparsers.choices.values():
+                for action in subparser._actions:
+                    action.default = NO_VALUE
         for action in parser_argv._actions:
             action.default = NO_VALUE
+        if parser_argv._subparsers:
+            for subparser in parser_argv._subparsers.choices.values():
+                for action in subparser._actions:
+                    action.default = NO_VALUE
 
         # Parse original CLI args (excluding script name)
         argv_ns, orig_unknown = parser_argv.parse_known_args(original_argv[1:])
         if orig_unknown:
-            logger.warning("Passed unknown args for this parser via sys.argv: %s", orig_unknown, stacklevel=2)
+            logger.warning("Passed unknown args for this parser via sys.argv: %s", orig_unknown, stacklevel=3)
 
         # Parse patch args
-        patch_ns, patch_unknown = patch_parser.parse_known_args(list(map(str, args)))
+        config_args = [
+            arg
+            for args_from_config in patch_parser.args_from_configs
+            for arg in shlex.split(args_from_config, comments=True)
+        ]
+
+        patch_ns, patch_unknown = patch_parser.parse_known_args(config_args + list(map(str, args)))
         if patch_unknown:
-            logger.warning("Patching with unknown args: %s", patch_unknown, stacklevel=2)
+            logger.warning("Patching with unknown args: %s", patch_unknown, stacklevel=3)
 
         # Remove NO_VALUE entries to keep those that were actually passed:
         passed_argv = {dest: v for dest, v in vars(argv_ns).items() if v is not NO_VALUE}
@@ -342,68 +361,20 @@ class PatchArgsMixin(Tap):
         )
 
         new_args = []
+        # Move subparser actions to the end:
+        used_actions = {k: v for k, v in used_actions.items() if not isinstance(k, argparse._SubParsersAction)} | {
+            k: v for k, v in used_actions.items() if isinstance(k, argparse._SubParsersAction)
+        }
         for action, value in used_actions.items():
-            option = None
-            args_option: str | None = None
-            dd_option: str | None = None
-            for option in action.option_strings:
-                # find the one that was used:
-                if option in original_argv:
-                    break
-                if option in args:
-                    # could still be overwritten in argv
-                    args_option = option
-                if option.startswith("--"):
-                    dd_option = option
-            else:
-                # did not find in patch
-                if args_option is not None:
-                    option = args_option
-                elif dd_option is not None:
-                    option = dd_option
-            if option is None:
-                continue  # should not happen            # consider n_args and store_true/false
-            if isinstance(value, bool):
-                # action was used so add it, do not need to check store_true/false
-                if action.nargs in (None, 0):
-                    new_args.append(option)
-                else:
-                    # cannot pass bool as str
-                    # possible has some type conversion we cannot guess
-                    ok = (
-                        option.lstrip("-") in complete_annotations
-                        and get_origin(complete_annotations[option.lstrip("-")]) is Annotated
-                        and "AcceptsBoolAsString" in get_args(complete_annotations[option.lstrip("-")])
-                    )
-                    if ok:
-                        logger.debug(
-                            "%s is annotated as AcceptsBoolAsString. '%s %s' will be passed as argument.",
-                            option,
-                            option,
-                            str(value),
-                        )
-                    else:
-                        logger.warning(
-                            "Cannot safely convert boolean value to string for option '%s'. "
-                            "Make sure that the parser can handle '%s %s' and annotate it with AcceptsBoolAsString",
-                            option,
-                            option,
-                            str(value),
-                        )
-                    new_args.extend((option, str(value)))
-                continue
-
-            if action.nargs in (None, 1):
-                new_args.extend([option, value])
-            elif action.nargs == 0:
-                new_args.append(option)
-            elif action.nargs == "?":
-                new_args.extend([option, value] if value is not None else [option])
-            elif action.nargs in ("*", "+") or isinstance(action.nargs, int):
-                new_args.extend([option] + (value if value is not None else []))
-            else:
-                logger.warning("Unexpected nargs value for option '%s': %s", option, action.nargs)
-                new_args.extend([option] + (value if value is not None else []))
+            cls._recus_add_actions(
+                action,
+                value,
+                new_args=new_args,
+                original_argv=original_argv,
+                args=merged_args,
+                complete_annotations=complete_annotations,
+                merged_args=merged_args,
+            )
         patched_argv = [original_argv[0], *map(str, new_args), *orig_unknown]
         sys.argv = patched_argv
 
@@ -411,6 +382,182 @@ class PatchArgsMixin(Tap):
             yield
         finally:
             sys.argv = original_argv
+
+    @classmethod
+    def _recus_add_actions(
+        cls,
+        action: argparse.Action,
+        value: Any,
+        *,
+        new_args: list,
+        original_argv,
+        args,
+        complete_annotations,
+        merged_args,
+    ):
+        option = None
+        args_option: str | None = None
+        dd_option: str | None = None
+        for option in action.option_strings:
+            # find the one that was used:
+            if option in original_argv:
+                break
+            if option in args:
+                # could still be overwritten in argv
+                args_option = option
+            if option.startswith("--"):
+                dd_option = option
+        else:
+            # did not find in patch
+            if args_option is not None:
+                option = args_option
+            elif dd_option is not None:
+                option = dd_option
+        if option is None and not isinstance(action, argparse._SubParsersAction):
+            return  # should not happen            # consider n_args and store_true/false
+        if isinstance(value, bool):
+            # action was used so add it, do not need to check store_true/false
+            if action.nargs in (None, 0):
+                new_args.append(option)
+            else:
+                # cannot pass bool as str
+                # possible has some type conversion we cannot guess
+                ok = (
+                    option.lstrip("-") in complete_annotations
+                    and get_origin(complete_annotations[option.lstrip("-")]) is Annotated
+                    and "AcceptsBoolAsString" in get_args(complete_annotations[option.lstrip("-")])
+                )
+                if ok:
+                    logger.debug(
+                        "%s is annotated as AcceptsBoolAsString. '%s %s' will be passed as argument.",
+                        option,
+                        option,
+                        str(value),
+                    )
+                else:
+                    logger.warning(
+                        "Cannot safely convert boolean value to string for option '%s'. "
+                        "Make sure that the parser can handle '%s %s' and annotate it with AcceptsBoolAsString",
+                        option,
+                        option,
+                        str(value),
+                    )
+                new_args.extend((option, str(value)))
+            return
+
+        if action.nargs in (None, 1):
+            new_args.extend([option, value])
+        elif action.nargs == 0:
+            new_args.append(option)
+        elif action.nargs == "?":
+            new_args.extend([option, value] if value is not None else [option])
+        elif action.nargs in ("*", "+") or isinstance(action.nargs, int):
+            if isinstance(value, str):
+                new_args.extend([option, value])
+            else:
+                new_args.extend([option] + (value if value is not None else []))
+        elif action.nargs == argparse.PARSER:
+            new_args.append(value)
+            for sub_action in action.choices[value]._actions:
+                sub_value = merged_args.get(sub_action.dest)
+                if sub_value is None:
+                    continue
+                cls._recus_add_actions(
+                    sub_action,
+                    sub_value,
+                    new_args=new_args,
+                    original_argv=original_argv,
+                    args=args,
+                    complete_annotations=complete_annotations,
+                    merged_args=merged_args,
+                )
+        else:
+            logger.warning("Unexpected nargs value for option '%s': %s", option, action.nargs)
+            new_args.extend([option] + (value if value is not None else []))
+
+
+Subparsers = TypeVar("Subparsers", bound=argparse.ArgumentParser | None, default=Any | None)
+
+
+class SubcommandHandlerBase(
+    Generic[Subparsers],
+    Tap,
+):
+    _command_str = None
+    __command = None
+
+    @property
+    def command_str(self) -> str | None:
+        return self._command_str
+
+    @property
+    def command(self) -> Subparsers:  # type hint is per default union with | None
+        return self.__command  # pyright: ignore[reportReturnType]
+
+    @command.setter
+    def command(self, value: Subparsers) -> None:
+        self.__command = value
+
+    _skip_subparser_fields = ["help", "description"]  # noqa: RUF012
+
+    def configure(self) -> None:
+        super().configure()
+        self.add_subparsers(dest="_command_str", help="Sub-command to run")
+
+    def process_args(self) -> None:
+        super().process_args()
+        self._process_subparsers()
+
+    def _process_subparsers(self):
+        if self.command_str is None:
+            return
+        assert isinstance(self._subparsers, argparse._SubParsersAction)
+        # subparser is not parsed
+        command: Subparsers | argparse.ArgumentParser = self._subparsers.choices[self.command_str]
+        assert command is not None
+        if isinstance(command, Tap):
+            type(command).process_args(self)
+        # Full sync, just use for duck-typing
+        self.command = self.create_delegator(command)  # pyright: ignore[reportAttributeAccessIssue]
+
+    def create_delegator(self, subparser: _ParserT) -> _ParserT:
+        DelegatorCommand = type(
+            subparser.__class__.__name__ + "Delegator",
+            (subparser.__class__,),
+            {"_parsed": True, "help": getattr(subparser, "help", None)},
+        )
+        for action in subparser._actions:
+            if action.dest in self._skip_subparser_fields:
+                continue
+
+            @property
+            def delegator_getter(_delegator: Any, dest=action.dest) -> Any:  # noqa: PLR0206
+                return getattr(self, dest)
+
+            @delegator_getter.setter
+            def delegator_setter(_delegator: Any, value: Any, dest=action.dest) -> None:
+                setattr(self, dest, value)
+
+            setattr(DelegatorCommand, action.dest, delegator_setter)
+
+        def attr_gettr(_delegator: Any, key: str) -> Any:
+            # Optional: remove check for full Delegator -> main parser forwarding
+            if not hasattr(subparser, key):
+                raise AttributeError(f"'{key}' not found on subparser {subparser!r}")
+            return getattr(self, key)
+
+        DelegatorCommand.__getattr__ = attr_gettr
+
+        # def attr_settr(_delegator: Any, key: str, value: Any) -> None:
+        #    setattr(_delegator, key, value)
+        # DelegatorCommand.__setattr__ = attr_settr
+        # Also call process_args if its a Tap class
+        if isinstance(subparser, Tap):
+            # subparser.process_args()
+            # Process args on parser, choose one:
+            # type(subparser).process_args(parser)
+            DelegatorCommand.process_args(self)
+        return DelegatorCommand()
 
 
 class _GoalParser(Tap):
@@ -889,10 +1036,14 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
         self.add_argument("--iterations", "-it", default="auto", type=_auto_int_transform)
 
 
-class _ScalingPopulationBasedTrainingParser(OptionalExtensionsArgs, PopulationBasedTrainingParser):
+class ScalingPBTSubparser(OptionalExtensionsArgs, SubcommandHandlerBase[PopulationBasedTrainingParser | Subparsers]):
+    def _is_pbt_used(_self, self: Self) -> TypeIs[PopulationBasedTrainingParser]:  # pyright: ignore[reportGeneralTypeIssues] # noqa: N805
+        return isinstance(self.command, PopulationBasedTrainingParser)
+
     def process_args(self) -> None:
-        # DO NOT CALL SUPER in subparser.process_args!
-        # NEEDS OptionalExtensionsArgs.process_args to be called via normal process_args chain
+        super().process_args()
+        if not self._is_pbt_used(self):
+            return
         if isinstance(self.perturbation_interval, float):
             if self.perturbation_interval.is_integer() and self.perturbation_interval > 1:
                 # Do not modify it, but warn
@@ -926,6 +1077,10 @@ class _ScalingPopulationBasedTrainingParser(OptionalExtensionsArgs, PopulationBa
                 self.perturbation_interval,
                 max_step_size,
             )
+
+    def configure(self) -> None:
+        super().configure()
+        self.add_subparser("pbt", PopulationBasedTrainingParser, help="Enable Population Based Training")
 
 
 #####
@@ -975,62 +1130,9 @@ class ConfigFilePreParser(Tap):
         self.add_argument("--config_files", "-cfg", nargs="+", default=[])
 
 
-Subparsers = TypeVar("Subparsers", bound=argparse.ArgumentParser | None, default=Any | None)
-
-
-class SubcommandHandlerBase(
-    Generic[Subparsers],
-    Tap,
-):
-    _command_str = None
-    __command = None
-
-    @property
-    def command_str(self) -> str | None:
-        return self._command_str
-
-    @property
-    def command(self) -> Subparsers:  # type hint is per default union with | None
-        return self.__command  # pyright: ignore[reportReturnType]
-
-    @command.setter
-    def command(self, value: Subparsers) -> None:
-        self.__command = value
-
-    _skip_subparser_fields = ["help", "description"]  # noqa: RUF012
-
-    def configure(self) -> None:
-        super().configure()
-        self.add_subparsers(dest="_command_str", help="Sub-command to run")
-
-    def process_args(self) -> None:
-        super().process_args()
-        self._process_subparsers()
-
-    def _process_subparsers(self):
-        if self.command_str is not None:
-            assert isinstance(self._subparsers, argparse._SubParsersAction)
-            # subparser is not parsed
-            command: Subparsers | argparse.ArgumentParser = self._subparsers.choices[self.command_str]
-            if isinstance(command, Tap):
-                type(command).process_args(self)
-            # Full sync, just use for duck-typing
-            self.command = self  # type: ignore[assignment]
-        else:
-            self.__command = None
-
-
-class SubcommandParser(SubcommandHandlerBase[_ScalingPopulationBasedTrainingParser | Subparsers]):
-    """Use at the start of the parser to enable subcommands."""
-
-    def configure(self) -> None:
-        super().configure()
-        self.add_subparser("pbt", _ScalingPopulationBasedTrainingParser, help="Enable Population Based Training")
-
-
 class DefaultArgumentParser(
     SupportsMetaAnnotations,
-    SubcommandParser[Subparsers],  # needs be before  OptionalExtensionsArgs
+    ScalingPBTSubparser[Subparsers],  # needs be before  OptionalExtensionsArgs
     OptionalExtensionsArgs,  # Needs to be before _DefaultSetupArgumentParser
     RLlibArgumentParser,
     OptunaArgumentParser,
