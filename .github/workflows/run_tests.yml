@@ -50,7 +50,7 @@ jobs:
         export KEEP_MAX_DIFF=1
         export DISABLE_BREAKPOINTS=1
         # Run basic tests. If these fail others likely fail as well
-        # NOTE that fast is a patched default in conftest.py
+        # NOTE that "fast" is a patched default value in conftest.py for all non-marked tests
         pytest -xv -m "basic and length(speed='fast')"
     - name: Run pytest (fast tests only)
       run: |
@@ -58,7 +58,7 @@ jobs:
         export KEEP_MAX_DIFF=1
         export DISABLE_BREAKPOINTS=1
         # Split tests because of deadlock
-        # Test all others execluded by tests below
+        # Test all others excluded by tests below
         pytest -k "not test_trainable" -m "not basic and length(speed='fast')" -v -x --fast
       env:
         COMET_API_KEY: ${{ secrets.COMET_API_KEY }}
@@ -90,7 +90,7 @@ jobs:
         export KEEP_MAX_DIFF=1
         export DISABLE_BREAKPOINTS=1
         # Split tests because of deadlock
-        # Test all others excluded by tests below
+        # Test all others excluded by the tests below
         pytest -k "not test_trainable" -m "not basic and not length(speed='fast')" -v -x --fast
       env:
         COMET_API_KEY: ${{ secrets.COMET_API_KEY }}
@@ -106,7 +106,7 @@ jobs:
       uses: ./.github/actions/cached-python-setup
       with:
         python-version: '3.10'
-        use-pip-cache: false
+        use-pip-cache: true
     - name: Test trainable 1/2 (might deadlock)
       run: |
         source .venv/bin/activate
@@ -142,7 +142,7 @@ jobs:
   test-multiple-envrunners-2:
     name: Test trainable multiple EnvRunners with Tuner 3/3
     runs-on: ubuntu-latest
-    # Start this a bit later to avoid all jobs starting at once
+    # Start this a bit later after 'test-tuner-and-trainable' to avoid all jobs starting at once
     needs: test-tuner-and-trainable
     steps:
     - uses: actions/checkout@v4
