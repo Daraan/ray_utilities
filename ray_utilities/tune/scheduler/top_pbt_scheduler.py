@@ -177,6 +177,17 @@ class _PerturbationSeed(int):
 
 
 class _ReseedEnv:
+    """
+    Wraps a configuration dictionary to support environment reseeding during Population Based Training (PBT) perturbations.
+
+    This class optionally applies a wrapping function to the config and, if an additional seed is specified,
+    appends a `_PerturbationSeed` to the `env_seed` entry in the config. This enables tracking and reproducibility
+    of environment changes caused by PBT perturbations.
+
+    Args:
+        wrap (Optional[Callable[[dict], dict]]): Optional function to apply to the config before reseeding.
+        add_seed (Optional[int]): If provided, this integer is added as a `_PerturbationSeed` to the `env_seed`.
+    """
     def __init__(self, wrap: Optional[Callable[[dict], dict]] = None, add_seed: Optional[int] = None):
         self.wrap = wrap
         self.add_seed = add_seed
