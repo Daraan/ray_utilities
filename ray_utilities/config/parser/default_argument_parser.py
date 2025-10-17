@@ -13,10 +13,15 @@ from __future__ import annotations
 # pyright: enableExperimentalFeatures=true
 import argparse
 import logging
+import math
 import sys
 from ast import literal_eval
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Optional
+
+from typing_extensions import TypeVar
+
+from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 
 try:
     import argcomplete
@@ -408,7 +413,14 @@ class PatchArgsMixin(Tap):
             sys.argv = original_argv
 
 
-class _DefaultSetupArgumentParser(Tap):
+class _GoalParser(Tap):
+    mode: Literal["min", "max"] = "max"
+    """One of {min, max}.Determines whether objective is minimizing or maximizing the metric attribute."""
+    metric: str = EVAL_METRIC_RETURN_MEAN
+    """The metric to be optimized as flat key, e.g. 'evaluation/env_runners/episode_return_mean'."""
+
+
+class _DefaultSetupArgumentParser(_GoalParser, Tap):
     agent_type: AlwaysRestore[str] = "mlp"
     """Agent Architecture"""
 
@@ -797,7 +809,7 @@ class CheckpointConfigArgumentParser(Tap):
         return super().process_args()
 
 
-class OptionalExtensionsArgs(RLlibArgumentParser, PopulationBasedTrainingParser):
+class OptionalExtensionsArgs(RLlibArgumentParser):
     dynamic_buffer: AlwaysRestore[bool] = False
     """Use DynamicBufferCallback. Increases env steps sampled and batch size"""
 
@@ -872,6 +884,52 @@ class OptionalExtensionsArgs(RLlibArgumentParser, PopulationBasedTrainingParser)
         # TODO / NOTE: When adjusting the train_batch_size_per_learner afterwards the amount of
         # iterations will be wrong to reach total steps (at least shown in CLI).
 
+    def configure(self) -> None:
+        super().configure()
+        self.add_argument("--iterations", "-it", default="auto", type=_auto_int_transform)
+
+
+class _ScalingPopulationBasedTrainingParser(OptionalExtensionsArgs, PopulationBasedTrainingParser):
+    def process_args(self) -> None:
+        # DO NOT CALL SUPER in subparser.process_args!
+        # NEEDS OptionalExtensionsArgs.process_args to be called via normal process_args chain
+        if isinstance(self.perturbation_interval, float):
+            if self.perturbation_interval.is_integer() and self.perturbation_interval > 1:
+                # Do not modify it, but warn
+                logger.warning(
+                    "Passing a integer equal float %s as perturbation_interval that is outside of [0,1]. ",
+                    {self.perturbation_interval},
+                )
+            elif 0 <= self.perturbation_interval <= 1:
+                if not isinstance(self.iterations, (float, int)):
+                    raise ValueError(
+                        "When passing perturbation_interval as fraction (float in [0,1]), "
+                        f"the iterations argument must be numerical, not {self.iterations}"
+                    )
+                relative_interval = math.ceil(self.perturbation_interval * self.total_steps)
+                logger.info(
+                    "Interpreting perturbation_interval=%s as fraction of total steps: "
+                    "Setting perturbation_interval=%s",
+                    self.perturbation_interval,
+                    relative_interval,
+                )
+                self.perturbation_interval = relative_interval
+            # Else assume it is some float time attr
+
+        max_step_size = getattr(self, "max_step_size", None)
+        if max_step_size is None:
+            return
+        if self.perturbation_interval % max_step_size != 0:
+            logger.warning(
+                "The perturbation_interval (%s) is not a multiple of max_step_size (%s). "
+                "This will lead to overstepping behavior and uneven perturbation intervals.",
+                self.perturbation_interval,
+                max_step_size,
+            )
+
+
+#####
+
 
 def _parse_tune_choices(
     value: str | Literal[False],
@@ -879,7 +937,7 @@ def _parse_tune_choices(
     return value  # type: ignore[return-value]
 
 
-class OptunaArgumentParser(Tap):
+class OptunaArgumentParser(_GoalParser, Tap):
     optimize_config: NotAModelParameter[NeverRestore[bool]] = (
         False  # legacy argument name; possible replace with --tune later
     )
@@ -917,8 +975,62 @@ class ConfigFilePreParser(Tap):
         self.add_argument("--config_files", "-cfg", nargs="+", default=[])
 
 
+Subparsers = TypeVar("Subparsers", bound=argparse.ArgumentParser | None, default=Any | None)
+
+
+class SubcommandHandlerBase(
+    Generic[Subparsers],
+    Tap,
+):
+    _command_str = None
+    __command = None
+
+    @property
+    def command_str(self) -> str | None:
+        return self._command_str
+
+    @property
+    def command(self) -> Subparsers:  # type hint is per default union with | None
+        return self.__command  # pyright: ignore[reportReturnType]
+
+    @command.setter
+    def command(self, value: Subparsers) -> None:
+        self.__command = value
+
+    _skip_subparser_fields = ["help", "description"]  # noqa: RUF012
+
+    def configure(self) -> None:
+        super().configure()
+        self.add_subparsers(dest="_command_str", help="Sub-command to run")
+
+    def process_args(self) -> None:
+        super().process_args()
+        self._process_subparsers()
+
+    def _process_subparsers(self):
+        if self.command_str is not None:
+            assert isinstance(self._subparsers, argparse._SubParsersAction)
+            # subparser is not parsed
+            command: Subparsers | argparse.ArgumentParser = self._subparsers.choices[self.command_str]
+            if isinstance(command, Tap):
+                type(command).process_args(self)
+            # Full sync, just use for duck-typing
+            self.command = self  # type: ignore[assignment]
+        else:
+            self.__command = None
+
+
+class SubcommandParser(SubcommandHandlerBase[_ScalingPopulationBasedTrainingParser | Subparsers]):
+    """Use at the start of the parser to enable subcommands."""
+
+    def configure(self) -> None:
+        super().configure()
+        self.add_subparser("pbt", _ScalingPopulationBasedTrainingParser, help="Enable Population Based Training")
+
+
 class DefaultArgumentParser(
     SupportsMetaAnnotations,
+    SubcommandParser[Subparsers],  # needs be before  OptionalExtensionsArgs
     OptionalExtensionsArgs,  # Needs to be before _DefaultSetupArgumentParser
     RLlibArgumentParser,
     OptunaArgumentParser,

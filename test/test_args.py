@@ -487,7 +487,7 @@ class TestTagArgumentProcessing(unittest.TestCase):
         # Only one foo: or foo= should remain
         self.assertListEqual(parser.tags, ["foo", "foo:4"])
 
-    @patch_args("foo:1", "--tag:foo", "--tag:foo:2")
+    @patch_args("pbt", "foo:1", "--tag:foo", "--tag:foo:2")
     def test_invalid_tag_format(self):
         stderr_out = io.StringIO()
         with self.assertRaises(SystemExit), redirect_stderr(stderr_out):
@@ -495,6 +495,21 @@ class TestTagArgumentProcessing(unittest.TestCase):
         parser = DefaultArgumentParser().parse_args(known_only=True)
         self.assertListEqual(["foo", "foo:2"], parser.tags)
         self.assertIn("foo:1", parser.extra_args)
+
+
+class TestSubparsers(unittest.TestCase):
+    def test_pbt_subparser(self):
+        with patch_args():
+            parser = DefaultArgumentParser().parse_args()
+            self.assertIsNone(parser.command)
+
+        with patch_args("pbt"):
+            parser = DefaultArgumentParser[DefaultArgumentParser]().parse_args()
+            self.assertIsNotNone(parser.command)
+
+        with patch_args("pbt", "--perturbation_interval", "0.5"):
+            parser = DefaultArgumentParser[DefaultArgumentParser]().parse_args()
+            self.assertEqual(parser.command.perturbation_interval, parser.total_steps * 0.5)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 if __name__ == "__main__":

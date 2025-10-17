@@ -1,11 +1,12 @@
 from ast import literal_eval
 from typing import Optional
 
+import tree
 from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
 from tap import Tap
-import tree
 
 from ray_utilities.config import DefaultArgumentParser
+from ray_utilities.config.parser.default_argument_parser import Subparsers
 
 try:
     from frozenlist import FrozenList  # pyright: ignore[reportAssignmentType]
@@ -137,5 +138,5 @@ class SimpleMLPParser(Tap):
         super().process_args()
 
 
-class MLPArgumentParser(SimpleMLPParser, DefaultArgumentParser):
+class MLPArgumentParser(SimpleMLPParser, DefaultArgumentParser[Subparsers]):
     pass
