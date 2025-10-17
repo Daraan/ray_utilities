@@ -732,7 +732,7 @@ def create_log_metrics(
     elif "learners" not in log_stats and LEARNER_RESULTS in merged_result:
         merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_IN)
         merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_OUT)
-        if "timers" not in log_stats:
+        if "timers" not in log_stats:  # not timers+learners case
             merged_result[LEARNER_RESULTS][ALL_MODULES].pop(NUM_ENV_STEPS_TRAINED_LIFETIME + "_throughput")
             merged_result[LEARNER_RESULTS][ALL_MODULES].pop(NUM_MODULE_STEPS_TRAINED + "_throughput")
     _remove_less_interesting_keys(merged_result)

@@ -36,7 +36,9 @@ class TestPBTParser(unittest.TestCase):
             args = parser.parse_args(known_only=True)
             self.assertEqual(args.time_attr, "current_step")
             self.assertEqual(args.quantile_fraction, 0.1)
-            self.assertEqual(args.perturbation_interval, 100_000)
+            # TODO: Add some "auto" mode that chooses depending on total_steps or max_step size.
+            # Use a float value to split total_steps into a fraction
+            self.assertEqual(args.perturbation_interval, 8192 * 14)
             self.assertEqual(args.resample_probability, 1.0)
             self.assertEqual(args.mode, "max")
 
@@ -150,7 +152,7 @@ class TestTopTrialScheduler(DisableLoggers, TestHelpers):
         lower_scores_filtered = [s for s in lower_scores if s is not None]
 
         # Verify all upper scores are higher than any lower score
-        self.assertTrue(all(u > max(lower_scores_filtered) for u in upper_scores))
+        self.assertTrue(all(u > max(lower_scores_filtered) for u in upper_scores))  # pyright: ignore[reportOptionalOperand]
 
     def test_quantiles_min_mode(self):
         """Test quantile calculation with min mode."""
@@ -174,7 +176,7 @@ class TestTopTrialScheduler(DisableLoggers, TestHelpers):
         # Filter out None values for min()
         lower_scores_filtered = [s for s in lower_scores if s is not None]
         # Verify all upper scores are greater than any lower score. Remember for min mode the sign is switched.
-        self.assertTrue(all(u > max(lower_scores_filtered) for u in upper_scores))
+        self.assertTrue(all(u > max(lower_scores_filtered) for u in upper_scores))  # pyright: ignore[reportOptionalOperand]
 
     def test_distribute_exploitation(self):
         """Test exploitation distribution among trials."""
@@ -306,7 +308,7 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
 
             # Need to have checkpoints for upper trials
             for trial in upper:
-                scheduler._trial_state[trial].last_checkpoint = "upper_checkpoint"
+                scheduler._trial_state[trial].last_checkpoint = "upper_checkpoint"  # pyright: ignore[reportAttributeAccessIssue]
 
             scheduler._checkpoint_or_exploit(lower_trial, mock_controller, upper, lower)
 

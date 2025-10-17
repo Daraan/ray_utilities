@@ -188,6 +188,7 @@ class _ReseedEnv:
         wrap (Optional[Callable[[dict], dict]]): Optional function to apply to the config before reseeding.
         add_seed (Optional[int]): If provided, this integer is added as a `_PerturbationSeed` to the `env_seed`.
     """
+
     def __init__(self, wrap: Optional[Callable[[dict], dict]] = None, add_seed: Optional[int] = None):
         self.wrap = wrap
         self.add_seed = add_seed
@@ -518,7 +519,7 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
                 trials.append(trial)
 
         # Sort trials by score; _save_trial_state takes care of mode (multiply by -1 if min mode)
-        trials.sort(key=lambda t: self._trial_state[t].last_score)
+        trials.sort(key=lambda t: self._trial_state[t].last_score)  # pyright: ignore[reportArgumentType]
 
         if len(trials) <= 1:
             return [], []
