@@ -1,3 +1,4 @@
+import sys
 import pytest
 
 
@@ -8,8 +9,21 @@ def pytest_addoption(parser: pytest.Parser):
 
 def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config, items: list[pytest.Item]):
     for item in items:
-        # Check if the test has the 'length' marker
         marker = item.get_closest_marker("length")
         if marker is None:
-            # If not, add the default marker
             item.add_marker(pytest.mark.length(speed="fast"))
+
+
+@pytest.fixture(autouse=True)
+def clean_sys_argv(monkeypatch):
+    """
+    Automatically reset sys.argv for each test to avoid pytest CLI arguments interfering
+    with custom argument parsers in tests.
+
+    Args:
+        monkeypatch: The pytest monkeypatch fixture.
+
+    Returns:
+        None
+    """
+    monkeypatch.setattr(sys, "argv", ["pytest"])
