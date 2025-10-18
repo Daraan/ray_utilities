@@ -472,7 +472,13 @@ class CometArchiveTracker(UploadHelperMixin):
                 failed_file = Path(COMET_OFFLINE_DIRECTORY) / COMET_FAILED_UPLOAD_FILE
                 with failed_file.open("a") as f:
                     f.write(f"{zip_file}\n")
-                    f.write(indent(stdout, "    ") + "\n" + indent(stderr, "    ") + "\n")
+                    output_lines = []
+                    if stdout:
+                        output_lines.append(indent(stdout, "    ").rstrip())
+                    if stderr:
+                        output_lines.append(indent(stderr, "    ").rstrip())
+                    if output_lines:
+                        f.write("\n".join(output_lines) + "\n")
             _LOGGER.warning("Wrote details of failed comet upload to %s", failed_file.resolve())
         if not move or not success:
             return success
