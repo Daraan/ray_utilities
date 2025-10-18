@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Generic, Optional
 
 from typing_extensions import Self, TypeIs, TypeVar
 
+from ray_utilities.config.parser.subcommand import SubcommandMixin
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 
 try:
@@ -526,11 +527,12 @@ class SubcommandHandlerBase(
     def create_delegator(self, subparser: _ParserT) -> _ParserT:
         DelegatorCommand = type(
             subparser.__class__.__name__ + "Delegator",
-            (subparser.__class__,),
+            (subparser.__class__, SubcommandMixin),
             {
                 "_parsed": True,
                 "help": getattr(subparser, "help", None),
                 "description": getattr(subparser, "description", self.__doc__),
+                "_SubcommandMixin__parent": self,
             },
         )
         for action in subparser._actions:
