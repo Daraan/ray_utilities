@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
     import wandb
     from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor as _WandbRunMonitor
+    from ray_utilities.nice_logger import ImportantLogger
 
 
 logger = logging.getLogger(__name__)
@@ -285,10 +286,10 @@ class WandbUploaderMixin(UploadHelperMixin):
                 p for p in self._unfinished_gathered_uploads if p.poll() is None
             ]
             if unfinished_from_past:
-                logger.warning(
+                cast("ImportantLogger", logger).important_info(
                     "Continuing %d unfinished wandb uploads from previous gather: %s",
                     len(unfinished_from_past),
-                    unfinished_from_past,
+                    [p.args for p in unfinished_from_past],
                 )
                 for process in unfinished_from_past:
                     exit_code = self._failure_aware_wait(process, timeout=300, terminate_on_timeout=False)

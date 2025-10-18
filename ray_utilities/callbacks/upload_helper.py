@@ -5,7 +5,10 @@ import logging
 import subprocess
 import time
 from enum import IntEnum, auto
-from typing import IO, ClassVar, Optional, TypeAlias
+from typing import IO, TYPE_CHECKING, ClassVar, Optional, TypeAlias, cast
+
+if TYPE_CHECKING:
+    from ray_utilities.nice_logger import ImportantLogger
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +101,7 @@ class UploadHelperMixin:
         *,
         terminate_on_timeout: bool = True,
         report_upload: bool = True,
+        prev_out: Optional[str] = None,
     ) -> int | ExitCode:
         """
         Wait for process to complete and return its exit code, handling exceptions.
@@ -107,7 +111,7 @@ class UploadHelperMixin:
         """
         start = last_time = time.time()
 
-        stdout_accum = ""
+        stdout_accum = prev_out or ""
         error_occurred = False
         # Define error patterns to look for in output (case-insensitive)
         stdout_type = None
@@ -135,18 +139,18 @@ class UploadHelperMixin:
                 # Check for any error pattern in the line (case-insensitive)
                 if any(pattern in line.lower() for pattern in map(str.lower, cls.error_patterns)):
                     error_occurred = True
-                    logger.error(
-                        "Detected error pattern in %s sync output while uploading trial %s. "
-                        "Killing process. Output line: %s",
-                        cls._upload_service_name,
-                        trial_id,
-                        line.strip(),
-                    )
                     if "contact support" in line and "500" in line:
                         # When forking the run-*-history artifact is not yet available
                         # this file is ONLY created when viewing the run on the website
                         # its possible that this error is raised while the file is still built
                         # it *might* be resolved after some wait time.
+                        cast("ImportantLogger", logger).important_warning(
+                            "Detected Server error in %s sync output while uploading trial %s. "
+                            "Waiting but speeding up wait progressively before retrying...\n%s",
+                            cls._upload_service_name,
+                            trial_id,
+                            line.strip(),
+                        )
                         if timeout > 15:
                             # try again recursively with less time. Then continue if still fails.
                             time.sleep(5)
@@ -159,8 +163,18 @@ class UploadHelperMixin:
                                 line.strip(),
                             )
                             return cls._failure_aware_wait(
-                                process, timeout=max(10, timeout - (time_now - start) - 10), terminate_on_timeout=False
+                                process,
+                                timeout=max(10, timeout - (time_now - start) - 10),
+                                terminate_on_timeout=False,
+                                prev_out=stdout_accum,
                             )
+                        logger.error(
+                            "Detected error pattern in %s sync output while uploading trial %s. "
+                            "Killing process. Output line: %s",
+                            cls._upload_service_name,
+                            trial_id,
+                            line.strip(),
+                        )
                         error_code = ExitCode.WANDB_SERVER_ERROR
                     elif "not found (<Response [404]>)" in line:
                         error_code = ExitCode.WANDB_PARENT_NOT_FOUND
@@ -217,6 +231,7 @@ class UploadHelperMixin:
                 trial_id,
                 stacklevel=3,  # one above this function
             )
+        logger.debug("Not reported output of trial %s upload process: %s", trial_id, stdout_accum)
         if process.poll() is not None and stdout_accum and stdout_type is not None:
             # regenerate stdout
 

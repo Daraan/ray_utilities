@@ -29,6 +29,55 @@ from typing_extensions import Sentinel
 # pyright: enableExperimentalFeatures=true
 _NO_PACKAGE = Sentinel("_NO_PACKAGE")
 
+# --- Custom log levels ---
+IMPORTANT_INFO = 25  # Between INFO (20) and WARNING (30)
+IMPORTANT_WARNING = 35  # Between WARNING (30) and ERROR (40)
+
+logging.addLevelName(IMPORTANT_INFO, "IMPORTANT_INFO")
+logging.addLevelName(IMPORTANT_WARNING, "IMPORTANT_WARNING")
+
+
+class ImportantLogger(logging.Logger):
+    """
+    Implements two custom log levels: IMPORTANT_INFO and IMPORTANT_WARNING.
+
+    Its methods are also registered to the standard logging.Logger class.
+    Use this class via `typing.cast("ImportantLogger", normal_logger).important_info(...)`
+    or ImportantLogger.important_info(logger, ...).
+    """
+
+    def important_info(self: logging.Logger, msg: str, *args, stacklevel=1, **kwargs):
+        """Log 'msg % args' with severity 'IMPORTANT_INFO'."""
+        if self.isEnabledFor(IMPORTANT_INFO):
+            self._log(IMPORTANT_INFO, msg, *args, stacklevel=stacklevel, **kwargs)
+
+    def important_warning(self: logging.Logger, msg: str, *args, stacklevel=1, **kwargs):
+        """Log 'msg % args' with severity 'IMPORTANT_WARNING'."""
+        if self.isEnabledFor(IMPORTANT_WARNING):
+            self._log(IMPORTANT_WARNING, msg, *args, stacklevel=stacklevel, **kwargs)
+
+
+logging.Logger.important_info = ImportantLogger.important_info  # type: ignore
+logging.Logger.important_warning = ImportantLogger.important_warning  # type: ignore
+
+
+def _get_colorlog_formatter() -> colorlog.ColoredFormatter:
+    """Returns a ColoredFormatter with custom colors for all log levels, including custom ones."""
+    return colorlog.ColoredFormatter(
+        "%(log_color)s[%(levelname)s][ %(filename)s:%(lineno)d, %(funcName)s] :%(reset)s %(message)s",
+        log_colors={
+            "DEBUG": "cyan",
+            "INFO": "green",
+            "IMPORTANT_INFO": "bold_green",
+            "WARNING": "yellow",
+            "IMPORTANT_WARNING": "bold_yellow",
+            "ERROR": "red",
+            "CRITICAL": "bold_red",
+        },
+        secondary_log_colors={},
+        style="%",
+    )
+
 
 def nice_logger(logger: logging.Logger | str, level: int | str | None = None) -> logging.Logger:
     """Create or modify a logger with colored formatting and enhanced readability.
@@ -77,7 +126,9 @@ def nice_logger(logger: logging.Logger | str, level: int | str | None = None) ->
         Colors help distinguish between different log levels:
         - DEBUG: Cyan
         - INFO: Green
+        - IMPORTANT_INFO: Bold Green
         - WARNING: Yellow
+        - IMPORTANT_WARNING: Bold Yellow
         - ERROR: Red
         - CRITICAL: Bold red
     """
@@ -92,9 +143,7 @@ def nice_logger(logger: logging.Logger | str, level: int | str | None = None) ->
             "Making a richer logger, but logger %s already has handlers, consider removing them first.", logger
         )
     utilities_handler = colorlog.StreamHandler()
-    formatter = colorlog.ColoredFormatter(
-        "%(log_color)s[%(levelname)s][ %(filename)s:%(lineno)d, %(funcName)s] :%(reset)s %(message)s"
-    )
+    formatter = _get_colorlog_formatter()
     utilities_handler.setFormatter(formatter)
     logger.addHandler(utilities_handler)
     return logger

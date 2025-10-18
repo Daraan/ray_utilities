@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from ray.actor import ActorProxy
 
     from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor
+    from ray_utilities.nice_logger import ImportantLogger
     from ray_utilities.typing import ForkFromData
 
 from ._log_result_grouping import non_metric_results
@@ -676,7 +677,7 @@ class AdvWandbLoggerCallback(
                 p for p in self._unfinished_gathered_uploads if p.poll() is None
             ]
             if unfinished_from_past:
-                _logger.info(
+                cast("ImportantLogger", _logger).important_info(
                     "Continuing %d unfinished wandb uploads from previous gather: %s",
                     len(unfinished_from_past),
                     unfinished_from_past,
