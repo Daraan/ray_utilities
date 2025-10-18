@@ -204,7 +204,7 @@ def run_tune(
     try:
         if not results:
             logger.warning("No results returned from the tuner.")
-        setup.upload_offline_experiments(results, tuner)
+        setup.upload_offline_experiments(results, tuner, use_tqdm=True)
     except KeyboardInterrupt:
         pass
     except Exception:  # noqa: BLE001

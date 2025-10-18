@@ -14,6 +14,7 @@ from textwrap import indent
 from typing import TYPE_CHECKING, Any, Iterable, Mapping, NamedTuple, Optional, Sequence, cast, overload
 
 import pandas as pd
+from tqdm import tqdm
 
 # Note ray is only necessary for the WandbRunMonitor actor
 import ray
@@ -91,6 +92,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         *,
         wait: bool = True,
         parallel_uploads: int = 5,
+        use_tqdm: bool = False,
     ) -> list[subprocess.Popen] | None:
         """
         Upload wandb's offline folder of the session to wandb, similar to the `wandb sync` shell command
@@ -100,6 +102,7 @@ class WandbUploaderMixin(UploadHelperMixin):
             tuner: Optional tuner to get additional trial information.
             wait: If True, waits for the upload to finish before returning.
             parallel_uploads: Number of parallel uploads to by executing :class:`subprocess.Popen`
+            use_tqdm: Whether to use tqdm progress bars for upload progress.
         """
         logger.info("Uploading wandb offline experiments...")
 
@@ -109,7 +112,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         global_wandb_dir = os.environ.get("WANDB_DIR", None)
         if global_wandb_dir and (global_wandb_dir := Path(global_wandb_dir)).exists():
             wandb_paths.append(global_wandb_dir)
-        uploads = self.upload_paths(wandb_paths, wait=wait, parallel_uploads=parallel_uploads)
+        uploads = self.upload_paths(wandb_paths, wait=wait, parallel_uploads=parallel_uploads, use_tqdm=use_tqdm)
         return uploads
 
     def _monitor_check_parent_trial(self, trial_id: str, timeout: float = 40) -> bool | None:
@@ -241,6 +244,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         *,
         wait: bool = True,
         parallel_uploads: int = 5,
+        use_tqdm: bool = False,
     ):
         # Step 2: Collect all trial runs with their trial IDs
         if trial_runs is None:
@@ -305,7 +309,9 @@ class WandbUploaderMixin(UploadHelperMixin):
                     if exit_code != 0:
                         failed_uploads.append(process)
 
-        for group_idx, group in enumerate(upload_groups):
+        # Use tqdm for outer loop if requested
+        outer_iter = tqdm(upload_groups, desc="WandB Upload Groups", leave=True) if use_tqdm else upload_groups
+        for group_idx, group in enumerate(outer_iter):
             logger.info("Uploading group %d/%d with %d trials", group_idx + 1, len(upload_groups), len(group))
 
             # Wait for previous group to complete before starting next group
@@ -325,8 +331,10 @@ class WandbUploaderMixin(UploadHelperMixin):
                     finished_or_failed.append(process)
                 uploads = [p for p in uploads if p not in finished_or_failed]
 
-            # Upload trials in current group (can be parallel within group)
-            for trial_id, run_dirs in group:
+            # Use tqdm for inner loop if requested
+            inner_iter = tqdm(group, desc=f"Trials in Group {group_idx + 1}", leave=False) if use_tqdm else group
+
+            for trial_id, run_dirs in inner_iter:
                 # Manage parallel upload limit within group
                 if len(uploads) >= parallel_uploads:
                     logger.info(
