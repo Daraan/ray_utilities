@@ -213,3 +213,6 @@ markers = [
    "env_runner_cases",
    "length: Mark tests that are fast/medium/slow to execute"
 ]
+testpaths = [
+  "test"
+]
