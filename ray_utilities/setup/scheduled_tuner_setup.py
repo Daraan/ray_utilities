@@ -118,7 +118,7 @@ class PBTTunerSetup(ScheduledTunerSetup["PPOMLPWithPBTSetup"]):
 
 class PPOMLPWithPBTSetup(PPOMLPSetup["MLPArgumentParser[PopulationBasedTrainingParser]"]):
     def create_tuner(self) -> tune.Tuner:
-        if not hasattr(self.args, "command") or self.args.command_str != "pbt":
+        if self.args.command_str != "pbt":
             raise RuntimeError(f"PPOMLPWithPBTSetup requires 'pbt' command, got '{self.args.command_str}'")
         assert self.args.command is not None
         return PBTTunerSetup(

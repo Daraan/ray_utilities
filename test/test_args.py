@@ -1,5 +1,7 @@
 # ruff: noqa: FBT003  # positional bool
 
+from __future__ import annotations
+
 import argparse
 import io
 import sys
@@ -9,7 +11,7 @@ from contextlib import redirect_stderr
 from inspect import isclass
 
 import pytest
-from typing_extensions import get_args
+from typing_extensions import TYPE_CHECKING, get_args
 
 from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradientAccumulation
 from ray_utilities.callbacks.algorithm.dynamic_buffer_callback import DynamicBufferUpdate
@@ -25,6 +27,10 @@ from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup
 from ray_utilities.testing_utils import DisableLoggers, SetupLowRes, SetupWithEnv, mock_trainable_algorithm, patch_args
 from ray_utilities.training.helpers import is_algorithm_callback_added
+
+if TYPE_CHECKING:
+    from ray_utilities.config.parser.pbt_scheduler_parser import PopulationBasedTrainingParser
+
 
 pytestmark = pytest.mark.basic
 
@@ -505,19 +511,19 @@ class TestTagArgumentProcessing(unittest.TestCase):
 class TestSubparsers(unittest.TestCase):
     def test_pbt_subparser(self):
         with patch_args():
-            parser = DefaultArgumentParser().parse_args()
+            parser = DefaultArgumentParser[None]().parse_args()
             self.assertIsNone(parser.command)
 
         with patch_args("pbt"):
-            parser = DefaultArgumentParser[DefaultArgumentParser]().parse_args()
+            parser = DefaultArgumentParser["PopulationBasedTrainingParser"]().parse_args()
             self.assertIsNotNone(parser.command)
 
         with patch_args("pbt", "--perturbation_interval", "0.5"):
-            parser = DefaultArgumentParser[DefaultArgumentParser]().parse_args()
+            parser = DefaultArgumentParser["PopulationBasedTrainingParser"]().parse_args()
             self.assertEqual(parser.command.perturbation_interval, parser.total_steps * 0.5)  # pyright: ignore[reportAttributeAccessIssue]
 
         with patch_args("pbt", "--perturbation_interval", "0.5"):
-            parser = DefaultArgumentParser[DefaultArgumentParser]().parse_args()
+            parser = DefaultArgumentParser["PopulationBasedTrainingParser"]().parse_args()
             self.assertEqual(parser.command.perturbation_interval, parser.total_steps * 0.5)  # pyright: ignore[reportAttributeAccessIssue]
 
 

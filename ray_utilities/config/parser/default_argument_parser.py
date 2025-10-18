@@ -856,7 +856,7 @@ class DefaultLoggingArgParser(Tap):
 
     def __setstate__(self, d: dict[str, Any]) -> None:
         d.pop("use_comet_offline", None)  # do not set property
-        d.pop("command_str")
+        d.pop("command_str", None)  # Cannot set subparser field
         return super().__setstate__(d)
 
     def _parse_logger_choices(  # noqa: PLR6301  # could be static
@@ -1069,7 +1069,7 @@ class ScalingPBTSubparser(OptionalExtensionsArgs, SubcommandHandlerBase[Populati
                 # Do not modify it, but warn
                 logger.warning(
                     "Passing a integer equal float %s as perturbation_interval that is outside of [0,1]. ",
-                    {self.perturbation_interval},
+                    self.perturbation_interval,
                 )
             elif 0 <= self.perturbation_interval <= 1:
                 if not isinstance(self.iterations, (float, int)):

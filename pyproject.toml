@@ -170,6 +170,8 @@ extend-generics = [
     "ray_utilities.jax.jax_model.FlaxRLModel",
     "ray_utilities.setup.ppo_mlp_setup.MLPSetup",
     "ray_utilities.setup.ppo_mlp_setup.PPOMLPSetup",
+    "ray_utilities.config.DefaultArgumentParser",
+    "ray_utilities.config.parser.default_argument_parser.DefaultArgumentParser",
 ]
 allowed-unused-imports = ["hvplot.pandas", "default_arguments.PYTHON_ARGCOMPLETE_OK"]
 
