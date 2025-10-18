@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -10,11 +11,14 @@ import threading
 import time
 from pathlib import Path
 from textwrap import indent
-from typing import TYPE_CHECKING, Iterable, Mapping, Optional, Sequence, cast
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, NamedTuple, Optional, Sequence, cast, overload
+
+import pandas as pd
 
 # Note ray is only necessary for the WandbRunMonitor actor
 import ray
 import ray.exceptions
+import tree
 
 from ray_utilities._runtime_constants import RUN_ID
 from ray_utilities.callbacks.upload_helper import AnyPopen, ExitCode, UploadHelperMixin
@@ -30,6 +34,7 @@ if TYPE_CHECKING:
     import wandb
     from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor as _WandbRunMonitor
     from ray_utilities.nice_logger import ImportantLogger
+    from wandb.apis.public.runs import Run, Runs
 
 
 logger = logging.getLogger(__name__)
@@ -720,6 +725,12 @@ class WandbUploaderMixin(UploadHelperMixin):
                 logger.debug("Timed out while starting WandbRunMonitor actor.")
         return self._monitor
 
+    def verify_wandb_uploads(self, experiment_key: Optional[str] = None, output_dir="./outputs/experiments/"):
+        logger.info("Verifying wandb uploads for experiment_key=%s", experiment_key or RUN_ID)
+        return verify_wandb_runs(
+            project=self.project if self.project else "", output_dir=output_dir, experiment_key=experiment_key or RUN_ID
+        )
+
     def __del__(self):
         # do not clean on_experiment_end as we want to access it with Setup classes as well afterwards
         try:
@@ -729,3 +740,199 @@ class WandbUploaderMixin(UploadHelperMixin):
                 self._monitor = None
         except KeyboardInterrupt:
             WandbUploaderMixin.__del__(self)  # need to make sure we clean monitor, do not go back to self
+
+
+class _FailureTuple(NamedTuple):
+    metric: str
+    offline_value: Any
+    online_value: Any
+
+
+def verify_wandb_runs(
+    *,
+    project: str,
+    entity: Optional[str] = None,
+    experiment_key: str,
+    output_dir="./outputs/experiments/",
+):
+    api = wandb_api()
+    if entity is None:
+        entity = api.default_entity
+    # get all runs of the project with the given experiment key
+    runs: Runs = api.runs(f"{entity}/{project}", filters={"config.experiment_key": experiment_key}, per_page=32)
+    verify_results: dict[Run, list[_FailureTuple] | Exception] = {}
+    logged_tb_once = False
+    for run in runs:
+        try:
+            failures = verify_wandb_run_history(run=run, output_dir=output_dir)
+            verify_results[run] = failures
+        except Exception as e:  # noqa: PERF203
+            if not logged_tb_once:
+                logger.exception("Failed to verify wandb run %s", run.id)
+                logged_tb_once = True
+            else:
+                logger.error("Failed to verify wandb run %s: %s", run.id, str(e))
+            verify_results[run] = e
+    for run, failure in verify_results.items():
+        if isinstance(failure, Exception):
+            logger.error("Verification for wandb run %s failed with exception: %s", run.id, str(failure))
+        elif failure:
+            logger.error("Wandb run %s history verification failed: %s", run.id, failure)
+        else:
+            logger.info("Wandb run %s history verified successfully.", run.id)
+
+    return verify_results
+
+
+@overload
+def verify_wandb_run_history(
+    *,
+    output_dir="./outputs/experiments/",
+    run: Run,
+): ...
+
+
+@overload
+def verify_wandb_run_history(
+    project: str,
+    run_id: str,
+    entity: Optional[str] = None,
+    *,
+    experiment_id: Optional[str] = None,
+    output_dir="./outputs/experiments/",
+    run: Optional[Run] = None,
+): ...
+
+
+def verify_wandb_run_history(
+    project: Optional[str] = None,
+    run_id: Optional[str] = None,
+    entity: Optional[str] = None,
+    *,
+    experiment_id: Optional[str] = None,
+    output_dir="./outputs/experiments/",
+    run: Optional[Run] = None,
+):
+    """Verify the online wandb history against the offline JSON file.
+
+    The "result*run_id.json" file is read from the ``output_dir`` which should be the parent folder for all experiments.
+    It is assumed that the `run_id`
+    stored in output_dir. The last logged current_step and training_iteration
+
+    Args:
+        project: Wandb project name.
+        run_id: The Wandb run ID.
+        entity: Wandb entity (user or team). If None, uses default entity.
+        output_dir: Directory where offline wandb experiment data is stored.
+        experiment_id: The experiment ID will be extracted from the run_id if possible.
+            If provided will be checked for equality. See :const:``RUN_ID``.
+        run: Optional wandb Run object. If not provided, will fetch from Wandb API.
+    """
+    if run:
+        if run_id is not None and run.id != run_id:
+            raise ValueError(f"Provided run ID {run_id} does not match run.id {run.id}")
+        run_id = run.id
+        extracted_experiment_id = cast("str", run.config["run_id"])
+        if experiment_id and experiment_id != extracted_experiment_id:
+            raise ValueError(
+                f"Provided experiment_id {experiment_id} does not match extracted experiment ID {extracted_experiment_id} from run config"
+            )
+        experiment_id = extracted_experiment_id
+    else:
+        if run_id is None or project is None:
+            raise ValueError("Either run and/or run_id and project must be provided to verify wandb history.")
+        if "X" not in run_id:
+            if not experiment_id:
+                raise ValueError(
+                    f"Cannot extract experiment ID from run_id {run_id}. Please provide experiment_id argument."
+                )
+        else:
+            extracted_experiment_id = run_id.split("X", 1)[0]
+            if experiment_id and experiment_id != extracted_experiment_id:
+                raise ValueError(
+                    f"Provided experiment_id {experiment_id} does not match extracted experiment ID "
+                    f"{extracted_experiment_id} from run_id {run_id}"
+                )
+            experiment_id = extracted_experiment_id
+
+    experiment_paths = list(Path(output_dir).glob("*" + experiment_id))
+    if not experiment_paths:
+        raise ValueError(f"No experiment paths found in {output_dir} with id {experiment_id}")
+    if len(experiment_paths) > 1:
+        logger.warning(
+            "Multiple experiment paths found for experiment ID %s: %s. Using the first one.",
+            experiment_id,
+            experiment_paths,
+        )
+    experiment_path = Path(experiment_paths[0])
+    progress_files = list(experiment_path.glob(f"**/result*{run_id}.json"))
+    if len(progress_files) != 1:
+        logger.error(
+            "Expected exactly one progress file for run ID %s in experiment path %s, found %d: %s",
+            run_id,
+            experiment_path,
+            len(progress_files),
+            progress_files,
+        )
+        if not progress_files:
+            logger.error("Cannot verify wandb history without offline progress file.")
+            return
+
+    with open(progress_files[0], "r") as f:
+        records = [json.loads(line) for line in f]
+    flat_records = [dict(tree.flatten_with_path(rec)) for rec in records]
+
+    # Find all unique column keys
+    all_keys = set()
+    for rec in flat_records:
+        all_keys.update(rec.keys())
+
+    # Ensure all records have all keys (fill missing with None)
+    maxlen = max(len(k) for k in all_keys)
+
+    for rec in flat_records:
+        for key in all_keys:
+            padded_key = tuple(list(key) + [""] * (maxlen - len(key)))
+            rec.setdefault(key, None)
+            if key != padded_key:
+                rec[padded_key] = rec.pop(key)
+
+    # Convert to DataFrame
+    offline_data = pd.DataFrame(flat_records)
+
+    # Set MultiIndex columns
+    offline_data.columns = pd.MultiIndex.from_tuples(cast("list[tuple[str, ...]]", offline_data.columns))
+    last_step = offline_data["current_step"].iloc[-1]
+    last_iteration = offline_data["training_iteration"].iloc[-1]
+
+    if run is None:
+        api = wandb_api()
+        if entity is None:
+            entity = api.default_entity
+        run = cast("Run", api.run(f"{entity}/{project}/{run_id}"))
+    online_history = cast("pd.DataFrame", run.history(pandas=True))
+    last_log_step = online_history.iloc[-1]._step
+    online_iterations = online_history.iloc[-1].training_iteration
+    online_last_step = online_history.iloc[-1].current_step
+    failures: list[_FailureTuple] = []
+    for metric_name, offline_value, online_value in zip(
+        ("current_step", "training_iteration"), (last_step, last_iteration), (online_last_step, online_iterations)
+    ):
+        if offline_value != online_value:
+            failures.append(_FailureTuple(metric_name, offline_value, online_value))
+            logger.error(
+                "Mismatch in %s: offline last %s vs online last %s. On WandB only logged until %d step total %d entries.",
+                metric_name,
+                offline_value,
+                online_value,
+                last_log_step,
+                online_history.shape[0],
+            )
+        else:
+            logger.debug(
+                "Match in %s: offline last %s vs online last %s",
+                metric_name,
+                offline_value,
+                online_value,
+            )
+    return failures

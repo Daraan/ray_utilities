@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar
 from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
+from ray_utilities._runtime_constants import RUN_ID
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.misc import raise_tune_errors, shutdown_monitor
 from ray_utilities.random import seed_everything
@@ -208,6 +209,10 @@ def run_tune(
         pass
     except Exception:  # noqa: BLE001
         logger.exception("Error occurred during offline experiment upload:")
+    else:
+        logger.info("Offline experiment upload completed successfully. Verifying uploads... (pausing 10s first)")
+        time.sleep(10)  # wait a bit for the uploads to be finalized
+        setup.verify_wandb_uploads(RUN_ID)
     finally:
         if raise_errors and results is not None:
             raise_tune_errors(results)
