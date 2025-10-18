@@ -73,7 +73,7 @@ try:
 except ImportError:
     pass
 
-from ray_utilities.callbacks.upload_helper import UploadHelperMixin
+from ray_utilities.callbacks.upload_helper import ExitCode, UploadHelperMixin
 from ray_utilities.constants import COMET_OFFLINE_DIRECTORY
 
 _api: Optional[comet_ml.API] = None
@@ -105,7 +105,7 @@ COMET_COLOR_STRINGS = {
 }
 """Colored log level strings for Comet ML console output."""
 
-FAILED_UPLOAD_FILE = "failed_comet_uploads.txt"
+COMET_FAILED_UPLOAD_FILE = "failed_comet_uploads.txt"
 """Filename for storing details of failed Comet ML offline uploads."""
 
 
@@ -230,7 +230,7 @@ def comet_upload_offline_experiments(tracker: Optional[CometArchiveTracker] = No
     """
     if tracker is None:
         tracker = _default_comet_archive_tracker
-    tracker.upload_and_move()
+    return tracker.upload_and_move()
 
 
 def comet_assure_project_exists(workspace_name: str, project_name: str, project_description: Optional[str] = None):
@@ -397,13 +397,14 @@ class CometArchiveTracker(UploadHelperMixin):
         failed_uploads, succeeded = self._upload()
         self._write_failed_upload_file(failed_uploads)
         self.move_archives(succeeded)
+        return ExitCode.SUCCESS if not failed_uploads else ExitCode.ERROR
 
     def _write_failed_upload_file(self, failed_uploads: list[str]) -> None:
         """Write details of failed comet uploads to a file in the experiment directory."""
         if not failed_uploads:
             return
         # Use the configured COMET_OFFLINE_DIRECTORY for failed upload file location
-        failed_file = Path(COMET_OFFLINE_DIRECTORY) / FAILED_UPLOAD_FILE
+        failed_file = Path(COMET_OFFLINE_DIRECTORY) / COMET_FAILED_UPLOAD_FILE
         # Write failed archive names to file
         with _failed_upload_file_lock:
             with failed_file.open("a") as f:
@@ -468,7 +469,7 @@ class CometArchiveTracker(UploadHelperMixin):
         # If not successful write failed upload file
         if not success:
             with _failed_upload_file_lock:
-                failed_file = Path(COMET_OFFLINE_DIRECTORY) / FAILED_UPLOAD_FILE
+                failed_file = Path(COMET_OFFLINE_DIRECTORY) / COMET_FAILED_UPLOAD_FILE
                 with failed_file.open("a") as f:
                     f.write(f"{zip_file}\n")
                     f.write(indent(stdout, "    ") + "\n" + indent(stderr, "    ") + "\n")

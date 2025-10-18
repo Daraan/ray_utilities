@@ -15,19 +15,19 @@ from typing import TYPE_CHECKING, Iterable, Mapping, Optional, Sequence, cast
 # Note ray is only necessary for the WandbRunMonitor actor
 import ray
 import ray.exceptions
-from wandb import Api
 
 from ray_utilities._runtime_constants import RUN_ID
 from ray_utilities.callbacks.upload_helper import AnyPopen, ExitCode, UploadHelperMixin
 from ray_utilities.constants import FORK_DATA_KEYS
 from ray_utilities.misc import RE_GET_TRIAL_ID, ExperimentKey
+from wandb import Api
 
 if TYPE_CHECKING:
-    import wandb
     from ray import tune
     from ray.actor import ActorProxy
     from ray.tune import ResultGrid
 
+    import wandb
     from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor as _WandbRunMonitor
 
 
@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 _failed_upload_file_lock = threading.Lock()
 
+WANDB_FAILED_UPLOAD_FILE = f"failed_wandb_uploads-{RUN_ID}.txt"
 
 _wandb_api = None
 
@@ -69,6 +70,11 @@ class WandbUploaderMixin(UploadHelperMixin):
         super().__init__(*args, **kwargs)
         self._unfinished_gathered_uploads: list[AnyPopen] = []
         self._upload_to_trial: dict[AnyPopen, str] = {}
+        """
+        Mapping of uploading processes to their trial IDs.
+
+        Filled in :meth:`upload_paths` when starting uploads.
+        """
         self._monitor: Optional[ActorProxy[_WandbRunMonitor]] = None
         self._history_artifact: dict[str, list[wandb.Artifact]] = {}
 
@@ -414,7 +420,7 @@ class WandbUploaderMixin(UploadHelperMixin):
                     continue
                 # copy failure doc to other experiment
                 try:
-                    dest = path / f"failed_wandb_uploads-{RUN_ID}.txt"
+                    dest = path / WANDB_FAILED_UPLOAD_FILE
                     if dest.exists():
                         dest.rename(dest.with_suffix(".txt.old"))
                     shutil.copyfile(failed_file, dest)
@@ -442,7 +448,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         self, failed_uploads: Iterable[AnyPopen], file_dir: Path, process_to_trial: Optional[dict[AnyPopen, str]] = None
     ) -> Path:
         with _failed_upload_file_lock:
-            failed_file = file_dir / f"failed_wandb_uploads-{RUN_ID}.txt"
+            failed_file = file_dir / WANDB_FAILED_UPLOAD_FILE
             with failed_file.open("a") as f:
                 for process in failed_uploads:
                     trial_id = process_to_trial.get(process, "unknown") if process_to_trial else "unknown"
@@ -695,8 +701,8 @@ class WandbUploaderMixin(UploadHelperMixin):
             return self._monitor
         if self.project is None:
             raise ValueError("Cannot start WandbRunMonitor without wandb project name set.")
-        from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor  # noqa: PLC0415
         from ray_utilities import runtime_env  # noqa: PLC0415
+        from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor  # noqa: PLC0415
 
         actor_options = {"runtime_env": runtime_env}
 

@@ -4,8 +4,8 @@ import io
 import logging
 import subprocess
 import time
-from typing import IO, ClassVar, Optional, TypeAlias
 from enum import IntEnum, auto
+from typing import IO, ClassVar, Optional, TypeAlias
 
 logger = logging.getLogger(__name__)
 
