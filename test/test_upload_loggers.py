@@ -8,10 +8,12 @@ and proper handling of offline/online modes for both Comet and WandB loggers.
 from __future__ import annotations
 
 import io
+from itertools import chain
 import os
 import random
 import re
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -895,6 +897,14 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
             self.online_callback = AdvCometLoggerCallback(online=True)
             self.offline_callback = AdvCometLoggerCallback(online=False)
 
+    def tearDown(self):
+        for thread in chain(self.online_callback._threads, self.offline_callback._threads):
+            if isinstance(thread, subprocess.Popen):
+                thread.terminate()
+            elif isinstance(thread, threading.Thread):
+                thread.join(timeout=1)
+        super().tearDown()
+
     def _create_forked_trial(self, trial_id: str, fork_data: ForkFromData, config: dict | None = None) -> MockTrial:
         """Create a mock forked trial with proper configuration."""
         base_config = {FORK_FROM: fork_data}
@@ -1172,8 +1182,9 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
             )
             mock_experiment.add_tags.assert_called_once_with(["test_tag", "forked"])
             # Verify both log_other calls: "Created from" and command line args
-            self.assertEqual(mock_experiment.log_other.call_count, 2)
             mock_experiment.log_other.assert_any_call("Created from", "Ray")
+            # Will be called with sys args if present
+            self.assertEqual(mock_experiment.log_other.call_count, 2 if callback._cli_args else 1)
             # The second call should be for CLI args if they exist
 
     def test_log_trial_start_non_forked_trial(self):
