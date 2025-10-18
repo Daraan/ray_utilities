@@ -211,7 +211,8 @@ markers = [
    "tuner",
    "basic: Mark tests that should be tested first - if they fail others likely fail",
    "env_runner_cases",
-   "length: Mark tests that are fast/medium/slow to execute"
+   "length: Mark tests that are fast/medium/slow to execute",
+   "flaky: Mark tests as flaky to automatically rerun them on failure",
 ]
 testpaths = [
   "test"
