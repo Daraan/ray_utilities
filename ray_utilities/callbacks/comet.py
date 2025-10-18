@@ -56,15 +56,16 @@ See Also:
 # pyright: reportPossiblyUnboundVariable=information
 from __future__ import annotations
 
-from contextlib import contextmanager
 import io
 import logging
 import os
-from pathlib import Path
 import re
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
+from pathlib import Path
+from textwrap import indent
 from typing import Literal, Optional, Sequence, cast, overload
 
 try:
@@ -103,6 +104,9 @@ COMET_COLOR_STRINGS = {
     "COMET ERROR": "\x1b[1;38;5;196mCOMET ERROR:\x1b[0m",
 }
 """Colored log level strings for Comet ML console output."""
+
+FAILED_UPLOAD_FILE = "failed_comet_uploads.txt"
+"""Filename for storing details of failed Comet ML offline uploads."""
 
 
 def color_comet_log_strings(log_str: str) -> str:
@@ -399,7 +403,7 @@ class CometArchiveTracker(UploadHelperMixin):
         if not failed_uploads:
             return
         # Use the configured COMET_OFFLINE_DIRECTORY for failed upload file location
-        failed_file = Path(COMET_OFFLINE_DIRECTORY) / "failed_comet_uploads.txt"
+        failed_file = Path(COMET_OFFLINE_DIRECTORY) / FAILED_UPLOAD_FILE
         # Write failed archive names to file
         with _failed_upload_file_lock:
             with failed_file.open("a") as f:
@@ -455,14 +459,20 @@ class CometArchiveTracker(UploadHelperMixin):
             and not any(pattern in stderr.lower() for pattern in map(str.lower, cls.error_patterns))
             and not any(pattern in stdout.lower() for pattern in map(str.lower, cls.error_patterns))
         )
-        stdout = color_comet_log_strings(stdout)
-        stderr = color_comet_log_strings(stderr)
         if success:
-            _COMET_OFFLINE_LOGGER.info("Successfully uploaded to comet:\n%s", stdout)
+            _COMET_OFFLINE_LOGGER.info("Successfully uploaded to comet:\n%s", color_comet_log_strings(stdout))
         else:
-            _COMET_OFFLINE_LOGGER.error("Error while uploading to comet:\n%s", stdout)
+            _COMET_OFFLINE_LOGGER.error("Error while uploading to comet:\n%s", color_comet_log_strings(stdout))
         if process.stderr:
-            _COMET_OFFLINE_LOGGER.error("Error while uploading to comet:\n%s", stderr)
+            _COMET_OFFLINE_LOGGER.error("Error while uploading to comet:\n%s", color_comet_log_strings(stderr))
+        # If not successful write failed upload file
+        if not success:
+            with _failed_upload_file_lock:
+                failed_file = Path(COMET_OFFLINE_DIRECTORY) / FAILED_UPLOAD_FILE
+                with failed_file.open("a") as f:
+                    f.write(f"{zip_file}\n")
+                    f.write(indent(stdout, "    ") + "\n" + indent(stderr, "    ") + "\n")
+            _LOGGER.warning("Wrote details of failed comet upload to %s", failed_file.resolve())
         if not move or not success:
             return success
         zip_path = Path(zip_file)
