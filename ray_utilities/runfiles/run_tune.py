@@ -31,6 +31,7 @@ from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
 from ray_utilities._runtime_constants import RUN_ID
+from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.misc import raise_tune_errors, shutdown_monitor
 from ray_utilities.random import seed_everything
@@ -202,6 +203,21 @@ def run_tune(
             fallback_error = e3
 
     try:
+        if setup.args.wandb:
+            # Assure that the gathered uploads are finished
+            try:
+                callbacks = tuner._local_tuner.get_run_config().callbacks  # pyright: ignore[reportOptionalMemberAccess]
+            except AttributeError:
+                pass
+            else:
+                try:
+                    for cb in callbacks or ():
+                        if isinstance(cb, AdvWandbLoggerCallback):
+                            cb.wait_for_gatherer_threads()
+                except KeyboardInterrupt:
+                    pass
+                except Exception:
+                    logger.exception("Error occurred while waiting for gatherer threads:")
         if not results:
             logger.warning("No results returned from the tuner.")
         setup.upload_offline_experiments(results, tuner, use_tqdm=True)

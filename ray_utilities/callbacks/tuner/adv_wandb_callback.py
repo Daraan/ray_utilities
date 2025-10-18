@@ -116,6 +116,7 @@ class AdvWandbLoggerCallback(
         self._gather_timer: Optional[threading.Timer] = None
         self._gather_timeout_min = 10.0  # seconds to wait for more trials to finish
         self._active_trials_count = 0
+        self._gatherer_threads: list[threading.Thread] = []
 
     def __getstate__(self):
         # We need to be able to pickle this class but we cannot pickle locks, remove them
@@ -494,7 +495,9 @@ class AdvWandbLoggerCallback(
                 self._gather_timer.cancel()
                 self._gather_timer = None
                 # Process uploads immediately in a separate thread to avoid blocking
-                threading.Thread(target=self._process_gathered_uploads, daemon=False).start()
+                thread = threading.Thread(target=self._process_gathered_uploads, daemon=False)
+                thread.start()
+                self._gatherer_threads.append(thread)
 
     def _process_gathered_uploads(self, *, wait=False):
         """
@@ -704,3 +707,27 @@ class AdvWandbLoggerCallback(
                         self._monitor.close_run_tab.remote(old_id)  # pyright: ignore[reportFunctionMemberAccess]
         except Exception:
             _logger.exception("Error during tab clearing:")
+
+    def wait_for_gatherer_threads(self, timeout=900):
+        """Wait for all gatherer threads to finish."""
+        _logger.info("Waiting for %d gatherer threads to finish...", len(self._gatherer_threads))
+        threads_left = [thread for thread in self._gatherer_threads if thread.is_alive()]
+        initial_count = len(threads_left)
+        start = time.time()
+        while threads_left and ((now := time.time() - start) < timeout):
+            thread = threads_left[0]
+            if not thread.is_alive():
+                threads_left.pop(0)
+                continue
+            _logger.info(
+                "Waiting for gatherer thread %s to finish... %d/%d threads left - timeout: %.0f/%.0f",
+                thread.name,
+                len(threads_left),
+                initial_count,
+                now,
+                timeout,
+            )
+            thread.join(timeout=8)
+
+    def __del__(self):
+        self.wait_for_gatherer_threads()
