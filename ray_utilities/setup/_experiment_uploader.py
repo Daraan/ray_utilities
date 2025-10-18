@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Generic, Optional, TypeAlias
 
 from typing_extensions import Sentinel, TypeVar
 
-from ray_utilities.callbacks.comet import CometArchiveTracker
-from ray_utilities.callbacks.wandb import WandbUploaderMixin
+from ray_utilities._runtime_constants import COMET_OFFLINE_DIRECTORY, RUN_ID
+from ray_utilities.callbacks.comet import COMET_FAILED_UPLOAD_FILE, CometArchiveTracker
+from ray_utilities.callbacks.wandb import WANDB_FAILED_UPLOAD_FILE, WandbUploaderMixin
 
 # pyright: enableExperimentalFeatures=true
 
@@ -17,6 +19,7 @@ if TYPE_CHECKING:
     from ray import tune
     from ray.tune import ResultGrid
 
+    from ray_utilities.callbacks.upload_helper import AnyPopen
     from ray_utilities.config.parser.default_argument_parser import DefaultArgumentParser
 
 
@@ -57,8 +60,8 @@ class CometUploaderMixin(Generic[ParserType_co]):
                     "No comet tracker setup but args.comet=%s. Cannot upload experiments. Upload them manually instead.",
                     self.args.comet,  # pyright: ignore[reportAttributeAccessIssue]
                 )
-            return
-        self.comet_tracker.upload_and_move()
+            return None
+        return self.comet_tracker.upload_and_move()
 
 
 class ExperimentUploader(WandbUploaderMixin, CometUploaderMixin[ParserType_co]):
@@ -68,30 +71,88 @@ class ExperimentUploader(WandbUploaderMixin, CometUploaderMixin[ParserType_co]):
 
     def upload_offline_experiments(self, results: Optional[ResultGrid] = None, tuner: Optional[tune.Tuner] = None):
         unfinished_wandb_uploads = None
-        if self.args.wandb and "upload" in self.args.wandb:
-            if results is None:
-                logger.warning(
-                    "Wandb upload requested, but no results provided. This will not upload any offline experiments."
+        try:
+            failed_runs: list[str] = []
+            failed_processes: list[AnyPopen] = []
+            if self.args.wandb and "upload" in self.args.wandb:
+                if results is None:
+                    logger.warning(
+                        "Wandb upload requested, but no results provided. This will not upload any offline experiments."
+                    )
+                try:  # if no results (due to a failure) get them in a more hacky way.
+                    # Do not wait to start uploading to comet.
+                    unfinished_wandb_uploads = self.wandb_upload_results(results, tuner, wait=False)
+                except Exception:
+                    logger.exception("Error while uploading offline experiments to WandB: %s")
+            if self.args.comet and "upload" in self.args.comet:
+                logger.info("Uploading offline experiments to Comet")
+                try:
+                    self.comet_upload_offline_experiments()
+                except Exception:
+                    logger.exception("Error while uploading offline experiments to Comet")
+            if unfinished_wandb_uploads:
+                for process in unfinished_wandb_uploads:
+                    exit_code = self._failure_aware_wait(process, timeout=900, trial_id="")
+                    if exit_code != 0:
+                        try:
+                            failed_runs.append(" ".join(process.args))  # pyright: ignore[reportArgumentType, reportCallIssue]
+                        except TypeError:
+                            failed_runs.append(str(process.args))
+                        failed_processes.append(process)
+        finally:
+            # Output failed uploads file contents
+            experiment_path = None
+            if tuner and tuner._local_tuner:
+                run_config = tuner._local_tuner.get_run_config()
+                experiment_path = Path(
+                    run_config.storage_path,  # pyright: ignore[reportArgumentType]
+                    f"{self.project}-{RUN_ID}",
                 )
-            try:  # if no results (due to a failure) get them in a more hacky way.
-                # Do not wait to start uploading to comet.
-                unfinished_wandb_uploads = self.wandb_upload_results(results, tuner, wait=False)
-            except Exception:
-                logger.exception("Error while uploading offline experiments to WandB: %s")
-        if self.args.comet and "upload" in self.args.comet:
-            logger.info("Uploading offline experiments to Comet")
-            try:
-                self.comet_upload_offline_experiments()
-            except Exception:
-                logger.exception("Error while uploading offline experiments to Comet")
-        failed_runs = []
-        if unfinished_wandb_uploads:
-            for process in unfinished_wandb_uploads:
-                exit_code = self._failure_aware_wait(process, timeout=900, trial_id="")
-                if exit_code != 0:
-                    try:
-                        failed_runs.append(" ".join(process.args))  # pyright: ignore[reportArgumentType, reportCallIssue]
-                    except TypeError:
-                        failed_runs.append(str(process.args))
-        if failed_runs:
-            logger.error("Failed to upload the following wandb runs. Commands to run:\n%s", "\n".join(failed_runs))
+            if results:
+                # XXX Check if paths actually match
+                if experiment_path is not None and experiment_path != Path(results.experiment_path):
+                    logger.error(
+                        "Experiment path from results (%s) does not match path from tuner (%s). Using results path.",
+                        results.experiment_path,
+                        experiment_path,
+                    )
+                experiment_path = Path(results.experiment_path)
+            if failed_runs:
+                logger.error("Failed to upload the following wandb runs. Commands to run:\n%s", "\n".join(failed_runs))
+                if experiment_path is None:
+                    logger.error("Cannot determine experiment path to log failed uploads.")
+                else:
+                    self._update_failed_upload_file(failed_processes, experiment_path, self._upload_to_trial)
+            if experiment_path is not None:
+                self.report_failed_uploads(experiment_path)
+
+    def report_failed_uploads(self, experiment_path: str | Path) -> None:
+        """Report failed uploads stored in the failed upload file."""
+        # Comet
+        comet_fail_file = Path(COMET_OFFLINE_DIRECTORY) / COMET_FAILED_UPLOAD_FILE
+        if comet_fail_file.exists():
+            COMET_LOGGER = logging.getLogger("comet_ml.offline")
+            with comet_fail_file.open("r") as f:
+                lines = f.readlines()
+            if not lines:
+                logger.info("No failed uploads to report, file %s is empty.", comet_fail_file.resolve())
+                return
+            logger.error("Reporting %d failed uploads from file %s:", len(lines), comet_fail_file.resolve())
+            for line in lines:
+                COMET_LOGGER.error(" - %s", line)
+        else:
+            logger.info("No failed uploads to report, file %s does not exist.", comet_fail_file.resolve())
+
+        # WandB
+        wandb_fail_file = Path(experiment_path / WANDB_FAILED_UPLOAD_FILE)
+        if wandb_fail_file.exists():
+            with wandb_fail_file.open("r") as f:
+                lines = f.readlines()
+            if not lines:
+                logger.info("No failed uploads to report, file %s is empty.", wandb_fail_file.resolve())
+                return
+            logger.error("Reporting %d failed uploads from file %s:", len(lines), wandb_fail_file.resolve())
+            for line in lines:
+                logger.error(" - %s", line)
+        else:
+            logger.info("No failed uploads to report, file %s does not exist.", wandb_fail_file.resolve())

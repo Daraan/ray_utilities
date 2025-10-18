@@ -30,14 +30,15 @@ class TestPBTParser(unittest.TestCase):
     @unittest.skip("not implemented")
     def test_hyperparam_mutations_parsing(self): ...
 
-    @patch_args()
+    @patch_args("pbt")
     def test_default_overrides(self):
         for parser in (PopulationBasedTrainingParser(), DefaultArgumentParser()):
             args = parser.parse_args(known_only=True)
+            if isinstance(args, DefaultArgumentParser):
+                assert args.command is not None
+                args = args.command
             self.assertEqual(args.time_attr, "current_step")
             self.assertEqual(args.quantile_fraction, 0.1)
-            # TODO: Add some "auto" mode that chooses depending on total_steps or max_step size.
-            # Use a float value to split total_steps into a fraction
             self.assertEqual(args.perturbation_interval, PopulationBasedTrainingParser.perturbation_interval)
             self.assertEqual(args.resample_probability, 1.0)
             self.assertEqual(args.mode, "max")

@@ -1,5 +1,7 @@
 # ruff: noqa: FBT003  # positional bool
 
+from __future__ import annotations
+
 import argparse
 import io
 import sys
@@ -9,7 +11,7 @@ from contextlib import redirect_stderr
 from inspect import isclass
 
 import pytest
-from typing_extensions import get_args
+from typing_extensions import TYPE_CHECKING, get_args
 
 from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradientAccumulation
 from ray_utilities.callbacks.algorithm.dynamic_buffer_callback import DynamicBufferUpdate
@@ -25,6 +27,10 @@ from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup
 from ray_utilities.testing_utils import DisableLoggers, SetupLowRes, SetupWithEnv, mock_trainable_algorithm, patch_args
 from ray_utilities.training.helpers import is_algorithm_callback_added
+
+if TYPE_CHECKING:
+    from ray_utilities.config.parser.pbt_scheduler_parser import PopulationBasedTrainingParser
+
 
 pytestmark = pytest.mark.basic
 
@@ -342,7 +348,8 @@ class TestProcessing(unittest.TestCase):
                 # The order of arguments might be changed by patch_args
                 self.assertTrue(
                     sys.argv[1:] == ["-a", "no_actor_by_patch", "--log_level", "DEBUG"]
-                    or sys.argv[1:] == ["--log_level", "DEBUG", "-a", "no_actor_by_patch"]
+                    or sys.argv[1:] == ["--log_level", "DEBUG", "-a", "no_actor_by_patch"],
+                    f"Not patched correctly: {sys.argv[1:]}",
                 )
                 args = DefaultArgumentParser().parse_args()
                 self.assertEqual(args.comet, False)
@@ -410,6 +417,7 @@ class TestProcessing(unittest.TestCase):
             args = DefaultArgumentParser().parse_args()
             self.assertTrue(args.total_steps, 100)
 
+    def test_patch_args_with_subparser_commands(self):
         with patch_args("--comet", "--no_exact_sampling", "-n", 4, "--log_level", "DEBUG"):
             with DefaultArgumentParser.patch_args(
                 # main args for this experiment
@@ -427,9 +435,11 @@ class TestProcessing(unittest.TestCase):
                 "--comet", "offline+upload",
                 "--log_level", "INFO",
                 "--use_exact_total_steps",
+                "pbt",
+                "--perturbation_interval", "0.5",
             ):  # fmt: skip
                 args = AlgorithmSetup().args
-                self.assertListEqual(args.tune, ["batch_size"])  # pyright: ignore[reportArgumentType]
+                self.assertListEqual(args.tune, ["batch_size"], f"is {args.tune}")  # pyright: ignore[reportArgumentType]
                 self.assertEqual(args.max_step_size, 16_000)
                 self.assertEqual(args.tags, ["tune-batch_size", "mlp"])
                 self.assertEqual(args.comment, "Default training run. Tune batch size")
@@ -442,6 +452,7 @@ class TestProcessing(unittest.TestCase):
                 self.assertEqual(args.num_samples, 4)
                 self.assertEqual(args.comet, "online")
                 self.assertIs(args.no_exact_sampling, True)
+                self.assertEqual(args.command.perturbation_interval, 0.5 * args.total_steps)  # pyright: ignore[reportOptionalMemberAccess]
             args = AlgorithmSetup().args
             self.assertIs(args.use_exact_total_steps, False)
             self.assertIs(args.wandb, False)
@@ -487,7 +498,7 @@ class TestTagArgumentProcessing(unittest.TestCase):
         # Only one foo: or foo= should remain
         self.assertListEqual(parser.tags, ["foo", "foo:4"])
 
-    @patch_args("foo:1", "--tag:foo", "--tag:foo:2")
+    @patch_args("pbt", "foo:1", "--tag:foo", "--tag:foo:2")
     def test_invalid_tag_format(self):
         stderr_out = io.StringIO()
         with self.assertRaises(SystemExit), redirect_stderr(stderr_out):
@@ -495,6 +506,25 @@ class TestTagArgumentProcessing(unittest.TestCase):
         parser = DefaultArgumentParser().parse_args(known_only=True)
         self.assertListEqual(["foo", "foo:2"], parser.tags)
         self.assertIn("foo:1", parser.extra_args)
+
+
+class TestSubparsers(unittest.TestCase):
+    def test_pbt_subparser(self):
+        with patch_args():
+            parser = DefaultArgumentParser[None]().parse_args()
+            self.assertIsNone(parser.command)
+
+        with patch_args("pbt"):
+            parser = DefaultArgumentParser["PopulationBasedTrainingParser"]().parse_args()
+            self.assertIsNotNone(parser.command)
+
+        with patch_args("pbt", "--perturbation_interval", "0.5"):
+            parser = DefaultArgumentParser["PopulationBasedTrainingParser"]().parse_args()
+            self.assertEqual(parser.command.perturbation_interval, parser.total_steps * 0.5)  # pyright: ignore[reportAttributeAccessIssue]
+
+        with patch_args("pbt", "--perturbation_interval", "0.5"):
+            parser = DefaultArgumentParser["PopulationBasedTrainingParser"]().parse_args()
+            self.assertEqual(parser.command.perturbation_interval, parser.total_steps * 0.5)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 if __name__ == "__main__":

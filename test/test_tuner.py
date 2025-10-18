@@ -1058,6 +1058,7 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
 
     @pytest.mark.length(speed="medium")
     @mock.patch("wandb.Api", new=MagicMock())
+    @mock.patch("ray_utilities.callbacks.wandb.wandb_api", new=MagicMock())
     def test_run_tune_with_top_trial_scheduler(self):
         original_exploit = TopPBTTrialScheduler._exploit
         perturbation_interval = 100
@@ -1191,14 +1192,15 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             "--seed", "42",
             "--log_level", "DEBUG",
             "--log_stats", "most",
-            "--perturbation_interval", perturbation_interval,
-            "--quantile_fraction", "0.1",
             "--total_steps", max(batch_sizes) * 3,
             "--use_exact_total_steps",
             "--no_dynamic_eval_interval",
             "--fcnet_hiddens", "[4]",
             "--num_envs_per_env_runner", 5,
             "--test",
+            "pbt",
+            "--quantile_fraction", "0.1",
+            "--perturbation_interval", perturbation_interval,
         ):  # fmt: skip
             Setup = SetupWithCheck(CheckTrainableForTop, PPOMLPWithPBTSetup)
             Setup.batch_size_sample_space = {"grid_search": batch_sizes}  # start values?
@@ -1207,7 +1209,7 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
                 # TODO: Trials are reused, trial name might be wrong then
             )
 
-            setup.args.set_hyperparam_mutations(
+            setup.args.command.set_hyperparam_mutations(
                 {
                     "train_batch_size_per_learner": CyclicMutation(Setup.batch_size_sample_space["grid_search"]),
                     "fcnet_hiddens": KeepMutation([2]),

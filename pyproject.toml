@@ -170,6 +170,8 @@ extend-generics = [
     "ray_utilities.jax.jax_model.FlaxRLModel",
     "ray_utilities.setup.ppo_mlp_setup.MLPSetup",
     "ray_utilities.setup.ppo_mlp_setup.PPOMLPSetup",
+    "ray_utilities.config.DefaultArgumentParser",
+    "ray_utilities.config.parser.default_argument_parser.DefaultArgumentParser",
 ]
 allowed-unused-imports = ["hvplot.pandas", "default_arguments.PYTHON_ARGCOMPLETE_OK"]
 
@@ -211,5 +213,9 @@ markers = [
    "tuner",
    "basic: Mark tests that should be tested first - if they fail others likely fail",
    "env_runner_cases",
-   "length: Mark tests that are fast/medium/slow to execute"
+   "length: Mark tests that are fast/medium/slow to execute",
+   "flaky: Mark tests as flaky to automatically rerun them on failure",
+]
+testpaths = [
+  "test"
 ]

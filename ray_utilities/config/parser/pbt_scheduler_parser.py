@@ -127,10 +127,14 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
     def configure(self) -> None:
         super().configure()
         self.add_argument(
-            "--hyperparam-mutations",
+            "--hyperparam_mutations",
             type=_to_hyperparam_mutations,
             default=None,
             help="Hyperparameter mutations for PopulationBasedTraining.",
+        )
+        self.add_argument(
+            "--perturbation_interval",
+            type=lambda x: float(x) if "." in x else int(x),
         )
         # As long as Sentinel cannot be pickled do not add it as default
         # self.add_argument(
@@ -177,7 +181,8 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
 
     def to_scheduler(self) -> PopulationBasedTraining:
         if not self._parsed:
-            args = self.parse_args().as_dict()
+            # When used as subparser we should not end up here
+            args = self.parse_args(known_only=True).as_dict()
         else:
             args = self.as_dict()
         args.pop("hyperparam_mutations", None)  # will be set below
@@ -201,15 +206,4 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
             hyperparam_mutations=self.hyperparam_mutations,
         )
 
-    def process_args(self) -> None:
-        super().process_args()
-        max_step_size = getattr(self, "max_step_size", None)
-        if max_step_size is None:
-            return
-        if self.perturbation_interval % max_step_size != 0:
-            logger.warning(
-                "The perturbation_interval (%s) is not a multiple of max_step_size (%s). "
-                "This will lead to overstepping behavior and uneven perturbation intervals.",
-                self.perturbation_interval,
-                max_step_size,
-            )
+    # See _ScalingPopulationBasedTrainingParser.process_args to leverage RLLib arguments as well

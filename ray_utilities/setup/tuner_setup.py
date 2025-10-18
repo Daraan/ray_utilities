@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from ray.tune.stopper import Stopper
 
     from ray_utilities.config import DefaultArgumentParser
+    from ray_utilities.config.parser.pbt_scheduler_parser import PopulationBasedTrainingParser
     from ray_utilities.setup.experiment_base import ExperimentSetupBase
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
 
@@ -66,7 +67,9 @@ __all__ = [
 ]
 
 SetupType_co = TypeVar(
-    "SetupType_co", bound="ExperimentSetupBase[DefaultArgumentParser, AlgorithmConfig, Algorithm]", covariant=True
+    "SetupType_co",
+    bound="ExperimentSetupBase[DefaultArgumentParser[PopulationBasedTrainingParser] | DefaultArgumentParser[None], AlgorithmConfig, Algorithm]",  # noqa: E501
+    covariant=True,
 )
 
 logger = logging.getLogger(__name__)

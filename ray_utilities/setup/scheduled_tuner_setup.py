@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from ray.tune import Callback, schedulers
 
     from ray_utilities.config.parser.mlp_argument_parser import MLPArgumentParser
+    from ray_utilities.config.parser.pbt_scheduler_parser import PopulationBasedTrainingParser
+
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +79,10 @@ class ScheduledTunerSetup(TunerSetup[SetupType_co]):
 
 class ReTunerSetup(ScheduledTunerSetup[SetupType_co]):
     def create_scheduler(self) -> schedulers.TrialScheduler:
+        assert self._setup.args.command is not None
         return ReTuneScheduler(
-            perturbation_interval=self._setup.args.perturbation_interval,
-            resample_probability=self._setup.args.resample_probability,
+            perturbation_interval=self._setup.args.command.perturbation_interval,
+            resample_probability=self._setup.args.command.resample_probability,
             hyperparam_mutations={
                 "train_batch_size_per_learner": {"grid_search": [256, 512, 1024, 2048]}
             },  # TODO: experimental
@@ -89,9 +92,12 @@ class ReTunerSetup(ScheduledTunerSetup[SetupType_co]):
         )
 
 
-class PPOMLPWithReTuneSetup(PPOMLPSetup):
+class PPOMLPWithReTuneSetup(PPOMLPSetup["MLPArgumentParser[PopulationBasedTrainingParser]"]):
     def create_tuner(self) -> tune.Tuner:
-        return ReTunerSetup(setup=self, eval_metric=self.args.metric, eval_metric_order=self.args.mode).create_tuner()
+        assert self.args.command is not None
+        return ReTunerSetup(
+            setup=self, eval_metric=self.args.command.metric, eval_metric_order=self.args.command.mode
+        ).create_tuner()
 
 
 # endregion
@@ -101,7 +107,8 @@ class PPOMLPWithReTuneSetup(PPOMLPSetup):
 
 class PBTTunerSetup(ScheduledTunerSetup["PPOMLPWithPBTSetup"]):
     def create_scheduler(self) -> schedulers.TrialScheduler:
-        return self._setup.args.to_scheduler()
+        assert self._setup.args.command is not None
+        return self._setup.args.command.to_scheduler()
 
     def create_callbacks(self, *, adv_loggers: bool | None = True) -> list[Callback]:
         callbacks = super().create_callbacks(adv_loggers=adv_loggers)
@@ -109,11 +116,14 @@ class PBTTunerSetup(ScheduledTunerSetup["PPOMLPWithPBTSetup"]):
         return callbacks
 
 
-class PPOMLPWithPBTSetup(PPOMLPSetup["MLPArgumentParser"]):
+class PPOMLPWithPBTSetup(PPOMLPSetup["MLPArgumentParser[PopulationBasedTrainingParser]"]):
     def create_tuner(self) -> tune.Tuner:
-        return PBTTunerSetup(setup=self, eval_metric=self.args.metric, eval_metric_order=self.args.mode).create_tuner(
-            adv_loggers=True
-        )
+        if self.args.command_str != "pbt":
+            raise RuntimeError(f"PPOMLPWithPBTSetup requires 'pbt' command, got '{self.args.command_str}'")
+        assert self.args.command is not None
+        return PBTTunerSetup(
+            setup=self, eval_metric=self.args.command.metric, eval_metric_order=self.args.command.mode
+        ).create_tuner(adv_loggers=True)
 
 
 # endregion

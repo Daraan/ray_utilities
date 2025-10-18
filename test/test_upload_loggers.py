@@ -8,10 +8,12 @@ and proper handling of offline/online modes for both Comet and WandB loggers.
 from __future__ import annotations
 
 import io
+from itertools import chain
 import os
 import random
 import re
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -27,7 +29,7 @@ import pytest
 from ray.tune.experiment import Trial
 
 from ray_utilities._runtime_constants import RUN_ID
-from ray_utilities.callbacks.comet import CometArchiveTracker
+from ray_utilities.callbacks.comet import COMET_FAILED_UPLOAD_FILE, CometArchiveTracker
 from ray_utilities.callbacks.tuner.adv_comet_callback import AdvCometLoggerCallback
 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
@@ -318,7 +320,7 @@ class TestCometFailedUpload(unittest.TestCase):
             tracker = CometArchiveTracker(path=self.comet_dir)
             # Simulate failed upload
             tracker._write_failed_upload_file([str(self.archive)])
-            failed_file = self.comet_dir / "failed_comet_uploads.txt"
+            failed_file = self.comet_dir / COMET_FAILED_UPLOAD_FILE
             self.assertTrue(failed_file.exists())
             with open(failed_file) as f:
                 content = f.read()
@@ -895,6 +897,23 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
             self.online_callback = AdvCometLoggerCallback(online=True)
             self.offline_callback = AdvCometLoggerCallback(online=False)
 
+    def tearDown(self):
+        for thread in chain(self.online_callback._threads, self.offline_callback._threads):
+            if isinstance(thread, subprocess.Popen):
+                thread.terminate()
+            elif isinstance(thread, threading.Thread):
+                thread.join(timeout=1)
+            else:
+                # Catch-all for unexpected thread types
+                try:
+                    if hasattr(thread, "terminate"):
+                        thread.terminate()
+                    elif hasattr(thread, "join"):
+                        thread.join(timeout=1)
+                except Exception:  # noqa: BLE001
+                    pass
+        super().tearDown()
+
     def _create_forked_trial(self, trial_id: str, fork_data: ForkFromData, config: dict | None = None) -> MockTrial:
         """Create a mock forked trial with proper configuration."""
         base_config = {FORK_FROM: fork_data}
@@ -1172,8 +1191,9 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
             )
             mock_experiment.add_tags.assert_called_once_with(["test_tag", "forked"])
             # Verify both log_other calls: "Created from" and command line args
-            self.assertEqual(mock_experiment.log_other.call_count, 2)
             mock_experiment.log_other.assert_any_call("Created from", "Ray")
+            # Will be called with sys args if present
+            self.assertEqual(mock_experiment.log_other.call_count, 2 if callback._cli_args else 1)
             # The second call should be for CLI args if they exist
 
     def test_log_trial_start_non_forked_trial(self):

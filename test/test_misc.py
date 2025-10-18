@@ -196,10 +196,10 @@ class TestMisc(TestCase):
                         )
 
     def test_check_valid_args_decorator(self):
-        with self.assertRaisesRegex(ValueError, re.escape("Unexpected unrecognized args: ['--it', '10']")):
+        with self.assertRaisesRegex(ValueError, re.escape("Unexpected unrecognized args: ['--it']")):
 
             @check_args
-            @patch_args("--it", 10, check_for_errors=False)
+            @patch_args("--it", check_for_errors=False)
             def f():
                 AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
 
@@ -208,7 +208,7 @@ class TestMisc(TestCase):
         with self.assertRaisesRegex(ExceptionGroup, "Unexpected unrecognized args"):
 
             @check_args
-            @patch_args("--it", 10, check_for_errors=False)
+            @patch_args("--it", check_for_errors=False)
             def f2():
                 AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
                 raise ValueError("Some other error")
@@ -218,7 +218,7 @@ class TestMisc(TestCase):
         # Test exception
 
         @check_args(exceptions=["--it", "10"])
-        @patch_args("--it", 10, check_for_errors=False)
+        @patch_args("pbt", "--it", 10, check_for_errors=False)
         def h():
             AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
 
@@ -228,7 +228,7 @@ class TestMisc(TestCase):
         with self.assertRaisesRegex(ValueError, re.escape("Unexpected unrecognized args: ['--it', '10']")):
 
             @check_args(exceptions=["10", "--it"])
-            @patch_args("--it", 10, check_for_errors=False)
+            @patch_args("pbt", "--it", 10, check_for_errors=False)
             def g():
                 AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
 
@@ -240,7 +240,7 @@ class TestMisc(TestCase):
         ):
 
             @check_args(exceptions=["--it", "10"])
-            @patch_args("--foo", "10", "--it", "10", "--bar", "10", check_for_errors=False)
+            @patch_args("pbt", "--foo", "10", "--it", "10", "--bar", "10", check_for_errors=False)
             def g():
                 AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
 
@@ -249,7 +249,7 @@ class TestMisc(TestCase):
     def test_parse_args_with_check(self):
         with self.assertRaisesRegex(ValueError, re.escape("Unexpected unrecognized args: ['--it', '10']")):
 
-            @patch_args("--it", 10)
+            @patch_args("pbt", "--it", 10)
             def f():
                 AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
 
@@ -257,7 +257,7 @@ class TestMisc(TestCase):
 
         with self.assertRaisesRegex(ExceptionGroup, "Unexpected unrecognized args"):
 
-            @patch_args("--it", 10)
+            @patch_args("pbt", "--it", 10)
             def f2():
                 AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
                 raise ValueError("Some other error")
@@ -265,7 +265,7 @@ class TestMisc(TestCase):
             f2()
 
         # Test exception;  OK
-        @patch_args("--it", 10, except_parser_errors=["--it", "10"])
+        @patch_args("pbt", "--it", 10, except_parser_errors=["--it", "10"])
         def h():
             AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
 
@@ -275,7 +275,7 @@ class TestMisc(TestCase):
 
         with self.assertRaisesRegex(ValueError, re.escape("Unexpected unrecognized args: ['--it', '10']")):
 
-            @patch_args("--it", 10, except_parser_errors=["10", "--it"])
+            @patch_args("pbt", "--it", 10, except_parser_errors=["10", "--it"])
             def g():
                 AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
 
@@ -286,7 +286,7 @@ class TestMisc(TestCase):
             ValueError, re.escape("Unexpected unrecognized args: ['--foo', '12', '--bar', '13']")
         ):
 
-            @patch_args("--foo", "10", "--it", "12", "--bar", "13", except_parser_errors=["10", "--it"])
+            @patch_args("pbt", "--foo", "10", "--it", "12", "--bar", "13", except_parser_errors=["10", "--it"])
             def g():
                 AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
 
@@ -294,16 +294,16 @@ class TestMisc(TestCase):
 
     def test_parse_args_as_with(self):
         with self.assertRaisesRegex(ValueError, re.escape("Unexpected unrecognized args: ['--it', '10']")):
-            with patch_args("--it", 10):
+            with patch_args("pbt", "--it", 10):
                 AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
 
         with self.assertRaisesRegex(ExceptionGroup, "Unexpected unrecognized args"):
-            with patch_args("--it", 10):
+            with patch_args("pbt", "--it", 10):
                 AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
                 raise ValueError("Some other error")
 
         # Test exception;  OK
-        with patch_args("--it", 10, except_parser_errors=["--it", "10"]):
+        with patch_args("pbt", "--it", 10, except_parser_errors=["--it", "10"]):
             AlgorithmSetup(init_trainable=False, init_config=False, init_param_space=False)
 
     def test_can_import_default_arguments(self):

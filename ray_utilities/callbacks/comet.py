@@ -56,15 +56,16 @@ See Also:
 # pyright: reportPossiblyUnboundVariable=information
 from __future__ import annotations
 
-from contextlib import contextmanager
 import io
 import logging
 import os
-from pathlib import Path
 import re
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
+from pathlib import Path
+from textwrap import indent
 from typing import Literal, Optional, Sequence, cast, overload
 
 try:
@@ -72,7 +73,7 @@ try:
 except ImportError:
     pass
 
-from ray_utilities.callbacks.upload_helper import UploadHelperMixin
+from ray_utilities.callbacks.upload_helper import ExitCode, UploadHelperMixin
 from ray_utilities.constants import COMET_OFFLINE_DIRECTORY
 
 _api: Optional[comet_ml.API] = None
@@ -103,6 +104,9 @@ COMET_COLOR_STRINGS = {
     "COMET ERROR": "\x1b[1;38;5;196mCOMET ERROR:\x1b[0m",
 }
 """Colored log level strings for Comet ML console output."""
+
+COMET_FAILED_UPLOAD_FILE = "failed_comet_uploads.txt"
+"""Filename for storing details of failed Comet ML offline uploads."""
 
 
 def color_comet_log_strings(log_str: str) -> str:
@@ -226,7 +230,7 @@ def comet_upload_offline_experiments(tracker: Optional[CometArchiveTracker] = No
     """
     if tracker is None:
         tracker = _default_comet_archive_tracker
-    tracker.upload_and_move()
+    return tracker.upload_and_move()
 
 
 def comet_assure_project_exists(workspace_name: str, project_name: str, project_description: Optional[str] = None):
@@ -393,13 +397,14 @@ class CometArchiveTracker(UploadHelperMixin):
         failed_uploads, succeeded = self._upload()
         self._write_failed_upload_file(failed_uploads)
         self.move_archives(succeeded)
+        return ExitCode.SUCCESS if not failed_uploads else ExitCode.ERROR
 
     def _write_failed_upload_file(self, failed_uploads: list[str]) -> None:
         """Write details of failed comet uploads to a file in the experiment directory."""
         if not failed_uploads:
             return
         # Use the configured COMET_OFFLINE_DIRECTORY for failed upload file location
-        failed_file = Path(COMET_OFFLINE_DIRECTORY) / "failed_comet_uploads.txt"
+        failed_file = Path(COMET_OFFLINE_DIRECTORY) / COMET_FAILED_UPLOAD_FILE
         # Write failed archive names to file
         with _failed_upload_file_lock:
             with failed_file.open("a") as f:
@@ -455,14 +460,26 @@ class CometArchiveTracker(UploadHelperMixin):
             and not any(pattern in stderr.lower() for pattern in map(str.lower, cls.error_patterns))
             and not any(pattern in stdout.lower() for pattern in map(str.lower, cls.error_patterns))
         )
-        stdout = color_comet_log_strings(stdout)
-        stderr = color_comet_log_strings(stderr)
         if success:
-            _COMET_OFFLINE_LOGGER.info("Successfully uploaded to comet:\n%s", stdout)
+            _COMET_OFFLINE_LOGGER.info("Successfully uploaded to comet:\n%s", color_comet_log_strings(stdout))
         else:
-            _COMET_OFFLINE_LOGGER.error("Error while uploading to comet:\n%s", stdout)
+            _COMET_OFFLINE_LOGGER.error("Error while uploading to comet:\n%s", color_comet_log_strings(stdout))
         if process.stderr:
-            _COMET_OFFLINE_LOGGER.error("Error while uploading to comet:\n%s", stderr)
+            _COMET_OFFLINE_LOGGER.error("Error while uploading to comet:\n%s", color_comet_log_strings(stderr))
+        # If not successful write failed upload file
+        if not success:
+            with _failed_upload_file_lock:
+                failed_file = Path(COMET_OFFLINE_DIRECTORY) / COMET_FAILED_UPLOAD_FILE
+                with failed_file.open("a") as f:
+                    f.write(f"{zip_file}\n")
+                    output_lines = []
+                    if stdout:
+                        output_lines.append(indent(stdout, "    ").rstrip())
+                    if stderr:
+                        output_lines.append(indent(stderr, "    ").rstrip())
+                    if output_lines:
+                        f.write("\n".join(output_lines) + "\n")
+            _LOGGER.warning("Wrote details of failed comet upload to %s", failed_file.resolve())
         if not move or not success:
             return success
         zip_path = Path(zip_file)

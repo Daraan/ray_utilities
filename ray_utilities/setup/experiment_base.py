@@ -623,7 +623,7 @@ class ExperimentSetupBase(
 
     def clean_args_to_hparams(self, args: Optional[NamespaceType[ParserType_co]] = None) -> dict[str, Any]:
         args = args or self.get_args()
-        to_remove: list[str] = [*LOG_IGNORE_ARGS, "process_number"]
+        to_remove: list[str] = [*LOG_IGNORE_ARGS, "process_number", "command"]  # do not add subparser
         if isinstance(args, SupportsMetaAnnotations):
             to_remove.extend(args.get_non_cli_args())
         upload_args = remove_ignored_args(args, remove=to_remove)
