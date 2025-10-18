@@ -27,7 +27,7 @@ import pytest
 from ray.tune.experiment import Trial
 
 from ray_utilities._runtime_constants import RUN_ID
-from ray_utilities.callbacks.comet import FAILED_UPLOAD_FILE, CometArchiveTracker
+from ray_utilities.callbacks.comet import COMET_FAILED_UPLOAD_FILE, CometArchiveTracker
 from ray_utilities.callbacks.tuner.adv_comet_callback import AdvCometLoggerCallback
 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
@@ -318,7 +318,7 @@ class TestCometFailedUpload(unittest.TestCase):
             tracker = CometArchiveTracker(path=self.comet_dir)
             # Simulate failed upload
             tracker._write_failed_upload_file([str(self.archive)])
-            failed_file = self.comet_dir / FAILED_UPLOAD_FILE
+            failed_file = self.comet_dir / COMET_FAILED_UPLOAD_FILE
             self.assertTrue(failed_file.exists())
             with open(failed_file) as f:
                 content = f.read()
