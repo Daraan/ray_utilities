@@ -1056,8 +1056,9 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
 
 
 class ScalingPBTSubparser(OptionalExtensionsArgs, SubcommandHandlerBase[PopulationBasedTrainingParser | Subparsers]):
-    def _is_pbt_used(_self, self: Self) -> TypeIs[PopulationBasedTrainingParser]:  # pyright: ignore[reportGeneralTypeIssues] # noqa: N805
-        return isinstance(self.command, PopulationBasedTrainingParser)
+    @staticmethod
+    def _is_pbt_used(parser: Self) -> TypeIs[PopulationBasedTrainingParser]:  # pyright: ignore[reportGeneralTypeIssues] # noqa: N805
+        return isinstance(parser.command, PopulationBasedTrainingParser)
 
     def process_args(self) -> None:
         super().process_args()

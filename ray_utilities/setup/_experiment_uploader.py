@@ -71,9 +71,9 @@ class ExperimentUploader(WandbUploaderMixin, CometUploaderMixin[ParserType_co]):
 
     def upload_offline_experiments(self, results: Optional[ResultGrid] = None, tuner: Optional[tune.Tuner] = None):
         unfinished_wandb_uploads = None
-        failed_runs: list[str] = []
-        failed_processes: list[AnyPopen] = []
         try:
+            failed_runs: list[str] = []
+            failed_processes: list[AnyPopen] = []
             if self.args.wandb and "upload" in self.args.wandb:
                 if results is None:
                     logger.warning(

@@ -411,7 +411,7 @@ class TestProcessing(unittest.TestCase):
             args = DefaultArgumentParser().parse_args()
             self.assertTrue(args.total_steps, 100)
 
-    def test_class_patch_args_complex(self):
+    def test_patch_args_with_subparser_commands(self):
         with patch_args("--comet", "--no_exact_sampling", "-n", 4, "--log_level", "DEBUG"):
             with DefaultArgumentParser.patch_args(
                 # main args for this experiment

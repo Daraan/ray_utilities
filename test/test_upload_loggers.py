@@ -903,6 +903,15 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
                 thread.terminate()
             elif isinstance(thread, threading.Thread):
                 thread.join(timeout=1)
+            else:
+                # Catch-all for unexpected thread types
+                try:
+                    if hasattr(thread, "terminate"):
+                        thread.terminate()
+                    elif hasattr(thread, "join"):
+                        thread.join(timeout=1)
+                except Exception:  # noqa: BLE001
+                    pass
         super().tearDown()
 
     def _create_forked_trial(self, trial_id: str, fork_data: ForkFromData, config: dict | None = None) -> MockTrial:
