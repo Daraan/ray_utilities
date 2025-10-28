@@ -966,6 +966,19 @@ class ExperimentSetupBase(
 
     @classmethod
     @abstractmethod
+    def _get_algorithm_classes(
+        cls, args: NamespaceType[ParserType_co]
+    ) -> tuple[type[ConfigType_co], type[AlgorithmType_co] | None]:
+        """
+        Get the algorithm class and config class associated with this setup.
+
+        Returns:
+            A tuple containing the algorithm class and the algorithm config class.
+        """
+        return cls.config_class, cls.algo_class
+
+    @classmethod
+    @abstractmethod
     def _config_from_args(
         cls, args: ParserType_co | argparse.Namespace, base: Optional[ConfigType_co] = None
     ) -> ConfigType_co:
