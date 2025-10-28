@@ -19,10 +19,12 @@ a standardized interface for algorithm configuration across different RL algorit
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Optional
 
+from ray.rllib.algorithms.dqn import DQN, DQNConfig
 from ray.rllib.algorithms.ppo import PPO, PPOConfig
 from typing_extensions import TypeVar
 
@@ -48,6 +50,8 @@ __all__ = ["AlgorithmSetup", "AlgorithmType_co", "ConfigType_co", "PPOSetup", "P
 
 TrainableT = TypeVar("TrainableT", bound=Callable[..., "TrainableReturnData"] | type["DefaultTrainable"])
 """TypeVar for the two trainable types. Note that default values of generic DefaultTrainable are applied here"""
+
+logger = logging.getLogger(__name__)
 
 
 class AlgorithmSetup(
@@ -96,7 +100,7 @@ class AlgorithmSetup(
     """
 
     PROJECT = "Unnamed Project"
-    # FIXME: Need at least PPO to use run_tune with this class
+    # Default to PPO, but will be overridden based on args.algorithm
     config_class: type[ConfigType_co] = PPOConfig  # evaluate the forward ref of ConfigType.__default__
     algo_class: type[AlgorithmType_co] = PPO
 
@@ -124,15 +128,45 @@ class AlgorithmSetup(
         return None
 
     @classmethod
+    def _get_algorithm_classes(
+        cls, args: NamespaceType[ParserType_co]
+    ) -> tuple[type[ConfigType_co], type[AlgorithmType_co] | None]:
+        """Get algorithm config and class based on args.algorithm selection.
+
+        Args:
+            args: Parsed arguments with algorithm selection
+
+        Returns:
+            Tuple of (config_class, algo_class)
+        """
+        algorithm = getattr(args, "algorithm", "ppo")
+        if algorithm == "dqn":
+            return DQNConfig, DQN
+        return PPOConfig, PPO
+
+    @classmethod
     def _config_from_args(cls, args, base: Optional[ConfigType_co] = None) -> ConfigType_co:
+        # Determine algorithm classes dynamically
+        config_class, _ = cls._get_algorithm_classes(args)
+        if config_class != cls.config_class:
+            # TODO: This will warn when using
+            ImportantLogger.important_warning(
+                "The selected algorithm config returned by _get_algorithm_classes does not match the class config_class attribute. "
+                "Will use the dynamically selected config class %s. ",
+                config_class.__name__,
+            )
+
         learner_class = None
-        if args.accumulate_gradients_every > 1 or args.dynamic_batch:
+        # Only use gradient accumulation learner for PPO
+        if args.algorithm == "ppo" and (args.accumulate_gradients_every > 1 or args.dynamic_batch):
             # import lazy as currently not used elsewhere
             from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
                 PPOTorchLearnerWithGradientAccumulation,
             )
 
             learner_class = PPOTorchLearnerWithGradientAccumulation
+        # TODO: Implement a DQN variant with gradient accumulation
+
         config, _module_spec = create_algorithm_config(
             args=args,
             module_class=None,
@@ -140,7 +174,7 @@ class AlgorithmSetup(
             model_config=cls._model_config_from_args(args),
             learner_class=learner_class,
             framework="torch",
-            config_class=cls.config_class,
+            config_class=config_class,
             base_config=base,
         )
         add_callbacks_to_config(config, cls.get_callbacks_from_args(args))
