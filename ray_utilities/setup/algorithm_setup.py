@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
     from ray_utilities.typing import TrainableReturnData
 
-__all__ = ["AlgorithmSetup", "AlgorithmType_co", "ConfigType_co", "PPOSetup", "ParserType_co"]
+__all__ = ["AlgorithmSetup", "AlgorithmType_co", "ConfigType_co", "DQNSetup", "PPOSetup", "ParserType_co"]
 
 
 TrainableT = TypeVar("TrainableT", bound=Callable[..., "TrainableReturnData"] | type["DefaultTrainable"])
@@ -228,6 +228,52 @@ class PPOSetup(AlgorithmSetup[ParserType_co, "PPOConfig", "PPO"]):
 
     config_class = PPOConfig
     algo_class = PPO
+
+
+class DQNSetup(AlgorithmSetup[ParserType_co, "DQNConfig", "DQN"]):
+    """Specialized setup class for Deep Q-Networks (DQN) experiments.
+
+    This class provides a ready-to-use setup specifically configured for DQN
+    algorithms in Ray RLlib. It inherits all the dynamic configuration capabilities
+    from :class:`AlgorithmSetup` while ensuring type safety with DQN-specific
+    algorithm and configuration types.
+
+    The setup automatically configures DQN-specific features like replay buffer,
+    target network updates, and epsilon-greedy exploration when requested through
+    command-line arguments, and provides sensible defaults for DQN experiments.
+
+    Features:
+        - Type-safe DQN configuration and algorithm classes
+        - Automatic replay buffer configuration
+        - Target network update scheduling
+        - Epsilon-greedy exploration scheduling
+        - Inherits dynamic batch sizing and buffer management
+        - Compatible with Ray Tune hyperparameter optimization
+
+    Attributes:
+        config_class: Set to :class:`ray.rllib.algorithms.dqn.DQNConfig`
+        algo_class: Set to :class:`ray.rllib.algorithms.dqn.DQN`
+
+    Example:
+        >>> setup = DQNSetup()
+        >>> parser = setup.create_parser()
+        >>> args = parser.parse_args(["--env", "CartPole-v1", "--algorithm", "dqn"])
+        >>> config = setup.create_config(args)
+        >>> trainable = setup._create_trainable()
+
+    Note:
+        This class can be extended to customize DQN configurations and callbacks
+        for specific experiment requirements. Override methods like ``create_config``
+        or ``_get_callbacks_from_args`` to add custom behavior.
+
+    See Also:
+        :class:`AlgorithmSetup`: Base algorithm setup class
+        :class:`ray.rllib.algorithms.dqn.DQN`: The DQN algorithm implementation
+        :class:`ray.rllib.algorithms.dqn.DQNConfig`: DQN configuration class
+    """
+
+    config_class = DQNConfig
+    algo_class = DQN
 
 
 if TYPE_CHECKING:  # check ABC
