@@ -14,10 +14,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import ray
 from ray.tune.callback import Callback
-
 from ray.tune.experiment import Trial
 from ray.tune.utils.file_transfer import sync_dir_between_nodes
-
 
 if TYPE_CHECKING:
     from ray.tune.experiment import Trial
@@ -68,6 +66,12 @@ class SyncConfigFilesCallback(Callback):
             _logger.debug("Config files already synced for trial %s", trial.trial_id)
             return
 
+        config_file_sync_data = self._get_config_file_sync_data(trial)
+        if all(Path(f).exists() for f in config_file_sync_data or []):
+            self._synced_trials.add(trial.trial_id)
+            return
+        # Use TUNE_ORIG_WORKING_DIR (not availiable here) to find files the files, in the Trainable here it is complicated / not possible.
+        return
         try:
             self._sync_config_files_for_trial(trial)
             self._synced_trials.add(trial.trial_id)
@@ -105,14 +109,23 @@ class SyncConfigFilesCallback(Callback):
             # remote dir is "here", local will be the worker
             good = trial.storage.syncer.sync_down(remote_dir=rel_file.as_posix(), local_dir=dest.as_posix())
             if not good:
-                _logger.warning("Failed to sync config file %s for trial %s", file, trial.trial_id)
+                import socket  # noqa: PLC0415
+
+                _logger.warning(
+                    "Failed to sync config file\n%s\nfor trial %s for relative path\n%shostname=%s, ip=%s",
+                    file.resolve(),
+                    trial.trial_id,
+                    Path.cwd(),
+                    socket.gethostname(),
+                    socket.getfqdn(),
+                )
             success += good
         if success:
             trial.storage.syncer.wait_or_retry()
             _logger.info("Successfully synced %d config files for trial %s to %s", success, trial.trial_id, synced)
         return  # Get the remote path where config files should be stored
 
-    def _get_config_file_sync_data(self, trial: "Trial") -> Optional[Dict[str, Any]]:
+    def _get_config_file_sync_data(self, trial: "Trial") -> Optional[list[str | Path]]:
         """Extract config file sync data from trial's checkpoint or result.
 
         Args:
@@ -134,10 +147,10 @@ class SyncConfigFilesCallback(Callback):
             Remote path string if available, None otherwise.
         """
         # Use trial's remote path as base
-        if hasattr(trial, "path") and trial.path:
+        if trial.path:
             return str(Path(trial.path) / "config_files")
 
-        if hasattr(trial, "remote_experiment_path") and trial.remote_experiment_path:
+        if trial.remote_experiment_path:
             return str(Path(trial.remote_experiment_path) / trial.trial_id / "config_files")
 
         return None

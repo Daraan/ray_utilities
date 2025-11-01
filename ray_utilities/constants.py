@@ -47,7 +47,7 @@ from ._runtime_constants import (
     ENTRY_POINT,
     ENTRY_POINT_ID,
     RAY_UTILITIES_INITIALIZATION_TIMESTAMP,
-    RUN_ID,
+    _RUN_ID,
 )
 
 __all__ = []
@@ -56,7 +56,7 @@ __all__ += [
     "ENTRY_POINT",
     "ENTRY_POINT_ID",
     "RAY_UTILITIES_INITIALIZATION_TIMESTAMP",
-    "RUN_ID",
+    "_RUN_ID",
 ]
 
 # region runtime constants
@@ -379,7 +379,8 @@ The ``fork_id`` will be everything before the first ``?``, the ``?_step=<fork_st
 OPTIONAL_FORK_DATA_KEYS = ("current_step", "controller")
 FORK_DATA_KEYS = (
     "trial_id",
-    "parent_id",
+    "parent_fork_id",
+    "parent_trial_id",
     "parent_training_iteration",
     "step_metric",
     "step_metric_value",
@@ -387,7 +388,8 @@ FORK_DATA_KEYS = (
 )
 
 FORK_FROM_CSV_KEY_MAPPING: dict[str, str | None] = {
-    "parent_id": "parent_trial_id",
+    "parent_trial_id": "parent_trial_id",
+    "parent_fork_id": "parent_fork_id",
     "parent_training_iteration": "parent_training_iteration",
     "step_metric": "parent_time",
     "step_metric_value": None,
@@ -401,3 +403,25 @@ Maps :const:`FORK_DATA_KEYS` to keys used in the :class:`ForkFromData` dict.
 A None value indicates a skip when the header is written to CSV.
 For example, "parent_time" should be extracted into two columns: "step_metric" and "step_metric_value"
 """
+
+WANDB_MONITOR_ACTOR_NAME = "remote_wandb_run_monitor"
+"""str: Name used for the WandB remote run monitor actor."""
+
+
+def get_run_id() -> str:
+    """
+    Get the current global RUN_ID for this execution from the environment.
+
+    This function retrieves the RUN_ID from the constants submodule, allowing for
+    updates when restoring an experiment globally. This is preferred over using the RUN_ID
+    constant directly, as it ensures the most current value is used.
+
+    Returns:
+        The current RUN_ID string.
+
+    See Also:
+        :const:`_RUN_ID`: The initial RUN_ID constant set at import time.
+        :meth:`~ray_utilities.setup.experiment_base.ExperimentSetupBase.restore_experiment`:
+            Updates RUN_ID when restoring experiments.
+    """
+    return _RUN_ID

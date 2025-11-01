@@ -28,31 +28,33 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, Optional, Protocol, cast, overload
 
 from ray import train, tune
+from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.algorithms.ppo import PPO
+from ray.tune.execution.placement_groups import PlacementGroupFactory
 from ray.tune.search.optuna import OptunaSearch
 from ray.tune.stopper import CombinedStopper, FunctionStopper
 from typing_extensions import TypeVar
 
-from ray_utilities._runtime_constants import RUN_ID
 from ray_utilities.callbacks.tuner.metric_checkpointer import StepCheckpointer
 from ray_utilities.config._tuner_callbacks_setup import TunerCallbackSetup
 from ray_utilities.constants import (
-    CLI_REPORTER_PARAMETER_COLUMNS,
     DEFAULT_EVAL_METRIC,
     EVAL_METRIC_RETURN_MEAN,
     FORK_FROM,
     NEW_LOG_EVAL_METRIC,
     TUNE_RESULT_IS_A_COPY,
+    get_run_id,
 )
 from ray_utilities.misc import get_current_step, new_log_format_used
 from ray_utilities.misc import trial_name_creator as default_trial_name_creator
-from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner, create_search_algo
+from ray_utilities.nice_logger import ImportantLogger
+from ray_utilities.tune.searcher.constrained_minibatch_search import constrained_minibatch_search
+from ray_utilities.tune.searcher.optuna_searcher import OptunaSearchWithPruner, create_optuna_searcher
 from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultIterationStopper
 
 if TYPE_CHECKING:
     from ray.air.config import RunConfig as RunConfigV1
-    from ray.rllib.algorithms import Algorithm, AlgorithmConfig
-    from ray.tune.execution.placement_groups import PlacementGroupFactory
+    from ray.rllib.algorithms import Algorithm
     from ray.tune.experiment import Trial
     from ray.tune.stopper import Stopper
 
@@ -169,13 +171,16 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         Get the experiment name for organizing tuning results.
         This will be the subdir or the storage_path the tuner uses.
         """
-        return f"{self._setup.project}-{RUN_ID}"
+        return f"{self._setup.project}-{get_run_id()}"
 
     def get_storage_path(self) -> str:
         """
         Get the storage path for organizing tuning results.
         This will be the base directory where the tuner saves outputs.
+        Can also point to an S3 bucket.
         """
+        if str(self._setup.storage_path).startswith("s3://"):
+            return str(self._setup.storage_path)
         return str(Path(self._setup.storage_path).resolve())
 
     def create_stoppers(self) -> list[Stopper]:
@@ -231,12 +236,15 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
                 total_steps,
             )
 
-            def total_steps_stopper(trial_id: str, results: dict[str, Any] | StrictAlgorithmReturnData) -> bool:  # noqa: ARG001
+            def total_steps_stopper(
+                trial_id: str, results: dict[str, Any] | StrictAlgorithmReturnData, total_steps=total_steps
+            ) -> bool:  # noqa: ARG001
                 current_step = get_current_step(results)  # pyright: ignore[reportArgumentType]
                 stop = current_step >= total_steps
                 # however will self._setup and trainable._setup still be aligned after a restore?
                 if stop:
-                    logger.info(
+                    ImportantLogger.important_info(
+                        logger,
                         "Stopping trial %s at step %s >= total_steps %s",
                         trial_id,
                         current_step,
@@ -264,34 +272,54 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
                     or not self._setup.args.tune
                     or not {"iterations", "train_batch_size_per_learner", "batch_size"} & tune_keys
                 ):
-                    logger.info("Adding MaximumResultIterationStopper with %s iterations", iterations)
+                    ImportantLogger.important_info(
+                        logger, "Adding MaximumResultIterationStopper with %s iterations", iterations
+                    )
                     # Do NOT add this stopper if iterations is adjusted, e.g. by scheduler or the trainable itself
                     stoppers.append(MaximumResultIterationStopper(iterations))
                     added_iteration_stopper = True
         if not added_iteration_stopper:
-            logger.debug(
+            logger.info(
                 "Not adding MaximumResultIterationStopper for %s, Tuner.add_iteration_stopper=%s",
                 self._setup.args.iterations,
                 self.add_iteration_stopper,
             )
         return stoppers
 
-    def create_tune_config(self) -> tune.TuneConfig:
-        if getattr(self._setup.args, "resume", False):
-            tune.ResumeConfig  # TODO
-        stoppers = self.create_stoppers()
-        if self._setup.args.optimize_config:
-            searcher, optuna_stopper = create_search_algo(
+    def create_searcher(self, stoppers: list[Stopper]):
+        """
+        Create a ``Searcher`` or ``SearchAlgorithm`` for hyperparameter optimization. Return None to use default.
+
+        When the minibatch_size is in the parameter space
+        """
+        if self._setup.args.tune or self._setup.args.optimize_config:  # legacy argument
+            searcher, optuna_stopper = create_optuna_searcher(
                 hparams=self._setup.param_space,
                 study_name=self.get_experiment_name(),
                 seed=self._setup.args.seed,
                 metric=self.eval_metric,
                 mode=self.eval_metric_order,
-                pruner=self._setup.args.optimize_config,
+                pruner=bool(
+                    self._setup.args.tune or self._setup.args.optimize_config
+                ),  # TODO: ALWAYS TRUE, make optional add arguments
+                pruner_warmup_steps=self._setup.args.pruner_warmup_steps,
+                pruner_min_trials=self._setup.args.pruner_min_trials,
             )  # TODO: metric
-            stoppers.append(optuna_stopper)
+            if optuna_stopper is not None:
+                stoppers.append(optuna_stopper)
+        elif "minibatch_size" in self._setup.param_space and not isinstance(
+            self._setup.param_space["minibatch_size"], (int, float)
+        ):
+            searcher = constrained_minibatch_search(self._setup)
         else:
             searcher = None
+        return searcher
+
+    def create_tune_config(self) -> tune.TuneConfig:
+        if getattr(self._setup.args, "resume", False):
+            tune.ResumeConfig  # TODO
+        stoppers = self.create_stoppers()
+        searcher = self.create_searcher(stoppers)
         if len(stoppers) == 0:
             self._stopper = None
         elif len(stoppers) == 1:
@@ -306,6 +334,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             trial_name_creator=self.trial_name_creator,
             max_concurrent_trials=None if self._setup.args.not_parallel else self._setup.args.num_jobs,
             # scheduler=Fifo,
+            reuse_actors=False,  # self._setup.args.test,  # EXPERIMENTAL!
         )
 
     @overload
@@ -342,20 +371,28 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             stopper = None
         else:
             stopper: OptunaSearchWithPruner | Stopper | None = self._stopper
-        if self._setup.args.checkpoint_frequency_unit == "steps" and self._setup.args.checkpoint_frequency is not None:
-            checkpoint_frequency = 0  # handle it with custom callback
-            if TUNE_RESULT_IS_A_COPY:
-                logger.info(
-                    "Disabling iteration based checkpointing, using StepCheckpointer instead. "
-                    "NOTE: However this will not work with ray <= (all versions) as it passes a copy"
-                    " of the result dict."
-                )
+        # We do not checkpoint when we do PBT
+        if self._setup.args.command_str and "pbt" not in self._setup.args.command_str.lower():
+            if (
+                self._setup.args.checkpoint_frequency_unit == "steps"
+                and self._setup.args.checkpoint_frequency is not None
+            ):
+                checkpoint_frequency = 0  # handle it with custom callback
+                if TUNE_RESULT_IS_A_COPY:
+                    logger.info(
+                        "Disabling iteration based checkpointing, using StepCheckpointer instead. "
+                        "NOTE: However this will not work with ray <= (all versions) as it passes a copy"
+                        " of the result dict."
+                    )
 
+                else:
+                    logger.info("Disabling iteration based checkpointing, using StepCheckpointer instead")
+                callbacks.append(StepCheckpointer(self._setup.args.checkpoint_frequency, min_iterations=24))
             else:
-                logger.info("Disabling iteration based checkpointing, using StepCheckpointer instead")
-            callbacks.append(StepCheckpointer(self._setup.args.checkpoint_frequency))
+                checkpoint_frequency = self._setup.args.checkpoint_frequency
         else:
-            checkpoint_frequency = self._setup.args.checkpoint_frequency
+            checkpoint_frequency = 0
+            logger.info("Disabling checkpointing by Tuner, handled by PBT scheduler.")
         return RunConfig(
             # Trial artifacts are uploaded periodically to this directory
             storage_path=str(self.get_storage_path()),
@@ -382,7 +419,10 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         )
 
     def create_sync_config(self):
-        return tune.SyncConfig(sync_artifacts=True)
+        return tune.SyncConfig(
+            sync_artifacts=True,
+            sync_period=600,
+        )
 
     @staticmethod
     def _grid_search_to_normal_search_space(
@@ -395,25 +435,87 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             for k, v in param_space.items()
         }
 
-    def create_tuner(self, *, adv_loggers: Optional[bool] = None) -> tune.Tuner:
+    def create_tuner(self, *, adv_loggers: Optional[bool] = True) -> tune.Tuner:
         """
         Create and return a configured Ray Tune Tuner instance.
+
+        By default the tuner will reserve 3 GB + 0.5 GB per environment runner.
+        To account for memory usage during training, e.g. 1-2 GB should be reserved for the WandbLogger
 
         Args:
             adv_loggers: Whether to include advanced variants of the standard CSV, TBX, JSON loggers.
                 If ``None``, will be set to ``True`` if :attr:`~DefaultArgumentParser.render_mode` is set in ``args`` of
                 the setup.
                 Its recommended to use ``True`` when using schedulers working with ``FORK_FROM``.
+
+        Returns:
+            A configured :class:`tune.Tuner` instance, either restored from a previous experiment
+            if :attr:`args.restore_path<DefaultArgumentParser.restore_path>` is set,
+            or a new tuner instance.
+
+        Raises:
+            ValueError: If ``restore_path`` is set but the path holds not tuner.pkl file.
         """
-        resource_requirements = PPO.default_resource_request(self._setup.config)
+        # Prepare resource requirements (used for both new and restored tuners)
+        resource_requirements = PPO.default_resource_request(
+            self._setup.config.copy(copy_frozen=False).update_from_dict(
+                AlgorithmConfig.overrides(custom_resources_per_env_runner={"memory": 0.75 * 1024 * 1024 * 1024})
+            )
+        )
         resource_requirements = cast(
             "PlacementGroupFactory", resource_requirements
         )  # Resources return value is deprecated
+        bundles = resource_requirements.bundles
+        # When tracking memory calculate RES - SHR
+        # https://docs.ray.io/en/latest/ray-core/scheduling/memory-management.html
+        bundles[0]["memory"] = bundles[0].get("memory", 0) + 4.25 * 1024 * 1024 * 1024
+        if len(bundles) == 1:
+            # No env runners, reserve some extra memory
+            bundles[0]["memory"] = bundles[0].get("memory", 0) + 0.75 * 1024 * 1024 * 1024
+        if self._setup.args.wandb:  # When using remote we should increase this with local mode we do not need much
+            # Reserve extra memory for wandb logger. Queue and Logging actor need ~1gb each, so
+            bundles[0]["memory"] = bundles[0].get("memory", 0) + 1.5 * 1024 * 1024 * 1024
+        if self._setup.args.uuid_selector or self._setup.args.hostname_selector:
+            hostname_label = (
+                {"hostname": self._setup.args.hostname_selector} if self._setup.args.hostname_selector else {}
+            )
+            uuid_label = {"uuid": self._setup.args.uuid_selector} if self._setup.args.uuid_selector else {}
+            bundle_label_selector = [hostname_label | uuid_label for _ in bundles]
+        else:
+            bundle_label_selector = None
+        resource_requirements = PlacementGroupFactory(
+            bundles, resource_requirements.strategy, bundle_label_selector=bundle_label_selector
+        )
         logger.info("Default resource per trial: %s", resource_requirements.bundles)
+
         assert self._setup.trainable is not None, "Trainable must be set before creating the tuner"
         trainable = tune.with_resources(self._setup.trainable, resource_requirements)
         # functools.update_wrapper(trainable, self._setup.trainable)
         trainable.__name__ = self._setup.trainable.__name__
+
+        # Check if we should restore from a previous experiment
+        if self._setup.args.restore_path:
+            restore_path = self._setup.args.restore_path
+            logger.info("Restoring Tuner from path: %s", restore_path)
+
+            # Verify the path can be restored before attempting
+            if not tune.Tuner.can_restore(restore_path):
+                raise ValueError(
+                    f"Cannot restore Tuner from path: {restore_path}. "
+                    "The path does not contain a valid Ray Tune experiment. "
+                    "Please check that the path exists and contains experiment metadata."
+                )
+
+            # Use Tuner.restore() with the trainable
+            return tune.Tuner.restore(
+                path=restore_path,
+                trainable=trainable,
+                resume_errored=self._setup.args.restore_errored == "resume",
+                restart_errored=self._setup.args.restore_errored == "restart",
+                # Possibly add param_space if it contained object references, todo if we add the cli_args not as a dict
+            )
+
+        # Create a new tuner
         tune_config = self.create_tune_config()
         if isinstance(tune_config.search_alg, OptunaSearch) and any(
             isinstance(v, dict) and "grid_search" in v for v in self._setup.param_space.values()
@@ -423,13 +525,20 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             param_space = self._grid_search_to_normal_search_space(self._setup.param_space)
         else:
             param_space = self._setup.param_space
+        if "minibatch_size" in param_space:
+            if "train_batch_size_per_learner" not in param_space:
+                # Let searcher know which train_batch_size is used. Alternatively could set this info on the searcher
+                # Problem / side-effect. This puts train_batch_size_per_learner into the hparameter space
+                param_space["train_batch_size_per_learner"] = tune.choice(
+                    [self._setup.args.train_batch_size_per_learner]
+                )
 
         assert FORK_FROM not in param_space, (
             f"{FORK_FROM} is not expected to be in the param_space that is passed to the Tuner by default."
         )
         return tune.Tuner(
             trainable=trainable,  # Updated to use the modified trainable with resource requirements
-            param_space=param_space,  # TODO: Likely Remove when using space of OptunaSearch
+            param_space=param_space,
             tune_config=tune_config,
             run_config=self.create_run_config(self.create_callbacks(adv_loggers=adv_loggers)),
         )

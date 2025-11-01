@@ -167,7 +167,7 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
 
     def test_gradient_accumulation_behavior(self):
         """Test that gradients are accumulated correctly and applied only when expected."""
-        batch_size = make_divisible(32, DefaultArgumentParser.num_envs_per_env_runner)
+        batch_size = make_divisible(32, 6)
         accumulate_every = 3
 
         with patch_args(
@@ -176,6 +176,7 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
             "--batch_size", batch_size,
             "--minibatch_size", batch_size,
             "--fcnet_hiddens", "[8, 8]",
+            "--num_envs_per_env_runner", "6",
         ):  # fmt: skip
             setup = MLPSetup(init_trainable=False)
 

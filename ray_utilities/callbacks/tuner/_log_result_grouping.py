@@ -42,4 +42,6 @@ exclude_results: set[str] = {
     "cli_args/test",
     "cli_args/num_jobs",
     "node_ip",
+    "pid",
+    "evaluated_this_step",
 }

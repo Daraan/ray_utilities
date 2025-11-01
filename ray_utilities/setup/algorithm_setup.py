@@ -19,6 +19,7 @@ a standardized interface for algorithm configuration across different RL algorit
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -34,7 +35,7 @@ from ray_utilities.setup.experiment_base import (
     NamespaceType,
     ParserType_co,
 )
-from ray_utilities.setup.extensions import SetupWithDynamicBatchSize, SetupWithDynamicBuffer
+from ray_utilities.setup.extensions import SetupWithDynamicBatchSize, SetupWithDynamicBuffer, TunableSetupMixin
 from ray_utilities.training.default_class import DefaultTrainable
 
 if TYPE_CHECKING:
@@ -50,6 +51,7 @@ TrainableT = TypeVar("TrainableT", bound=Callable[..., "TrainableReturnData"] | 
 
 
 class AlgorithmSetup(
+    TunableSetupMixin[ParserType_co, ConfigType_co, AlgorithmType_co],
     SetupWithDynamicBuffer[ParserType_co, ConfigType_co, AlgorithmType_co],  # use before the other setup
     SetupWithDynamicBatchSize[ParserType_co, ConfigType_co, AlgorithmType_co],
     ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co],
@@ -113,6 +115,7 @@ class AlgorithmSetup(
             self,
             model_config=None,  # TODO: allow porting, but check that it works
             log_level=self.args.log_level,
+            use_pbar="RAY_UTILITIES_NO_TQDM" not in os.environ,
         )
 
     @classmethod

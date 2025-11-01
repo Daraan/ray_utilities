@@ -27,9 +27,11 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 import wandb
 from ray_utilities.callbacks._wandb_monitor._wandb_session_cache import WandBSessionCache
+from ray_utilities.nice_logger import ImportantLogger
 
 if TYPE_CHECKING:
     from pathlib import Path
+
 
 logger = logging.getLogger(__name__)
 
@@ -200,8 +202,8 @@ class WandBSeleniumSession:
         if self.callback:
             try:
                 self.callback(status, data)
-            except Exception as e:  # ruff: noqa: BLE001
-                logger.warning("Callback error: %s", e)
+            except Exception:
+                logger.exception("Callback error")
 
     def _setup_driver(self) -> webdriver.Remote:
         """Setup and return the appropriate WebDriver."""
@@ -245,9 +247,9 @@ class WandBSeleniumSession:
 
         try:
             # Try to get the service/process from the driver
-            if hasattr(self.driver, "service") and hasattr(self.driver.service, "process"):
-                if self.driver.service.process:
-                    self._driver_pid = self.driver.service.process.pid
+            if hasattr(self.driver, "service") and hasattr(self.driver.service, "process"):  # pyright: ignore[reportAttributeAccessIssue]
+                if self.driver.service.process:  # pyright: ignore[reportAttributeAccessIssue]
+                    self._driver_pid = self.driver.service.process.pid  # pyright: ignore[reportAttributeAccessIssue]
                     logger.debug("Captured driver PID: %s", self._driver_pid)
                     return
 
@@ -284,7 +286,7 @@ class WandBSeleniumSession:
             if success:
                 logger.debug("Successfully force killed driver process %s", self._driver_pid)
                 self._driver_pid = None
-        except Exception as e:  # ruff: noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             logger.warning("Error force killing driver: %s", e)
             return False
         return success
@@ -587,7 +589,7 @@ class WandBSeleniumSession:
                 return True
 
             # If cached login failed, proceed with manual login
-            logger.info("Cached login failed or not available, performing manual login")
+            ImportantLogger.important_info(logger, "Cached login failed or not available, performing manual login")
 
             # Navigate to WandB login page (new URL that redirects to Auth0)
             login_url = "https://app.wandb.ai/login?_gl=1*1njlh40*_ga*MjAzMDY0NTMxOC4xNjg2NzMzODEw*_ga_JH1SJHJQXJ*MTY5MDk5MDgxNS4xMjEuMS4xNjkwOTkxMDExLjYwLjAuMA.."
@@ -668,7 +670,7 @@ class WandBSeleniumSession:
             for selector in password_selectors:
                 try:
                     password_field = self._wait_for_element(By.CSS_SELECTOR, selector, timeout=5)
-                    logger.info("Found password field with selector: %s", selector)
+                    logger.debug("Found password field with selector: %s", selector)
                     break
                 except TimeoutException:
                     continue
@@ -704,7 +706,7 @@ class WandBSeleniumSession:
             for selector in login_button_selectors:
                 try:
                     login_button = self._wait_for_clickable(By.CSS_SELECTOR, selector, timeout=5)
-                    logger.info("Found login button with selector: %s", selector)
+                    logger.debug("Found login button with selector: %s", selector)
                     break
                 except TimeoutException:
                     continue
@@ -741,7 +743,7 @@ class WandBSeleniumSession:
                 )
 
                 self.is_logged_in = True
-                logger.info("Successfully logged in to WandB")
+                ImportantLogger.important_info(logger, "Successfully logged in to WandB")
                 logger.info("Final URL: %s", self.driver.current_url)
                 self._notify("login_success")
 
@@ -884,9 +886,9 @@ class WandBSeleniumSession:
             # Switch to new tab if requested
             if switch_to:
                 self.driver.switch_to.window(new_tab)
-                logger.info("Opened and switched to new tab")
+                logger.debug("Opened and switched to new tab")
             else:
-                logger.info("Opened new tab without switching")
+                logger.debug("Opened new tab without switching")
 
             self._notify("new_tab_opened", {"tab_handle": new_tab, "switched": switch_to})
 
@@ -973,7 +975,7 @@ class WandBSeleniumSession:
             # Create new tab for this run
             try:
                 new_tab = self.open_new_tab(switch_to=True)
-                logger.info("Opened new dedicated tab for run: %s/%s/%s", entity, project, run_id)
+                logger.debug("Opened new dedicated tab for run: %s/%s/%s", entity, project, run_id)
             except RuntimeError as e:
                 logger.error("Failed to open new tab for run page: %s", e)
                 return False
@@ -1075,11 +1077,11 @@ class WandBSeleniumSession:
                 remaining_tabs = [tab for tab in all_tabs if tab != current_tab]
                 if remaining_tabs:
                     self.driver.switch_to.window(remaining_tabs[0])
-                    logger.info("Closed tab and switched to remaining tab")
+                    logger.debug("Closed tab and switched to remaining tab")
                 else:
                     logger.warning("No remaining tabs to switch to")
             else:
-                logger.info("Closed last tab - browser will close")
+                ImportantLogger.important_info(logger, "Closed last tab - browser will close")
 
             self._notify("tab_closed", current_tab)
 
@@ -1154,7 +1156,7 @@ class WandBSeleniumSession:
         run_url = f"https://wandb.ai/{entity}/{project}/runs/{run_id}"
 
         if run_url not in self._run_tabs:
-            logger.info("No tab found for run: %s/%s/%s", entity, project, run_id)
+            logger.debug("No tab found for run: %s/%s/%s", entity, project, run_id)
             return False
 
         if not self.driver:
@@ -1286,7 +1288,7 @@ class WandBSeleniumSession:
         self._stop_event.set()
         if self.thread:
             self.thread.join(timeout=5)
-            logger.info("Stopped WandB session thread")
+            ImportantLogger.important_info(logger, "Stopped WandB session thread")
 
     def clear_cache(self) -> bool:
         """
@@ -1322,36 +1324,40 @@ class WandBSeleniumSession:
 
     def cleanup(self) -> None:
         """Clean up resources safely and thoroughly."""
-        with self._lock:
-            if self.driver:
-                try:
-                    # First try graceful shutdown
-                    self.driver.quit()
-                    logger.debug("Driver quit gracefully")
-                except (WebDriverException, ConnectionError) as e:
-                    logger.warning("Error during graceful driver cleanup: %s", e)
-                    # If graceful shutdown failed, try force kill
-                    logger.info("Attempting force kill of driver process")
-                    self._force_kill_driver()
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("Unexpected error during driver cleanup: %s", e)
-                    # Try force kill as last resort
-                    self._force_kill_driver()
-                finally:
-                    self.driver = None
-                    self.is_logged_in = False
+        try:
+            with self._lock:
+                if self.driver:
+                    try:
+                        # First try graceful shutdown
+                        self.driver.quit()
+                        logger.debug("Driver quit gracefully")
+                    except (WebDriverException, ConnectionError) as e:
+                        logger.warning(
+                            "Error during graceful driver cleanup - Attempting force kill of driver process: %s", e
+                        )
+                        # If graceful shutdown failed, try force kill
+                        self._force_kill_driver()
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("Unexpected error during driver cleanup: %s", e)
+                        # Try force kill as last resort
+                        self._force_kill_driver()
+                    finally:
+                        self.driver = None
+                        self.is_logged_in = False
 
-            # Always try force kill as safety net if we have a PID
-            elif self._driver_pid:
-                logger.warning("Driver object is None but PID exists, force killing")
-                self._force_kill_driver()
+                # Always try force kill as safety net if we have a PID
+                elif self._driver_pid:
+                    logger.warning("Driver object is None but PID exists, force killing")
+                    self._force_kill_driver()
+        except BaseException:  # noqa: BLE001
+            self._force_kill_driver()
 
         # Clear run tab tracking
         self._run_tabs.clear()
         logger.debug("Cleared run tab tracking")
 
         self._notify("cleanup_complete")
-        logger.info("Cleaned up WandB session")
+        ImportantLogger.important_info(logger, "Cleaned up WandBSeleniumSession")
 
     def __enter__(self):
         """Context manager entry."""

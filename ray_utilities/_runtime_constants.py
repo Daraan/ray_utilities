@@ -19,7 +19,7 @@ __all__ = [
     "ENTRY_POINT",
     "ENTRY_POINT_ID",
     "RAY_UTILITIES_INITIALIZATION_TIMESTAMP",
-    "RUN_ID",
+    "_RUN_ID",
 ]
 
 RAY_UTILITIES_INITIALIZATION_TIMESTAMP = float(os.environ.get("RAY_UTILITIES_INITIALIZATION_TIMESTAMP", time.time()))
@@ -46,7 +46,7 @@ ENTRY_POINT_ID: str = hashlib.blake2b(
 """Hash of the entry point script's filename, i.e. sys.argv[0]'s basename"""
 # Deterministic no need to write to environ
 
-RUN_ID = os.environ.get(
+_RUN_ID = os.environ.get(
     "RUN_ID",
     (
         ENTRY_POINT_ID
@@ -64,14 +64,19 @@ It can be used to more easily identify trials that have the same entry point and
 during the same execution.
 
 The last character is the version of the run_id format. It is currently "3".
+
+Attention: When restoring experiments the RUN_ID is updated to the restored experiment's RUN_ID.
+    Therefore it is preferred to use :func:`get_run_id()` to get the current RUN_ID instead of using this constant directly.
+
+:meta public:
 """
 
-os.environ["RUN_ID"] = RUN_ID
+os.environ["RUN_ID"] = _RUN_ID
+
+COMET_OFFLINE_DIRECTORY_BASE = os.environ.get("COMET_OFFLINE_DIRECTORY_BASE", "./outputs/.cometml-runs")
 
 _COMET_OFFLINE_DIRECTORY_SUGGESTION = (
-    Path("./")
-    / "outputs"
-    / ".cometml-runs"
+    Path(COMET_OFFLINE_DIRECTORY_BASE)
     / (
         (
             Path(ENTRY_POINT).stem

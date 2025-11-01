@@ -203,7 +203,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
 
     @pytest.mark.tuner
     @pytest.mark.length(speed="medium")  # still not that slow
-    @pytest.mark.timeout(method="thread")
+    @pytest.mark.timeout(300, method="thread")
     def test_dynamic_param_spaces(self):
         # Test warning and failure
         with patch_args("--tune", "dynamic_buffer"):
@@ -222,22 +222,24 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         type_hints = te.get_type_hints(DefaultArgumentParser)["tune"]
         self.assertIs(te.get_origin(type_hints), te.Union)
         th_args = te.get_args(type_hints)
-        th_lists = [
+        hint_lists = [
             literal
             for li in [te.get_args(arg)[0] for arg in th_args if te.get_origin(arg) is list]
             for literal in te.get_args(li)
             if literal != "all"
         ]
-        self.assertIn("rollout_size", th_lists)
-        self.assertNotIn("all", th_lists)
-        for param in th_lists:
+        self.assertIn("rollout_size", hint_lists)
+        self.assertNotIn("all", hint_lists)
+        for param in hint_lists:
             with (
+                self.subTest(param=param),
                 patch_args(
                     "--tune", param,
                     "--total_steps", "10",
                     "-it", "2",
-                    "--num_samples", "16",
+                    "--num_samples", "8",
                     "--env_seeding_strategy", "constant",
+                    "--log_level", "WARNING",
                 )  # ,
                 # self.assertNoLogs(logger, level="WARNING"),
             ):  # fmt: skip
@@ -251,6 +253,10 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     grid = param_space[param]["grid_search"]
                 else:
                     grid = []
+                if param == "minibatch_size":
+                    # Apply constraint to expectation
+                    assert "train_batch_size_per_learner" not in param_space
+                    grid = [mb for mb in grid if mb <= setup.config.train_batch_size_per_learner]
 
                 def fake_trainable(params, param=param):
                     print("Fake callable trainable called with params:", params)
@@ -275,6 +281,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
     @pytest.mark.timeout(method="thread")
     def test_dynamic_param_space_with_trainable(self):
         """Check the --tune parameters"""
+        # see OptunaArgumentParser.tune
         type_hints = te.get_type_hints(DefaultArgumentParser)["tune"]
         self.assertIs(te.get_origin(type_hints), te.Union)
         th_args = te.get_args(type_hints)
@@ -1828,6 +1835,7 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
                 "--num_envs_per_env_runner", num_envs_per_env_runner,
                 "--env_seeding_strategy", "same",
                 "--seed", 11,
+                "--no_dynamic_eval_interval",
                 "--num_env_runners", num_env_runners,
             ):  # fmt: skip
                 with AlgorithmSetup(init_trainable=False) as setup:

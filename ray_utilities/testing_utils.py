@@ -67,6 +67,7 @@ import tree
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import Algorithm, AlgorithmConfig
 from ray.rllib.algorithms import algorithm as algorithm_module
+from ray.rllib.algorithms.ppo.ppo import PPO
 from ray.rllib.core import ALL_MODULES
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
@@ -97,7 +98,7 @@ from typing_extensions import Final, NotRequired, Required, Sentinel, TypeAliasT
 
 import ray_utilities.callbacks.algorithm.model_config_saver_callback
 import ray_utilities.config.create_algorithm
-from ray_utilities import runtime_env
+from ray_utilities import get_runtime_env
 from ray_utilities.callbacks.wandb import WandbUploaderMixin
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.parser.mlp_argument_parser import MLPArgumentParser
@@ -106,7 +107,9 @@ from ray_utilities.dynamic_config.dynamic_buffer_update import logger as dynamic
 from ray_utilities.misc import is_pbar, raise_tune_errors
 from ray_utilities.nice_logger import change_log_level
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
+from ray_utilities.setup.experiment_base import ExperimentSetupBase
 from ray_utilities.setup.experiment_base import logger as experiment_base_logger
+from ray_utilities.setup.extensions import _logger as extensions_logger
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup, PPOMLPSetup
 from ray_utilities.setup.tuner_setup import TunerSetup
 from ray_utilities.setup.tuner_setup import logger as tuner_setup_logger
@@ -129,10 +132,10 @@ if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.tune import Result
 
-    from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co
+    from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ParserType_co
     from ray_utilities.typing import StopperType
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
-    from ray_utilities.typing.metrics import LogMetricsDict
+    from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict, LogMetricsDict
 
     LeafType = TypeAliasType("LeafType", "pytree.SequenceKey | pytree.DictKey | pytree.GetAttrKey")
 
@@ -239,7 +242,7 @@ def check_args(
                 result = func(*args, **kwargs)
             except Exception as e:  # noqa: BLE001
                 error = e
-        record_errors = []
+        record_errors: list[Exception | ValueError] = []
         for record in capture.records:
             if "The following arguments were not recognized by the parser" in record.message:
                 assert record.args
@@ -261,18 +264,21 @@ def check_args(
                 if exceptions:
                     # We might not have access to patched args
                     # Find all matching sub-sequences of arexceptionsgs in unknown_args
-                    matches = []
                     args_seq = tuple(unknown_args)
                     argv_seq = tuple(exceptions)
-                    for i in range(len(argv_seq) - len(args_seq) + 1):
-                        if argv_seq[i : i + len(args_seq)] == args_seq:
-                            matches.append(i)
+                    matches = [
+                        i
+                        for i in range(len(argv_seq) - len(args_seq) + 1)
+                        if argv_seq[i : i + len(args_seq)] == args_seq
+                    ]
                     # Remove subsequences from unknown_args:
                     for match in matches:
                         unknown_args = unknown_args[:match] + unknown_args[match + len(args_seq) :]
                 if unknown_args:
                     args_error = ValueError(f"Unexpected unrecognized args: {unknown_args}")
-                    record_errors.append(args_error)
+                    # Only add if not already present (by args)
+                    if not any(e.args == args_error.args for e in record_errors):
+                        record_errors.append(args_error)
         if record_errors:
             if error:
                 record_errors.insert(0, error)
@@ -328,7 +334,7 @@ class PatchArgsDecorator(ContextDecorator):
         self._log_capture.__exit__(exc_type, exc_value, traceback)  # pyright: ignore[reportOptionalMemberAccess]
         arg_errors = self._extract_arg_errors(self._log_capture)
         if arg_errors:
-            if exc_value:
+            if exc_value and exc_value != arg_errors[0]:
                 arg_errors.insert(0, exc_value)
             if len(arg_errors) == 1:
                 raise arg_errors[0]
@@ -516,7 +522,7 @@ class InitRay(unittest.TestCase):
                 ignore_reinit_error=True,
                 num_cpus=cls._num_cpus,
                 object_store_memory=1024**3 // 2,  # 512MB
-                runtime_env=runtime_env,
+                runtime_env=get_runtime_env(),
             )
         super().setUpClass()
 
@@ -604,12 +610,19 @@ class TestHelpers(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._disable_ray_auto_init()
+        os.environ["RAY_UTILITIES_STORAGE_PATH"] = "./outputs/experiments/"
+        ExperimentSetupBase.storage_path = "./outputs/experiments/"
         sys.modules["selenium"] = mock.MagicMock()
+        cls._setup_backup_mock: mock._patch_pass_arg[mock.MagicMock | mock.AsyncMock] = mock.patch.object(
+            ExperimentSetupBase, ExperimentSetupBase._backup_for_restore.__name__, return_value=None
+        )
+        cls._setup_backup_mock.start()
         super().setUpClass()
 
     @classmethod
     def tearDownClass(cls):
         cls._enable_ray_auto_init()
+        cls._setup_backup_mock.stop()
         del sys.modules["selenium"]
         super().tearDownClass()
 
@@ -657,7 +670,9 @@ class TestHelpers(unittest.TestCase):
             with (
                 change_log_level(experiment_base_logger, logging.ERROR),
                 change_log_level(tuner_setup_logger, logging.ERROR),
+                change_log_level(extensions_logger, logging.ERROR),
                 mock.patch("logging.getLogger") as mock_get_logger,  # not log or adjust
+                patch_args(),
             ):
                 mock_get_logger.return_value.name.split.return_value = ["Nothing"]
                 run_config = TunerSetup(
@@ -668,7 +683,7 @@ class TestHelpers(unittest.TestCase):
             if run_config.storage_path is None:
                 return
             storage_path = pathlib.Path(run_config.storage_path) / run_config.name  # pyright: ignore[reportOperatorIssue]
-            if storage_path.exists():
+            if storage_path.exists() and not sys.stdout.closed:
                 assert "TESTING" in storage_path.name, f"{storage_path} is not a TESTING storage path"
                 logger.info("Removing testing storage path: %s", storage_path)
 
@@ -679,6 +694,42 @@ class TestHelpers(unittest.TestCase):
             logger.exception("Failed to remove testing storage path, unknown error")
 
     _created_trainables: ClassVar[list[TrainableBase]] = []
+
+    @overload
+    def get_trainable(
+        self,
+        *,
+        num_env_runners: int = 0,
+        env_seed: int | None | _NOT_PROVIDED = _NOT_PROVIDED,
+        train: Any = True,
+        fast_model: bool = True,
+        eval_interval: Optional[int] = 1,
+        class_only: Literal[True],
+    ) -> type[DefaultTrainable[DefaultArgumentParser[Any | None], PPOConfig, PPO]]: ...
+
+    @overload
+    def get_trainable(
+        self,
+        *,
+        num_env_runners: int = 0,
+        env_seed: int | None | _NOT_PROVIDED = _NOT_PROVIDED,
+        train: Literal[True] = True,
+        fast_model: bool = True,
+        eval_interval: Optional[int] = 1,
+        class_only: Literal[False] = False,
+    ) -> tuple[DefaultTrainable[DefaultArgumentParser[Any | None], PPOConfig, PPO], AutoExtendedLogMetricsDict]: ...
+
+    @overload
+    def get_trainable(
+        self,
+        *,
+        num_env_runners: int = 0,
+        env_seed: int | None | _NOT_PROVIDED = _NOT_PROVIDED,
+        train: Literal[False],
+        fast_model: bool = True,
+        eval_interval: Optional[int] = 1,
+        class_only: Literal[False] = False,
+    ) -> tuple[DefaultTrainable[DefaultArgumentParser[Any | None], PPOConfig, PPO], None]: ...
 
     @patch_args(
         "--iterations", "5",
@@ -697,8 +748,13 @@ class TestHelpers(unittest.TestCase):
         num_env_runners: int = 0,
         env_seed: int | None | _NOT_PROVIDED = _NOT_PROVIDED,
         train: bool = True,
-        fast_model=True,
+        fast_model: bool = True,
         eval_interval: Optional[int] = 1,
+        class_only: bool = False,
+    ) -> (
+        tuple[DefaultTrainable[DefaultArgumentParser[Any | None], PPOConfig, PPO], None]
+        | tuple[DefaultTrainable[DefaultArgumentParser[Any | None], PPOConfig, PPO], AutoExtendedLogMetricsDict]
+        | type[DefaultTrainable[DefaultArgumentParser[Any | None], PPOConfig, PPO]]
     ):
         # NOTE: In this test attributes are shared BY identity, this is just a weak test.
         if fast_model:
@@ -710,6 +766,8 @@ class TestHelpers(unittest.TestCase):
         )
         if self._model_config is not None:
             self.TrainableClass.cls_model_config = self._model_config
+        if class_only:
+            return self.TrainableClass
         # this initializes the algorithm; overwrite batch_size of 64 again.
         # This does not modify the state["setup"]["config"]
         overrides = AlgorithmConfig.overrides(
@@ -774,6 +832,17 @@ class TestHelpers(unittest.TestCase):
                 trainable.algorithm.callbacks.on_checkpoint_loaded(
                     algorithm=trainable.algorithm, metrics_logger=trainable.algorithm.metrics
                 )
+        trainable._call_on_setup_callbacks()
+        TestHelpers.sync_eval_interval_to_env_runners(trainable)
+
+    @staticmethod
+    def sync_eval_interval_to_env_runners(trainable: TrainableBase[Any, Any, Algorithm | Any]):
+        """As configs can get out of sync and let tests fail sync eval_interval to env_runners"""
+        # Sync eval config to env_runners for test
+        interval = trainable.algorithm_config.evaluation_interval
+        trainable.algorithm.env_runner_group.foreach_env_runner(
+            lambda r, interval=interval: setattr(r.config, "evaluation_interval", interval)
+        )
 
     # endregion
 
@@ -911,10 +980,18 @@ class TestHelpers(unittest.TestCase):
                 seq1 = list(seeds_data1.pop("seed_sequence"))  # A B
             elif SEED in metrics_0[ENVIRONMENT_RESULTS]:
                 assert SEED in metrics_1[ENVIRONMENT_RESULTS]
-                seeds_data0: dict[str, Iterable[int]] = metrics_0[ENVIRONMENT_RESULTS][SEED]
+                seeds_data0: dict[str, Iterable[int]] = metrics_0[ENVIRONMENT_RESULTS][SEED]  # can be int too!
                 seeds_data1: dict[str, Iterable[int]] = metrics_1[ENVIRONMENT_RESULTS][SEED]
-                seq0 = list(seeds_data0.pop("initial_seed"))  # A
-                seq1 = list(seeds_data1.pop("initial_seed"))  # A B
+                seq0 = (
+                    list(seeds_data0.pop("initial_seed"))
+                    if not isinstance(seeds_data0["initial_seed"], int)
+                    else [seeds_data0["initial_seed"]]
+                )  # A
+                seq1 = (
+                    list(seeds_data1.pop("initial_seed"))
+                    if not isinstance(seeds_data1["initial_seed"], int)
+                    else [seeds_data1["initial_seed"]]
+                )  # A B
             else:
                 self.fail(
                     f"No {SEEDS} or {SEED} key found in metrics: "
@@ -1038,6 +1115,8 @@ class TestHelpers(unittest.TestCase):
         if "tf_session_args" in config:
             config["tf_session_args"]["inter_op_parallelism_threads"] = "removed_key_for_test"
             config["tf_session_args"]["intra_op_parallelism_threads"] = "removed_key_for_test"
+            config["_is_atari"] = None if not config["_is_atari"] else config["_is_atari"]  # False to None
+            config.pop("simple_optimizer", None)
             for key in (k for k, v in config.items() if "callbacks" in k and callable(v)):
                 config[key] = (
                     config[key].__name__
@@ -1112,20 +1191,23 @@ class TestHelpers(unittest.TestCase):
         algo_config_dict = algo.config.to_dict()
         algo_restored_config_dict = algo_restored.config.to_dict()
         if ignore_overrides_key:
-            assertCleanDictEqual(
-                {k: v for k, v in algo_restored_config_dict.items() if k != "_restored_overrides"}, algo_config_dict
+            self.compare_configs(
+                self.filter_incompatible_remote_config(
+                    {k: v for k, v in algo_restored_config_dict.items() if k != "_restored_overrides"}
+                ),
+                self.filter_incompatible_remote_config(algo_config_dict),
             )
         else:
             assertCleanDictEqual(algo_restored_config_dict, algo_config_dict)
         assert algo.config
         if algo.config.num_env_runners == 0:
             self.assertEqual(algo_restored.config.num_env_runners, 0)  # pyright: ignore[reportOptionalMemberAccess]
-            assertCleanDictEqual(
+            self.compare_configs(
                 (algo.env_runner.config.to_dict()),
                 algo_config_dict,  # pyright: ignore[reportOptionalMemberAccess]
             )
             restored_env_runner_config_dict = algo_restored.env_runner.config.to_dict()
-            assertCleanDictEqual(restored_env_runner_config_dict, algo_restored_config_dict)
+            self.compare_configs(restored_env_runner_config_dict, algo_restored_config_dict)
             if ignore_overrides_key:
                 assertCleanDictEqual(
                     {k: v for k, v in restored_env_runner_config_dict.items() if k != "_restored_overrides"},
@@ -1139,11 +1221,12 @@ class TestHelpers(unittest.TestCase):
 
         # Possible ignore local env_runner here when using remotes
         for i, config in enumerate((local_config, *remote_configs), start=1):
-            assertCleanDictEqual(
+            self.compare_configs(
                 config,
                 algo_config_dict,
                 ("Local config" if config is local_config else "Remote config")
                 + f" {i}/{len(remote_configs)} does not match algo config",
+                ignore=["evaluation_interval"],  # DynamicEvalCallback only modifies local
             )
         remote_configs_restored = algo_restored.env_runner_group.foreach_env_runner(
             lambda r: r.config.to_dict(), local_env_runner=False
@@ -1153,13 +1236,13 @@ class TestHelpers(unittest.TestCase):
             if ignore_overrides_key:
                 algo_restored_config_dict.pop("_restored_overrides", None)
                 config.pop("_restored_overrides", None)
-            assertCleanDictEqual(
+            self.compare_configs(
                 config,
                 algo_restored_config_dict,
                 ("Local config" if config is local_config_restored else "Remote config")
                 + f" {i}/{len(remote_configs_restored) + 1} does not match restored config",
             )
-            assertCleanDictEqual(
+            self.compare_configs(
                 config,
                 algo_config_dict,
                 ("Local config" if config is local_config_restored else "Remote config")
@@ -1167,7 +1250,12 @@ class TestHelpers(unittest.TestCase):
             )
 
     def compare_configs(
-        self, config1: AlgorithmConfig | dict, config2: AlgorithmConfig | dict, *, ignore: Collection[str] = ()
+        self,
+        config1: AlgorithmConfig | dict,
+        config2: AlgorithmConfig | dict,
+        msg: str = "",
+        *,
+        ignore: Collection[str] = (),
     ):
         config1_eval = None
         config2_eval = None
@@ -1187,18 +1275,24 @@ class TestHelpers(unittest.TestCase):
             for key in ignore:
                 config1.pop(key, None)
                 config2.pop(key, None)
+        config1 = self.filter_incompatible_remote_config(config1)
+        config2 = self.filter_incompatible_remote_config(config2)
         # remove class
         config1.pop("class", None)
         config2.pop("class", None)
         # Is set to False for one config, OldAPI value
         config1.pop("simple_optimizer", None)
         config2.pop("simple_optimizer", None)
-        self.assertDictEqual(config1, config2)  # ConfigType
+        if "learner_config_dict" in config1 and not config1["learner_config_dict"].get("_debug_connectors", False):
+            config1["learner_config_dict"].pop("_debug_connectors", None)
+        if "learner_config_dict" in config2 and not config2["learner_config_dict"].get("_debug_connectors", False):
+            config2["learner_config_dict"].pop("_debug_connectors", None)
+        self.assertDictEqual(config1, config2, msg)  # ConfigType
         if config1_eval or config2_eval:
             if not config1_eval or not config2_eval:
                 self.fail("One of the configs has no evaluation_config")
             with self.subTest("Compare evaluation configs"):
-                self.compare_configs(config1_eval, config2_eval, ignore=ignore)
+                self.compare_configs(config1_eval, config2_eval, msg="Subtest " + msg, ignore=ignore)
 
     def _compare_metrics_logger_states(
         self,
@@ -1447,8 +1541,8 @@ class TestHelpers(unittest.TestCase):
 
     def compare_trainables(
         self,
-        trainable: TrainableBase["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
-        trainable2: TrainableBase["DefaultArgumentParser", "ConfigType_co", "AlgorithmType_co"],
+        trainable: TrainableBase["ParserType_co", "ConfigType_co", "AlgorithmType_co"],
+        trainable2: TrainableBase["ParserType_co", "ConfigType_co", "AlgorithmType_co"],
         msg: str = "",
         *,
         ignore_env_runner_state: bool = True,
@@ -1501,7 +1595,7 @@ class TestHelpers(unittest.TestCase):
             config_dict2 = trainable2.algorithm_config.to_dict()
             config_dict2.pop("class", None)
             if ignore_restored_overrides_key:
-                self.assertDictEqual(
+                self.compare_configs(
                     {k: v for k, v in config_dict2.items() if k != "_restored_overrides"},
                     {k: v for k, v in config_dict1.items() if k != "_restored_overrides"},
                 )
@@ -1558,8 +1652,14 @@ class TestHelpers(unittest.TestCase):
                 self.fail("One of the trainables has a trial_name_creator, the other does not.")
             keys.remove("trial_name_creator")
 
-            self.assertListEqual(setup_data1.get("config_files") or [], setup_data2.get("config_files") or [])
+            self.assertListEqual(
+                list(setup_data1.get("config_files") or []), list(setup_data2.get("config_files") or [])
+            )
             keys.remove("config_files")
+
+            if "tune_parameters" in setup_data1 and "tune_parameters" in setup_data2:
+                self.assertDictEqual(setup_data1["tune_parameters"], setup_data2["tune_parameters"])
+                keys.remove("tune_parameters")
 
             self.assertEqual(len(keys), 0, f"Unchecked keys: {keys}")  # checked all params
             self.compare_param_space(param_space1, param_space2)  # pyright: ignore[reportArgumentType]
@@ -1952,11 +2052,11 @@ class TrainableWithChecks(DefaultTrainable[Any, "AlgorithmConfig", Any]):
     def step_post_check(self, result: StrictAlgorithmReturnData, metrics: LogMetricsDict, rewards: Any):
         pass
 
-    def setup(self, config, *, algorithm_overrides=None):
+    def setup(self, config, *, algorithm_overrides=None, reset: bool = False):
         if self.debug_setup:
             print("Start breakpoint")
             remote_breakpoint()
-        super().setup(config, algorithm_overrides=algorithm_overrides)
+        super().setup(config, algorithm_overrides=algorithm_overrides, reset=reset)
         self.setup_check(config, algorithm_overrides=algorithm_overrides)
 
     def step(self):

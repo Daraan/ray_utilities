@@ -227,9 +227,9 @@ def create_algorithm_config(
     )
     config.learners(
         # for fractional GPUs, you should always set num_learners to 0 or 1
-        num_learners=1 if args["parallel"] else 0,
-        num_cpus_per_learner=0 if args["test"] and args["num_jobs"] < 2 else 1,
-        num_gpus_per_learner=1 if args["gpu"] else 0,
+        num_learners=args["num_learners"],
+        num_cpus_per_learner="auto",  # auto: 1 if no gpu else 0
+        num_gpus_per_learner=1 if args["gpu"] else 0,  # Can also use fraction to share GPU
     )
     config.framework(framework)
     learner_mix: list[type[Learner]] = [learner_class or config.learner_class]
@@ -318,7 +318,10 @@ def create_algorithm_config(
     # https://docs.ray.io/en/latest/rllib/package_ref/doc/ray.rllib.algorithms.algorithm_config.AlgorithmConfig.evaluation.html
     evaluation_duration = 30
     config.evaluation(
-        evaluation_interval=16,  # Note can be adjusted dynamically by DynamicEvalInterval
+        # if evaluate_every_n_steps_before_step is used always evaluate on step 1 to not miss initial performance
+        evaluation_interval=(
+            16 if not args["evaluate_every_n_steps_before_step"] or args["no_dynamic_eval_interval"] else 1
+        ),  # Note can be adjusted dynamically by DynamicEvalInterval
         evaluation_duration=evaluation_duration,
         evaluation_duration_unit="episodes",
         evaluation_num_env_runners=(

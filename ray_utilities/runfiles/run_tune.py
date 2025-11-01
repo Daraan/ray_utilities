@@ -22,6 +22,7 @@ after setting up algorithms, hyperparameters, and training configurations.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 from inspect import isclass
@@ -31,7 +32,9 @@ from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.misc import raise_tune_errors, shutdown_monitor
+from ray_utilities.constants import get_run_id
+from ray_utilities.misc import get_trials_from_tuner, raise_tune_errors, shutdown_monitor
+from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.random import seed_everything
 from ray_utilities.training.default_class import TrainableBase
 
@@ -95,7 +98,7 @@ def _run_without_tuner(
 
         if "config" in result:
             result["config"].setdefault("_train_batch_size_per_learner", setup.config.train_batch_size_per_learner)
-        return create_log_metrics(result, log_stats=setup.args.log_stats)
+        return create_log_metrics(result, log_stats=setup.args.log_stats)  # pyright: ignore[reportArgumentType, reportReturnType]
     if test_mode_func:
         return test_mode_func(trainable, setup)
     return trainable(setup.sample_params())
@@ -182,14 +185,6 @@ def run_tune(
     except (KeyboardInterrupt, Exception) as e:  # noqa: BLE001
         try:
             fit_error = e
-            if isinstance(e, KeyboardInterrupt):
-                # In case we do not want to upload results
-                logger.info(
-                    "Tuning interrupted. Will try to upload gathered results now. "
-                    "Waiting 2 sec before continuing... "
-                    "Press Ctrl + C again to exit immediately."
-                )
-                time.sleep(2)
             logger.error("Error occurred during tuning: %s", fit_error)
             try:
                 results = tuner.get_results()
@@ -199,16 +194,61 @@ def run_tune(
         except (KeyboardInterrupt, Exception) as e3:  # cleanup monitor first  # noqa: BLE001
             shutdown_monitor()  # cleanup monitor before exiting
             fallback_error = e3
-
     try:
+        if fit_error and isinstance(fit_error, KeyboardInterrupt):
+            # In case we do not want to upload results
+            logger.info(
+                "Tuning interrupted. Will try to upload gathered results now. "
+                "Waiting 3 sec before continuing... "
+                "Press Ctrl + C again to exit immediately."
+            )
+            time.sleep(3)
+        if setup.args.wandb:
+            # Assure that the gathered uploads are finished
+            try:
+                callbacks = tuner._local_tuner.get_run_config().callbacks  # pyright: ignore[reportOptionalMemberAccess]
+            except AttributeError:
+                pass
+            else:
+                try:
+                    # lazy because of circular import
+                    from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback  # noqa: PLC0415
+
+                    for cb in callbacks or ():
+                        if isinstance(cb, AdvWandbLoggerCallback):
+                            cb.wait_for_gatherer_threads()
+                except KeyboardInterrupt:
+                    pass
+                except Exception:
+                    logger.exception("Error occurred while waiting for gatherer threads:")
         if not results:
             logger.warning("No results returned from the tuner.")
-        setup.upload_offline_experiments(results, tuner)
+        # File sync might still be in progress wait a bit
+        time.sleep(8)
+        setup.upload_offline_experiments(results, tuner, use_tqdm=True)
     except KeyboardInterrupt:
         pass
     except Exception:  # noqa: BLE001
         logger.exception("Error occurred during offline experiment upload:")
+    else:
+        if setup.args.wandb and "upload" in setup.args.wandb:
+            logger.info("Offline experiment upload completed successfully. Verifying uploads... (pausing 15s first)")
+            time.sleep(20)  # wait a bit for the uploads to be finalized
+            trials = get_trials_from_tuner(tuner)
+            if trials:
+                local_output_dir = trials[0].local_experiment_path
+            else:
+                logger.warning("Could not get trials to get the local output directory for wandb verification.")
+                local_output_dir = None
+            setup.verify_wandb_uploads(get_run_id(), output_dir=local_output_dir)
     finally:
+        if (
+            setup.args.wandb
+            and "upload" in setup.args.wandb
+            and os.environ.get("RAY_UTILITIES_NO_MONITOR", "0") != "1" != "1"
+        ) or setup._monitor is not None:
+            ImportantLogger.important_warning(logger, "Cleaning up WandB monitor...")
+            setup._stop_monitor()
         if raise_errors and results is not None:
             raise_tune_errors(results)
         if fallback_error and fit_error:
@@ -223,7 +263,6 @@ def run_tune(
         if fit_error:
             raise fit_error
     assert results is not None
-
     return results
 
 

@@ -5,7 +5,7 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "ray_utilities"
-version = "0.7.0"
+version = "1.0.0"
 readme = "README.md"
 description = "Utilities for Ray RLlib and related workflows. Includes experiment setup, callbacks, and JAX model utilities."
 license = { file = "LICENSE" }
@@ -23,12 +23,14 @@ authors = [
   ]
 dependencies = [
   "ray[tune,rllib] < 2.50.0",
+  "click!=8.3.0",
   "typed-argument-parser",
   "tqdm",
   "colorlog",
   "opencv-python",
   "python-dotenv",
   "frozenlist",
+  "frozendict",
   "torch",  # maybe optional
   "comet_ml",  # remove later -> optional
   "wandb",  # remove later -> optional
@@ -144,6 +146,7 @@ ignore = [
 
   "PLR2004",  # Magic Values
   "NPY002",  # Use random generator
+  "PYI051",  # str | Literal in type hint
 ]
 exclude = [
     ".git",
@@ -204,6 +207,17 @@ line_length = 120
 reportDeprecated = "warning"
 reportUnnecessaryComparison = "warning"
 reportUnnecessaryCast = "warning"
+defineConstant = {IS_PYDANTIC_V2 = true}
+exclude = [
+  "**/node_modules",
+  "**/__pycache__",
+  "build",
+  "dist",
+  ".venv",
+  "**/outputs/**",
+  ".git/*",
+  ".vscode/*"
+]
 
 [tool.pytest.ini_options]
 console_output_style = "count"

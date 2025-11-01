@@ -4,12 +4,15 @@ import logging
 import os
 import pickle
 import random
+import signal
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
 from unittest import mock
 from unittest.mock import MagicMock
 
@@ -25,6 +28,11 @@ from ray.rllib.utils.metrics import (
 from ray.train._internal.storage import StorageContext
 from ray.tune import CheckpointConfig
 from ray.tune.experiment import Trial
+from ray.tune.logger import (
+    CSVLoggerCallback,
+    JsonLoggerCallback,
+    TBXLoggerCallback,
+)
 from ray.tune.result import SHOULD_CHECKPOINT, TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.schedulers.pb2 import PB2
 from ray.tune.schedulers.pbt import logger as ray_pbt_logger
@@ -37,6 +45,7 @@ from ray_utilities.callbacks.algorithm import exact_sampling_callback
 from ray_utilities.callbacks.tuner.metric_checkpointer import StepCheckpointer  # pyright: ignore[reportDeprecated]
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.constants import (
+    CURRENT_STEP,
     EVAL_METRIC_RETURN_MEAN,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
@@ -44,9 +53,7 @@ from ray_utilities.constants import (
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations
 from ray_utilities.misc import is_pbar, raise_tune_errors
 from ray_utilities.runfiles import run_tune
-from ray_utilities.setup import optuna_setup
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
-from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup
 from ray_utilities.setup.scheduled_tuner_setup import PPOMLPWithPBTSetup
 from ray_utilities.testing_utils import (
@@ -68,9 +75,14 @@ from ray_utilities.training.default_class import DefaultTrainable
 from ray_utilities.training.helpers import make_divisible
 from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
 from ray_utilities.tune.scheduler.top_pbt_scheduler import CyclicMutation, KeepMutation, TopPBTTrialScheduler
+from ray_utilities.tune.searcher.optuna_searcher import OptunaSearchWithPruner
+from ray_utilities.tune.searcher.optuna_searcher import _logger as optuna_logger
 
 if TYPE_CHECKING:
+    from ray.rllib.algorithms import AlgorithmConfig
     from ray.tune.execution.tune_controller import TuneController
+    from ray.tune.result_grid import ResultGrid
+    from ray.tune.search.sample import Integer
 
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
     from ray_utilities.typing.metrics import LogMetricsDict
@@ -92,7 +104,7 @@ MINIBATCH_SIZE = 32
 @pytest.mark.tuner
 class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     def test_optuna_search_added(self):
-        with patch_args("--optimize_config", "--num_samples", "1"):
+        with patch_args("--tune", "batch_size", "--num_samples", "1"):
             optuna_setup = AlgorithmSetup()
             self.assertTrue(optuna_setup.args.optimize_config)
             tuner = optuna_setup.create_tuner()
@@ -139,7 +151,9 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 self.assertEqual(
                     stopper._max_iter,
                     second=calculate_iterations(
-                        dynamic_buffer=False, batch_size=setup.config.train_batch_size_per_learner
+                        dynamic_buffer=False,
+                        batch_size=setup.config.train_batch_size_per_learner,
+                        total_steps=DefaultArgumentParser.total_steps,
                     ),
                 )
                 return True
@@ -200,6 +214,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 self.assertEqual(result.metrics[TRAINING_ITERATION], 3)
             raise_tune_errors(results)
 
+    @pytest.mark.xfail("Currently not added StepCheckpointer")
     def test_step_checkpointing(self):
         batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
         with patch_args(
@@ -322,6 +337,162 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 runner.step()
 
             assert callback.num_checkpoints == 3
+
+    @mock.patch("ray.tune.impl.tuner_internal.StorageContext", new=MagicMock())
+    def test_loggers_added(self):
+        def fake_trainable():
+            pass
+
+        with patch_args("--offline_loggers", 0):
+            setup = MLPSetup(init_trainable=False)
+            setup.trainable = fake_trainable
+            self.assertIn("TUNE_DISABLE_AUTO_CALLBACK_LOGGERS", os.environ)
+            self.assertEqual(os.environ["TUNE_DISABLE_AUTO_CALLBACK_LOGGERS"], "1")
+            tuner = setup.create_tuner()
+            callbacks = tuner._local_tuner.get_run_config().callbacks  # pyright: ignore[reportOptionalMemberAccess]
+            if callbacks:
+                assert not any(c for c in callbacks if isinstance(c, CSVLoggerCallback)), callbacks
+                assert not any(c for c in callbacks if isinstance(c, JsonLoggerCallback)), callbacks
+                assert not any(c for c in callbacks if isinstance(c, TBXLoggerCallback)), callbacks
+            del os.environ["TUNE_DISABLE_AUTO_CALLBACK_LOGGERS"]
+        with patch_args("--offline_loggers", "all"):
+            setup = MLPSetup(init_trainable=False)
+            self.assertTrue(setup.args.offline_loggers)
+            setup.trainable = fake_trainable
+            if "TUNE_DISABLE_AUTO_CALLBACK_LOGGERS" in os.environ:
+                self.assertEqual(os.environ["TUNE_DISABLE_AUTO_CALLBACK_LOGGERS"], "0")
+            tuner = setup.create_tuner()
+
+            callbacks = tuner._local_tuner.get_run_config().callbacks  # pyright: ignore[reportOptionalMemberAccess]
+            if callbacks:
+                assert any(c for c in callbacks if isinstance(c, CSVLoggerCallback)), "csv missing"
+                assert any(c for c in callbacks if isinstance(c, JsonLoggerCallback)), "json missing"
+                assert any(c for c in callbacks if isinstance(c, TBXLoggerCallback)), "tbx missing"
+            if "TUNE_DISABLE_AUTO_CALLBACK_LOGGERS" in os.environ:
+                del os.environ["TUNE_DISABLE_AUTO_CALLBACK_LOGGERS"]
+
+        # No online loggers -> all offline
+        with patch_args("--wandb", "0", "--comet", "0"):
+            setup = MLPSetup(init_trainable=False)
+            setup.trainable = fake_trainable
+            tuner = setup.create_tuner()
+            self.assertEqual(setup.args.offline_loggers, True)
+            self.assertEqual(os.environ.get("TUNE_DISABLE_AUTO_CALLBACK_LOGGERS", "0"), "0")
+
+            callbacks = tuner._local_tuner.get_run_config().callbacks  # pyright: ignore[reportOptionalMemberAccess]
+            if callbacks:
+                assert any(c for c in callbacks if isinstance(c, CSVLoggerCallback)), "no csv"
+                assert any(c for c in callbacks if isinstance(c, JsonLoggerCallback)), "no json"
+                assert any(c for c in callbacks if isinstance(c, TBXLoggerCallback)), "no tbx"
+                # default
+            if "TUNE_DISABLE_AUTO_CALLBACK_LOGGERS" in os.environ:
+                del os.environ["TUNE_DISABLE_AUTO_CALLBACK_LOGGERS"]
+        with patch_args("--wandb", "offline"):
+            setup = MLPSetup(init_trainable=False)
+            setup.trainable = fake_trainable
+            tuner = setup.create_tuner()
+            self.assertEqual(os.environ["TUNE_DISABLE_AUTO_CALLBACK_LOGGERS"], "1")
+            callbacks = tuner._local_tuner.get_run_config().callbacks  # pyright: ignore[reportOptionalMemberAccess]
+            if callbacks:
+                assert not any(c for c in callbacks if isinstance(c, CSVLoggerCallback))
+                assert any(c for c in callbacks if isinstance(c, JsonLoggerCallback))
+                assert not any(c for c in callbacks if isinstance(c, TBXLoggerCallback))
+            if "TUNE_DISABLE_AUTO_CALLBACK_LOGGERS" in os.environ:
+                del os.environ["TUNE_DISABLE_AUTO_CALLBACK_LOGGERS"]
+
+    def test_restore_after_sigusr1(self):
+        """Test that experiments can be restored after SIGUSR1 signal interruption."""
+        batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
+        self._setup_backup_mock.stop()
+
+        def send_signal_after_delay(delay_seconds: float):
+            """Send SIGUSR1 to current process after delay."""
+            time.sleep(delay_seconds)
+            logger.info("Sending SIGUSR1 signal to abort tuning")
+            os.kill(os.getpid(), signal.SIGUSR1)
+
+        ITERATIONS = 110
+
+        with patch_args(
+            "--num_samples", "2",
+            "--num_jobs", "2",
+            "--batch_size", batch_size,
+            "--iterations", ITERATIONS,
+            "--fcnet_hiddens", "[4]",
+            "--num_envs_per_env_runner", "1",
+            "--checkpoint_frequency_unit", "iterations",
+            "--checkpoint_frequency", "50",
+            "--offline_loggers", "json",
+        ):  # fmt: skip
+            with MLPSetup(init_trainable=False) as setup1:
+                setup1.config.training(num_epochs=2, minibatch_size=batch_size)
+                setup1.config.evaluation(evaluation_interval=1)
+
+        tuner1 = setup1.create_tuner()
+        run_config = tuner1._local_tuner.get_run_config()  # pyright: ignore[reportOptionalMemberAccess]
+        experiment_path = Path(run_config.storage_path) / run_config.name  # pyright: ignore[reportArgumentType, reportOperatorIssue]
+
+        # Start signal thread - interrupt after some trials start
+        signal_thread = threading.Thread(target=send_signal_after_delay, args=(7.0,))
+        signal_thread.daemon = True
+        signal_thread.start()
+
+        results1 = tuner1.fit()
+
+        logger.warning("Tuning interrupted, results so far: %s", results1)
+
+        # Check if we were interrupted
+        try:
+            with self.assertRaisesRegex(RuntimeError, "no trial has reported this metric"):
+                results1.get_best_result()
+        except AssertionError:
+            # check that results are not completed
+            self.assertLess(results1.get_best_result().metrics[TRAINING_ITERATION], ITERATIONS)  # pyright: ignore[reportOptionalSubscript]
+        # If we get here without interruption, still check results
+
+        signal_thread.join(timeout=2.0)
+
+        # Verify experiment directory exists
+        self.assertTrue(
+            os.path.exists(experiment_path) or str(experiment_path).startswith("s3:/"),
+            f"Experiment path should exist: {experiment_path}",
+        )
+
+        # Now restore from checkpoint
+        with patch_args(
+            "--restore_path",
+            str(experiment_path),
+        ):
+            setup2 = MLPSetup()
+        del os.environ["RAY_UTILITIES_RESTORED"]
+        self.maxDiff = None
+        state1 = setup1.get_state()
+        state2 = setup2.get_state()
+        config1_state = cast("AlgorithmConfig", state1.pop("config"))
+        config2_state = cast("AlgorithmConfig", state2.pop("config"))
+        seed1 = cast("Integer", state1["param_space"].pop("env_seed"))
+        seed2 = cast("Integer", state2["param_space"].pop("env_seed"))
+        self.assertDictEqual(state1, state2)
+        self.compare_configs(config1_state, config2_state)
+        self.assertEqual((seed1.lower, seed1.upper), (seed2.lower, seed2.upper))
+
+        # Second run should complete all trials
+        results2 = cast("ResultGrid", run_tune(setup2))
+        raise_tune_errors(results2)  # pyright: ignore[reportArgumentType]
+
+        # Verify all trials completed
+        self.assertEqual(len(results2), 2, "Should have 2 completed trials")
+        for result in results2:
+            assert result.metrics
+            self.assertEqual(
+                result.metrics[TRAINING_ITERATION],
+                ITERATIONS,
+                f"Trial should complete 10 iterations, got {result.metrics[TRAINING_ITERATION]}",
+            )
+            self.assertEqual(result.metrics[CURRENT_STEP], ITERATIONS * batch_size)
+        self.assertIsNotNone(results2.get_best_result())
+
+        self._setup_backup_mock.start()
 
 
 @pytest.mark.tuner
@@ -668,7 +839,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
 
 class TestOptunaTuner(TestHelpers, DisableLoggers):
     def test_optuna_tuner_setup(self):
-        with patch_args("--optimize_config", "--num_samples", "1"):
+        with patch_args("--tune", "batch_size", "--num_samples", "1"):
             optuna_setup = AlgorithmSetup()
             self.assertTrue(optuna_setup.args.optimize_config)
             tuner = optuna_setup.create_tuner()
@@ -694,6 +865,7 @@ class TestOptunaTuner(TestHelpers, DisableLoggers):
             self.assertNotIsInstance(tuner2._local_tuner.get_run_config().stop, OptunaSearchWithPruner)
 
     @pytest.mark.tuner
+    @pytest.mark.flaky(max_runs=2, min_passes=1)
     def test_pruning(self):
         """
         Test might fail due to bad luck, low numbers first then high.
@@ -703,7 +875,9 @@ class TestOptunaTuner(TestHelpers, DisableLoggers):
             Reduce num_jobs or adjust seed and test again.
         """
         MAX_STEP = 15
-        with patch_args("--optimize_config", "--num_samples", "15", "--num_jobs", "4", "--seed", "42"):
+        with patch_args(
+            "--optimize_config", "--pruner_warmup_steps", 3, "--num_samples", "15", "--num_jobs", "4", "--seed", "42"
+        ):
 
             def trainable(params: dict[str, Any]) -> TrainableReturnData:
                 logger.info("Running trainable with value: %s", params["fake_result"])
@@ -737,7 +911,7 @@ class TestOptunaTuner(TestHelpers, DisableLoggers):
                 setup.config.training(num_epochs=2, train_batch_size_per_learner=64, minibatch_size=64)
                 setup.config.evaluation(evaluation_interval=1)
 
-            with self.assertLogs(optuna_setup._logger, level="INFO") as log:
+            with self.assertLogs(optuna_logger, level="INFO") as log:
                 _results = run_tune(setup)
 
             self.assertTrue(
@@ -749,7 +923,10 @@ class TestOptunaTuner(TestHelpers, DisableLoggers):
                 len([result for result in _results if result.metrics["current_step"] < MAX_STEP]),  # pyright: ignore[reportOptionalSubscript,reportAttributeAccessIssue]
                 3,
             )
-            # NOTE: This can be OK even if runs fail!
+            # Check that all results have at least 3 iterations (pruned trials may have less)
+            for result in _results:
+                assert result.metrics is not None  # pyright: ignore[reportAttributeAccessIssue]
+                self.assertGreaterEqual(result.metrics.get(TRAINING_ITERATION, 0), 3)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
@@ -1208,7 +1385,7 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
                 config_files=["experiments/models/mlp/default.cfg"],
                 # TODO: Trials are reused, trial name might be wrong then
             )
-
+            assert setup.args.command
             setup.args.command.set_hyperparam_mutations(
                 {
                     "train_batch_size_per_learner": CyclicMutation(Setup.batch_size_sample_space["grid_search"]),

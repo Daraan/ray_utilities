@@ -7,13 +7,20 @@ Note:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+import os
+from typing import TYPE_CHECKING, Literal, Optional
 
 from ray.air.constants import EXPR_PROGRESS_FILE
 from ray.tune.logger import CSVLoggerCallback
 
 from ray_utilities.callbacks.tuner._file_logger_fork_mixin import FileLoggerForkMixin
 from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback
+from ray_utilities.constants import (
+    DEFAULT_EVAL_METRIC,
+    EVAL_METRIC_RETURN_MEAN,
+    NEW_LOG_EVAL_METRIC,
+    RAY_UTILITIES_NEW_LOG_FORMAT,
+)
 from ray_utilities.postprocessing import remove_videos
 
 if TYPE_CHECKING:
@@ -35,7 +42,24 @@ class AdvCSVLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, CSVLogge
 
     When a trial is forked (has ``FORK_FROM`` in config), creates a new CSV file
     and tries to copy the data from the parent trial.
+
+    Args:
+        metric: Core metric to monitor. Adding it here ensures that it is present in the output CSV file.
+            as only the columns present in the first logged result are written to the CSV file.
     """
+
+    def __init__(
+        self,
+        *args,
+        metric: Optional[str | DEFAULT_EVAL_METRIC] = DEFAULT_EVAL_METRIC,
+        **kwargs,
+    ) -> None:
+        # cannot pickle DEFAULT_EVAL_METRIC use string
+        if metric is DEFAULT_EVAL_METRIC:
+            metric = "DEFAULT_EVAL_METRIC"
+            # Cannot serialize attribute with DEFAULT_EVAL_METRIC directly
+        self.metric: str | Literal["DEFAULT_EVAL_METRIC"] | DEFAULT_EVAL_METRIC | None = metric  # noqa: PYI051
+        super().__init__(*args, **kwargs)
 
     def _get_file_extension(self) -> str:
         return "csv"
@@ -71,6 +95,14 @@ class AdvCSVLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, CSVLogge
         )
 
     def log_trial_result(self, iteration: int, trial: "Trial", result: AnyLogMetricsDict):  # pyright: ignore[reportIncompatibleMethodOverride]
+        if self.metric:
+            if self.metric is DEFAULT_EVAL_METRIC or self.metric == "DEFAULT_EVAL_METRIC":
+                if os.environ.get(RAY_UTILITIES_NEW_LOG_FORMAT, "1").lower() in ("0", "false", "off"):
+                    self.metric = EVAL_METRIC_RETURN_MEAN
+                else:
+                    self.metric = NEW_LOG_EVAL_METRIC
+            if self.metric not in result:
+                result[self.metric] = float("nan")  # pyright: ignore[reportGeneralTypeIssues]
         if trial not in self._trial_csv:
             # Keys are permanently set; remove videos from the first iteration.
             # Therefore also need eval metric in first iteration

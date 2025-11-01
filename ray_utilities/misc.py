@@ -10,15 +10,18 @@ from __future__ import annotations
 import datetime
 import functools
 import logging
+import math
 import os
 import re
 import sys
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, cast, overload
 
 import base62
+import pyarrow.fs as pyfs
 import ray
 import ray.exceptions
+from frozendict import frozendict
 from ray.experimental import tqdm_ray
 from ray.rllib.utils.metrics import (
     ALL_MODULES,  # pyright: ignore[reportPrivateImportUsage]
@@ -33,6 +36,7 @@ from tqdm import tqdm
 from typing_extensions import Iterable, Sentinel, TypeIs
 
 from ray_utilities.constants import (
+    CURRENT_STEP,
     DEFAULT_EVAL_METRIC,
     EVAL_METRIC_RETURN_MEAN,
     FORK_DATA_KEYS,
@@ -42,12 +46,14 @@ from ray_utilities.constants import (
     OPTIONAL_FORK_DATA_KEYS,
     RAY_UTILITIES_INITIALIZATION_TIMESTAMP,
     RE_PARSE_FORK_FROM,
-    RUN_ID,
+    WANDB_MONITOR_ACTOR_NAME,
+    get_run_id,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from ray import tune
     from ray.tune.experiment import Trial
 
     from ray_utilities.callbacks._wandb_monitor import WandbRunMonitor
@@ -212,20 +218,38 @@ def trial_name_creator(trial: Trial) -> str:
     module = trial.config.get("module", None)
     if module is None and "cli_args" in trial.config:
         module = trial.config["cli_args"]["agent_type"]
+    trainable_name = trial.trainable_name
+    if trainable_name in ("DefaultTrainable", "DefinedTrainable", "DefinedDefaultTrainable"):
+        # make name shorter
+        trainable_name = ""
+    experiment_tag = cast("str", trial.experiment_tag)
+    if "_" in experiment_tag[:3]:
+        _exp_number, experiment_tag = experiment_tag.split("_", 1)
+        tag_list = experiment_tag.split("=")
+        if "config_files" in tag_list:
+            idx = tag_list.index("config_files")
+            tag_list.pop(idx + 1)
+            tag_list.pop(idx)
+        experiment_tag = _exp_number + "_" + "=".join(tag_list)
+    if len(trial.experiment_tag) > 80:
+        # too many infos in tag
+        experiment_tag = ""
     fields = [
-        trial.config["env"],
+        cast("str", trial.config["env"]).rstrip("v0123456789").rstrip("_-"),  # remove version suffix for brevity
         trial.trainable_name,
         module,
         "id=" + trial.trial_id,
-        start_time_str,
+        experiment_tag,
+        # Time is incorporated into RUN_ID so its in parent path
+        # start_time_str,
     ]
     if "cli_args" in trial.config and trial.config["cli_args"]["from_checkpoint"]:
         match = RE_GET_TRIAL_ID.match(trial.config["cli_args"]["from_checkpoint"])
         if match:
             fields.append("from_checkpoint=" + match.group("trial_id"))
-    setup_cls = trial.config.get("setup_cls", None)
+    setup_cls: str | None = trial.config.get("setup_cls", None)
     if setup_cls is not None:
-        fields.insert(0, setup_cls)
+        fields.insert(0, setup_cls.replace("Setup", ""))
     return "_".join(fields)
 
 
@@ -279,7 +303,6 @@ def extend_trial_name(
 
     def extended_trial_name_creator(trial: Trial) -> str:
         base = trial_name_creator(trial)
-
         start, end = base.split("_id=")
         for key in insert:
             if _is_key(key):
@@ -398,8 +421,10 @@ class ExperimentKey(str, Enum):
         if len(key) < cls.MIN_LENGTH.value:
             _logger.warning("Experiment key '%s' is shorter than expected minimum length of 32.", key)
         run_id_part, key = key.split(cls.RUN_ID_SEPARATOR, 1)
-        if not run_id_part.startswith(RUN_ID):
-            _logger.debug("Experiment key '%s' does not start with expected RUN_ID prefix '%s'.", key, RUN_ID + "X")
+        if not run_id_part.startswith(get_run_id()):
+            _logger.debug(
+                "Experiment key '%s' does not start with expected RUN_ID prefix '%s'.", key, get_run_id() + "X"
+            )
         fork_data = None
         if cls.FORK_SEPARATOR in key:
             key, fork_part = key.split(cls.FORK_SEPARATOR, 1)
@@ -457,7 +482,9 @@ class ExperimentKey(str, Enum):
             trial_number = cls.COUNT_SEPARATOR + "".join(trial_number).replace("000", cls.REPLACE_UNDERSCORE)
         else:  # empty list
             trial_number = ""
-        base_key = f"{RUN_ID}{cls.RUN_ID_SEPARATOR}{trial_base}{trial_number}".replace("_", cls.REPLACE_UNDERSCORE)
+        base_key = f"{get_run_id()}{cls.RUN_ID_SEPARATOR}{trial_base}{trial_number}".replace(
+            "_", cls.REPLACE_UNDERSCORE
+        )
         # Pad at the end with Z to be at least 32 characters long.
         # Use uppercase letters as trial_id is lowercase alphanumeric only.
         base_key = f"{base_key:{cls.RIGHT_PAD_CHAR}<{cls.MIN_LENGTH}}"
@@ -470,7 +497,7 @@ class ExperimentKey(str, Enum):
         # Prefer training iteration for experiment key (stable across frameworks)
         ft = fork_data.get("parent_time")
         # ft is a NamedTuple[time_attr, time]; only use numeric time
-        parent_iteration = ft[1] if ft[0] == "current_step" else fork_data["parent_training_iteration"]
+        parent_iteration = ft[1] if ft[0] == CURRENT_STEP else fork_data["parent_training_iteration"]
 
         fork_base, *fork_number = parent_id.split("_")
         if fork_number:
@@ -799,7 +826,7 @@ def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict | dict[s
             return current_step
         return result.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=0)
 
-    current_step = result.get("current_step")  # likely not present
+    current_step = result.get(CURRENT_STEP)  # likely not present
     if current_step is not None:  # LogMetricsDict
         return current_step
     result = cast("StrictAlgorithmReturnData", result)
@@ -815,6 +842,29 @@ def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict | dict[s
     )
 
 
+@overload
+def deep_freeze(obj: dict) -> frozendict: ...
+
+
+@overload
+def deep_freeze(obj: list[_T] | set[_T]) -> tuple[_T | object, ...]: ...
+
+
+@overload
+def deep_freeze(obj: _T) -> _T: ...
+
+
+def deep_freeze(obj: object):
+    """Convert nested dicts/lists/sets to immutable equivalents."""
+    if isinstance(obj, dict):
+        return frozendict({k: deep_freeze(v) for k, v in obj.items()})
+    if isinstance(obj, list):
+        return tuple(deep_freeze(v) for v in obj)
+    if isinstance(obj, set):
+        return tuple(sorted(deep_freeze(v) for v in obj))
+    return obj
+
+
 def shutdown_monitor() -> None:
     """Shutdown the WandbRunMonitor and its associated selenium process. Cannot be interrupted by KeyboardInterrupt"""
     while True:
@@ -822,7 +872,7 @@ def shutdown_monitor() -> None:
             try:
                 if not ray.is_initialized():
                     return None
-                monitor: WandbRunMonitor = ray.get_actor(name="remote_wandb_run_monitor")
+                monitor: WandbRunMonitor = ray.get_actor(name=WANDB_MONITOR_ACTOR_NAME)
             except (ValueError, ray.exceptions.RayActorError):
                 return None
             else:
@@ -830,5 +880,101 @@ def shutdown_monitor() -> None:
                 monitor.__ray_terminate__.remote()  # pyright: ignore[reportAttributeAccessIssue]
                 return None
         except KeyboardInterrupt:  # noqa: PERF203
-            _logger.warning("shutdown monitor has not completed yet")
+            _logger.warning(
+                "shutdown monitor has not completed yet. "
+                "DO NOT INTERRUPT this process to avoid resource leaks. Trying again..."
+            )
             return shutdown_monitor()
+
+
+def get_trials_from_tuner(tuner: tune.Tuner) -> list[Trial] | None:
+    """Extract the list of trials from a Ray Tune Tuner object.
+
+    This function retrieves the trials associated with a given
+    :class:`ray.tune.tuner.Tuner` instance. It accesses the internal
+    experiment manager to obtain the trials.
+
+    Args:
+        tuner: The :class:`ray.tune.tuner.Tuner` instance from which to extract trials.
+            If a callback has a _trials attribute that one will be returned as fallback
+    Returns:
+        A list of :class:`ray.tune.experiment.Trial` objects associated with the tuner.
+        Returns ``None`` if the trials cannot be accessed, in case the tuner did not finish or is
+        a remote Tuner.
+
+    Example:
+        >>> from ray.tune import Tuner
+        >>> tuner = Tuner(...)  # Assume a Tuner is created
+        >>> trials = get_trials_from_tuner(tuner)
+    """
+    try:
+        return tuner._local_tuner.get_results()._experiment_analysis.trials  # pyright: ignore[reportOptionalMemberAccess]
+    except RuntimeError:
+        try:
+            callbacks = tuner._local_tuner.get_run_config().callbacks  # pyright: ignore[reportOptionalMemberAccess]
+        except Exception as e:  # noqa: BLE001
+            _logger.error("Could not get callbacks from Tuner, results and callbacks not availiable: %s", e)
+            return None
+        if not callbacks:
+            return None
+        return next((c._trials for c in callbacks if hasattr(c, "_trials")), None)  # pyright: ignore[reportAttributeAccessIssue]
+    except AttributeError as e:
+        if "_local_tuner" in str(e):
+            _logger.error("Can only get results from a local Tuner instance, not a remote one.")
+        return None
+
+
+def get_filesystem_uri_prefix(filesystem: pyfs.FileSystem) -> str:
+    """Get URI prefix from a PyArrow FileSystem instance.
+
+    Args:
+        filesystem: PyArrow FileSystem instance.
+
+    Returns:
+        URI prefix string (e.g., "s3://", "gs://", "file://").
+    """
+    fs_type = filesystem.type_name
+
+    if isinstance(filesystem, pyfs.S3FileSystem):
+        return "s3://"
+    if isinstance(filesystem, pyfs.GcsFileSystem):
+        return "gs://"
+    if isinstance(filesystem, pyfs.HadoopFileSystem):
+        return "hdfs://"
+    if isinstance(filesystem, pyfs.LocalFileSystem):
+        return "file://"
+    if isinstance(filesystem, pyfs.SubTreeFileSystem):
+        # Recursively get the base filesystem's prefix
+        return get_filesystem_uri_prefix(filesystem.base_fs)
+    _logger.warning("Unknown filesystem type: %s", fs_type)
+    return ""
+
+
+def find_threshold_divisor(target: int, threshold: int) -> int:
+    """find a divisor the the target that is closest to the threshold"""
+    closest = -1
+    diff = 10**18
+
+    # Iterate till square root of N
+    for i in range(1, math.ceil(math.sqrt(target)) + 1):
+        if target % i == 0:
+            # Check if divisors are equal
+            if target // i == i:
+                # Check if i is the closest
+                if abs(threshold - i) < diff:
+                    diff = abs(threshold - i)
+                    closest = i
+
+            else:
+                # Check if i is the closest
+                if abs(threshold - i) < diff:
+                    diff = abs(threshold - i)
+                    closest = i
+
+                # Check if n / i is the closest
+                if abs(threshold - target // i) < diff:
+                    diff = abs(threshold - target // i)
+                    closest = target // i
+
+    # Print the closest value
+    return closest

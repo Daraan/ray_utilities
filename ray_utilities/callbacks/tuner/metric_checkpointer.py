@@ -5,13 +5,14 @@ import sys
 from functools import partial
 from typing import TYPE_CHECKING, Any, List, Optional, cast
 
+from ray.air.constants import TRAINING_ITERATION
 from ray.rllib.utils.annotations import override
 from ray.tune.callback import Callback
 from ray.tune.experiment import Trial
 from ray.tune.result import SHOULD_CHECKPOINT
 from typing_extensions import Self, deprecated
 
-from ray_utilities.constants import TUNE_RESULT_IS_A_COPY
+from ray_utilities.constants import CURRENT_STEP, TUNE_RESULT_IS_A_COPY
 from ray_utilities.misc import get_current_step
 
 if TYPE_CHECKING:
@@ -72,6 +73,45 @@ class MetricCheckpointer(Callback):
                 ),
             )
 
+    def get_state(self) -> dict:
+        """Get the state of the callback for checkpointing.
+
+        Returns:
+            Dictionary containing checkpoint tracking data.
+
+        Note:
+            The condition callable is not saved as it may not be picklable.
+            It must be provided again when restoring from checkpoint.
+        """
+        return {
+            "metric_name": self.metric_name,
+            "last_checkpoint_iteration": self._last_checkpoint_iteration,
+            "last_checkpoint_value": self._last_checkpoint_value,
+            "last_checkpoint_step": self._last_checkpoint_step,
+        }
+
+    def set_state(self, state: dict) -> None:
+        """Set the state of the callback from checkpoint data.
+
+        Args:
+            state: State dictionary containing checkpoint tracking data.
+
+        Note:
+            The condition callable must be provided during __init__ as it
+            cannot be restored from the checkpoint.
+        """
+        self.metric_name = state.get("metric_name", "Unknown")
+        self._last_checkpoint_iteration = state.get("last_checkpoint_iteration", -1)
+        self._last_checkpoint_value = state.get("last_checkpoint_value", None)
+        self._last_checkpoint_step = state.get("last_checkpoint_step", -1)
+
+        _logger.info(
+            "Restored MetricCheckpointer state: last checkpoint at iteration %d, step %d, value %s",
+            self._last_checkpoint_iteration,
+            self._last_checkpoint_step,
+            self._last_checkpoint_value,
+        )
+
     @override(Callback)
     def on_trial_result(
         self,
@@ -99,26 +139,26 @@ class MetricCheckpointer(Callback):
         )
 
 
+# This can be used from ray 2.50.0 onwards when tune passes the actual result dict
 @deprecated("Do not use as long as tune passes only a copy of the result dict.", stacklevel=2)
 class StepCheckpointer(MetricCheckpointer):  # type: ignore
     """Checkpoints trials based on a specific metric condition."""
 
     def _condition(self, result: StrictAlgorithmReturnData | LogMetricsDict | dict) -> bool:
         steps_since_last_checkpoint = get_current_step(result) - self._last_checkpoint_step  # pyright: ignore[reportArgumentType]
-        # _logger.debug(
-        #    "StepCheckpointer: steps since last checkpoint: %d, frequency: %d",
-        #    steps_since_last_checkpoint,
-        #    self._checkpoint_frequency,
-        # )
-        return steps_since_last_checkpoint >= self._checkpoint_frequency
+        return steps_since_last_checkpoint >= self._checkpoint_frequency and (
+            not self._min_iterations
+            or result[TRAINING_ITERATION] - self._last_checkpoint_iteration >= self._min_iterations
+        )
 
-    def __init__(self, checkpoint_frequency: int = 50_000) -> None:
+    def __init__(self, checkpoint_frequency: int = 65_536, min_iterations: Optional[int] = 24) -> None:
         if checkpoint_frequency == 0:
             _logger.info("Checkpoint frequency is set to 0, disabling step checkpointing.")
             checkpoint_frequency = sys.maxsize
         self._checkpoint_frequency = checkpoint_frequency
-        super().__init__("current_step", self._condition)
+        self._min_iterations = min_iterations
+        super().__init__(CURRENT_STEP, self._condition)
 
     @classmethod
-    def make_callback_class(cls, *, checkpoint_frequency, **kwargs) -> type[Self]:
-        return partial(cls, checkpoint_frequency=checkpoint_frequency, **kwargs)  # pyright: ignore[reportReturnType]
+    def make_callback_class(cls, *, checkpoint_frequency, min_iterations: Optional[int] = 24, **kwargs) -> type[Self]:
+        return partial(cls, checkpoint_frequency=checkpoint_frequency, min_iterations=min_iterations, **kwargs)  # pyright: ignore[reportReturnType]

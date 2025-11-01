@@ -2,40 +2,58 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import select
 import shutil
 import subprocess
 import threading
 import time
 from pathlib import Path
 from textwrap import indent
-from typing import TYPE_CHECKING, Iterable, Mapping, Optional, Sequence, cast
+from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping, NamedTuple, Optional, Sequence, cast, overload
+
+import numpy as np
+import pandas as pd
 
 # Note ray is only necessary for the WandbRunMonitor actor
 import ray
 import ray.exceptions
-
-from ray_utilities._runtime_constants import RUN_ID
-from ray_utilities.callbacks.upload_helper import AnyPopen, ExitCode, UploadHelperMixin
-from ray_utilities.constants import FORK_DATA_KEYS
-from ray_utilities.misc import RE_GET_TRIAL_ID, ExperimentKey
+import tree
+from pyarrow.fs import LocalFileSystem
+from tqdm import tqdm
 from wandb import Api
 
+from ray_utilities.callbacks.upload_helper import AnyPopen, ExitCode, UploadHelperMixin
+from ray_utilities.constants import FORK_DATA_KEYS, FORK_FROM, get_run_id
+from ray_utilities.misc import RE_GET_TRIAL_ID, ExperimentKey, get_trials_from_tuner
+from ray_utilities.nice_logger import ImportantLogger
+
 if TYPE_CHECKING:
+    import wandb
     from ray import tune
     from ray.actor import ActorProxy
     from ray.tune import ResultGrid
+    from wandb.apis.public.runs import Run, Runs
 
-    import wandb
     from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor as _WandbRunMonitor
-
 
 logger = logging.getLogger(__name__)
 
 _failed_upload_file_lock = threading.Lock()
 
-WANDB_FAILED_UPLOAD_FILE = f"failed_wandb_uploads-{RUN_ID}.txt"
+WANDB_SYNC_MARKER = ".wandb_synced"
+
+
+def get_wandb_failed_upload_file() -> str:
+    """
+    Get the name of the failed uploads file for the current RUN_ID.
+
+    It is build as: failed_wandb_uploads-{RUN_ID}.txt
+    """
+    return f"failed_wandb_uploads-{get_run_id()}.txt"
+
 
 _wandb_api = None
 
@@ -85,6 +103,8 @@ class WandbUploaderMixin(UploadHelperMixin):
         *,
         wait: bool = True,
         parallel_uploads: int = 5,
+        use_tqdm: bool = False,
+        skip_synced: bool = True,
     ) -> list[subprocess.Popen] | None:
         """
         Upload wandb's offline folder of the session to wandb, similar to the `wandb sync` shell command
@@ -94,6 +114,8 @@ class WandbUploaderMixin(UploadHelperMixin):
             tuner: Optional tuner to get additional trial information.
             wait: If True, waits for the upload to finish before returning.
             parallel_uploads: Number of parallel uploads to by executing :class:`subprocess.Popen`
+            use_tqdm: Whether to use tqdm progress bars for upload progress.
+            skip_synced: If True, skip paths that contain the sync marker file.
         """
         logger.info("Uploading wandb offline experiments...")
 
@@ -103,7 +125,12 @@ class WandbUploaderMixin(UploadHelperMixin):
         global_wandb_dir = os.environ.get("WANDB_DIR", None)
         if global_wandb_dir and (global_wandb_dir := Path(global_wandb_dir)).exists():
             wandb_paths.append(global_wandb_dir)
-        uploads = self.upload_paths(wandb_paths, wait=wait, parallel_uploads=parallel_uploads)
+        if not wandb_paths:
+            logger.warning("No wandb offline directories found to upload.")
+            return None
+        uploads = self.upload_paths(
+            wandb_paths, wait=wait, parallel_uploads=parallel_uploads, use_tqdm=use_tqdm, skip_synced=skip_synced
+        )
         return uploads
 
     def _monitor_check_parent_trial(self, trial_id: str, timeout: float = 40) -> bool | None:
@@ -118,11 +145,13 @@ class WandbUploaderMixin(UploadHelperMixin):
                 # contains only the pure trial id not the experiment key of the parent
                 parent_id = fork_data.get("parent_trial_id")
 
-        self._monitor = self._start_monitor()
-        page_visit = self._monitor.visit_run_page.remote(parent_id)  # pyright: ignore[reportFunctionMemberAccess, reportOptionalMemberAccess]
-        done, _ = ray.wait([page_visit], timeout=timeout)
-        # try again
-        return bool(done)
+        if self._start_monitor_safe():
+            assert self._monitor is not None
+            page_visit = self._monitor.visit_run_page.remote(parent_id)  # pyright: ignore[reportFunctionMemberAccess, reportOptionalMemberAccess]
+            done, _ = ray.wait([page_visit], timeout=timeout)
+            # try again
+            return bool(done)
+        return None
 
     def _get_history_artifact_name(
         self, run_id: str, version: Optional[str | int] = "latest", entity: Optional[str] = None
@@ -200,13 +229,34 @@ class WandbUploaderMixin(UploadHelperMixin):
         if parent_id is None:
             logger.warning("Found no parent for %s cannot check again", trial_id)
             return ExitCode.NO_PARENT_FOUND
-        found_before, artifact_is_new = self._check_for_artifact(parent_id)
-        self._monitor_check_parent_trial(trial_id=trial_id, timeout=timeout)
-        time.sleep(2)
-        found_after, new_artifact_after = self._check_for_artifact(parent_id)
-        while not (artifact_is_new or new_artifact_after) and (time.time() - start) < timeout:
-            time.sleep(5)
+
+        try:
+            found_before, artifact_is_new = self._check_for_artifact(parent_id)
+            visit_result = self._monitor_check_parent_trial(trial_id=trial_id, timeout=min(40, timeout * 0.3))
+            if visit_result is None:
+                logger.warning("Monitor check returned None for trial %s, monitor may not be available", trial_id)
+            time.sleep(2)
             found_after, new_artifact_after = self._check_for_artifact(parent_id)
+
+            # Wait for artifact with reduced timeout to avoid blocking
+            max_artifact_wait = min(timeout * 0.5, 60)
+            artifact_wait_start = time.time()
+            while (
+                not (artifact_is_new or new_artifact_after) and (time.time() - artifact_wait_start) < max_artifact_wait
+            ):
+                time.sleep(5)
+                try:
+                    found_after, new_artifact_after = self._check_for_artifact(parent_id)
+                except Exception:
+                    logger.exception("Error checking for artifact during retry wait")
+                    break
+        except KeyboardInterrupt:
+            logger.warning("KeyboardInterrupt during monitor check and retry for trial %s", trial_id)
+            return ExitCode.TERMINATED
+        except Exception:
+            logger.exception("Error during monitor check and retry for trial %s", trial_id)
+            return ExitCode.ERROR
+
         process_retry = subprocess.Popen(
             ["wandb", "sync", *cast("Iterable[str]", process.args[2:])],  # pyright: ignore[reportIndexIssue]
             stdout=subprocess.PIPE,
@@ -215,10 +265,12 @@ class WandbUploaderMixin(UploadHelperMixin):
             bufsize=1,  # line-buffered
         )
         end = time.time()
+        remaining_timeout = max(20, timeout * 0.2, timeout - (end - start))
         exit_code = self._failure_aware_wait(
             process_retry,
-            timeout=max(20, timeout * 0.2, timeout - (end - start)),
+            timeout=remaining_timeout,
             trial_id=self._upload_to_trial.get(process, ""),
+            upload_service_name="wandb",
         )
         if exit_code != 0:
             logger.error(
@@ -230,20 +282,32 @@ class WandbUploaderMixin(UploadHelperMixin):
 
     def upload_paths(
         self,
-        wandb_paths: Sequence[Path],
+        wandb_paths: list[Path],
         trial_runs: Optional[list[tuple[str, Path]]] = None,
         *,
         wait: bool = True,
         parallel_uploads: int = 5,
+        use_tqdm: bool = False,
+        skip_synced: bool = True,
     ):
         # Step 2: Collect all trial runs with their trial IDs
         if trial_runs is None:
             logger.info("No trial_runs provided, extracting from wandb paths.", stacklevel=2)
             trial_runs = []  # (trial_id, run_dir)
 
-            for wandb_dir in wandb_paths:
+            wandb_paths = wandb_paths.copy()
+            wandb_paths_set = set()
+            skipped_synced = 0
+            for i, wandb_dir in enumerate(wandb_paths):
                 # Find offline run directories, there might be multiple because of resuming
-                offline_runs = list(wandb_dir.glob("offline-run-*"))
+                if "offline-run-" in wandb_dir.name:
+                    # already an offline run, but we need parent paths only
+                    offline_runs: list[Path] = [wandb_dir]
+                    wandb_paths_set.add(wandb_dir.parent)
+                    wandb_paths[i] = wandb_dir.parent
+                else:
+                    offline_runs = list(wandb_dir.glob("offline-run-*"))
+                    wandb_paths_set.add(wandb_dir)
 
                 if not offline_runs:
                     logger.error(
@@ -252,6 +316,21 @@ class WandbUploaderMixin(UploadHelperMixin):
                     continue
 
                 for run_dirs in offline_runs:
+                    # Check for WandB's own sync marker
+                    wandb_sync_files = list(run_dirs.glob("run-*.wandb.synced"))
+                    if wandb_sync_files:
+                        logger.warning(
+                            "Found WandB sync marker file(s) in %s: %s. This run was likely already uploaded to WandB.",
+                            run_dirs,
+                            [f.name for f in wandb_sync_files],
+                        )
+
+                    # Check for our custom sync marker if skip_synced is enabled
+                    if skip_synced and (run_dirs / WANDB_SYNC_MARKER).exists():
+                        logger.debug("Skipping already synced run directory: %s", run_dirs)
+                        skipped_synced += 1
+                        continue
+
                     trial_id = self._extract_trial_id_from_wandb_run(run_dirs)
                     if trial_id:
                         trial_runs.append((trial_id, run_dirs))
@@ -261,13 +340,22 @@ class WandbUploaderMixin(UploadHelperMixin):
                         )
                         trial_runs.append((run_dirs.name, run_dirs))
 
+            if skipped_synced > 0:
+                logger.info("Skipped %d already synced run directories", skipped_synced)
+        # Keep ordered remove duplicates:
+        wandb_paths = list(dict.fromkeys(wandb_paths))
+
         if not trial_runs:
             logger.info("No wandb offline runs found to upload.")
             return None
 
         # Step 3: Parse fork relationships
         self.fork_relationships = self._parse_wandb_fork_relationships(wandb_paths)
-        logger.debug("Found %d fork relationships: %s", len(self.fork_relationships), self.fork_relationships)
+        if len(self.fork_relationships) == 0:
+            ImportantLogger.important_info(
+                logger, "No fork relationships found. If you work with forks something went wrong"
+            )
+        logger.debug("Found %d fork relationships.", len(self.fork_relationships))
 
         # Step 4: Build dependency-ordered upload groups
         upload_groups: list[list[tuple[str, list[Path]]]] = self._build_upload_dependency_graph(
@@ -285,13 +373,15 @@ class WandbUploaderMixin(UploadHelperMixin):
                 p for p in self._unfinished_gathered_uploads if p.poll() is None
             ]
             if unfinished_from_past:
-                logger.warning(
+                cast("ImportantLogger", logger).important_info(
                     "Continuing %d unfinished wandb uploads from previous gather: %s",
                     len(unfinished_from_past),
-                    unfinished_from_past,
+                    [p.args for p in unfinished_from_past],
                 )
                 for process in unfinished_from_past:
-                    exit_code = self._failure_aware_wait(process, timeout=300, terminate_on_timeout=False)
+                    exit_code = self._failure_aware_wait(
+                        process, timeout=300, terminate_on_timeout=False, upload_service_name="wandb"
+                    )
                     if exit_code in (ExitCode.WANDB_BEHIND_STEP, ExitCode.WANDB_SERVER_ERROR):
                         # use monitor to check on parent, try again
                         # how do I get the parent id?
@@ -299,108 +389,157 @@ class WandbUploaderMixin(UploadHelperMixin):
                     if exit_code != 0:
                         failed_uploads.append(process)
 
-        for group_idx, group in enumerate(upload_groups):
-            logger.info("Uploading group %d/%d with %d trials", group_idx + 1, len(upload_groups), len(group))
+        # Use tqdm for outer loop if requested
+        outer_iter = tqdm(upload_groups, desc="WandB Upload Groups", leave=True) if use_tqdm else upload_groups
+        unfinished_uploads = []
+        group_idx = 0
+        try:
+            for group_idx, group in enumerate(outer_iter):
+                logger.info("Uploading group %d/%d with %d trials", group_idx + 1, len(upload_groups), len(group))
 
-            # Wait for previous group to complete before starting next group
-            if group_idx > 0:
-                logger.info("Waiting for previous upload group to complete...")
-                finished_or_failed = []
-                for process in uploads:
-                    exit_code = self._failure_aware_wait(
-                        process, timeout=900, trial_id=self._upload_to_trial.get(process, "")
+                # Wait for previous group to complete before starting next group
+                if group_idx > 0:
+                    logger.info("Waiting for previous upload group to complete...")
+                    finished_or_failed = []
+                    # Use tqdm for waiting on previous group if requested
+                    prev_iter = (
+                        tqdm(uploads, desc=f"Waiting for Group {group_idx} uploads", leave=False)
+                        if use_tqdm
+                        else uploads
                     )
-                    if exit_code == 0:
-                        finished_uploads.add(process)
-                    elif self._check_with_monitor_and_retry(process) == 0:
-                        finished_uploads.add(process)
-                    else:
-                        failed_uploads.append(process)
-                    finished_or_failed.append(process)
-                uploads = [p for p in uploads if p not in finished_or_failed]
-
-            # Upload trials in current group (can be parallel within group)
-            for trial_id, run_dirs in group:
-                # Manage parallel upload limit within group
-                if len(uploads) >= parallel_uploads:
-                    logger.info(
-                        "%d >= %d uploads already in progress waiting for some to finish before starting new ones...",
-                        len(uploads),
-                        parallel_uploads,
-                    )
-                # process uploads that are already finished:
-                for process in (p for p in uploads if p.poll() is not None):
-                    exit_code = self._failure_aware_wait(
-                        process, timeout=60, trial_id=self._upload_to_trial.get(process, "")
-                    )
-                    if exit_code == 0:
-                        finished_uploads.add(process)
-                    elif self._check_with_monitor_and_retry(process) == 0:
-                        finished_uploads.add(process)
-                    else:
-                        failed_uploads.append(process)
-                    uploads.remove(process)
-                while len(uploads) >= parallel_uploads:
-                    finished_or_failed = set()
-                    # Prioritize checking processes that have already finished else oldest first
-                    for process in sorted(uploads, key=lambda p: p.poll() is None):
+                    for process in prev_iter:
                         exit_code = self._failure_aware_wait(
-                            process, timeout=900, trial_id=self._upload_to_trial.get(process, "")
+                            process,
+                            timeout=150,
+                            trial_id=self._upload_to_trial.get(process, ""),
+                            upload_service_name="wandb",
                         )
                         if exit_code == 0:
                             finished_uploads.add(process)
-                        elif self._check_with_monitor_and_retry(process) == 0:
+                            self._create_sync_marker(process, self._upload_to_trial)
+                        elif self._check_with_monitor_and_retry(process, timeout=200) == 0:
                             finished_uploads.add(process)
+                            self._create_sync_marker(process, self._upload_to_trial)
                         else:
                             failed_uploads.append(process)
-                        finished_or_failed.add(process)
+                        finished_or_failed.append(process)
                     uploads = [p for p in uploads if p not in finished_or_failed]
 
-                # if the run has a parent we want to check it with the monitor first
-                logger.debug("Checking with monitor before uploading trial %s", trial_id)
-                if (visit_success := self._monitor_check_parent_trial(trial_id, timeout=40)) is not None:
-                    logger.debug("Monitor visit for parent of trial %s was %s", trial_id, visit_success)
-                    time.sleep(5)
-                logger.info(
-                    "Uploading offline wandb run for trial %s (group %d/%d, trial %d/%d in group) from dirs:\n%s",
-                    trial_id,
-                    group_idx + 1,
-                    len(upload_groups),
-                    group.index((trial_id, run_dirs)) + 1,
-                    len(group),
-                    run_dirs,
-                )
-                process = subprocess.Popen(
-                    ["wandb", "sync", *[d.as_posix() for d in run_dirs], "--append"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,  # line-buffered
-                )
-                uploads.append(process)
-                self._upload_to_trial[process] = trial_id
-                total_uploaded += 1
+                # Use tqdm for inner loop if requested
+                inner_iter = tqdm(group, desc=f"Trials in Group {group_idx + 1}", leave=False) if use_tqdm else group
+                for trial_id, run_dirs in inner_iter:
+                    # Manage parallel upload limit within group
+                    if len(uploads) >= parallel_uploads:
+                        logger.info(
+                            "%d >= %d uploads already in progress waiting for some to finish before starting new ones...",
+                            len(uploads),
+                            parallel_uploads,
+                        )
+                    # process uploads that are already finished:
+                    for process in (p for p in uploads if p.poll() is not None):
+                        exit_code = self._failure_aware_wait(
+                            process,
+                            timeout=60,
+                            trial_id=self._upload_to_trial.get(process, ""),
+                            upload_service_name="wandb",
+                        )
+                        if exit_code == 0:
+                            finished_uploads.add(process)
+                            self._create_sync_marker(process, self._upload_to_trial)
+                        elif self._check_with_monitor_and_retry(process) == 0:
+                            finished_uploads.add(process)
+                            self._create_sync_marker(process, self._upload_to_trial)
+                        else:
+                            failed_uploads.append(process)
+                        uploads.remove(process)
+                    while len(uploads) >= parallel_uploads:
+                        finished_or_failed = set()
+                        # Prioritize checking processes that have already finished else oldest first
+                        for process in sorted(uploads, key=lambda p: p.poll() is None):
+                            exit_code = self._failure_aware_wait(
+                                process,
+                                timeout=900,
+                                trial_id=self._upload_to_trial.get(process, ""),
+                                upload_service_name="wandb",
+                            )
+                            if exit_code == 0:
+                                finished_uploads.add(process)
+                                self._create_sync_marker(process, self._upload_to_trial)
+                            elif self._check_with_monitor_and_retry(process) == 0:
+                                finished_uploads.add(process)
+                                self._create_sync_marker(process, self._upload_to_trial)
+                            else:
+                                failed_uploads.append(process)
+                            finished_or_failed.add(process)
+                        uploads = [p for p in uploads if p not in finished_or_failed]
 
-        # Handle final completion
-        if wait:
-            logger.info("Waiting for all wandb uploads to finish...")
-        unfinished_uploads = uploads.copy()
-        for process in sorted(uploads, key=lambda p: p.poll() is None):
-            exit_code = None
+                    # if the run has a parent we want to check it with the monitor first
+                    logger.debug("Checking with monitor before uploading trial %s", trial_id)
+                    if (visit_success := self._monitor_check_parent_trial(trial_id, timeout=40)) is not None:
+                        logger.debug("Monitor visit for parent of trial %s was %s", trial_id, visit_success)
+                        time.sleep(5)
+                    logger.info(
+                        "Uploading offline wandb run for trial %s (group %d/%d, trial %d/%d in group) from dirs:\n%s",
+                        trial_id,
+                        group_idx + 1,
+                        len(upload_groups),
+                        group.index((trial_id, run_dirs)) + 1,
+                        len(group),
+                        run_dirs,
+                    )
+                    process = subprocess.Popen(
+                        ["wandb", "sync", *[d.as_posix() for d in run_dirs], "--append"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,  # line-buffered
+                    )
+                    uploads.append(process)
+                    self._upload_to_trial[process] = trial_id
+                    total_uploaded += 1
+
+            # Handle final completion
             if wait:
-                exit_code = self._failure_aware_wait(
-                    process, timeout=900, trial_id=self._upload_to_trial.get(process, "")
+                logger.info("Waiting for all wandb uploads to finish...")
+            unfinished_uploads = uploads.copy()
+            # Use tqdm for waiting on unfinished uploads if requested
+            if wait and use_tqdm:
+                iter_uploads = tqdm(
+                    sorted(uploads, key=lambda p: p.poll() is None),
+                    desc="Waiting for final wandb uploads",
+                    leave=True,
                 )
-            if process.poll() is not None:
-                if exit_code is None:
-                    exit_code = self._report_upload(process)
-                if exit_code == 0:
-                    finished_uploads.add(process)
-                elif self._check_with_monitor_and_retry(process) == 0:
-                    finished_uploads.add(process)
-                else:
-                    failed_uploads.append(process)
-                unfinished_uploads.remove(process)
+            else:
+                iter_uploads = sorted(uploads, key=lambda p: p.poll() is None)
+            for process in iter_uploads:
+                exit_code = None
+                if wait:
+                    exit_code = self._failure_aware_wait(
+                        process,
+                        timeout=900,
+                        trial_id=self._upload_to_trial.get(process, ""),
+                        upload_service_name="wandb",
+                    )
+                if process.poll() is not None:
+                    if exit_code is None:
+                        exit_code = self._report_upload(process)
+                    if exit_code == 0:
+                        finished_uploads.add(process)
+                        self._create_sync_marker(process, self._upload_to_trial)
+                    elif self._check_with_monitor_and_retry(process) == 0:
+                        finished_uploads.add(process)
+                        self._create_sync_marker(process, self._upload_to_trial)
+                    else:
+                        failed_uploads.append(process)
+                    unfinished_uploads.remove(process)
+        except KeyboardInterrupt:
+            logger.warning("KeyboardInterrupt received, terminating ongoing wandb uploads...")
+            failed_uploads.extend(unfinished_uploads)
+            logger.error(
+                "Not uploaded wandb runs due to KeyboardInterrupt: %s",
+                (str(upload_groups[group_idx:]).replace(", ", ",\n")),
+            )
+
         uploads = []
 
         if failed_uploads:
@@ -420,7 +559,7 @@ class WandbUploaderMixin(UploadHelperMixin):
                     continue
                 # copy failure doc to other experiment
                 try:
-                    dest = path / WANDB_FAILED_UPLOAD_FILE
+                    dest = path / get_wandb_failed_upload_file()
                     if dest.exists():
                         dest.rename(dest.with_suffix(".txt.old"))
                     shutil.copyfile(failed_file, dest)
@@ -429,7 +568,8 @@ class WandbUploaderMixin(UploadHelperMixin):
                     logger.exception("Failed to copy failed upload file to %s", path)
         if not unfinished_uploads:
             logger.info("All wandb offline runs have been tried to upload.")
-        logger.info(
+        ImportantLogger.important_info(
+            logger,
             "Uploaded wandb offline runs from %d trial paths: "
             "success %d, failed %d, still in progress %d from paths: %s.",
             total_uploaded,
@@ -444,11 +584,47 @@ class WandbUploaderMixin(UploadHelperMixin):
             return unfinished_uploads
         return None
 
+    def _create_sync_marker(self, process: AnyPopen, process_to_trial: Optional[dict[AnyPopen, str]] = None):
+        """Create a marker file in successfully synced run directories.
+
+        Args:
+            process: The completed upload process.
+            process_to_trial: Optional mapping of process to trial ID for logging.
+        """
+        try:
+            # Extract run directories from process args
+            # process.args format: ['wandb', 'sync', '/path/to/run1', '/path/to/run2', '--append']
+            if not isinstance(process.args, (str, bytes)) and isinstance(process.args, Iterable):
+                run_paths = [arg for arg in process.args[2:] if arg != "--append" and not arg.startswith("-")]
+            else:
+                logger.warning("Cannot extract run paths from process args: %s", process.args)
+                return
+
+            trial_id = process_to_trial.get(process, "unknown") if process_to_trial else "unknown"
+
+            for run_path_str in run_paths:
+                run_path = Path(run_path_str)
+                if not run_path.exists():
+                    logger.warning("Run path does not exist for marker creation: %s", run_path)
+                    continue
+
+                marker_file = run_path / WANDB_SYNC_MARKER
+                try:
+                    marker_file.touch(exist_ok=True)
+                    logger.debug("Created sync marker for trial %s at %s", trial_id, marker_file)
+                except Exception:
+                    logger.exception("Failed to create sync marker at %s", marker_file)
+        except Exception:
+            logger.exception("Error while creating sync markers for process")
+
     def _update_failed_upload_file(
-        self, failed_uploads: Iterable[AnyPopen], file_dir: Path, process_to_trial: Optional[dict[AnyPopen, str]] = None
+        self,
+        failed_uploads: Iterable[AnyPopen],
+        file_dir: Path,
+        process_to_trial: Optional[dict[AnyPopen, str]] = None,
     ) -> Path:
         with _failed_upload_file_lock:
-            failed_file = file_dir / WANDB_FAILED_UPLOAD_FILE
+            failed_file = file_dir / get_wandb_failed_upload_file()
             with failed_file.open("a") as f:
                 for process in failed_uploads:
                     trial_id = process_to_trial.get(process, "unknown") if process_to_trial else "unknown"
@@ -459,12 +635,19 @@ class WandbUploaderMixin(UploadHelperMixin):
                     )
                     err = ""
                     if process.stdout:
-                        out_left = process.stdout.read()
-                        if isinstance(out_left, bytes):
-                            out_left = out_left.decode("utf-8")
-                        if out_left:
-                            err = "\n" + indent(out_left, prefix=" " * 4) + "\n"
+                        # Check if there's data available with a timeout
+                        out_data: list[bytes] | list[str]
+                        output_left: bytes | str = b""
+                        out_data, _, _ = select.select([process.stdout], [], [], 1.0)
+                        if out_data:
+                            output_left = process.stdout.read()
+                            output_left = output_left if isinstance(output_left, bytes) else "\n".join(output_left)  # pyright: ignore[reportArgumentType, reportCallIssue]
+                        if isinstance(output_left, bytes):
+                            output_left = output_left.decode("utf-8")
+                        if output_left:
+                            err = "\n" + indent(output_left, prefix=" " * 4) + "\n"
                     f.write(f"{trial_id} : {formatted_args}{err}\n")
+        # TODO: If we write this AFTER tune is done the file will not be synced to remote storage!
         logger.warning("Wrote details of failed uploads to %s", failed_file.resolve())
         return failed_file
 
@@ -481,43 +664,29 @@ class WandbUploaderMixin(UploadHelperMixin):
                 return []
             try:
                 results = tuner.get_results()  # if this works below works if we have a local tuner
-                assert tuner._local_tuner is not None
-                trials = (
-                    tuner._local_tuner.get_results()._experiment_analysis.trials  # pyright: ignore[reportOptionalMemberAccess]
-                )
             except RuntimeError as e:
-                if (
-                    not tuner._local_tuner or not tuner._local_tuner.get_run_config().callbacks
-                ):  # assume there is a logger
-                    raise RuntimeError("Cannot get trials as local tuner or callbacks are missing.") from e
-                # Import here to avoid circular dependency
-                from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback  # noqa: PLC0415
-
-                wandb_cb = next(
-                    cb
-                    for cb in tuner._local_tuner.get_run_config().callbacks  # pyright: ignore[reportOptionalIterable]
-                    if isinstance(cb, AdvWandbLoggerCallback)
-                )  # pyright: ignore[reportOptionalIterable]
-                trials = wandb_cb._trials
+                logger.error("Could not get results from tuner: %s", e)
+            trials = get_trials_from_tuner(tuner)
+            if trials is None:
+                logger.error("Could not get trials from tuner to get wandb paths.")
+                return []
             trial_paths = [Path(trial.local_path) / "wandb" for trial in trials if trial.local_path]
             if len(trial_paths) != len(trials):
                 logger.error("Did not get all wandb paths %d of %d", len(trial_paths), len(trials))
             return trial_paths
-        result_paths = [Path(result.path) / "wandb" for result in results]  # these are in the non-temp dir
+        # these are in the non-temp dir, could be S3 path and non-local
+        result_paths = [Path(result.path) / "wandb" for result in results]
         if tuner is None:
             logger.warning("No tuner provided cannot check for missing wandb paths.")
             return result_paths
-        try:
-            # compare paths for completeness
-            assert tuner._local_tuner is not None
-            trials = tuner._local_tuner.get_results()._experiment_analysis.trials
-            trial_paths = [Path(trial.local_path) / "wandb" for trial in trials if trial.local_path]
-        except Exception:
+        trials = get_trials_from_tuner(tuner)
+        if trials is None:
             logger.exception("Could not get trials or their paths")
         else:
-            existing_in_result = sum(p.exists() for p in result_paths)
-            existing_in_trial = sum(p.exists() for p in trial_paths)
-            if existing_in_result != existing_in_trial:
+            trial_paths = [Path(trial.local_path) / "wandb" for trial in trials if trial.local_path]
+            existing_in_result = sum(p.exists() for p in result_paths)  # can point to S3
+            existing_in_trial = sum(p.exists() for p in trial_paths)  # are local
+            if (existing_in_result > 0 and existing_in_trial > 0) and existing_in_result != existing_in_trial:
                 logger.error(
                     "Count of existing trials paths did not match %d vs %d: \nResult Paths:\n%s\nTrial Paths:\n%s",
                     existing_in_result,
@@ -525,8 +694,31 @@ class WandbUploaderMixin(UploadHelperMixin):
                     result_paths,
                     trial_paths,
                 )
+            elif existing_in_result == 0:
+                logger.info(
+                    "No locally existing paths found in results or trials, possibly stored remotely: %s. Using local paths for wandb upload.",
+                    results.experiment_path,
+                )
+
+            if not isinstance(results.filesystem, LocalFileSystem):
+                logger.info("Result filesystem is not local, using local trial paths for wandb upload.")
+                if existing_in_result != 0:
+                    logger.warning("Still found existing result paths despite non-local filesystem.")
+                if existing_in_trial != len(trial_paths):
+                    logger.error(
+                        "Not all trial paths exist locally %d of %d: %s",
+                        existing_in_trial,
+                        len(trial_paths),
+                        trial_paths,
+                    )
+                return [p for p in trial_paths if p.exists()]
+            if existing_in_trial >= existing_in_result:
+                logger.info(
+                    "Found matching number of existing wandb paths in the local trial dirs "
+                    "preferring them to final storage_path."
+                )
+                return [p for p in trial_paths if p.exists()]
             non_existing_results = [res for res in results if not (Path(res.path) / "wandb").exists()]
-            # How to get the trial id?
             if non_existing_results:
                 not_synced_trial_ids = {
                     match.group("trial_id")
@@ -534,6 +726,7 @@ class WandbUploaderMixin(UploadHelperMixin):
                     if (match := RE_GET_TRIAL_ID.search(res.path))
                 }
                 non_synced_trials = [trial for trial in trials if trial.trial_id in not_synced_trial_ids]
+                # Fall back to local paths (are they possibly better as primary source as no sync necessary?)
                 result_paths.extend(Path(cast("str", trial.local_path)) / "wandb" for trial in non_synced_trials)
                 result_paths = list(filter(lambda p: p.exists(), result_paths))
                 logger.info("Added trial.paths to results, now having %d paths", len(result_paths))
@@ -549,20 +742,49 @@ class WandbUploaderMixin(UploadHelperMixin):
         """
         fork_relationships: dict[str, tuple[str | None, int | None]] = {}
 
+        found_experiment_files: set[Path] = set()
         for wandb_dir in wandb_paths:
-            # TODO: use experiment_info_file if available
-            experiment_info_file = Path(wandb_dir) / f"pbt_fork_data-{RUN_ID}.csv"
+            # TODO: use experiment_info_file if available, ONLY on root, not on remote
+            # can only use RUN_ID if we are in the same experiment, not some later upload
+            experiment_info_files = list(Path(wandb_dir.parent.parent).glob("pbt_fork_data-*.csv"))
+            if len(experiment_info_files) == 1:
+                experiment_info_file = experiment_info_files[0]
+            else:
+                # Will be no file if we have no forks.
+                logger.debug(
+                    "Found %d pbt_fork_data-*.csv files found in %s - expecting one (when not in temp/local dir).%s",
+                    len(experiment_info_files),
+                    wandb_dir.parent.parent,
+                    " Using the first one." if experiment_info_files else "",
+                )
+                experiment_info_file = experiment_info_files[0] if experiment_info_files else None
             fork_info_file = wandb_dir.parent.parent / "wandb_fork_from.csv"
+
             if not fork_info_file.exists():
-                continue
+                if (
+                    not experiment_info_file
+                    or experiment_info_file in found_experiment_files
+                    or not experiment_info_file.exists()
+                ):
+                    continue
+                found_experiment_files.add(experiment_info_file)
+                fork_info_file = experiment_info_file
 
             try:
                 with open(fork_info_file, "r") as f:
                     lines = f.readlines()
                     # Check header
                     header = [p.strip() for p in lines[0].split(",")]
-                    assert tuple(header[:2]) == tuple(FORK_DATA_KEYS[:2])
                     assert len(lines) >= 2
+                    # moved parent_id added parent_fork_id at position 1
+                    assert tuple(header[:2]) == tuple(FORK_DATA_KEYS[:2]) or (
+                        header[0] == FORK_DATA_KEYS[0]
+                        and header[1] == "parent_id"
+                        and FORK_DATA_KEYS[1] == "parent_fork_id"
+                    )
+                    iteration_idx = None
+                    if "parent_training_iteration" in header:
+                        iteration_idx = header.index("parent_training_iteration")
                     for line in lines[1:]:
                         line = line.strip()  # noqa: PLW2901
                         if not line:
@@ -572,7 +794,15 @@ class WandbUploaderMixin(UploadHelperMixin):
                             trial_id = parts[0]
                             parent_id = parts[1] if parts[1] != trial_id else None
                             parent_step = None
-                            if len(parts) >= 3 and parts[2].isdigit():
+                            if iteration_idx is not None and len(parts) > iteration_idx:  # global pbt_fork_data format
+                                if parts[iteration_idx].isdigit():
+                                    parent_step = int(parts[iteration_idx])
+                                else:
+                                    logger.warning(
+                                        "Unexpected format for iteration_idx, expected integer: %s",
+                                        parts[iteration_idx],
+                                    )
+                            elif len(parts) >= 3 and parts[2].isdigit():  # wandb_fork_from.csv format
                                 parent_step = int(parts[2])
                             elif len(parts) >= 3:
                                 logger.warning("Unexpected format for parent_step, expected integer: %s", parts[2])
@@ -586,7 +816,8 @@ class WandbUploaderMixin(UploadHelperMixin):
 
         return fork_relationships
 
-    def _extract_trial_id_from_wandb_run(self, run_dir: Path) -> str:
+    @staticmethod
+    def _extract_trial_id_from_wandb_run(run_dir: Path) -> str:
         """Extract trial ID from wandb offline run directory name."""
         # Extract from directory name pattern like "offline-run-20240101_123456-trial_id" or "run-20240101_123456-trial_id"
         run_name = run_dir.name
@@ -633,14 +864,14 @@ class WandbUploaderMixin(UploadHelperMixin):
         dependencies: dict[str, set[str]] = {}  # child_id -> {parent_id1, parent_id2, ...}
 
         # Create a mapping from trial_id to all paths for that ID
-        trial_id_to_runs: dict[str, list[Path]] = {}
+        trial_id_to_run_paths: dict[str, list[Path]] = {}
         for trial_id, run_path in trial_runs:
-            if trial_id not in trial_id_to_runs:
-                trial_id_to_runs[trial_id] = []
-            trial_id_to_runs[trial_id].append(run_path)
+            if trial_id not in trial_id_to_run_paths:
+                trial_id_to_run_paths[trial_id] = []
+            trial_id_to_run_paths[trial_id].append(run_path)
 
         # Initialize dependency tracking, using unique trial IDs
-        unique_trial_ids = list(trial_id_to_runs.keys())
+        unique_trial_ids = list(trial_id_to_run_paths.keys())
         for trial_id in unique_trial_ids:
             dependencies[trial_id] = set()
             dependents[trial_id] = []
@@ -680,7 +911,7 @@ class WandbUploaderMixin(UploadHelperMixin):
             # Create group for this batch, including all paths for each ready trial
             # Create group for this batch, grouping all paths for each ready trial_id
             group = [
-                (trial_id, sorted(trial_id_to_runs[trial_id]))
+                (trial_id, sorted(trial_id_to_run_paths[trial_id]))
                 for trial_id in ready_trials
             ]  # fmt: skip
 
@@ -695,29 +926,104 @@ class WandbUploaderMixin(UploadHelperMixin):
 
         return upload_groups
 
-    def _start_monitor(self, project: Optional[str] = None) -> ActorProxy[_WandbRunMonitor]:
-        """Gets or starts the WandbRunMonitor actor to monitor parent runs of forked trials."""
+    def _stop_monitor(self):
+        from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor  # noqa: PLC0415
+
+        if not WandbRunMonitor.is_remote_monitor_running():
+            return
+
+        WandbRunMonitor.get_remote_monitor(project="stop_monitor_cleanup", num_cpus=0).cleanup.remote()  # pyright: ignore[reportFunctionMemberAccess]
+
+    def _start_monitor_safe(self, project: Optional[str] = None, entity: Optional[str] = None) -> bool:
+        """
+        Starts the WandbRunMonitor actor safely, catching ActorDiedError.
+
+        Returns:
+            bool: True if the monitor was started successfully, False otherwise.
+        """
+        try:
+            self._monitor = self._start_monitor(project=project, entity=entity, stacklevel=3)
+            if self._monitor is None:
+                return False
+        except ray.exceptions.ActorDiedError:
+            self._monitor = None
+            # TODO: Maybe kill actor to allow reuse.
+            return False
+        except Exception:
+            # could be missing project
+            logger.exception("Failed to start WandbRunMonitor actor for unknown reason.")
+            self._monitor = None
+            return False
+        return True
+
+    def _start_monitor(
+        self,
+        project: Optional[str] = None,
+        entity: Optional[str] = None,
+        stacklevel=2,
+    ) -> ActorProxy[_WandbRunMonitor] | None:
+        """
+        Gets or starts the WandbRunMonitor actor to monitor parent runs of forked trials.
+        Raises:
+            ray.exceptions.ActorDiedError: If the WandbRunMonitor actor is already dead / could not start-
+        """
+        if os.environ.get("RAY_UTILITIES_NO_MONITOR", "0") == "1":
+            return None
         if self._monitor is not None:
             return self._monitor
         if self.project is None:
             raise ValueError("Cannot start WandbRunMonitor without wandb project name set.")
-        from ray_utilities import runtime_env  # noqa: PLC0415
+        ImportantLogger.important_info(logger, "Starting WandbRunMonitor actor...", stacklevel=2)
+
+        from ray_utilities import get_runtime_env  # noqa: PLC0415
         from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor  # noqa: PLC0415
 
-        actor_options = {"runtime_env": runtime_env}
+        actor_options = {"runtime_env": get_runtime_env()}
 
-        self._monitor = WandbRunMonitor.get_remote_monitor(
-            project=self.project, num_cpus=1, actor_options=actor_options
-        )
-        if not ray.get(self._monitor.is_initialized.remote()):  # pyright: ignore[reportFunctionMemberAccess]
-            _init_future = self._monitor.initialize.remote()  # pyright: ignore[reportFunctionMemberAccess]
-            try:
-                ray.get(_init_future, timeout=10)
-                logger.info("Started WandbRunMonitor actor to track parent runs of forked trials.")
-            except ray.exceptions.GetTimeoutError:
-                # if there is a serious exception during init it will be raised now
-                logger.debug("Timed out while starting WandbRunMonitor actor.")
+        try:
+            self._monitor = WandbRunMonitor.get_remote_monitor(
+                project=self.project, num_cpus=1, actor_options=actor_options, entity=entity
+            )
+            if not ray.get(self._monitor.is_initialized.remote()):  # pyright: ignore[reportFunctionMemberAccess]
+                _init_future = self._monitor.initialize.remote()  # pyright: ignore[reportFunctionMemberAccess]
+                try:
+                    ray.get(_init_future, timeout=10)
+                except ray.exceptions.GetTimeoutError:
+                    # if there is a serious exception during init it will be raised now
+                    logger.debug("Timed out while starting WandbRunMonitor actor.")
+                ImportantLogger.important_info(
+                    logger,
+                    "Started WandbRunMonitor actor to track parent runs of forked trials.",
+                    stacklevel=stacklevel,
+                )
+        except ray.exceptions.ActorDiedError as e:
+            logger.error("Failed to start WandbRunMonitor actor:\n%s", e.error_msg)
+            raise
         return self._monitor
+
+    def verify_wandb_uploads(
+        self,
+        experiment_id: Optional[str] = None,
+        output_dir: Optional[str] = None,
+        *,
+        single_experiment: Optional[str] = None,
+    ):
+        if output_dir is None:
+            # might be S3 bucket
+            output_dir = os.environ.get("RAY_UTILITIES_STORAGE_PATH", "./outputs/experiments/")
+        if output_dir.startswith("s3://"):
+            logger.error("S3 lookup not yet supported for wandb verification.")
+            return {}
+        logger.info("Verifying wandb uploads for experiment_key=%s", experiment_id or get_run_id())
+        return verify_wandb_runs(
+            project=self.project if self.project else "",
+            output_dir=output_dir,
+            experiment_id=experiment_id or get_run_id(),
+            single_experiment=single_experiment,
+        )
+
+    def __ray_shutdown__(self):
+        self.__del__()
 
     def __del__(self):
         # do not clean on_experiment_end as we want to access it with Setup classes as well afterwards
@@ -728,3 +1034,262 @@ class WandbUploaderMixin(UploadHelperMixin):
                 self._monitor = None
         except KeyboardInterrupt:
             WandbUploaderMixin.__del__(self)  # need to make sure we clean monitor, do not go back to self
+
+
+class _FailureTuple(NamedTuple):
+    metric: str
+    offline_value: Any
+    online_value: Any
+    rel_difference: float = float("nan")
+
+
+def verify_wandb_runs(
+    *,
+    project: str,
+    entity: Optional[str] = None,
+    experiment_id: str,
+    output_dir: Optional[str] = None,
+    single_experiment: Optional[str] = None,
+):
+    if output_dir is None:
+        output_dir = os.environ.get("RAY_UTILITIES_STORAGE_PATH", "./outputs/experiments/")
+    api = wandb_api()
+    if entity is None:
+        entity = api.default_entity
+    # get all runs of the project with the given experiment key
+    runs: Runs | Iterable[Run]
+    if single_experiment:
+        run = api.run(f"{entity}/{project}/{single_experiment}")
+        runs = [run]
+    else:
+        runs = api.runs(f"{entity}/{project}", filters={"config.experiment_id": experiment_id}, per_page=32)
+    verify_results: dict[Run, list[_FailureTuple] | Exception] = {}
+    logged_tb_once = False
+    for run in runs:
+        try:
+            failures = verify_wandb_run_history(run=run, output_dir=output_dir)
+            verify_results[run] = failures
+        except Exception as e:  # noqa: PERF203
+            if not logged_tb_once:
+                logger.exception("Failed to verify wandb run %s", run.id)
+                logged_tb_once = True
+            else:
+                logger.error("Failed to verify wandb run %s: %s", run.id, str(e))
+            verify_results[run] = e
+    if not verify_results:
+        logger.warning(
+            "No wandb runs found for project %s, entity %s with experiment_key %s",
+            project,
+            entity,
+            experiment_id,
+        )
+    for run, failure in verify_results.items():
+        if isinstance(failure, Exception):
+            logger.error("Verification for wandb run %s failed with exception: %s", run.id, str(failure))
+        elif failure:
+            logger.error("Wandb run %s history verification failed: %s", run.id, failure)
+        else:
+            ImportantLogger.important_info(logger, "Wandb run %s history verified successfully.", run.id)
+
+    return verify_results
+
+
+@overload
+def verify_wandb_run_history(
+    *,
+    output_dir: Optional[str] = None,
+    run: Run,
+): ...
+
+
+@overload
+def verify_wandb_run_history(
+    project: str,
+    run_id: str,
+    entity: Optional[str] = None,
+    *,
+    experiment_id: Optional[str] = None,
+    output_dir: Optional[str] = None,
+    run: Optional[Run] = None,
+): ...
+
+
+def verify_wandb_run_history(
+    project: Optional[str] = None,
+    run_id: Optional[str] = None,
+    entity: Optional[str] = None,
+    *,
+    experiment_id: Optional[str] = None,
+    output_dir: Optional[str] = None,
+    run: Optional[Run] = None,
+) -> list[_FailureTuple]:
+    """Verify the online wandb history against the offline JSON file.
+
+    The "result*run_id.json" file is read from the ``output_dir`` which should be the parent folder for all experiments.
+    It is assumed that the `run_id`
+    stored in output_dir. The last logged current_step and training_iteration
+
+    Args:
+        project: Wandb project name.
+        run_id: The Wandb run ID.
+        entity: Wandb entity (user or team). If None, uses default entity.
+        output_dir: Directory where offline wandb experiment data is stored.
+            Defaults to RAY_UTILITIES_STORAGE_PATH or "./outputs/experiments/".
+        experiment_id: The experiment ID will be extracted from the run_id if possible.
+            If provided will be checked for equality. See :const:``RUN_ID``.
+        run: Optional wandb Run object. If not provided, will fetch from Wandb API.
+    """
+    if output_dir is None:
+        output_dir = os.environ.get("RAY_UTILITIES_STORAGE_PATH", "./outputs/experiments/")
+        # TODO: can point to S3 bucket
+    if run:
+        if run_id is not None and run.id != run_id:
+            raise ValueError(f"Provided run ID {run_id} does not match run.id {run.id}")
+        run_id = cast("str", run.id)
+        if isinstance(run.config, str):
+            config = json.loads(run.config)
+            assert isinstance(config, dict)
+            run._attrs["config"] = config
+        assert isinstance(run.config, dict)
+        extracted_experiment_id = cast("str | dict[Literal['value'], Any]", run.config["run_id"])
+        if isinstance(extracted_experiment_id, dict):
+            extracted_experiment_id = extracted_experiment_id["value"]
+        assert isinstance(extracted_experiment_id, str)
+        if experiment_id and experiment_id != extracted_experiment_id:
+            raise ValueError(
+                f"Provided experiment_id {experiment_id} "
+                "does not match extracted experiment ID {extracted_experiment_id} from run config"
+            )
+        experiment_id = extracted_experiment_id
+    else:
+        if run_id is None or project is None:
+            raise ValueError("Either run and/or run_id and project must be provided to verify wandb history.")
+        if ExperimentKey.RUN_ID_SEPARATOR not in run_id:
+            if not experiment_id:
+                raise ValueError(
+                    f"Cannot extract experiment ID from run_id {run_id}. Please provide experiment_id argument."
+                )
+        else:
+            extracted_experiment_id = run_id.split("X", 1)[0]
+            if experiment_id and experiment_id != extracted_experiment_id:
+                raise ValueError(
+                    f"Provided experiment_id {experiment_id} does not match extracted experiment ID "
+                    f"{extracted_experiment_id} from run_id {run_id}"
+                )
+            experiment_id = extracted_experiment_id
+
+    experiment_paths = list(Path(output_dir).glob("*" + experiment_id))
+    if not experiment_paths:
+        # When using a local path we have already the correct dir
+        logger.info(
+            "Did not find experiment paths for id %s in %s. Assuming correct path was given", experiment_id, output_dir
+        )
+        experiment_paths = [output_dir]
+    if len(experiment_paths) > 1:
+        logger.warning(
+            "Multiple experiment paths found for experiment ID %s: %s. Using the first one.",
+            experiment_id,
+            experiment_paths,
+        )
+    experiment_path = Path(experiment_paths[0])
+    if not experiment_path.exists():
+        raise FileNotFoundError(str(experiment_path))
+    if ExperimentKey.FORK_SEPARATOR in run_id or (run and FORK_FROM in run.config):
+        progress_files = list(experiment_path.glob(f"**/result*{run_id}.json"))
+    else:
+        # if it is not a fork then the normal result.json
+        progress_files = list(experiment_path.glob(f"*id={run_id}*/result.json"))
+    if len(progress_files) != 1:
+        logger.error(
+            "Expected exactly one progress file for run ID %s in experiment path %s, found %d: %s",
+            run_id,
+            experiment_path,
+            len(progress_files),
+            progress_files,
+        )
+        if not progress_files:
+            logger.error("Cannot verify wandb history without offline progress file.")
+            return [_FailureTuple("Error: No offline history found", float("nan"), float("nan"))]
+
+    with open(progress_files[0], "r") as f:
+        records = [json.loads(line) for line in f]
+    flat_records = [dict(tree.flatten_with_path(rec)) for rec in records]
+
+    # Find all unique column keys
+    all_keys = set()
+    for rec in flat_records:
+        all_keys.update(rec.keys())
+
+    # Ensure all records have all keys (fill missing with None)
+    maxlen = max(len(k) for k in all_keys) if len(all_keys) > 0 else 0
+
+    for rec in flat_records:
+        for key in all_keys:
+            padded_key = tuple(list(key) + [""] * (maxlen - len(key)))
+            rec.setdefault(key, None)
+            if key != padded_key:
+                rec[padded_key] = rec.pop(key)
+
+    # Convert to DataFrame
+    offline_data = pd.DataFrame(flat_records)
+
+    # Set MultiIndex columns
+    offline_data.columns = pd.MultiIndex.from_tuples(cast("list[tuple[str, ...]]", offline_data.columns))
+    last_step = offline_data["current_step"].iloc[-1]
+    last_iteration = offline_data["training_iteration"].iloc[-1]
+
+    if run is None:
+        api = wandb_api()
+        if entity is None:
+            entity = api.default_entity
+        run = cast("Run", api.run(f"{entity}/{project}/{run_id}"))
+    online_history = cast("pd.DataFrame", run.history(pandas=True))
+    failures: list[_FailureTuple] = []
+    if len(online_history) == 0:
+        # data incomplete
+        logger.error(
+            "No online wandb history data found for run %s. Last server step %d, offline step %d",
+            run_id,
+            run.lastHistoryStep,
+            last_iteration,
+        )
+        failures.append(_FailureTuple("No online history found", last_iteration, run.lastHistoryStep))
+        # TODO: Could clean sync marker, could check local dir in /tmp
+        return failures
+    last_log_step = online_history.iloc[-1]._step
+    online_iterations = online_history.iloc[-1].training_iteration
+    online_last_step = online_history.iloc[-1].current_step
+    for metric_name, offline_value, online_value in zip(
+        ("current_step", "training_iteration"), (last_step, last_iteration), (online_last_step, online_iterations)
+    ):
+        if offline_value != online_value:
+            if isinstance(offline_value, np.number):
+                offline_value = offline_value.item()  # noqa: PLW2901
+            if isinstance(online_value, np.number):
+                online_value = online_value.item()  # noqa: PLW2901
+            # relative_diff if possibly
+            try:
+                rel_diff = round(
+                    abs(offline_value - online_value) / max(abs(offline_value), abs(online_value), 1e-8) * 100, 2
+                )
+            except TypeError:
+                rel_diff = float("nan")
+            failures.append(_FailureTuple(metric_name, offline_value, online_value, rel_diff))
+            logger.error(
+                "❌ Mismatch in %18s: offline last %8s vs online last %8s (%.1f %)."
+                "On WandB only logged until %6d step total %3d entries. (run id: %s)",
+                metric_name,
+                offline_value,
+                online_value,
+                rel_diff,
+                last_log_step,
+                online_history.shape[0],
+                run_id,
+            )
+        else:
+            logger.debug(
+                "🟩 Metric '%s' matches: offline == online: %s",
+                metric_name,
+                online_value,
+            )
+    return failures

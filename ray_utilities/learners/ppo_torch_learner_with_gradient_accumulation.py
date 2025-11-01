@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Collection
 
 from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import PPOTorchLearner
 from ray.rllib.utils.annotations import override
+from ray.rllib.utils.metrics import NUM_ENV_STEPS_SAMPLED_LIFETIME
 from ray.rllib.utils.typing import ParamDict
 
 if TYPE_CHECKING:
@@ -28,6 +29,7 @@ class PPOTorchLearnerWithGradientAccumulation(PPOTorchLearner):
         self._gradient_updates = 0
         self._last_gradient_update_step: int | None = None
         self._params: dict[ParamRef, torch.Tensor]  # pyright: ignore[reportIncompatibleVariableOverride]
+        self._accumulated_time_steps: int = 0
         # TODO: Test checkpoint loading
 
     # TODO:
@@ -78,12 +80,21 @@ class PPOTorchLearnerWithGradientAccumulation(PPOTorchLearner):
             # Calls optimizer.step(), scaler.step() and update if applicable
             super().apply_gradients(gradients_dict)
 
+    @override(PPOTorchLearner)
     def after_gradient_based_update(self, *, timesteps: dict[str, Any]) -> None:
-        # TODO: Discuss: Scheduler is updated based on non-exact sampled timesteps.
-        # if self._step_count % self.config.learner_config_dict["accumulate_gradients_every"] == 0:
-        # Updates KL coefficients, and LR Schedulers; if doing this every step batch_size
-        # accumulation is not exact to multipling batch size - but should be minor influence if any.
-        super().after_gradient_based_update(timesteps=timesteps)
+        if self._step_count % self.config.learner_config_dict["accumulate_gradients_every"] == 0:
+            super().after_gradient_based_update(
+                timesteps={**timesteps, NUM_ENV_STEPS_SAMPLED_LIFETIME: self._accumulated_time_steps}
+            )
+            self._accumulated_time_steps = 0
+        # otherwise could call it with 0 timesteps
+
+    def update(self, *args, timesteps: dict[str, Any], **kwargs) -> dict[str, Any]:
+        timesteps[NUM_ENV_STEPS_SAMPLED_LIFETIME] = sum(map(len, kwargs["training_data"].episodes))
+        self._accumulated_time_steps += timesteps[NUM_ENV_STEPS_SAMPLED_LIFETIME]
+        # _update -> compute gradients is called num_epochs * batch_size / minibatch_size
+        # e.g. 2048 * 30 / 128 = 480 steps per update as default
+        return super().update(*args, timesteps=timesteps, **kwargs)
 
     def get_state(
         self,

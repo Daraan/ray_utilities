@@ -13,7 +13,8 @@ import ray
 from packaging.version import Version
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
-from ray.rllib.core import COMPONENT_LEARNER, COMPONENT_METRICS_LOGGER, COMPONENT_RL_MODULE
+from ray.rllib.core import COMPONENT_LEARNER, COMPONENT_METRICS_LOGGER, COMPONENT_RL_MODULE, DEFAULT_MODULE_ID
+from ray.rllib.env import INPUT_ENV_SPACES
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
     EVALUATION_RESULTS,
@@ -26,6 +27,7 @@ from ray_utilities.config import seed_environments_for_config
 from ray_utilities.constants import ENVIRONMENT_RESULTS, RAY_VERSION, SEED, SEEDS
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, calculate_steps
 from ray_utilities.misc import AutoInt
+from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.warn import (
     warn_about_larger_minibatch_size,
     warn_if_batch_size_not_divisible,
@@ -67,20 +69,28 @@ _NOT_FOUND = Sentinel("_NOT_FOUND")
 
 
 @overload
-def episode_iterator(args: dict[str, Any], hparams: Any, *, use_pbar: Literal[False]) -> range: ...
+def episode_iterator(
+    args: dict[str, Any], hparams: Any, *, use_pbar: Literal[False], flush_interval: Optional[float] = 3.5
+) -> range: ...
 
 
 @overload
-def episode_iterator(args: dict[str, Any], hparams: dict[Any, Any], *, use_pbar: Literal[True]) -> tqdm_ray.tqdm: ...
+def episode_iterator(
+    args: dict[str, Any], hparams: dict[Any, Any], *, use_pbar: Literal[True], flush_interval: Optional[float] = 3.5
+) -> tqdm_ray.tqdm: ...
 
 
-def episode_iterator(args: dict[str, Any], hparams: dict[str, Any], *, use_pbar: bool = True) -> tqdm_ray.tqdm | range:
+def episode_iterator(
+    args: dict[str, Any], hparams: dict[str, Any], *, use_pbar: bool = True, flush_interval: Optional[float] = 3.5
+) -> tqdm_ray.tqdm | range:
     """Creates an iterator for `args["iterations"]`
 
     Will create a `tqdm` if `use_pbar` is True, otherwise returns a range object.
     """
     if use_pbar:
-        return tqdm_ray.tqdm(range(args["iterations"]), position=hparams.get("process_number", None))
+        return tqdm_ray.tqdm(
+            range(args["iterations"]), position=hparams.get("process_number", None), flush_interval_s=flush_interval
+        )
     return range(args["iterations"])
 
 
@@ -119,6 +129,12 @@ def _patch_with_param_space(
         logger.debug("No keys to patch in args with hparams: %s", hparams)
         return args, config
     msg_dict = {k: f"{args[k]} -> {hparams[k]}" for k in same_keys}
+
+    # Check if minibatch_scale is set (from args or hparams)
+    # NOTE: Cli args priority is higher here. # XXX Why? # CRITICAL This could be wrong when we tune minibatch_scale. Test
+    minibatch_scale = hparams.get("cli_args", {}).get("minibatch_scale", args.get("minibatch_scale", None))
+
+    # Adjust minibatch_size if train_batch_size_per_learner changes
     if (
         "train_batch_size_per_learner" in same_keys
         and config.minibatch_size is not None
@@ -133,6 +149,17 @@ def _patch_with_param_space(
         if config_inplace:
             object.__setattr__(config, "minibatch_size", hparams["train_batch_size_per_learner"])
         args["__overwritten_keys__"]["minibatch_size"] = hparams["train_batch_size_per_learner"]
+
+    # Apply minibatch_scale logic if set
+    elif minibatch_scale is not None and "train_batch_size_per_learner" in same_keys:
+        new_batch_size = int(hparams["train_batch_size_per_learner"] * minibatch_scale)
+        if config.minibatch_size != new_batch_size:
+            msg_dict["minibatch_size"] = (
+                f"{config.minibatch_size} -> {new_batch_size} (minibatch_scale={minibatch_scale})"
+            )
+            if config_inplace:
+                object.__setattr__(config, "minibatch_size", new_batch_size)
+            args["__overwritten_keys__"]["minibatch_size"] = new_batch_size
 
     logger.info("Patching args with hparams: %s", msg_dict)
     for key in same_keys:
@@ -310,9 +337,24 @@ def setup_trainable(
         setup_class=setup_class,
         model_config=model_config,
     )
+
+    # Apply minibatch_scale setting if set in args
+    minibatch_scale: float | None = args.get("minibatch_scale", None)
+    if minibatch_scale is not None:
+        scaled_minibatch = int(config.train_batch_size_per_learner * minibatch_scale)
+        if config.minibatch_size != scaled_minibatch:
+            config = config.copy(copy_frozen=False)
+            config.minibatch_size = scaled_minibatch
+            config.freeze()
+
     if config_overrides:
         if isinstance(config_overrides, AlgorithmConfig):
             config_overrides = config_overrides.to_dict()
+
+        # Check if minibatch_scale is set and adjust minibatch_size accordingly
+        if minibatch_scale is not None and "train_batch_size_per_learner" in config_overrides:
+            config_overrides["minibatch_size"] = int(config_overrides["train_batch_size_per_learner"] * minibatch_scale)
+
         if "train_batch_size_per_learner" in config_overrides or "minibatch_size" in config_overrides:
             batch_size = config_overrides.get("train_batch_size_per_learner", config.train_batch_size_per_learner)
             minibatch_size = config_overrides.get("minibatch_size", config.minibatch_size)
@@ -431,7 +473,8 @@ def _set_env_runner_state(
     if hasattr(env_runner, "num_envs"):
         if 0 != env_runner.num_envs != env_runner.config.num_envs_per_env_runner:  # pyright: ignore[reportAttributeAccessIssue]
             # local env runner can have zero envs when we are remote
-            logger.error(
+            ImportantLogger.important_warning(
+                logger,
                 "EnvRunner has %d envs, but config.num_envs_per_env_runner is %d. Recreating envs.",
                 env_runner.num_envs,  # pyright: ignore[reportAttributeAccessIssue]
                 env_runner.config.num_envs_per_env_runner,
@@ -667,3 +710,63 @@ def get_evaluation_results(
     if ENV_RUNNER_RESULTS in eval_results:
         return eval_results[ENV_RUNNER_RESULTS]
     return eval_results
+
+
+def rebuild_learner_group(algorithm: Algorithm) -> None:
+    """
+    Rebuilds the learner group of the given algorithm.
+
+    This can be useful when the learner group needs to be rebuilt, e.g. after changing
+    the config or the RL module.
+
+    Assumes that the current env_runner_group returns the correct spaces.
+
+    Args:
+        algorithm: The algorithm to rebuild the learner group for.
+    """
+    assert algorithm.config
+    spaces = {
+        INPUT_ENV_SPACES: (
+            algorithm.config.observation_space,
+            algorithm.config.action_space,
+        )
+    }
+    # env_runner_groups might be in an old state if spaces change due to config changes
+    if algorithm.env_runner_group:
+        spaces.update(algorithm.env_runner_group.get_spaces())
+    elif algorithm.eval_env_runner_group:
+        spaces.update(algorithm.eval_env_runner_group.get_spaces())
+    else:
+        spaces.update(
+            {
+                DEFAULT_MODULE_ID: (
+                    algorithm.config.observation_space,
+                    algorithm.config.action_space,
+                ),
+            }
+        )
+
+    assert algorithm.config is not None
+    module_spec = algorithm.config.get_multi_rl_module_spec(
+        spaces=spaces,  # pyright: ignore[reportArgumentType]
+        inference_only=False,
+    )
+    algorithm.learner_group = algorithm.config.build_learner_group(rl_module_spec=module_spec)
+
+    # Check if there are modules to load from the `module_spec`.
+    rl_module_ckpt_dirs = {}
+    multi_rl_module_ckpt_dir = module_spec.load_state_path
+    modules_to_load = module_spec.modules_to_load
+    module_specs = module_spec.rl_module_specs
+    if not isinstance(module_specs, dict):
+        # Very unlikely. Would rise AttributeError on ray if this actually were a dict.
+        module_specs = {DEFAULT_MODULE_ID: module_specs}
+    for module_id, sub_module_spec in module_specs.items():
+        if sub_module_spec.load_state_path:
+            rl_module_ckpt_dirs[module_id] = sub_module_spec.load_state_path
+    if multi_rl_module_ckpt_dir or rl_module_ckpt_dirs:
+        algorithm.learner_group.load_module_state(
+            multi_rl_module_ckpt_dir=multi_rl_module_ckpt_dir,
+            modules_to_load=modules_to_load,
+            rl_module_ckpt_dirs=rl_module_ckpt_dirs,
+        )

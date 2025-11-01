@@ -222,7 +222,7 @@ class FutureFile(_WandbFuture):
     ) -> None:
         self.global_str = glob_str
         self.base_path = base_path
-        self.policy = policy
+        self.policy: PolicyName = policy
 
     def json_encode(self) -> dict[str, Any]:
         return {

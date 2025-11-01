@@ -118,10 +118,25 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
         parent_local_file_path = Path(parent_trial.local_path, parent_file_name)  # pyright: ignore[reportArgumentType]
 
         # Same node - use local copy
-        if trial.node_ip == parent_trial.node_ip or (
-            parent_local_file_path.exists() and local_file_path.parent.exists()
-        ):
-            shutil.copy2(parent_local_file_path, local_file_path)
+        if parent_local_file_path.exists() and local_file_path.parent.exists():
+            try:
+                shutil.copy2(parent_local_file_path, local_file_path)
+            except OSError as err:
+                logger.error("Error copying parent file locally: %s", err)
+                if err.errno and err.errno == 28:  # No space left on device
+                    stat_result = shutil.disk_usage(local_file_path.parent)
+                    # Get disk space information
+                    logger.error(
+                        "No space left on device when copying parent file for trial %s from trial %s. "
+                        "Disk space on %s - Total: %s, Used: %s, Free: %s",
+                        trial.trial_id,
+                        parent_trial.trial_id,
+                        local_file_path.parent,
+                        stat_result.total,
+                        stat_result.used,
+                        stat_result.free,
+                    )
+                return False
             return True
 
         # Different nodes - sync via remote storage
@@ -136,25 +151,41 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
                     parent_remote_file_path.rename(
                         parent_remote_file_path.parent / (parent_remote_file_path.name + ".old")
                     )
-
                 try:
-                    pyarrow.fs.copy_files(
-                        parent_local_file_path.as_posix(),
-                        parent_remote_file_path.as_posix(),
-                        source_filesystem=None,
-                        destination_filesystem=trial.storage.storage_filesystem,
-                        chunk_size=512 * 1024,
-                        use_threads=False,
-                    )
-                except Exception as e:  # noqa: BLE001
-                    logger.info("Exception while coppying file: %s. Falling back to different method", e)
-                    # sync_up does not support single files
-                    parent_trial.storage.syncer.sync_up(
-                        parent_local_file_path.as_posix(),
-                        parent_remote_file_path.as_posix(),
-                        exclude=["*/checkpoint_*", "*.pkl", "events.out.tfevents.*"],
-                    )
-                    parent_trial.storage.syncer.wait()
+                    try:
+                        pyarrow.fs.copy_files(
+                            parent_local_file_path.as_posix(),
+                            parent_remote_file_path.as_posix(),
+                            source_filesystem=None,
+                            destination_filesystem=trial.storage.storage_filesystem,
+                            chunk_size=512 * 1024,
+                            use_threads=False,
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.info("Exception while coppying file: %s. Falling back to different method", e)
+                        # sync_up does not support single files, this might create a directory
+                        parent_trial.storage.syncer.sync_up(
+                            parent_local_file_path.as_posix(),
+                            parent_remote_file_path.as_posix(),
+                            exclude=["*/checkpoint_*", "*.pkl", "events.out.tfevents.*"],
+                        )
+                        parent_trial.storage.syncer.wait()
+                except FileNotFoundError as fnf_error:
+                    # When restoring local file does not exist
+                    if parent_remote_file_path.exists() and parent_remote_file_path.is_dir():
+                        # Failed sync
+                        shutil.rmtree(parent_remote_file_path.as_posix())
+                    if not parent_remote_file_path.exists():
+                        logger.warning(
+                            "file %s does not exist for trial %s. This can happen when restoring from a checkpoint.",
+                            fnf_error.filename,
+                            trial.trial_id,
+                        )
+                        # restore old
+                        Path(parent_remote_file_path.parent, parent_remote_file_path.name + ".old").resolve().rename(
+                            parent_remote_file_path.name
+                        )
+
                 logger.debug(
                     "Syncing down parent %s file to %s", self._get_file_extension().upper(), local_file_path.as_posix()
                 )
@@ -244,7 +275,14 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
         file_name = self._make_forked_trial_file_name(trial, fork_data)
         trial.init_local_path()
         local_file_path = Path(trial.local_path, file_name)  # pyright: ignore[reportArgumentType]
-        assert not local_file_path.exists(), "File should not exist yet"
+        if local_file_path.exists():
+            # Might exist if we are restoring from a previous experiment
+            logger.warning(
+                "Trial %s forked but log file %s already exists. "
+                "This is unexpected, expect when restoring an experiment",
+                trial.trial_id,
+                local_file_path,
+            )
 
         # Try to sync from parent trial
         file_copied = False
@@ -271,3 +309,38 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
         if FORK_FROM in trial.config:
             self._setup_forked_trial(trial, trial.config[FORK_FROM])
         return super().log_trial_start(trial)
+
+    def _get_stateXX(self) -> dict:
+        """Get the state of the callback for checkpointing.
+
+        Returns:
+            Dictionary containing file paths instead of file handles.
+            File handles cannot be pickled and will need to be reopened.
+        """
+        state = super().get_state() if hasattr(super(), "get_state") else {}
+        # Store file paths instead of file handles
+        state["trial_file_paths"] = {
+            trial.trial_id: (file_handle.name if hasattr(file_handle, "name") else str(file_handle))
+            for trial, file_handle in self._trial_files.items()
+        }
+        return state
+
+    def _set_stateXX(self, state: dict) -> None:
+        """Set the state of the callback from checkpoint data.
+
+        Args:
+            state: State dictionary containing file paths.
+
+        Note:
+            File handles will not be restored immediately. They will be recreated
+            when trials restart and call log_trial_start.
+        """
+        if hasattr(super(), "set_state"):
+            super().set_state(state)
+
+        # We don't restore file handles here - they will be recreated in log_trial_start
+        # when trials are restarted. Just log the information.
+        trial_file_paths = state.get("trial_file_paths", {})
+        if trial_file_paths:
+            logger.info("FileLoggerForkMixin state restored with %d trial file paths", len(trial_file_paths))
+            logger.debug("Trial file paths to be reopened: %s", trial_file_paths)

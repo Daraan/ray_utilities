@@ -377,6 +377,8 @@ class CometArchiveTracker(UploadHelperMixin):
                 comet_ml.offline.main_upload(archives_str, force_upload=False)  # pyright: ignore[reportPossiblyUnboundVariable]
         except comet_ml.exceptions.OfflineExperimentUploadFailed as e:
             _LOGGER.error("Comet offline upload failed with exception: %s", e)
+        except Exception:
+            _LOGGER.exception("Unexpected error during Comet offline upload:")
         log_contents = log_stream.getvalue()
 
         failed_uploads = re.findall(r"Upload failed for '([^']+\.zip)'", log_contents)
@@ -414,7 +416,7 @@ class CometArchiveTracker(UploadHelperMixin):
 
     def make_uploaded_dir(self) -> Path:
         new_dir = self.path / "uploaded"
-        new_dir.mkdir(exist_ok=True)
+        new_dir.mkdir(exist_ok=True, parents=True)
         return new_dir
 
     def move_archives(self, succeeded: list[tuple[str, str]] | None = None, *, _suppress_upload_warning: bool = False):
@@ -443,7 +445,7 @@ class CometArchiveTracker(UploadHelperMixin):
         # Note, comet writes its messages to stderr, need to check for errors in the contents.
         if isinstance(process, subprocess.Popen):
             if timeout is not None:
-                cls._failure_aware_wait(process, timeout=timeout, report_upload=False)
+                cls._failure_aware_wait(process, timeout=timeout, report_upload=False, upload_service_name="Comet")
                 if process.poll() is None:
                     _LOGGER.error("Timeout expired while waiting for comet upload process to finish")
                     return False

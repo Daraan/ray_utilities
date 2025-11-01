@@ -10,6 +10,7 @@ with standardized logging, restoration, and state management capabilities.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.metadata
 import logging
 import os
@@ -18,10 +19,12 @@ import pickle
 import sys
 from abc import ABCMeta
 from collections import defaultdict
-from copy import copy
+from copy import copy, deepcopy
 from inspect import isclass
 from pathlib import Path
 from pprint import pformat
+import time
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, ClassVar, Collection, Generic, Optional, TypedDict, TypeVar, cast, overload
 
 import git
@@ -30,6 +33,7 @@ import ray
 import tree
 from packaging.version import Version
 from ray import get_runtime_context, tune
+from ray.air.constants import TRAINING_ITERATION
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.callbacks.utils import make_callback
 from ray.rllib.core import (
@@ -46,16 +50,20 @@ from ray.tune.result import SHOULD_CHECKPOINT
 from typing_extensions import Self, TypeAliasType
 
 from ray_utilities.callbacks.progress_bar import restore_pbar, save_pbar_state, update_pbar
+from ray_utilities.callbacks.trainable.trainable_callback import TrainableCallbackExtension
 from ray_utilities.config.parser.default_argument_parser import LOG_STATS, LogStatsChoices
 from ray_utilities.constants import FORK_FROM, PERTURBED_HPARAMS, RAY_VERSION, TUNE_RESULT_IS_A_COPY
-from ray_utilities.misc import AutoInt, get_current_step, is_pbar
-from ray_utilities.nice_logger import set_project_log_level
+from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
+from ray_utilities.misc import AutoInt, find_threshold_divisor, get_current_step, get_filesystem_uri_prefix, is_pbar
+from ray_utilities.nice_logger import ImportantLogger, set_project_log_level
 from ray_utilities.training.functional import training_step
 from ray_utilities.training.helpers import (
     create_running_reward_updater,
     episode_iterator,
+    get_args_and_config,
     get_total_steps,
     patch_model_config,
+    rebuild_learner_group,
     setup_trainable,
     sync_env_runner_states_after_reload,
 )
@@ -72,6 +80,8 @@ if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
     from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
     from ray.rllib.env.env_runner import EnvRunner
+    from ray.rllib.env.multi_agent_env_runner import MultiAgentEnvRunner
+    from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
     from ray.rllib.utils.metrics.stats import Stats
     from ray.rllib.utils.typing import StateDict
     from ray.runtime_context import RuntimeContext
@@ -328,7 +338,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # Get git metadata now, as when on remote we are in a temp dir
         try:
             repo = git.Repo(search_parent_directories=True)
-        except (git.InvalidGitRepositoryError, Exception) as e:
+        except (git.InvalidGitRepositoryError, Exception) as e:  # noqa: BLE001
             _logger.warning("Could not get git commit SHA: %s", e)
             cls._git_repo_sha = _UNKNOWN_GIT_SHA
         else:
@@ -390,7 +400,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         """
         # Change log level:
         # When remote set log level or project here
-        if ray.is_initialized():
+        log_level = self._log_level
+        if config:
+            config = deepcopy(config)
+            log_level = config.get("cli_args", {}).get("log_level")
+        # XXX For debugging do not raise level currently
+        if log_level or self._log_level:
+            set_project_log_level(logging.getLogger(__name__.split(".")[0]), log_level or self._log_level)  # pyright: ignore[reportArgumentType]
+        if False and ray.is_initialized():
             run_context: RuntimeContext = get_runtime_context()
             if run_context.get_actor_name() is not None:  # we are remote
                 log_level = (
@@ -399,7 +416,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     else self._log_level
                 )
                 if log_level is not None:
-                    set_project_log_level(logging.getLogger(__name__.split(".")[0]), log_level)
+                    ...
 
         self._algorithm = None
         self._algorithm_overrides = algorithm_overrides
@@ -410,15 +427,22 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 "might result in unexpected values after a restore. Test carefully."
             )
             # NOTE: Use get_ctor_args_and_kwargs to include the overwrites on a reload
+        self._perturbed_config: Optional[dict[str, Any]]
+        """The current env steps sampled by the trainable, updated by step()."""
         if config and PERTURBED_HPARAMS in config:
             _logger.info("Received perturbed config: %s", config[PERTURBED_HPARAMS])
             self._perturbed_config: Optional[dict[str, Any]] = config[PERTURBED_HPARAMS]
         else:
             self._perturbed_config = None
-        """When initialized with a perturbed config, this holds the original config."""
 
         self._current_step: int = 0
-        """The current env steps sampled by the trainable, updated by step()."""
+        self._is_in_reset_state: bool = False
+        """
+        Set on reset_config and unset on set_state after reset.
+        Then either it will go to
+            - train
+            - restore -> load_checkpoint -> set_state -> train
+        """
 
         super().__init__(config or {}, **kwargs)  # calls setup
         # TODO: do not create loggers, if any are created
@@ -437,6 +461,15 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         self._algo_config: _ConfigType
         """Config used during setup, available even when algorithm is None during checkpoint loading."""
 
+        self._args_during_setup: dict[str, Any]
+        """Only relevant when loading from checkpoint or reset to recalculate steps and iterations."""
+
+        self._during_buffered_training: bool = False
+        """Whether we are currently in a self-controlled buffered training step."""
+
+        self._buffer_steps_left: int = 0
+        """Time left in buffered training in case timeout was reached while we still wanted to buffer"""
+
     @property
     def algorithm(self) -> _AlgorithmType:
         # self._algorithm should only be used inside setup and load_checkpoint
@@ -444,12 +477,31 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         assert self._algorithm
         return self._algorithm
 
+    def _get_cli_arg(self, key: str, default=None):
+        """Looks up the key in cli_args (if it exists) otherwise returns default."""
+        return self.config.get("cli_args", {}).get(key, default)
+
     @algorithm.setter
     def algorithm(self, value: _AlgorithmType) -> None:
         self._algorithm = value
 
+    def _setup_trainable(
+        self, hparams: dict[str, Any], *, create_algorithm: bool = True
+    ) -> tuple[dict[str, Any], _ConfigType, _AlgorithmType | None, Optional[RewardUpdaters]]:
+        args, algo_config, algorithm, reward_updaters = setup_trainable(
+            hparams=hparams,
+            setup=self._setup,
+            setup_class=self.setup_class if isclass(self.setup_class) else None,
+            config_overrides=self._algorithm_overrides,
+            model_config=self._model_config,
+            create_algo=create_algorithm,  # Avoid creating unnecessary intermediate algorithm
+        )
+        return args, algo_config, algorithm, reward_updaters
+
     @override(tune.Trainable)
-    def setup(self, config: dict[str, Any], *, algorithm_overrides: Optional[dict[str, Any]] = None) -> None:
+    def setup(
+        self, config: dict[str, Any], *, algorithm_overrides: Optional[dict[str, Any]] = None, reset: bool = False
+    ) -> None:
         """Initialize the trainable with Ray Tune configuration and setup experiment components.
 
         This method is called automatically by Ray Tune during trainable instantiation.
@@ -462,6 +514,9 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 and Ray Utilities specific parameters.
             algorithm_overrides: Optional algorithm configuration overrides to apply
                 during setup. These take precedence over setup class defaults.
+            reset: When :meth:`reset_config` is called, this is True. It will recreate the
+                trainable from a new config, trying to not recreate the algorithm and env runners
+                if possible for efficient reuse.
 
         Sets:
             - algorithm: The Ray RLlib algorithm instance for training
@@ -514,69 +569,92 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             )  # XXX # FIXME # correct args; might not work when used with Tuner
         else:
             self._setup = self.setup_class
+        if self._is_in_reset_state:
+            # does not contain keys removed by clean_args_to_hparams, should not access anyway.
+            # ! Will not contain special methods or properties !!
+            self._setup.args = SimpleNamespace(**self.config["cli_args"])
         # TODO: Possible unset setup._config to not confuse configs (or remove setup totally?)
         # use args = config["cli_args"] # XXX
 
         # _logger.debug("Sys argv during Trainable.setup(): %s", sys.argv)
-        _logger.info(
+        _logger.debug(
             "args %s are:\n %s",
             "(in config)" if "cli_args" in config else "(on setup)",
-            pformat(
-                config.get(
-                    "cli_args",
-                    {
-                        k: v
-                        for k, v in (
-                            self._setup.args.as_dict()
-                            if hasattr(self._setup.args, "as_dict")
-                            else vars(self._setup.args)
-                        ).items()
-                        if not callable(v)
-                    },
-                )
+            config.get(
+                "cli_args",
+                {
+                    k: v
+                    for k, v in (
+                        self._setup.args.as_dict() if hasattr(self._setup.args, "as_dict") else vars(self._setup.args)
+                    ).items()
+                    if not callable(v)
+                },
             ),
         )
         # NOTE: args is a dict, self._setup.args a Namespace | Tap
-        self._reward_updaters: RewardUpdaters
         # if FORK_FROM we assume we load the checkpoint later by an outside call.
         load_from_checkpoint = "cli_args" in config and config["cli_args"].get("from_checkpoint")
-        load_algorithm = load_from_checkpoint or FORK_FROM in config
+        load_algorithm = load_from_checkpoint or FORK_FROM in config or reset
         self._algorithm: _AlgorithmType | None
-        args, _algo_config, algorithm, self._reward_updaters = setup_trainable(
-            hparams=config,
-            setup=self._setup,
-            setup_class=self.setup_class if isclass(self.setup_class) else None,
-            config_overrides=self._algorithm_overrides,
-            model_config=self._model_config,
-            create_algo=not load_algorithm,  # Avoid creating unnecessary intermediate algorithm
-        )
+        if not reset:
+            args, _algo_config, algorithm, reward_updaters = self._setup_trainable(
+                hparams=config,
+                create_algorithm=not load_algorithm,  # Avoid creating unnecessary intermediate algorithm
+            )
+        else:
+            algorithm = None
+            reward_updaters = None
+            args, _algo_config = get_args_and_config(
+                config,
+                setup=None,
+                setup_class=self.setup_class if isclass(self.setup_class) else type(self.setup_class),
+                model_config=self._model_config,
+            )
+
+        self._reward_updaters: RewardUpdaters
+        if reward_updaters is not None:
+            self._reward_updaters = reward_updaters
+        else:
+            self._reward_updaters = {k: create_running_reward_updater() for k in RewardUpdaters.__required_keys__}  # pyright: ignore[reportAttributeAccessIssue]
         # Store the config for access when algorithm might be None during checkpoint loading
         self._algo_config = _algo_config
         self._param_overrides: dict[str, Any] = args.get("__overwritten_keys__", {})
         """Changed parameters via the hparams argument, e.g. passed by the tuner. See also: --tune"""
-        self._pbar: tqdm | range | tqdm_ray.tqdm = episode_iterator(args, config, use_pbar=self.use_pbar)
+        self._pbar: tqdm | range | tqdm_ray.tqdm = episode_iterator(
+            args, config, use_pbar=self.use_pbar, flush_interval=3.5
+        )
         self._iteration: int = 0
         self.log_stats: LogStatsChoices = args[LOG_STATS]
         # After components have been setup up load checkpoint if requested
         # When restore is called by a Tuner, setup was called a while ago
         # keep args ONLY to calculate steps and iterations
         self._args_during_setup = args
+        """Only relevant when loading from checkpoint or reset to recalculate steps and iterations."""
         if load_algorithm:
             self._algo_class: type[_AlgorithmType] | None = _algo_config.algo_class
             # store args to be latter used in restore call
             if not load_from_checkpoint:
-                # reload controlled by the outside, restore called, e.g. because of FORK_FROM
+                # reload controlled by the outside or reset, restore called, e.g. because of FORK_FROM
                 return
             _logger.info("At end of setup(), loading from checkpoint: %s", config["cli_args"]["from_checkpoint"])
             # calls restore from path; from_checkpoint could also be a dict here
             # algorithm is None when create_algo=False, will be set in load_checkpoint
             self.load_checkpoint(config["cli_args"]["from_checkpoint"])
             assert self._algorithm is not None
-        else:
-            assert algorithm is not None
-            self._algorithm = algorithm
+            assert self.algorithm.config
+            return
+        assert algorithm is not None
+        self._algorithm = algorithm
         assert self.algorithm.config
         self._calculate_steps_and_iterations(args)  # also called in load_checkpoint
+        self._call_on_setup_callbacks()
+
+    def _call_on_setup_callbacks(self) -> None:
+        assert self._algorithm is not None
+        # Call on_setup callbacks
+        for cb in force_list(self.algorithm.callbacks):
+            if isinstance(cb, TrainableCallbackExtension):
+                cb.on_trainable_setup(trainable=self)
 
     def _calculate_steps_and_iterations(self, args: dict[str, Any]):
         """After the setup / load_checkpoint recalculate the total_steps & iterations until the goal."""
@@ -643,12 +721,215 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         self.config = value
 
     @override(tune.Trainable)
+    def train(self) -> AutoExtendedLogMetricsDict | dict[str, Any]:  # pyright: ignore[reportIncompatibleMethodOverride]
+        if self._is_in_reset_state:
+            ImportantLogger.important_info(
+                _logger,
+                "Trainable.train is called and Trainable is in reset state. Trying to clear old states.",
+            )
+            if not self._rebuild_algorithm_if_necessary(self._algo_config):
+                # reset all env runners states
+                algo_ref = ray.put(self._algo_config)
+
+                def reset_env_runner(env_runner: EnvRunner | SingleAgentEnvRunner | MultiAgentEnvRunner, ref=algo_ref):
+                    try:
+                        env_runner.stop()
+                    except Exception as e:  # noqa: BLE001
+                        _logger.warning("Failed to stop env_runner: %s", e)
+                    # Otherwise
+                    # Reset metrics
+                    # Reset config
+                    # Reset envs (instead of recreating)
+                    # recreate callbacks
+                    env_runner.__init__(config=ray.get(ref), spaces={}, tune_trial_id=self.trial_id)
+
+                if self.algorithm.env_runner_group:
+                    self.algorithm.env_runner_group.foreach_env_runner(reset_env_runner)
+                if self.algorithm.eval_env_runner_group is not None:  # pyright: ignore[reportUnnecessaryComparison]
+                    self.algorithm.eval_env_runner_group.foreach_env_runner(reset_env_runner)
+                # eval runner as well? env config might have changed
+            rebuild_learner_group(self.algorithm)
+            sync_env_runner_states_after_reload(self.algorithm)
+            self._is_in_reset_state = False
+        if self._during_buffered_training or self.config.get("cli_args", {}).get("buffer_length") != "auto":
+            return super().train()
+        # train buffered
+        budget = split_timestep_budget(
+            total_steps=self._total_steps["total_steps"],
+            min_size=self.config["cli_args"]["min_step_size"],
+            max_size=self.config["cli_args"]["max_step_size"],
+            assure_even=not self.config["cli_args"]["use_exact_total_steps"],
+        )
+        try:
+            step_idx = budget["step_sizes"].index(self.algorithm_config.train_batch_size_per_learner)
+        except ValueError:
+            _logger.warning(
+                "Current train_batch_size_per_learner %s not in calculated buffer sizes %s. Not training buffered.",
+                self.algorithm_config.train_batch_size_per_learner,
+                budget["step_sizes"],
+            )
+            return super().train()
+        max_iterations = min(
+            budget["iterations_per_step_size"][step_idx],
+            (
+                iterations
+                if isinstance(iterations := self.config.get("iterations", self.config["cli_args"]["iterations"]), int)
+                else float("inf")
+            ),
+        )
+        # check checkpoint frequency
+        checkpoint_freq = self.config["cli_args"]["checkpoint_frequency"]
+        if checkpoint_freq:
+            checkpoint_unit = self.config["cli_args"]["checkpoint_frequency_unit"]
+            if checkpoint_unit == TRAINING_ITERATION:
+                max_iterations = min(max_iterations, checkpoint_freq)
+            elif checkpoint_unit == "current_step":
+                steps_per_iteration = self.algorithm_config.train_batch_size_per_learner
+                checkpoint_iterations = checkpoint_freq // steps_per_iteration
+                max_iterations = min(max_iterations, checkpoint_iterations)
+            # else just train until checkpoint
+        # Should be a divider of checkpoint frequency and has to be a divider of perturbation_interval if we are in PBT
+        # Check for PBT
+        if self.config["cli_args"].get("command_str") == "pbt":
+            # If we are in PBT mode, we need to adjust the max_iterations
+            pbt_interval = self.config["cli_args"]["perturbation_interval"]
+            pbt_unit = self.config["cli_args"]["time_attr"]
+            if pbt_unit == TRAINING_ITERATION:
+                max_iterations = min(max_iterations, pbt_interval)
+            elif pbt_unit == "current_step":
+                steps_per_iteration = self.algorithm_config.train_batch_size_per_learner
+                pbt_iterations = pbt_interval // steps_per_iteration
+                # Want the minimum BUT minimum must be a divisor
+                if max_iterations < pbt_iterations:
+                    max_divisor = find_threshold_divisor(pbt_iterations, threshold=min(64, max_iterations))  # pyright: ignore[reportArgumentType]
+                    if max_divisor <= 1:
+                        # cannot find buffer that divides pbt_iterations
+                        _logger.debug("Cannot find buffer that divides pbt_iterations %s", pbt_iterations)
+                        return super().train()
+                    max_iterations = max_divisor
+                else:
+                    max_iterations = pbt_iterations
+            else:
+                _logger.warning(
+                    _logger,
+                    "Unknown time_attr %s for PBT, cannot adjust buffered training iterations accordingly.",
+                    pbt_unit,
+                )
+                return super().train()
+            if int(max_iterations) != max_iterations:
+                _logger.warning(
+                    "Calculated max_iterations %s for buffered training is not an integer. "
+                    "This might lead to unexpected behavior with PBT.",
+                    max_iterations,
+                )
+        max_iterations = int(max_iterations)
+        if max_iterations > 1:
+            self._during_buffered_training = True
+            if self._buffer_steps_left:
+                buffer_goal = self.iteration + self._buffer_steps_left
+                max_iterations = self._buffer_steps_left
+            else:
+                buffer_goal = self.iteration + max_iterations
+            try:
+                if max_iterations >= 16:
+                    _logger.important_info(
+                        "Training for max_iterations=%s with %s steps per iteration (buffered).",
+                        max_iterations,
+                        self.algorithm_config.train_batch_size_per_learner,
+                    )
+                # Tune can handle multiple results in a list
+                return self.train_buffered(
+                    buffer_time_s=min(300, max(60, max_iterations * 30)), max_buffer_length=max_iterations
+                )
+            finally:
+                self._during_buffered_training = False
+                self._buffer_steps_left = buffer_goal - self.iteration
+                if self.iteration < buffer_goal:
+                    _logger.important_info(
+                        "Did not finish iteration goal step %s with %s buffered iterations at step size %s. "
+                        "Likely timed out. Will adjust next buffered training to match goal.",
+                        buffer_goal,
+                        max_iterations,
+                        self.algorithm_config.train_batch_size_per_learner,
+                    )
+                else:
+                    assert self._buffer_steps_left == 0
+        return super().train()
+
+    @override(tune.Trainable)
     def reset_config(self, new_config):  # pyright: ignore[reportIncompatibleMethodOverride] # currently not correctly typed in ray
+        # Note: called during Trainable.reset
         # Return True if the config was reset, False otherwise
         # This will be called when tune.TuneConfig(reuse_actors=True) is used
-        # TODO
+        # -- cleanup --
+        self._is_in_reset_state = True
+        new_config = deepcopy(new_config)
+        if self._pbar:
+            if is_pbar(self._pbar):
+                self._pbar.close()
+            delattr(self, "_pbar")
+        fixed_argv = False
+        if self._setup:
+            fixed_argv = bool(self._setup._fixed_argv or self.setup_class._fixed_argv)
+            delattr(self, "_setup")  # will be recreated
+        # -- Possible warnings --
+        if self._algorithm_overrides or fixed_argv:
+            ImportantLogger.important_warning(
+                _logger,
+                "Resetting config with algorithm_overrides or fixed_argv might lead to an unexpected config - "
+                "Some old values might remain. Test carefully.",
+            )
+        if self._model_config is not None:
+            ImportantLogger.important_warning(
+                _logger,
+                "Resetting config with a model_config present might lead to an unexpected model_config. "
+                "The old model_config likely remains. Test carefully.",
+            )
         super().reset_config(new_config)
-        self.setup(new_config)
+
+        # From __init__
+        if new_config and PERTURBED_HPARAMS in new_config:
+            _logger.info("Received perturbed config during reset_config: %s", new_config[PERTURBED_HPARAMS])
+            self._perturbed_config: Optional[dict[str, Any]] = new_config[PERTURBED_HPARAMS]
+        else:
+            self._perturbed_config = None
+
+        # To fully accept the config must unset self._setup
+        self.setup(new_config, reset=True)
+        if self._algorithm is not None:  # Otherwise algorithm will be created later
+            # TODO: possibly do not do this, handled by load_checkpoint already, still set algo_config
+            # self.algorithm_config = self._algo_config
+            if not self.algorithm.reset(self._algo_config):
+                # Algorithms do not have reset implemented.
+                self.algorithm._iteration = 0
+                self._time_total = 0.0
+                self.algorithm._timesteps_total = None
+                self.algorithm._episodes_total = None
+                self._timesteps_since_restore = 0
+                self._iterations_since_restore = 0
+            if self.algorithm.metrics:
+                self.algorithm.metrics.reset()
+            self._setup.config = self._algo_config  # needed for load_checkpoint
+            if self._model_config is not None and not (
+                (
+                    self._model_config
+                    if isinstance(self._model_config, dict)
+                    else dataclasses.asdict(self._model_config)
+                ).items()
+                <= self._algo_config.model_config.items()
+            ):
+                ImportantLogger.important_info(
+                    _logger,
+                    "Patching model_config during reset_config. Old %s Patch: %s",
+                    self.algorithm_config.model_config,
+                    self._model_config,
+                )
+                patch_model_config(self._algo_config, self._model_config)
+            # NOTE: Algorithm is updated in load_checkpoint -> set_state from the new config
+            # Algorithm does not support reset_config.
+            # TODO: What is actors are reused without load_checkpoint? -> goes to train
+
+        self._calculate_steps_and_iterations(self._args_during_setup)  # also called in load_checkpoint
         return True
 
     @override(tune.Trainable)
@@ -657,7 +938,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         super().cleanup()
         if hasattr(self, "_algorithm") and self._algorithm is not None:
             self._algorithm.cleanup()
-        if is_pbar(self._pbar):
+        if hasattr(self, "_pbar") and is_pbar(self._pbar):
             self._pbar.close()
 
     # endregion Trainable setup
@@ -670,13 +951,25 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         Args:
             new_algo_config: The new algorithm config being restored.
 
+        Returns:
+            - True if the algorithm was rebuilt.
+            - False if no changes were made
+            - None if no algorithm exists to rebuild.
+
         Todo:
             Does not check if learners need to be recreated.
             Assumes num_learners does not change.
         """
         if self._algorithm is None:
             return None
-        call_setup_again = False
+        if new_algo_config != self.algorithm.config:
+            ImportantLogger.important_warning(
+                _logger,
+                "Algorithm.config does not match the new_algo_config passed to _rebuild_algorithm_if_necessary. "
+                "Update the algorithm config to the new one before calling this method.",
+            )
+            self.algorithm.config = new_algo_config
+        # TODO: Also need update if model_config / rl_module changed
         env_runners_need_update = (
             self.algorithm.env_runner_group
             and new_algo_config.num_env_runners != self.algorithm.env_runner_group.num_remote_env_runners()
@@ -684,7 +977,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         eval_config = (
             new_algo_config.get_evaluation_config_object() if not new_algo_config.in_evaluation else new_algo_config
         )
-        eval_env_runners_need_update = (
+        eval_env_runners_need_update = bool(
             eval_config
             and self.algorithm._should_create_evaluation_env_runners(eval_config)  # if deactivated dont care
             and self.algorithm.eval_env_runner_group
@@ -741,7 +1034,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             )
             # FIXME
             # assert self.algorithm.spaces == self.algorithm.eval_env_runner_group.get_spaces()
-        return False
+        return env_runners_need_update or eval_env_runners_need_update
 
     # region Trainable checkpoints
 
@@ -809,8 +1102,16 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 .copy(copy_frozen=False)
                 .update_from_dict(config_overrides)
             )
-            # Fix batch_size < minibatch_size:
-            if (
+            # Fix batch_size < minibatch_size or apply minibatch_scale:
+            minibatch_scale: float | None = (
+                self._args_during_setup.get("minibatch_scale", None) if self._args_during_setup else None
+            )
+            if minibatch_scale is not None:
+                # Apply minibatch_scale setting
+                scaled_minibatch = int(algo_kwargs["config"].train_batch_size_per_learner * minibatch_scale)
+                algo_kwargs["config"].minibatch_size = scaled_minibatch
+                config_overrides["minibatch_size"] = scaled_minibatch
+            elif (
                 algo_kwargs["config"].minibatch_size is not None
                 and algo_kwargs["config"].train_batch_size_per_learner < algo_kwargs["config"].minibatch_size
             ):
@@ -832,7 +1133,9 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # from_checkpoint calls restore_from_path which calls set_state
             # if checkpoint["algorithm_checkpoint_dir"] is a tempdir (e.g. from tune, this is wrong)
             # However, self.set_state should have take care of algorithm already even if checkpoint dir is missing
-            if os.path.exists(checkpoint["algorithm_checkpoint_dir"]):
+            restored = False
+            try:
+                local_available = os.path.exists(checkpoint["algorithm_checkpoint_dir"])
                 if self._algorithm is not None:
                     self._algorithm.stop()  # free resources first
                     algo_class = type(self._algorithm)
@@ -841,10 +1144,43 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     algo_class = self._algo_class
                     assert algo_class is not None
                 # Does not call on_checkpoint_loaded callback
-                self._algorithm = algo_class.from_checkpoint(
-                    Path(checkpoint["algorithm_checkpoint_dir"]).absolute().as_posix(), **algo_kwargs
-                )  # pyright: ignore[reportAttributeAccessIssue]
-            elif "algorithm_state" in checkpoint:
+                start = time.time()
+                if local_available:
+                    self._algorithm = algo_class.from_checkpoint(
+                        Path(checkpoint["algorithm_checkpoint_dir"]).absolute().as_posix(), **algo_kwargs
+                    )  # pyright: ignore[reportAttributeAccessIssue]
+                elif self._storage is not None:
+                    # WORKAROUND for https://github.com/ray-project/ray/pull/58324
+                    if "://" not in (algo_checkpoint_dir := checkpoint["algorithm_checkpoint_dir"]):
+                        algo_checkpoint_dir = (
+                            get_filesystem_uri_prefix(self._storage.storage_filesystem) + algo_checkpoint_dir
+                        )
+                    # XXX Need to monitor if this is fixed in ray else will get an error!
+                    self._algorithm = algo_class.from_checkpoint(
+                        algo_checkpoint_dir,
+                        # self._storage.storage_filesystem,
+                        **algo_kwargs,
+                    )  # pyright: ignore[reportAttributeAccessIssue]
+                end = time.time()
+            except KeyError as e:
+                _logger.exception(
+                    "Checkpoint dictionary is missing required key '%s'. Cannot restore algorithm.", e.args[0]
+                )
+                raise
+            except Exception:
+                _logger.exception(
+                    "Failed to restore algorithm from checkpoint dir %s:",
+                    checkpoint["algorithm_checkpoint_dir"],
+                )
+                raise
+            else:
+                _logger.important_info(
+                    "Successfully loaded algorithm checkpoint from %s in (%d seconds)",
+                    checkpoint["algorithm_checkpoint_dir"],
+                    end - start,
+                )
+                restored = True
+            if not restored and "algorithm_state" in checkpoint:
                 _logger.error(
                     "Algorithm checkpoint directory %s does not exist, will restore from state",
                     checkpoint["algorithm_checkpoint_dir"],
@@ -861,11 +1197,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     )
                 self.algorithm.set_state(checkpoint["algorithm_state"])
                 keys_to_process.remove("algorithm_state")
-            else:
+            elif not restored:
                 _logger.critical(
-                    "Algorithm checkpoint directory %s does not exist, (possibly temporary path was saved) "
-                    "and no state provided. Cannot restore algorithm.",
+                    "Algorithm checkpoint directory %s does not exist (local available %s, storage available: %s), "
+                    "(possibly temporary path was saved) and no state provided. Cannot restore algorithm.",
                     checkpoint["algorithm_checkpoint_dir"],
+                    local_available,
+                    self._storage,
                 )
                 raise FileNotFoundError(None, "algorithm_checkpoint_dir", checkpoint["algorithm_checkpoint_dir"])
             keys_to_process.remove("algorithm_checkpoint_dir")
@@ -895,8 +1233,16 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     # Restored < algorithm_overrides < hparams < perturbed
                     .update_from_dict((self._algorithm_overrides or {}) | config_overrides)
                 )
-                # Fix minibatch size < batch_size if reloaded bad value
-                if (
+                # Fix minibatch size < batch_size if reloaded bad value, or apply minibatch_scale
+                minibatch_scale = (
+                    self._args_during_setup.get("minibatch_scale", None) if self._args_during_setup else None
+                )
+                if minibatch_scale is not None:
+                    # Apply minibatch_scale setting
+                    scaled_minibatch = int(algo_kwargs["config"].train_batch_size_per_learner * minibatch_scale)
+                    algo_kwargs["config"].minibatch_size = scaled_minibatch
+                    config_overrides["minibatch_size"] = scaled_minibatch
+                elif (
                     algo_kwargs["config"].minibatch_size is not None
                     and algo_kwargs["config"].train_batch_size_per_learner < algo_kwargs["config"].minibatch_size
                 ):
@@ -949,6 +1295,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             kwargs={"algorithm": self.algorithm, "metrics_logger": self.algorithm.metrics},
         )
         self._calculate_steps_and_iterations(self._args_during_setup)
+        self._call_on_setup_callbacks()
 
     # endregion
 
@@ -1093,7 +1440,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             self._episodes_total = trainable_state["episodes_total"]
             self._last_result = trainable_state["last_result"]
             if ray.__version__ != trainable_state.get("ray_version", ""):
-                _logger.info(
+                ImportantLogger.important_info(
+                    _logger,
                     "Checkpoint was created with a different Ray version: %s != %s",
                     trainable_state["ray_version"],
                     ray.__version__,
@@ -1108,7 +1456,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # NOTE: setup.config can differ from new_algo_config when algorithm_overrides is used!
         # self._setup.config = new_algo_config  # TODO: Possible unset setup._config to not confuse configs
         # also _setup.args does not respect current CLI args!
-        self._setup = self._setup.from_saved(state["setup"], init_trainable=False)
+        if not self._is_in_reset_state:  # already created a setup from loaded+perturbed config
+            self._setup = self._setup.from_saved(state["setup"], init_trainable=False)
         keys_to_process.remove("setup")
 
         # Algorithm - steps are very likely skipped as it is a checkpointable component and was not pickled
@@ -1134,7 +1483,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             if self._algorithm_overrides is None:
                 self._algorithm_overrides = algorithm_overrides
             else:
-                _logger.info(
+                ImportantLogger.important_info(
+                    _logger,
                     "Not setting _algorithm_overrides to %s as it would overwrite present values %s. "
                     "Use _algorithm_overrides=None first to load them on set_state; use an empty dict "
                     "if you do not want to restore them.",
@@ -1163,7 +1513,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     algorithm_state_dict["class"],
                 )
         # state["algorithm_config"] contains "class" to restore the correct config class
-        new_algo_config = AlgorithmConfig.from_state(algorithm_state_dict)
+        if not self._is_in_reset_state:
+            new_algo_config = AlgorithmConfig.from_state(algorithm_state_dict)
+        else:  # take setup from reset_config
+            new_algo_config = self._setup.config
         if type(new_algo_config) is not type(self.algorithm_config):
             _logger.warning(
                 "Restored config class %s differs from expected class %s", type(new_algo_config), type(self.config)
@@ -1185,6 +1538,24 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # NOTE: does not SYNC config if env_runners / learners not in components we do that below
             # NOTE: evaluation_config might also not be set!
             self.algorithm_config = new_algo_config
+
+        # Apply minibatch_scale setting after config restoration
+        minibatch_scale: float | None = (
+            self._args_during_setup.get("minibatch_scale", None) if self._args_during_setup else None
+        )
+        if minibatch_scale is not None:
+            scaled_minibatch = int(self.algorithm_config.train_batch_size_per_learner * minibatch_scale)
+            if self.algorithm_config.minibatch_size != scaled_minibatch:
+                _logger.info(
+                    "Applying minibatch_scale=%s: setting minibatch_size %d -> %d",
+                    minibatch_scale,
+                    self.algorithm_config.minibatch_size,
+                    scaled_minibatch,
+                )
+                unfrozen_config = self.algorithm_config.copy(copy_frozen=False)
+                unfrozen_config.minibatch_size = scaled_minibatch
+                unfrozen_config.freeze()
+                self.algorithm_config = cast("_ConfigType", unfrozen_config)
 
         # Update env_runners after restore
         # check if config has been restored correctly - TODO: Remove after more testing
@@ -1249,6 +1620,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 "The following keys were not processed during set_state: %s",
                 ", ".join(keys_to_process),
             )
+        self._is_in_reset_state = False
 
     @override(Checkpointable)
     def get_checkpointable_components(self) -> list[tuple[str, Checkpointable]]:
@@ -1294,24 +1666,38 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
         """
         metadata = super().get_metadata()
-        metadata["ray_utilities_version"] = importlib.metadata.version("ray_utilities")
+        try:
+            metadata["ray_utilities_version"] = importlib.metadata.version("ray_utilities")
+        except Exception as e:
+            _logger.error("Failed to get ray_utilities_version: %s", e)
         if self._git_repo_sha == _UNKNOWN_GIT_SHA:
+            repo = None
+            tried_dirs = ["(cwd: " + os.getcwd() + ")"]
             try:
                 repo = git.Repo(search_parent_directories=True)
-            except (git.InvalidGitRepositoryError, Exception):
+            except (git.InvalidGitRepositoryError, Exception):  # noqa: BLE001
                 # For some reason defined value was not kept :/
-                _logger.warning(
+                _logger.debug(
                     "_git_repo_sha was not set and current workdir is not a repository. "
                     "Checking: os.environ['TUNE_ORIG_WORKING_DIR']"
                 )
-                try:
-                    repo = git.Repo(os.environ["TUNE_ORIG_WORKING_DIR"], search_parent_directories=True)
-                except KeyError as e:
-                    _logger.error("KeyError %s not set, cannot find git repo for metadata", e)
-                except (git.InvalidGitRepositoryError, Exception) as e:
-                    _logger.error("Failed to get git Repo for metadata: %s", e)
+                for fallback in {
+                    os.environ.get("COMET_GIT_DIRECTORY"),
+                    os.environ.get("ORIGINAL_WORKING_DIR"),
+                    os.environ.get("TUNE_ORIG_WORKING_DIR"),
+                }:
+                    if fallback is not None:
+                        try:
+                            repo = git.Repo(fallback, search_parent_directories=True)
+                            break
+                        except git.InvalidGitRepositoryError:
+                            tried_dirs.append(fallback)
+                        except Exception as e:  # noqa: BLE001
+                            _logger.error("Failed to get git Repo for metadata from fallback %s: %s", fallback, e)
+            if repo is not None:
+                self._git_repo_sha = cast("git.types.AnyGitObject", repo.head.object).hexsha  # pyright: ignore[reportUnnecessaryCast]
             else:
-                self._git_repo_sha = cast("git.types.AnyGitObject", repo.head.object).hexsha
+                _logger.warning("Failed to get git Repo for metadata from fallback(s) %s", set(tried_dirs))
         metadata["repo_sha"] = self._git_repo_sha
         return metadata
 
@@ -1320,11 +1706,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     def step(self) -> LogMetricsDict:
         # Update self._current_step in child class
         raise NotImplementedError("Subclasses must implement the `step` method.")
-
-    if TYPE_CHECKING:  # update signature
-
-        def train(self) -> AutoExtendedLogMetricsDict:  # pyright: ignore[reportIncompatibleMethodOverride]
-            return super().train()  # pyright: ignore[reportReturnType]
 
     def __del__(self):
         # Cleanup the pbar if it is still open
@@ -1382,6 +1763,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             )
         # -----
         # from_checkpoint -> restore_from_path first restores subcomponents then calls set_state
+        # TODO: Parse setup args again with checkpoint=True
         restored = super().from_checkpoint(path, filesystem=filesystem, **kwargs)
         restored = cast("Self", restored)
         # Restore algorithm metric states; see my PR https://github.com/ray-project/ray/pull/54148/
@@ -1394,6 +1776,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             callbacks_functions=restored.algorithm.config.callbacks_on_checkpoint_loaded,  # pyright: ignore[reportArgumentType,reportOptionalMemberAccess]
             kwargs={"algorithm": restored.algorithm, "metrics_logger": restored.algorithm.metrics},
         )
+        restored._call_on_setup_callbacks()
         return restored
 
 
@@ -1513,17 +1896,25 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
             > self.config["cli_args"].get("total_steps", float("inf"))
             + self.algorithm_config.train_batch_size_per_learner
         ):
-            _logger.info(
-                "Current step %s exceeds total steps. Expecting the trainable to have stopped.", self._current_step
+            ImportantLogger.important_info(
+                _logger,
+                "Current step %s exceeds total steps. Expecting the trainable to have stopped.",
+                self._current_step,
             )
         # HACK: For ray < 2.50.0 where result is copied in for the callbacks
         # see for example: https://github.com/ray-project/ray/pull/55527
-        if (
-            TUNE_RESULT_IS_A_COPY
+        if (  # When we are doing pbt let pbt handle the checkpointing
+            not (
+                "pbt" in self.config.get("experiment_group", "").lower()
+                or "pbt" == self.config.get("cli_args", {}).get("command_str", "")
+            )
+            and TUNE_RESULT_IS_A_COPY  # 2.50 + we handle checkpoints with a real callback
             and self._setup.args.checkpoint_frequency_unit == "steps"  # type: ignore
             and self._setup.args.checkpoint_frequency  # type: ignore
             and (_steps_since_last_checkpoint := self._current_step - self._last_checkpoint_step)
             >= self._setup.args.checkpoint_frequency
+            and (self._iterations_since_restore - self._last_checkpoint_iteration)
+            >= 24  # avoid too frequent checkpointing
         ):
             _logger.info(
                 "Creating checkpoint at step %s as last checkpoint was at step %s, difference %s >= %s (frequency)",

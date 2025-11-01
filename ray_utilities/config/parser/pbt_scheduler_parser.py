@@ -5,20 +5,31 @@ from __future__ import annotations
 import inspect
 import logging
 from ast import literal_eval
-from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Optional, TypeAlias, TypeVar
 
 from ray.tune.schedulers import PopulationBasedTraining
 from tap import to_tap_class
 
-from ray_utilities.constants import DEFAULT_EVAL_METRIC, EVAL_METRIC_RETURN_MEAN
+from ray_utilities.config.parser.subcommand import SubcommandMixin
+from ray_utilities.constants import CURRENT_STEP, DEFAULT_EVAL_METRIC, EVAL_METRIC_RETURN_MEAN
 from ray_utilities.tune.scheduler.top_pbt_scheduler import TopPBTTrialScheduler
 
 if TYPE_CHECKING:
     from ray.tune.search.sample import Domain
 
+    from ray_utilities.config.parser.default_argument_parser import DefaultResourceArgParser
+
 logger = logging.getLogger(__name__)
 
+ParentT = TypeVar("ParentT", bound="DefaultResourceArgParser | None")
+
 _HPMutationsType: TypeAlias = dict[str, "dict[Any, Any] | list[Any] | tuple[Any, ...] | Callable[[], Any] | Domain"]
+
+# TODO: Pack into a common submodule without circular dependencies
+_T = TypeVar("_T")
+NotAModelParameter = Annotated[_T, "NotAModelParameter"]
+NeverRestore = Annotated[_T, "NeverRestore"]
+AlwaysRestore = Annotated[_T, "AlwaysRestore"]
 
 
 def _to_hyperparam_mutations(string: str) -> _HPMutationsType:
@@ -32,7 +43,7 @@ def _to_hyperparam_mutations(string: str) -> _HPMutationsType:
         ) from e
 
 
-class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
+class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining), SubcommandMixin[ParentT]):
     """
     Attributes:
         time_attr: The training result attr to use for comparing time.
@@ -102,16 +113,16 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
     metric: str = EVAL_METRIC_RETURN_MEAN
     """The metric to be optimized as flat key, e.g. 'evaluation/env_runners/episode_return_mean'."""
     hyperparam_mutations: Optional[_HPMutationsType] = None
-    require_attrs: bool = True
-    synch: bool = True
-    log_config: bool = True
-    time_attr: str = "current_step"
-    quantile_fraction: float = 0.1
+    require_attrs: NotAModelParameter[bool] = True
+    synch: NotAModelParameter[bool] = True
+    log_config: NotAModelParameter[NeverRestore[bool]] = True
+    time_attr: str = CURRENT_STEP
+    quantile_fraction: NotAModelParameter[float] = 0.1
     perturbation_interval: int | float = 8192 * 14  # (114688) Total should be divisible by total steps
-    resample_probability: float = 1.0  # always resample
+    resample_probability: NotAModelParameter[float] = 1.0  # always resample
 
     # custom_args, remove before passing to PopulationBasedTraining
-    use_native_pbt: bool = False
+    use_native_pbt: NotAModelParameter[AlwaysRestore[bool]] = False
     """Do not use TopPBTTrialScheduler"""
 
     def set_hyperparam_mutations(self, mutations: _HPMutationsType | None) -> None:
@@ -175,7 +186,7 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
                 var.startswith("_") or callable(val) or isinstance(val, (staticmethod, classmethod, property))
             ):
                 replace_action(var, val)
-        assert (action := next(a for a in self._actions if a.dest == "time_attr")).default == "current_step", (
+        assert (action := next(a for a in self._actions if a.dest == "time_attr")).default == CURRENT_STEP, (
             f"got {action.default}"
         )
 
@@ -197,13 +208,10 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining)):
         args = {arg: val for arg, val in args.items() if arg in inspect.signature(PopulationBasedTraining).parameters}
 
         if use_native:
-            return PopulationBasedTraining(
-                **args,
-                hyperparam_mutations=self.hyperparam_mutations,
-            )
-        return TopPBTTrialScheduler(
-            **args,
-            hyperparam_mutations=self.hyperparam_mutations,
-        )
+            return PopulationBasedTraining(**args, hyperparam_mutations=self.hyperparam_mutations)
+
+        num_samples = self.parent.num_samples if self.parent else 1  # pyright: ignore[reportOptionalMemberAccess]
+
+        return TopPBTTrialScheduler(**args, hyperparam_mutations=self.hyperparam_mutations, num_samples=num_samples)
 
     # See _ScalingPopulationBasedTrainingParser.process_args to leverage RLLib arguments as well

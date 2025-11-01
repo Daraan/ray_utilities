@@ -21,6 +21,9 @@ See Also:
 from __future__ import annotations
 
 import logging
+import os
+import socket
+import sys
 from contextlib import contextmanager
 
 import colorlog
@@ -28,6 +31,63 @@ from typing_extensions import Sentinel
 
 # pyright: enableExperimentalFeatures=true
 _NO_PACKAGE = Sentinel("_NO_PACKAGE")
+
+# --- Custom log levels ---
+IMPORTANT_INFO = 25  # Between INFO (20) and WARNING (30)
+IMPORTANT_WARNING = 35  # Between WARNING (30) and ERROR (40)
+
+logging.addLevelName(IMPORTANT_INFO, "IMPORTANT_INFO")
+logging.addLevelName(IMPORTANT_WARNING, "IMPORTANT_WARNING")
+
+
+class ImportantLogger(logging.Logger):
+    """
+    Implements two custom log levels: IMPORTANT_INFO and IMPORTANT_WARNING.
+
+    Its methods are also registered to the standard logging.Logger class.
+    Use this class via `typing.cast("ImportantLogger", normal_logger).important_info(...)`
+    or ImportantLogger.important_info(logger, ...).
+    """
+
+    # Can be used in a static method like manner with a normal logger instance
+    def important_info(logger: logging.Logger, msg: str, *args, stacklevel=1, **kwargs):  # pyright: ignore[reportSelfClsParameterName] # noqa: N805
+        """Log 'msg % args' with severity 'IMPORTANT_INFO'."""
+        if logger.isEnabledFor(IMPORTANT_INFO):
+            logger._log(IMPORTANT_INFO, msg, args, stacklevel=stacklevel, **kwargs)
+
+    def important_warning(logger: logging.Logger, msg: str, *args, stacklevel=1, **kwargs):  # pyright: ignore[reportSelfClsParameterName] # noqa: N805
+        """Log 'msg % args' with severity 'IMPORTANT_WARNING'."""
+        if logger.isEnabledFor(IMPORTANT_WARNING):
+            logger._log(IMPORTANT_WARNING, msg, args, stacklevel=stacklevel, **kwargs)
+
+
+logging.Logger.important_info = ImportantLogger.important_info  # type: ignore
+logging.Logger.important_warning = ImportantLogger.important_warning  # type: ignore
+
+try:
+    _hostname = socket.gethostname()
+except:  # noqa: E722
+    _hostname = "unknown_host"
+if _hostname in os.environ.get("LOG_HOSTNAME_IGNORE", ""):
+    _hostname = ""
+
+
+def _get_colorlog_formatter() -> colorlog.ColoredFormatter:
+    """Returns a ColoredFormatter with custom colors for all log levels, including custom ones."""
+    return colorlog.ColoredFormatter(
+        "%(log_color)s[%(levelname)s][" + _hostname + " %(filename)s:%(lineno)d, %(funcName)s] :%(reset)s %(message)s",
+        log_colors={
+            "DEBUG": "cyan",
+            "INFO": "green",
+            "IMPORTANT_INFO": "bold_green",
+            "WARNING": "yellow",
+            "IMPORTANT_WARNING": "bold_yellow",
+            "ERROR": "red",
+            "CRITICAL": "bold_red",
+        },
+        secondary_log_colors={},
+        style="%",
+    )
 
 
 def nice_logger(logger: logging.Logger | str, level: int | str | None = None) -> logging.Logger:
@@ -77,26 +137,36 @@ def nice_logger(logger: logging.Logger | str, level: int | str | None = None) ->
         Colors help distinguish between different log levels:
         - DEBUG: Cyan
         - INFO: Green
+        - IMPORTANT_INFO: Bold Green
         - WARNING: Yellow
+        - IMPORTANT_WARNING: Bold Yellow
         - ERROR: Red
         - CRITICAL: Bold red
     """
     if isinstance(logger, str):
         logger = logging.getLogger(logger)
     if isinstance(level, str):
-        level = getattr(logging, level.upper())
+        if sys.version_info >= (3, 11):
+            level = logging.getLevelNamesMapping()[level.upper()]
+        else:
+            level = logging.getLevelName(level.upper())  # pyright: ignore[reportDeprecated]
     if level is not None:
         logger.setLevel(level)
     if logger.hasHandlers():
         logger.warning(
             "Making a richer logger, but logger %s already has handlers, consider removing them first.", logger
         )
-    utilities_handler = colorlog.StreamHandler()
-    formatter = colorlog.ColoredFormatter(
-        "%(log_color)s[%(levelname)s][ %(filename)s:%(lineno)d, %(funcName)s] :%(reset)s %(message)s"
-    )
-    utilities_handler.setFormatter(formatter)
-    logger.addHandler(utilities_handler)
+    if "SLURM_JOB_ID" in os.environ:
+        # On SLURM: use plain, non-colored logging
+        utilities_handler = logging.StreamHandler()
+        formatter = logging.Formatter("[%(levelname)s][ %(filename)s:%(lineno)d, %(funcName)s] : %(message)s")
+        utilities_handler.setFormatter(formatter)
+        logger.addHandler(utilities_handler)
+    else:
+        utilities_handler = colorlog.StreamHandler()
+        formatter = _get_colorlog_formatter()
+        utilities_handler.setFormatter(formatter)
+        logger.addHandler(utilities_handler)
     return logger
 
 
@@ -154,7 +224,7 @@ def set_project_log_level(
                 for h in lg.handlers:
                     h.setLevel(level)
             except Exception:  # noqa: BLE001
-                lg.exception("Failed to set level with this logger")
+                lg.exception("Failed to set level for logger '%s'", name)
                 # be conservative: ignore any logger that can't be adjusted
                 continue
 

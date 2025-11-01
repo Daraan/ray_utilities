@@ -16,9 +16,11 @@ grid search mutations and more flexible population management strategies.
 from __future__ import annotations
 
 # pyright: enableExperimentalFeatures=true
+import itertools
 import logging
 import math
 import random
+from collections.abc import Iterable
 from functools import partial
 from itertools import cycle
 from pathlib import Path
@@ -43,13 +45,13 @@ import tree
 from ray.train._internal.session import _FutureTrainingResult, _TrainingResult
 from ray.tune.experiment import Trial
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
-from ray.tune.schedulers.pbt import PopulationBasedTraining
+from ray.tune.schedulers.pbt import PopulationBasedTraining, _fill_config
 from typing_extensions import Sentinel
 
-from ray_utilities._runtime_constants import RUN_ID
-from ray_utilities.constants import FORK_FROM, PERTURBED_HPARAMS
+from ray_utilities.constants import FORK_FROM, PERTURBED_HPARAMS, get_run_id
 from ray_utilities.misc import (
     build_nested_dict,
+    deep_freeze,
     flatten_mapping_with_path,
     get_current_step,
     get_value_by_path,
@@ -57,11 +59,13 @@ from ray_utilities.misc import (
     make_fork_from_csv_header,
     make_fork_from_csv_line,
 )
+from ray_utilities.tune.scheduler.run_slow_trials_first_mixin import RunSlowTrialsFirstMixin
 from ray_utilities.typing import ForkFromData, Forktime, ForktimeTuple
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, MutableMapping
+    from collections.abc import MutableMapping
 
+    from frozendict import frozendict
     from ray.tune.execution.tune_controller import TuneController
     from ray.tune.schedulers.pbt import _PBTTrialState
     from ray.tune.search.sample import Domain
@@ -138,6 +142,18 @@ def _debug_dump_new_config(new_config: dict, mutation_keys: list[str]):
     return new_config
 
 
+def _insert_perturbed_hparams(new_config: dict, mutation_keys: list[str]) -> dict:
+    new_config[PERTURBED_HPARAMS] = {k: new_config[k] for k in mutation_keys}
+    return new_config
+
+
+def wrap_custom_perturbed_hparams(func: Callable[[dict], dict], mutation_keys) -> Callable[[dict], dict]:
+    def wrapper(new_config: dict) -> dict:
+        return _insert_perturbed_hparams(func(new_config), mutation_keys)
+
+    return wrapper
+
+
 def _dummy_pass_through(new_config: dict) -> dict:
     return new_config
 
@@ -189,22 +205,70 @@ class _ReseedEnv:
         add_seed (Optional[int]): If provided, this integer is added as a `_PerturbationSeed` to the `env_seed`.
     """
 
-    def __init__(self, wrap: Optional[Callable[[dict], dict]] = None, add_seed: Optional[int] = None):
+    def __init__(
+        self,
+        wrap: Optional[Callable[[dict], dict]] = None,
+        add_seed: Optional[int] = None,
+        *,
+        initial_seeds: Optional[dict[Trial | None, int | None]],
+        next_trial: Optional[Trial] = None,
+    ):
         self.wrap = wrap
         self.add_seed = add_seed
+        self._trial_initial_seeds: dict[Trial | None, int | None] = initial_seeds or {}
+        self._trial_initial_seeds[None] = None
+        self._next_trial: Trial | None = next_trial
+
+    def get_next_trial(self) -> Trial | None:
+        """Get/Set the next trial to know which initial seed to use. After getting the next trial is cleared."""
+        next_trial = self._next_trial
+        self._next_trial = None
+        return next_trial
+
+    def set_next_trial(self, trial: Trial):
+        self._next_trial = trial
 
     def __call__(self, config: dict) -> dict:
         config = self.wrap(config) if self.wrap else config
         if self.add_seed is None or "env_seed" not in config or config["env_seed"] is None:
             return config
-        if isinstance(config["env_seed"], int):
-            config["env_seed"] = (config["env_seed"], _PerturbationSeed(self.add_seed))
+        trial = self.get_next_trial()
+        if trial is not None:
+            base_seed = self._trial_initial_seeds.get(trial, config["env_seed"])
+        else:
+            base_seed = config["env_seed"]
+        if isinstance(base_seed, int):
+            config["env_seed"] = (base_seed, _PerturbationSeed(self.add_seed))
             return config
         # clean auto int from sequence
         env_seed: Sequence[int] = config["env_seed"]
-        cleaned_seed = (s for s in env_seed if not isinstance(s, _PerturbationSeed))
+
+        # Remove any perturbation seeds from last time, time attr should not influence
+        cleaned_seed = self.remove_perturbation_seed(env_seed)
         config["env_seed"] = (*cleaned_seed, _PerturbationSeed(self.add_seed))
         return config
+
+    @overload
+    @staticmethod
+    def remove_perturbation_seed(
+        obj: Iterable[int | _PerturbationSeed | Iterable[object]],
+    ) -> tuple[int | tuple, ...]: ...
+
+    @overload
+    @staticmethod
+    def remove_perturbation_seed(obj: object) -> object | None: ...
+
+    @staticmethod
+    def remove_perturbation_seed(
+        obj: Iterable[int | _PerturbationSeed | Iterable[object]] | object,
+    ) -> tuple[int | tuple, ...] | object | None:
+        if isinstance(obj, _PerturbationSeed):
+            return None  # Remove this element
+        if isinstance(obj, (tuple, list, Iterable)):
+            # Recursively process sequences, filter out None
+            cleaned = tuple(_ReseedEnv.remove_perturbation_seed(s) for s in obj)
+            return tuple(x for x in cleaned if x is not None)
+        return obj
 
 
 class CyclicMutation(Generic[_T]):
@@ -266,7 +330,7 @@ class CyclicMutation(Generic[_T]):
         return v
 
 
-class TopPBTTrialScheduler(PopulationBasedTraining):
+class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
     """Enhanced Population Based Training scheduler with grid search and flexible quantiles.
 
     This scheduler extends Ray Tune's PopulationBasedTraining with support for grid search
@@ -348,21 +412,26 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         quantile_fraction: float = 0.1,  # 0.25,  # 0 for no exploit -> no top trials, 0.99 for only exploit top trial
         resample_probability: float = 1.0,  # Always resample, assume grid_search in hyperparam_mutations # TODO: alt use custom_explore_fn with new value as input
         perturbation_factors: Tuple[float, float] = (0.8, 1.2),
-        custom_explore_fn: Callable[..., Any] | None = None,
+        custom_explore_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         log_config: bool = True,
         require_attrs: bool = True,
         synch: bool = False,
         reseed: bool = True,
+        num_samples: int = 1,
     ):
         # if not hyperparam_mutations and custom_explore_fn is None:
         #    # Use a dummy function to log the perturbed hyperparams
         #    custom_explore_fn = _dummy_pass_through
         if custom_explore_fn is None and hyperparam_mutations:  # Otherwise use a wrapper
-            # XXX
             custom_explore_fn = partial(_debug_dump_new_config, mutation_keys=list(hyperparam_mutations.keys()))
+        elif custom_explore_fn is not None and hyperparam_mutations:
+            custom_explore_fn = wrap_custom_perturbed_hparams(
+                custom_explore_fn, mutation_keys=list(hyperparam_mutations.keys())
+            )
+        self._trial_initial_seeds: dict[Trial | None, int | None] = {None: None}
         self._reseed = reseed
         if reseed:
-            custom_explore_fn = _ReseedEnv(wrap=custom_explore_fn)
+            custom_explore_fn = _ReseedEnv(wrap=custom_explore_fn, initial_seeds=self._trial_initial_seeds)
         self._trial_state: dict[Trial, _PBTTrialState2]  # pyright: ignore[reportIncompatibleVariableOverride]
         if hyperparam_mutations:  # either hyperparam_mutations or custom_explore_fn must be passed
             for k, v in hyperparam_mutations.items():
@@ -408,6 +477,11 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         """
 
         self._fork_data_file: Path | None = None
+
+        self._num_samples = num_samples
+        """Number of samples from the parameter space."""
+
+        self._seen_config_hashes: set[int] = set()
 
     @classmethod
     def _deep_update_mutation(
@@ -477,16 +551,87 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
             return ret, None
         return ret
 
+    def _reseed_seen_configs(self, config: dict, trial: Trial | None) -> bool | None:
+        """
+        If the given config has been seen before (based on its hash), modifies the "env_seed" in the config
+        By appending a counter to ensure uniqueness, the env_seed is changed to a tuple of (original_seed, counter).
+
+        If there is no "env_seed" in the config, or if it is None, no changes are made.
+
+        Returns:
+            True if the config was modified (i.e., reseeded), False if the config was already unique,
+            None if no reseeding was performed due to missing "env_seed" key or its value being None.
+        """
+        frozen_config = deep_freeze(config)
+        counter = 0
+        hash_key = hash(frozen_config)
+        initial_seed = self._trial_initial_seeds.get(trial, None) or config.get("env_seed")
+        if initial_seed is None:
+            return None
+        while hash_key in self._seen_config_hashes:
+            # Same config but different checkpoints should be covered via fork_from
+            counter += 1
+            config["env_seed"] = (initial_seed, counter)
+            frozen_config = deep_freeze(config)
+            hash_key = hash(frozen_config)
+        if counter > 0:
+            logger.info(
+                "Adjusted env_seed for trial %s to avoid duplicate config after %s attempts. New env_seed: %s",
+                trial or "",
+                counter,
+                config["env_seed"],
+            )
+        self._seen_config_hashes.add(hash_key)
+        return counter > 0
+
     def on_trial_add(self, tune_controller: TuneController, trial: Trial):
         """Called when a new trial is added to the Tuner.
 
         Updates the trials config based on :attr:`hyperparam_mutations`.
         """
         super().on_trial_add(tune_controller, trial)
+        # Check minibatch_size constraint
+        if "minibatch_size" in trial.config:
+            minibatch_size = trial.config["minibatch_size"]
+            batch_size = trial.config.get("train_batch_size_per_learner", None)
+            if batch_size is not None and minibatch_size > batch_size:
+                # Should resample
+                pass
+            else:
+                batch_size = trial.config.get(
+                    "train_batch_size_per_learner",
+                    trial.config.get("cli_args", {}).get("train_batch_size_per_learner", float("inf")),
+                )
+                if minibatch_size > batch_size:
+                    # resample minibatch_size only
+                    count = 0
+                    while minibatch_size > batch_size and count < 40:
+                        search_space = self._hyperparam_mutations["minibatch_size"]
+                        # if isinstance(search_space, KeepMutation):
+                        #    search_space.set_value(trial.config["minibatch_size"])
+                        _fill_config(trial.config, "minibatch_size", search_space)
+                        minibatch_size = trial.config["minibatch_size"]
+                        count += 1
+                    if count >= 40:
+                        trial.set_status(trial.ERROR)
+                        logger.error(
+                            "Could not sample valid minibatch_size <= train_batch_size_per_learner "
+                            "after 40 attempts. Using minibatch_size=%s, train_batch_size_per_learner=%s ."
+                            "Trial might crash. Search space: %s",
+                            minibatch_size,
+                            batch_size,
+                            self._hyperparam_mutations["minibatch_size"],
+                        )
+
         if self._fork_data_file is None:
-            self._fork_data_file = Path(tune_controller.experiment_path) / f"pbt_fork_data-{RUN_ID}.csv"
-            with self._fork_data_file.open("w") as f:
-                f.write(make_fork_from_csv_header())
+            self._fork_data_file = Path(trial.local_experiment_path) / f"pbt_fork_data-{get_run_id()}.csv"
+            # if we restore it might already exist, only write header if not existing
+            if not self._fork_data_file.exists():
+                # TODO: but what if trial is on another host, does this still work?
+                self._fork_data_file.parent.mkdir(parents=True, exist_ok=True)
+                with self._fork_data_file.open("w") as f:
+                    f.write(make_fork_from_csv_header())
+
         if FORK_FROM in trial.config:
             fork_config: ForkFromData = trial.config[FORK_FROM]
             logger.info("Adding a forked trial %s with config: %s", trial, fork_config)
@@ -500,6 +645,14 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
             self._trial_state[trial].current_env_steps = 0
             self.current_trial_keys[trial] = trial.trial_id
             self._fork_ids[trial, None] = trial.trial_id  # initial fork id is trial id
+
+        # When using more than 1 sample and seeding_strategy="same" we end up with identical configs
+        # Need to change something in the config to make them different
+        # TODO: Possibly avoid when using "constant" as seeding strategy
+
+        # Convert all subdicts to frozendict and lists to tuples for hashing
+        self._trial_initial_seeds[trial] = trial.config.get("env_seed", None)
+        self._reseed_seen_configs(trial.config, trial)
 
     def _quantiles(self) -> Tuple[List[Trial], List[Trial]]:
         """Returns trials in the lower and upper `quantile` of the population.
@@ -537,6 +690,75 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
 
         return bottom_trials, top_trials
 
+    def _distribute_exploitation_repeated(
+        self, lower_quantile: list[Trial], upper_quantile: list[Trial]
+    ) -> dict[Trial, Trial]:
+        """
+        Distribute exploitation assignments so that each top trial is never assigned more than once to the same config,
+        unless the number of assignments exceeds the number of top trials.
+
+        This approach groups lower trials by their config. For each group,
+        top trials are assigned in a round-robin fashion, ensuring that within a group, no top trial is assigned
+        more than once unless necessary. Assignments are rotated across groups to balance usage.
+
+        Args:
+            lower_quantile: List of trials that will exploit top trials.
+            upper_quantile: List of top-performing trials to be exploited.
+
+        Returns:
+            Dictionary mapping each bottom trial to the top trial it should exploit.
+        """
+        if not upper_quantile or not lower_quantile:
+            return {}
+
+        assignments: dict[Trial, Trial] = {}
+
+        # Group lower trials by config
+        config_to_trials: dict[frozendict, list[Trial]] = {}
+        for trial in lower_quantile:
+            config = trial.config.copy()
+            config.pop(FORK_FROM, None)  # Exclude FORK_FROM from grouping
+            config.pop("env_seed", None)  # Exclude env_seed from grouping
+            frozen = deep_freeze(config)
+            config_to_trials.setdefault(frozen, []).append(trial)
+
+        num_top = len(upper_quantile)
+        group_list = list(config_to_trials.values())
+
+        # Track usage count for each top trial
+        top_usage = dict.fromkeys(upper_quantile, 0)
+
+        # For each group, rotate the starting index so assignments are balanced across groups
+        for group_idx, group_trials in enumerate(group_list):
+            # Rotate starting index for each group to balance assignments
+            start_idx = group_idx % num_top
+            used = set()
+            for idx, trial in enumerate(group_trials):
+                # Try to assign each top trial once per group, rotating start
+                top_idx = (start_idx + idx) % num_top
+                top_trial = upper_quantile[top_idx]
+                # Avoid repeats if possible
+
+                while top_trial in used and len(used) < num_top:
+                    top_idx = (top_idx + 1) % num_top
+                    top_trial = upper_quantile[top_idx]
+                used.add(top_trial)
+                assignments[trial] = top_trial
+                top_usage[top_trial] += 1
+
+        # Assign any remaining trials not in a group (shouldn't happen, but for safety)
+        assigned_trials = set(assignments)
+        top_trials_cycle = itertools.cycle(upper_quantile)
+        for trial in lower_quantile:
+            if trial not in assigned_trials:
+                assignments[trial] = next(top_trials_cycle)
+
+        # Log the distribution
+        distribution = {trial.trial_id: top_usage.get(trial, 0) for trial in upper_quantile}
+        logger.debug("Exploitation distribution: %s", distribution)
+        assert len(assignments) == len(lower_quantile)
+        return assignments
+
     def _distribute_exploitation(self, lower_quantile: List[Trial], upper_quantile: List[Trial]) -> Dict[Trial, Trial]:
         """Distribute the exploitation of top trials evenly among bottom trials.
 
@@ -551,17 +773,22 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
             return {}
 
         assignments: dict[Trial, Trial] = {}
-        # Create cyclic assignment to ensure even distribution
-        top_trials_cycle = cycle(upper_quantile)
-
-        for trial in lower_quantile:
-            assignments[trial] = next(top_trials_cycle)
+        # Create cyclic assignment to ensure even distribution of upper trials
+        # When having num_samples > do this in a shifting way
+        # and check that the perturbed trial has (hopefully) not the same config as the top trial (identical graph)
+        # NOTE: When using num_samples the first steps to first perturbation interval are duplicated
+        if self._num_samples > 1:
+            assignments = self._distribute_exploitation_repeated(lower_quantile, upper_quantile)
+        else:
+            top_trials_cycle = itertools.cycle(upper_quantile)
+            for trial in lower_quantile:
+                assignments[trial] = next(top_trials_cycle)
 
         # Log the distribution
         distribution = {trial.trial_id: 1 for trial in upper_quantile}
         for top in assignments.values():
             distribution[top.trial_id] += 1
-
+            assert top in upper_quantile
         logger.debug("Exploitation distribution: %s", distribution)
         return assignments
 
@@ -620,7 +847,8 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
             mutation.set_value(value)
         self._deep_update_mutation(self._hyperparam_mutations, new_skip=new_skips)
 
-        # Create a checkpoint for all trials
+        # NOTE: NEEDS the _exploit wrapper to pause the trial, otherwise this causes the last trial to be terminated
+        # if it is in the lower quantile,see https://github.com/ray-project/ray/issues/57906
         logger.debug("Instructing %s to save.", trial)
         checkpoint = tune_controller._schedule_trial_save(trial, result=state.last_result)
 
@@ -641,7 +869,8 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
                     state.last_checkpoint = trial.checkpoint
             else:
                 logger.debug("Keeping checkpoint of trial %s for exploit.", trial)
-                # TODO: # FIXME does this create two checkpoint with Trainable Auto saving?
+
+                # TODO: possible # FIXME does this create two checkpoint with Trainable Auto saving?
                 # state.last_checkpoint = tune_controller._schedule_trial_save(trial, result=state.last_result)
                 state.last_checkpoint = checkpoint
 
@@ -658,6 +887,39 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
             if not trial_to_clone:
                 logger.warning("No exploitation assignment for trial %s. Using random selection.", trial)
                 trial_to_clone = random.choice(upper_quantile)
+
+            # Minibatch <= train_bach_size constraint
+            if "minibatch_size" in self._hyperparam_mutations and isinstance(
+                self._hyperparam_mutations["minibatch_size"], KeepMutation
+            ):
+                train_batch_size_per_learner = trial_to_clone.config.get(
+                    "train_batch_size_per_learner",
+                    trial_to_clone.config.get("cli_args", {}).get("train_batch_size_per_learner", float("inf")),
+                )
+                if trial.config["minibatch_size"] > train_batch_size_per_learner:
+                    # Cannot keep Mutation minibatch size value and satisfy the constraint, do not exploit this trial.
+                    trial.config["_top_pbt_perturbed"] = False
+                    # Add current env step to seed data
+                    if self._reseed and trial.config.get("env_seed") is not None:
+                        # First _ReseedEnv can change seed to (initial, current_step)
+                        reseeder = _ReseedEnv(
+                            add_seed=self._trial_state[trial].current_env_steps,
+                            next_trial=trial,
+                            initial_seeds=self._trial_initial_seeds,
+                        )
+                        trial_config_reseeded = reseeder(trial.config)
+                        # If config type was already seen reseed to ((initial, current_step), counter)
+                        if self._reseed_seen_configs(trial_config_reseeded, trial):
+                            trial.set_config(trial_config_reseeded)
+                    logger.info(
+                        "Trial %s cannot exploit trial %s due to minibatch size constraint. Skipping exploit. "
+                        "minibatch_size=%s, train_batch_size_per_learner=%s",
+                        trial,
+                        trial_to_clone,
+                        trial.config["minibatch_size"],
+                        train_batch_size_per_learner,
+                    )
+                    return
 
             assert trial is not trial_to_clone
             assert trial_to_clone in upper_quantile
@@ -689,20 +951,29 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
                     last_checkpoint = None
 
             if not last_checkpoint:
-                logger.info("[pbt]: no checkpoint for trial %s. Skip exploit for Trial %s", trial_to_clone, trial)
+                logger.warning("[pbt]: no checkpoint for trial %s. Skip exploit for Trial %s", trial_to_clone, trial)
                 return
             # Add current env step to seed data
-            if not isinstance(self._custom_explore_fn, _ReseedEnv):
-                logger.warning("Custom explore function is not wrapped with _ReseedEnv, reseed will not work.")
-            else:
-                self._custom_explore_fn.add_seed = self._trial_state[trial_to_clone].current_env_steps
+            if self._reseed:
+                if not isinstance(self._custom_explore_fn, _ReseedEnv):
+                    logger.warning("Custom explore function is not wrapped with _ReseedEnv, reseed will not work.")
+                else:
+                    self._custom_explore_fn.set_next_trial(trial)
+                    self._custom_explore_fn.add_seed = self._trial_state[trial_to_clone].current_env_steps
+            # HACK: To save a checkpoint AND not terminate the actor we need to fake this a bit:
+            trial_status = trial.status
+            if trial_status != Trial.PAUSED:
+                trial.status = Trial.PAUSED  # fake to keep actor alive
             self._exploit(tune_controller, trial, trial_to_clone)
+            if trial_status != Trial.PAUSED:
+                trial.status = trial_status  # reset
+            if self._reseed_seen_configs(trial.config, trial):
+                trial.set_config(trial.config)
             # Mark trial as perturbed
             for k in self.additional_config_keys:
                 trial.config.pop(k, None)
             # Set info which trial was forked from
             parent_iteration = self._trial_state[trial_to_clone].last_training_iteration
-            assert parent_iteration == self._trial_state[trial_to_clone].last_result[TRAINING_ITERATION]
             fork_data: ForkFromData = {
                 "parent_trial_id": trial_to_clone.trial_id,  # NOTE: This is the pure trial_id, does not support
                 "parent_trial": trial_to_clone,
@@ -743,12 +1014,19 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
                     )
                 )
         else:
-            for k in self.additional_config_keys:
-                trial.config.pop(k, None)
             trial.config["_top_pbt_perturbed"] = False
             # Add current env step to seed data
             if self._reseed and trial.config.get("env_seed") is not None:
-                trial.set_config(_ReseedEnv(add_seed=self._trial_state[trial].current_env_steps)(trial.config))
+                # First _ReseedEnv can change seed to (initial, current_step)
+                reseeder = _ReseedEnv(
+                    add_seed=self._trial_state[trial].current_env_steps,
+                    next_trial=trial,
+                    initial_seeds=self._trial_initial_seeds,
+                )
+                trial_config_reseeded = reseeder(trial.config)
+                # If config type was already seen reseed to ((initial, current_step), counter)
+                if self._reseed_seen_configs(trial_config_reseeded, trial):
+                    trial.set_config(trial_config_reseeded)
 
     def _save_trial_state(
         self, state: _PBTTrialState | _PBTTrialState2, time: int, result: AlgorithmReturnData | dict, trial: Trial
@@ -827,3 +1105,91 @@ class TopPBTTrialScheduler(PopulationBasedTraining):
         )
         # Reset assignments when trials complete to ensure proper redistribution
         self.reset_exploitations()
+
+    # NOTE: Tune does NOT support get_state for schedulers yet, so this is custom
+
+    def get_state(self) -> dict:
+        """Get the state of the scheduler for checkpointing.
+
+        Returns:
+            Dictionary containing scheduler state. Trial objects are converted
+            to trial IDs for serialization.
+        """
+        state = super().get_state() if hasattr(super(), "get_state") else {}  # pyright: ignore[reportAttributeAccessIssue]
+
+        # Convert Trial keys to trial IDs for serialization
+        state.update(
+            {
+                "trial_initial_seeds": {
+                    (trial.trial_id if trial is not None else None): seed
+                    for trial, seed in self._trial_initial_seeds.items()
+                },
+                "reseed": self._reseed,
+                "current_trial_keys": {trial.trial_id: key for trial, key in self.current_trial_keys.items()},
+                "fork_ids": {
+                    (trial.trial_id, (parent.trial_id if parent else None, step) if parent_step else None): fork_ids
+                    for (trial, parent_step), fork_ids in self._fork_ids.items()
+                    for parent, step in ([parent_step] if parent_step else [(None, None)])
+                },
+                "fork_time_data": {
+                    (trial.trial_id, (parent.trial_id if parent else None, step) if parent_step else None): time_data
+                    for (trial, parent_step), time_data in self._fork_time_data.items()
+                    for parent, step in ([parent_step] if parent_step else [(None, None)])
+                },
+                "fork_data_file": str(self._fork_data_file) if self._fork_data_file else None,
+                "num_samples": self._num_samples,
+                "seen_config_hashes": list(self._seen_config_hashes),
+            }
+        )
+        return state
+
+    def set_state(self, state: dict) -> None:
+        """Set the state of the scheduler from checkpoint data.
+
+        Args:
+            state: State dictionary containing scheduler state.
+
+        Note:
+            Trial objects cannot be restored from IDs alone. The restored state
+            will use trial IDs as keys until trials are restarted and the mappings
+            are rebuilt.
+        """
+        if hasattr(super(), "set_state"):
+            super().set_state(state)  # pyright: ignore[reportAttributeAccessIssue]
+
+        # Restore trial_initial_seeds with trial IDs as keys
+        self._trial_initial_seeds = {
+            None if trial_id is None else trial_id: seed  # type: ignore[misc]
+            for trial_id, seed in state.get("trial_initial_seeds", {None: None}).items()
+        }
+
+        self._reseed = state.get("reseed", True)
+
+        # Restore current_trial_keys with trial IDs
+        self.current_trial_keys = {}
+        for trial_id, key in state.get("current_trial_keys", {}).items():
+            self.current_trial_keys[trial_id] = key
+
+        # Restore fork_ids with trial IDs
+        self._fork_ids = {}
+        for (trial_id, parent_data), fork_ids in state.get("fork_ids", {}).items():
+            self._fork_ids[(trial_id, parent_data)] = fork_ids
+
+        # Restore fork_time_data with trial IDs
+        self._fork_time_data = {}
+        for (trial_id, parent_data), time_data in state.get("fork_time_data", {}).items():
+            self._fork_time_data[(trial_id, parent_data)] = time_data
+
+        # Restore fork_data_file
+        fork_data_file_str = state.get("fork_data_file")
+        self._fork_data_file = Path(fork_data_file_str) if fork_data_file_str else None
+
+        self._num_samples = state.get("num_samples", 1)
+        self._seen_config_hashes = set(state.get("seen_config_hashes", []))
+
+        logger.info(
+            "Restored TopPBTTrialScheduler state: %d trial seeds, %d fork ids, %d seen configs",
+            len(self._trial_initial_seeds),
+            len(self._fork_ids),
+            len(self._seen_config_hashes),
+        )

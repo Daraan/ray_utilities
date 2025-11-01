@@ -298,7 +298,9 @@ def save_pbar_state(
 def restore_pbar(state: TqdmState | RayTqdmState | RangeState) -> "tqdm_ray.tqdm | tqdm | range":
     """Restores the progress bar from a saved state, returns a new object"""
     if isinstance(state, dict):  # ray tqdm state
-        pbar = tqdm_ray.tqdm(range(state["x"], state["total"]), total=state["total"])
+        pbar = tqdm_ray.tqdm(
+            range(state["x"], state["total"]), total=state["total"], flush_interval_s=state.get("flush_interval_s", 3.5)
+        )
         pbar._unit = state["unit"]
         pbar._x = state["x"]
         return pbar

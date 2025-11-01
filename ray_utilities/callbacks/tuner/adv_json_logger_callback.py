@@ -8,18 +8,20 @@ from __future__ import annotations
 
 import json
 import logging
+from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ray import cloudpickle
 from ray.air.constants import EXPR_RESULT_FILE
+from ray.rllib.utils.metrics import EVALUATION_RESULTS
 from ray.tune.experiment.trial import Trial
 from ray.tune.logger import JsonLoggerCallback
 from ray.tune.utils.util import SafeFallbackEncoder  # pyright: ignore[reportPrivateImportUsage]
 
 from ray_utilities.callbacks.tuner._file_logger_fork_mixin import FileLoggerForkMixin
 from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback
-from ray_utilities.constants import FORK_FROM
+from ray_utilities.constants import EVALUATED_THIS_STEP, FORK_FROM
 from ray_utilities.postprocessing import remove_videos
 
 if TYPE_CHECKING:
@@ -56,7 +58,8 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, JsonLog
     def update_config(self, trial: "Trial", config: dict):
         # Overwrite super method to not use default names.
         # We can call super if this trial is not forked and has never been forked before.
-        if not self.is_trial_forked(trial) and FORK_FROM not in trial.config:
+        # Currently fork_data from parent is not sufficent for file names
+        if (not self.is_trial_forked(trial) and FORK_FROM not in trial.config) or self.is_fork_parent_checkpoint(trial):
             # Use default names
             super().update_config(trial, config)
             return
@@ -64,7 +67,13 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, JsonLog
 
         trial_local_path = Path(trial.local_path)  # pyright: ignore[reportArgumentType]
 
-        param_file_name_base = f"params-fork-{self.make_forked_trial_id(trial, trial.config[FORK_FROM])}"
+        if FORK_FROM not in trial.config:
+            # unreachable currently
+            assert self.is_fork_parent_checkpoint(trial)
+            fork_data = self._forked_trials[trial][-1]
+        else:
+            fork_data = trial.config[FORK_FROM]
+        param_file_name_base = f"params-fork-{self.make_forked_trial_id(trial, fork_data)}"
 
         config_out = Path(trial_local_path, param_file_name_base + ".json")
         with config_out.open("w") as f:
@@ -83,7 +92,7 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, JsonLog
     def _setup_file_handle(self, trial: Trial, local_file_path: Path) -> None:
         """Open the JSON file handle and update config."""
         trial.init_local_path()
-        self.update_config(trial, trial.config)
+        self.update_config(trial, deepcopy(trial.config))
         self._trial_files[trial] = local_file_path.open("at")
 
     def _handle_missing_parent_file(self, trial: Trial, local_file_path: Path) -> None:
@@ -95,6 +104,9 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, JsonLog
         )
 
     def log_trial_result(self, iteration: int, trial: Trial, result: dict[str, Any] | AnyLogMetricsDict):
+        if not result.get(EVALUATED_THIS_STEP, True):
+            # Do not eval metric if we did not log it, ray copies the entry.
+            result.pop(EVALUATION_RESULTS, None)
         super().log_trial_result(
             iteration,
             trial,
@@ -105,7 +117,7 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, JsonLog
         # NOTE: Because JsonLoggerCallback.log_trial_start is not compatible with forked trials
         # set _call_super_log_trial_start to False to not call it in this chain.
         call_super = True
-        if FORK_FROM in trial.config or self.is_trial_forked(trial):
+        if (FORK_FROM in trial.config or self.is_trial_forked(trial)) and not self.is_fork_parent_checkpoint(trial):
             self._call_super_log_trial_start = call_super = False
         super().log_trial_start(trial)
         assert self._call_super_log_trial_start is True

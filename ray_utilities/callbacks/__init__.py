@@ -25,7 +25,7 @@ __all__ = ["LOG_IGNORE_ARGS", "remove_ignored_args"]
 _K = TypeVar("_K")
 _V = TypeVar("_V")
 
-LOG_IGNORE_ARGS = (
+HPARAMS_IGNORE_ARGS = (
     "wandb",
     "comet",
     "not_parallel",
@@ -33,10 +33,19 @@ LOG_IGNORE_ARGS = (
     "tags",  # handles separately by callbacks
     "use_comet_offline",
 )
+
+LOG_IGNORE_ARGS = (
+    *HPARAMS_IGNORE_ARGS,
+    "log_stats",
+    "log_level",
+    "pid",
+)
 """
 Arguments that control logging and execution behavior rather than experiment hyperparameters.
 These attributes of the `DefaultArgumentParser` or keys in the `Trainable`'s `config`
 which should not processed by logging callbacks.
+
+Includes :data:`HPARAMS_IGNORE_ARGS` plus additional logging-specific arguments.
 """
 
 

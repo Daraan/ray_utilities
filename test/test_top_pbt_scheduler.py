@@ -236,6 +236,7 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
 
     @patch("ray.tune.execution.tune_controller.TuneController")
     @patch("ray.tune.schedulers.pbt.PopulationBasedTraining.on_trial_add")
+    @patch("pathlib.Path.open", new=MagicMock())
     def test_checkpoint_or_exploit(self, mock_controller, _on_trial_mock):
         """Test the checkpoint_or_exploit method."""
         scheduler = TopPBTTrialScheduler(

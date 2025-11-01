@@ -1,0 +1,62 @@
+{
+  "lr": {
+    "name": "FloatDistribution",
+    "attributes": {
+      "step": null,
+      "low": 1e-05,
+      "high": 0.1,
+      "log": true
+    }
+  },
+  "batch_size": {
+    "grid_search": [
+      128,
+      256,
+      512,
+      1024,
+      2048,
+      4096,
+      8192,
+      16384
+    ]
+  },
+  "gradient_accumulation": {
+    "grid_search": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14
+    ]
+  },
+  "minibatch_size": {
+    "grid_search": [
+      128,
+      256,
+      512,
+      1024,
+      2048,
+      4096,
+      8192,
+      16384
+    ]
+  },
+  "minibatch_scale": {
+    "grid_search": [
+      0.0625,
+      0.125,
+      0.25,
+      0.5,
+      1.0
+    ]
+  }
+}
