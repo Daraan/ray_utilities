@@ -879,9 +879,9 @@ class DQNArgumentParser(_BaseRLlibArgumentParser):
         self.add_argument("--tau", type=float, required=False)
         self.add_argument("--epsilon", type=_parse_lr, required=False)  # Reuse lr parser for schedule
         self.add_argument("--double_q", action="store_true", default=None)
-        self.add_argument("--no_double_q", action="store_false", dest="double_q")
-        self.add_argument("--dueling", action="store_true", default=None)
-        self.add_argument("--no_dueling", action="store_false", dest="dueling")
+        self.add_argument("--no_double_q", action="store_false", dest="double_q", required=False)
+        self.add_argument("--dueling", action="store_true", default=None, required=False)
+        self.add_argument("--no_dueling", action="store_false", dest="dueling", required=False)
 
 
 class RLlibArgumentParser(PPOArgumentParser, DQNArgumentParser):

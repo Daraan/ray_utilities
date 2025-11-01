@@ -8,7 +8,7 @@ from ray_utilities import get_runtime_env, run_tune
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
 from ray_utilities.setup import PPOSetup
-from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
+from ray_utilities.setup.ppo_mlp_setup import DQNMLPSetup, PPOMLPSetup
 
 # Replace outputs to be more human readable and less nested
 # env_runners -> training
@@ -21,8 +21,19 @@ os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
 os.environ.setdefault("RAY_DEDUP_LOGS_ALLOW_REGEX", "COMET|wandb")
 
 if __name__ == "__main__":
-    PPOMLPSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
-    PPOMLPSetup.group_name = "default-training"  # pyright: ignore
+    # Parse algorithm selection early to determine which setup to use
+    parser = DefaultArgumentParser()
+    temp_args, _ = parser.parse_known_args()
+    algorithm = getattr(temp_args, "algorithm", "ppo")
+
+    # Select setup class based on algorithm
+    if algorithm == "dqn":
+        SetupClass = DQNMLPSetup
+    else:
+        SetupClass = PPOMLPSetup
+
+    SetupClass.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
+    SetupClass.group_name = "default-training"  # pyright: ignore
 
     from experiments.create_tune_parameters import (
         default_distributions,
@@ -48,8 +59,9 @@ if __name__ == "__main__":
         "--comment", "Default training run",
     ):  # fmt: skip
         # Replace with your own setup class
-        setup: PPOSetup[DefaultArgumentParser] = PPOMLPSetup(
+        setup = SetupClass(
             config_files=["experiments/default.cfg", "experiments/models/mlp/default.cfg"]
         )
         with init_ray_with_setup(setup, runtime_env=get_runtime_env()):
             results = run_tune(setup)
+

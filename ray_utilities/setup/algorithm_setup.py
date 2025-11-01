@@ -149,15 +149,15 @@ class AlgorithmSetup(
         # Determine algorithm classes dynamically
         config_class, _ = cls._get_algorithm_classes(args)
         if config_class != cls.config_class:
-            # TODO: This will warn when using
-            ImportantLogger.important_warning(
-                "The selected algorithm config returned by _get_algorithm_classes does not match the class config_class attribute. "
-                "Will use the dynamically selected config class %s. ",
+            logger.warning(
+                "The selected algorithm config returned by _get_algorithm_classes "
+                "does not match the class config_class attribute. "
+                "Will use the dynamically selected config class %s.",
                 config_class.__name__,
             )
 
         learner_class = None
-        # Only use gradient accumulation learner for PPO
+        # Use gradient accumulation learner for both PPO and DQN
         if args.algorithm == "ppo" and (args.accumulate_gradients_every > 1 or args.dynamic_batch):
             # import lazy as currently not used elsewhere
             from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
