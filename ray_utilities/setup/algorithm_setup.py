@@ -165,7 +165,12 @@ class AlgorithmSetup(
             )
 
             learner_class = PPOTorchLearnerWithGradientAccumulation
-        # TODO: Implement a DQN variant with gradient accumulation
+        elif args.algorithm == "dqn" and (args.accumulate_gradients_every > 1 or args.dynamic_batch):
+            from ray_utilities.learners.dqn_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
+                DQNTorchLearnerWithGradientAccumulation,
+            )
+
+            learner_class = DQNTorchLearnerWithGradientAccumulation
 
         config, _module_spec = create_algorithm_config(
             args=args,
