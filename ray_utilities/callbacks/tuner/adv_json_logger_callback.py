@@ -22,6 +22,7 @@ from ray.tune.utils.util import SafeFallbackEncoder  # pyright: ignore[reportPri
 from ray_utilities.callbacks.tuner._file_logger_fork_mixin import FileLoggerForkMixin
 from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback
 from ray_utilities.constants import EVALUATED_THIS_STEP, FORK_FROM
+from ray_utilities.misc import warn_if_slow
 from ray_utilities.postprocessing import remove_videos
 
 if TYPE_CHECKING:
@@ -103,6 +104,7 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, JsonLog
             local_file_path,
         )
 
+    @warn_if_slow
     def log_trial_result(self, iteration: int, trial: Trial, result: dict[str, Any] | AnyLogMetricsDict):
         if not result.get(EVALUATED_THIS_STEP, True):
             # Do not eval metric if we did not log it, ray copies the entry.

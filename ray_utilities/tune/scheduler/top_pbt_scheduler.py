@@ -43,6 +43,7 @@ from typing import (
 
 import tree
 from ray.train._internal.session import _FutureTrainingResult, _TrainingResult
+from ray.tune.execution.tune_controller import TuneController
 from ray.tune.experiment import Trial
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.schedulers.pbt import PopulationBasedTraining, _fill_config
@@ -58,6 +59,7 @@ from ray_utilities.misc import (
     make_experiment_key,
     make_fork_from_csv_header,
     make_fork_from_csv_line,
+    warn_if_slow,
 )
 from ray_utilities.tune.scheduler.run_slow_trials_first_mixin import RunSlowTrialsFirstMixin
 from ray_utilities.typing import ForkFromData, Forktime, ForktimeTuple
@@ -1092,6 +1094,10 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         for (trial, parent_data), (fork_id, parent_fork_id) in self._fork_ids.items():
             contents += self._write_fork_data_csv_line(trial, parent_data, fork_id, parent_fork_id=parent_fork_id)
         return contents
+
+    @warn_if_slow
+    def on_trial_result(self, tune_controller: TuneController, trial: Trial, result: Dict) -> str:
+        return super().on_trial_result(tune_controller, trial, result)
 
     def on_trial_complete(
         self, tune_controller: TuneController, trial: Trial, result: FlatLogMetricsDict | dict[str, Any]

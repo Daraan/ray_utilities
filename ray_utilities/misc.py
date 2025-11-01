@@ -14,6 +14,7 @@ import math
 import os
 import re
 import sys
+import time
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, cast, overload
 
@@ -978,3 +979,39 @@ def find_threshold_divisor(target: int, threshold: int) -> int:
 
     # Print the closest value
     return closest
+
+
+def warn_if_slow(func: Callable) -> Callable:
+    """Decorator to time a function and log a warning if it exceeds 5 seconds."""
+
+    @functools.wraps(func)
+    def wrapper(self: object, *args, **kwargs):
+        start_time = time.time()
+        result = func(self, *args, **kwargs)
+        elapsed_time = time.time() - start_time
+        if elapsed_time > 5.0:
+            # Attempt to get the class name if the method is bound to an instance
+            try:
+                class_name = self.__class__.__name__
+                if class_name:
+                    _logger.warning(
+                        "Method '%s.%s' took %.2f seconds to execute, exceeding the 5s threshold.",
+                        class_name,
+                        func.__name__,
+                        elapsed_time,
+                    )
+                else:
+                    _logger.warning(
+                        "Function '%s' took %.2f seconds to execute, exceeding the 5s threshold.",
+                        func.__name__,
+                        elapsed_time,
+                    )
+            except AttributeError:
+                _logger.warning(
+                    "Function '%s' took %.2f seconds to execute, exceeding the 5s threshold. (Could not get attribute of class)",
+                    func.__name__,
+                    elapsed_time,
+                )
+        return result
+
+    return wrapper

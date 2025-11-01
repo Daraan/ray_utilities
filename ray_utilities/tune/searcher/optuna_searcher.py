@@ -47,7 +47,7 @@ from ray.tune.stopper import Stopper
 from ray.tune.utils import flatten_dict
 
 from ray_utilities.constants import DEFAULT_EVAL_METRIC, EVAL_METRIC_RETURN_MEAN, NEW_LOG_EVAL_METRIC
-from ray_utilities.misc import deep_freeze, new_log_format_used
+from ray_utilities.misc import deep_freeze, new_log_format_used, warn_if_slow
 from ray_utilities.nice_logger import ImportantLogger
 
 try:
@@ -281,6 +281,7 @@ class OptunaSearchWithPruner(OptunaSearch, Stopper):
             self._pruner_set = True
         return success
 
+    @warn_if_slow
     def on_trial_result(self, trial_id, result: dict[str, Any]) -> None:
         """
         Args:
@@ -309,6 +310,7 @@ class OptunaSearchWithPruner(OptunaSearch, Stopper):
         """Returns true if the experiment should be terminated."""
         return False
 
+    @warn_if_slow
     def __call__(self, trial_id: str, result: dict[str, dict[str, Any] | Any]) -> bool:
         """
         Stopper method called by the tuner

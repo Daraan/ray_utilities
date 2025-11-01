@@ -31,7 +31,7 @@ from ray_utilities.constants import (
     EVALUATED_THIS_STEP,
     FORK_FROM,
 )
-from ray_utilities.misc import ExperimentKey, make_experiment_key
+from ray_utilities.misc import ExperimentKey, make_experiment_key, warn_if_slow
 from ray_utilities.video.numpy_to_video import numpy_to_video
 
 from ._log_result_grouping import exclude_results, non_metric_results
@@ -462,6 +462,7 @@ class AdvCometLoggerCallback(
         if to_other:
             experiment.log_others(to_other)
 
+    @warn_if_slow
     def log_trial_result(  # pyright: ignore[reportIncompatibleMethodOverride]
         self,
         iteration: int,

@@ -24,11 +24,13 @@ from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, EVALUATED_THIS_STEP
 from ray_utilities.misc import (
     extract_trial_id_from_checkpoint,
     make_experiment_key,
+    warn_if_slow,
 )
 from ray_utilities.nice_logger import ImportantLogger
 
 try:
-    from wandb import Video, Settings as WandbSettings
+    from wandb import Settings as WandbSettings
+    from wandb import Video
 except ModuleNotFoundError:
 
     class _WandbNotInstalled:
@@ -43,10 +45,10 @@ from ._log_result_grouping import non_metric_results
 from ._save_video_callback import SaveVideoFirstCallback
 
 if TYPE_CHECKING:
+    import wandb
     from ray.actor import ActorProxy
     from ray.tune.experiment import Trial
 
-    import wandb
     from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor
     from ray_utilities.typing import ForkFromData
     from ray_utilities.typing.metrics import (
@@ -882,6 +884,7 @@ class AdvWandbLoggerCallback(
         except (OSError, subprocess.SubprocessError) as e:
             _logger.warning("Failed to sync offline run for trial %s: %s", trial.trial_id, e)
 
+    @warn_if_slow
     def log_trial_result(
         self,
         iteration: int,  # noqa: ARG002

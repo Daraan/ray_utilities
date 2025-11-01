@@ -13,7 +13,7 @@ from ray.tune.result import SHOULD_CHECKPOINT
 from typing_extensions import Self, deprecated
 
 from ray_utilities.constants import CURRENT_STEP, TUNE_RESULT_IS_A_COPY
-from ray_utilities.misc import get_current_step
+from ray_utilities.misc import get_current_step, warn_if_slow
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -113,6 +113,7 @@ class MetricCheckpointer(Callback):
         )
 
     @override(Callback)
+    @warn_if_slow
     def on_trial_result(
         self,
         iteration: int,

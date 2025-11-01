@@ -76,7 +76,12 @@ class ExperimentUploader(WandbUploaderMixin, CometUploaderMixin[ParserType_co]):
         self.args: NamespaceType[ParserType_co]
 
     def upload_offline_experiments(
-        self, results: Optional[ResultGrid] = None, tuner: Optional[tune.Tuner] = None, *, use_tqdm: bool = False
+        self,
+        results: Optional[ResultGrid] = None,
+        tuner: Optional[tune.Tuner] = None,
+        *,
+        use_tqdm: bool = False,
+        skip_synced: bool = True,
     ) -> None:
         unfinished_wandb_uploads = None
         failed_runs: list[str] = []
@@ -89,7 +94,9 @@ class ExperimentUploader(WandbUploaderMixin, CometUploaderMixin[ParserType_co]):
                     )
                 try:  # if no results (due to a failure) get them in a more hacky way.
                     # Do not wait to start uploading to comet.
-                    unfinished_wandb_uploads = self.wandb_upload_results(results, tuner, wait=False, use_tqdm=use_tqdm)
+                    unfinished_wandb_uploads = self.wandb_upload_results(
+                        results, tuner, wait=False, use_tqdm=use_tqdm, skip_synced=skip_synced
+                    )
                 except Exception:
                     logger.exception("Error while uploading offline experiments to WandB: %s")
             if self.args.comet and "upload" in self.args.comet:

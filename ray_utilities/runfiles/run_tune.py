@@ -225,7 +225,7 @@ def run_tune(
             logger.warning("No results returned from the tuner.")
         # File sync might still be in progress wait a bit
         time.sleep(8)
-        setup.upload_offline_experiments(results, tuner, use_tqdm=True)
+        setup.upload_offline_experiments(results, tuner, use_tqdm=True, skip_synced=False)
     except KeyboardInterrupt:
         pass
     except Exception:  # noqa: BLE001

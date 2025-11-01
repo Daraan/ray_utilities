@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from ray.tune.logger import LoggerCallback
 
 from ray_utilities.constants import RAY_UTILITIES_NEW_LOG_FORMAT
+from ray_utilities.misc import warn_if_slow
 from ray_utilities.postprocessing import log_metrics_to_new_layout
 
 if TYPE_CHECKING:
@@ -31,6 +32,7 @@ class NewStyleLoggerCallback(LoggerCallback):
     for their results dict.
     """
 
+    @warn_if_slow
     def on_trial_result(
         self,
         iteration: int,
