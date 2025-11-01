@@ -638,6 +638,9 @@ class SubcommandHandlerBase(Tap, Generic[Subparsers]):
 
 
 class _DefaultSetupArgumentParser(GoalParser, Tap):
+    algorithm: AlwaysRestore[Literal["ppo", "dqn"]] = "ppo"
+    """Algorithm to use: 'ppo' (Proximal Policy Optimization) or 'dqn' (Deep Q-Network)"""
+
     agent_type: AlwaysRestore[str] = "mlp"
     """Agent Architecture"""
 
@@ -648,8 +651,9 @@ class _DefaultSetupArgumentParser(GoalParser, Tap):
     """
     How many iterations to run.
 
-    An iteration consists of *n* iterations over the PPO batch, each further
-    divided into minibatches of size `minibatch_size`.
+    An iteration consists of *n* iterations over the training batch.
+    For PPO: further divided into minibatches of size `minibatch_size`.
+    For DQN: sampled from replay buffer.
     """
     total_steps: int = 1_000_000  # NOTE: Overwritten by Extra
 
@@ -679,6 +683,7 @@ class _DefaultSetupArgumentParser(GoalParser, Tap):
     def configure(self) -> None:
         # Short hand args
         super().configure()
+        self.add_argument("--algorithm", "-algo", choices=["ppo", "dqn"], default="ppo")
         self.add_argument("-a", "--agent_type")
         self.add_argument("-env", "--env_type")
         self.add_argument("--seed", default=None, type=int)
@@ -753,18 +758,24 @@ def _literal_tuple_or_none(value: str) -> tuple[int, int] | None:
         raise argparse.ArgumentTypeError(f"Invalid format: Could not parse '{value}'") from e
 
 
-class RLlibArgumentParser(_EnvRunnerParser):
-    """Attributes of this class have to be attributes of the AlgorithmConfig."""
+class _BaseRLlibArgumentParser(_EnvRunnerParser):
+    """Base parser for common RLlib algorithm configurations.
 
-    train_batch_size_per_learner: int = 2048  # batch size that ray samples
-    minibatch_size: int = 128
-    """Minibatch size used for backpropagation/optimization"""
+    Contains parameters shared across all RLlib algorithms (PPO, DQN, etc.).
+
+    Attention:
+        Attributes of this class have to be attributes of the AlgorithmConfig object.
+    """
+
+    train_batch_size_per_learner: int = 2048
+    """Batch size per learner. For PPO: synchronous sampling. For DQN: samples from replay buffer."""
 
     minibatch_scale: float | None = None
     """If set, minibatch_size will be scaled as: minibatch_size = int(train_batch_size_per_learner * minibatch_scale).
     Must be in range (0, 1]. A value of 1.0 sets minibatch_size equal to train_batch_size_per_learner."""
 
     lr: float | list[tuple[int, float]] = 1e-4
+    """Learning rate or schedule: float or list of (timestep, lr) tuples"""
 
     def configure(self) -> None:
         super().configure()
@@ -793,6 +804,37 @@ class RLlibArgumentParser(_EnvRunnerParser):
         warn_if_batch_size_not_divisible(
             batch_size=self.train_batch_size_per_learner, num_envs_per_env_runner=self.num_envs_per_env_runner
         )
+        return super().process_args()
+
+
+class PPOArgumentParser(_BaseRLlibArgumentParser):
+    """Parser for PPO-specific algorithm configurations.
+
+    Extends the base parser with PPO-specific parameters like minibatch size and number of epochs.
+
+    Attention:
+        Attributes of this class have to be attributes of the AlgorithmConfig object.
+    """
+
+    minibatch_size: int = 128
+    """Minibatch size for PPO SGD updates"""
+
+    num_epochs: int = 30
+    """Number of SGD epochs to run per training batch"""
+
+    def configure(self) -> None:
+        super().configure()
+        self.add_argument("--minibatch_size", type=int, required=False)
+        self.add_argument("--num_epochs", type=int, required=False)
+
+    def process_args(self):
+        super().process_args()
+        # Only run PPO-specific validations if algorithm is ppo
+        # Check if algorithm attribute exists (it comes from _DefaultSetupArgumentParser in the MRO)
+        algorithm = getattr(self, "algorithm", None)
+        if algorithm != "ppo":
+            return
+
         if self.minibatch_size > self.train_batch_size_per_learner:
             warn_about_larger_minibatch_size(
                 minibatch_size=self.minibatch_size,
@@ -803,7 +845,62 @@ class RLlibArgumentParser(_EnvRunnerParser):
         warn_if_minibatch_size_not_divisible(
             minibatch_size=self.minibatch_size, num_envs_per_env_runner=self.num_envs_per_env_runner
         )
-        return super().process_args()
+
+
+class DQNArgumentParser(_BaseRLlibArgumentParser):
+    """Parser for DQN-specific algorithm configurations.
+
+    Extends the base parser with DQN-specific parameters like target network updates,
+    replay buffer settings, and exploration parameters.
+    """
+
+    target_network_update_freq: int = 500
+    """Update the target network every N sample steps"""
+
+    num_steps_sampled_before_learning_starts: int = 1000
+    """Number of timesteps to collect before starting learning"""
+
+    tau: float = 1.0
+    """Update the target by τ * policy + (1-τ) * target_policy"""
+
+    epsilon: float | list[tuple[int, float]] = 1.0
+    """Epsilon for epsilon-greedy exploration. Float or schedule."""
+
+    double_q: bool = True
+    """Whether to use double DQN"""
+
+    dueling: bool = True
+    """Whether to use dueling DQN architecture"""
+
+    def configure(self) -> None:
+        super().configure()
+        self.add_argument("--target_network_update_freq", type=int, required=False)
+        self.add_argument("--num_steps_sampled_before_learning_starts", type=int, required=False)
+        self.add_argument("--tau", type=float, required=False)
+        self.add_argument("--epsilon", type=_parse_lr, required=False)  # Reuse lr parser for schedule
+        self.add_argument("--double_q", action="store_true", default=None)
+        self.add_argument("--no_double_q", action="store_false", dest="double_q")
+        self.add_argument("--dueling", action="store_true", default=None)
+        self.add_argument("--no_dueling", action="store_false", dest="dueling")
+
+
+class RLlibArgumentParser(PPOArgumentParser, DQNArgumentParser):
+    """Unified parser for RLlib algorithm configurations.
+
+    Includes parameters for both PPO and DQN algorithms by inheriting from both
+    :class:`PPOArgumentParser` and :class:`DQNArgumentParser`. The actual parameters
+    used depend on the --algorithm selection. This class maintains backward compatibility
+    by including all algorithm-specific parameters in a single parser.
+
+    The method resolution order (MRO) ensures that:
+    - :meth:`PPOArgumentParser.process_args` is called first (runs PPO validations if algorithm=="ppo")
+    - :meth:`DQNArgumentParser.process_args` is called next (currently no-op, just calls super)
+    - :meth:`_BaseRLlibArgumentParser.process_args` validates common parameters
+
+    Note:
+        For new code, consider using :class:`PPOArgumentParser` or :class:`DQNArgumentParser`
+        directly if you know which algorithm you're using.
+    """
 
 
 class DefaultResourceArgParser(Tap):
