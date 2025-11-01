@@ -13,7 +13,7 @@ import ray
 # Enable shell completion for this file
 import default_arguments.PYTHON_ARGCOMPLETE_OK
 from experiments.ray_init_helper import init_ray_with_setup
-from ray_utilities import get_runtime_env, run_tune, runtime_env
+from ray_utilities import get_runtime_env, run_tune
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.setup.ppo_mlp_setup import DQNMLPSetup
 
