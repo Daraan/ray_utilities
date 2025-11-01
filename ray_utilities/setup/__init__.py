@@ -55,8 +55,8 @@ See Also:
     :class:`ray.tune.Tuner`: Ray Tune hyperparameter optimization
 """
 
-from .algorithm_setup import PPOSetup
+from .algorithm_setup import DQNSetup, PPOSetup
 from .experiment_base import ExperimentSetupBase
 from .tuner_setup import TunerSetup
 
-__all__ = ["ExperimentSetupBase", "PPOSetup", "TunerSetup"]
+__all__ = ["DQNSetup", "ExperimentSetupBase", "PPOSetup", "TunerSetup"]
