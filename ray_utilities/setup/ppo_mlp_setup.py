@@ -5,12 +5,13 @@ from typing import TYPE_CHECKING, Any
 from typing_extensions import TypeVar
 
 from ray_utilities.config.parser.mlp_argument_parser import MLPArgumentParser, SimpleMLPParser
-from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
+from ray_utilities.setup.algorithm_setup import AlgorithmSetup, DQNSetup, PPOSetup
 from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co
 
 if TYPE_CHECKING:
     from argparse import Namespace
 
+    from ray.rllib.algorithms.dqn import DQN, DQNConfig
     from ray.rllib.algorithms.ppo import PPO, PPOConfig
 
 
@@ -37,6 +38,10 @@ class MLPSetup(AlgorithmSetup[ParserType_co, ConfigType_co, AlgorithmType_co]):
 
 class PPOMLPSetup(PPOSetup[ParserType_co], MLPSetup[ParserType_co, "PPOConfig", "PPO"]):
     """Setup for MLP-based PPO algorithms."""
+
+
+class DQNMLPSetup(DQNSetup[ParserType_co], MLPSetup[ParserType_co, "DQNConfig", "DQN"]):
+    """Setup for MLP-based DQN algorithms."""
 
 
 if TYPE_CHECKING:  # Check ABC

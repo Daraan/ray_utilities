@@ -7,13 +7,24 @@ import default_arguments.PYTHON_ARGCOMPLETE_OK
 from experiments.ray_init_helper import init_ray_with_setup
 from ray_utilities import get_runtime_env, run_tune
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.setup.scheduled_tuner_setup import PPOMLPWithReTuneSetup
+from ray_utilities.setup.scheduled_tuner_setup import DQNMLPWithReTuneSetup, PPOMLPWithReTuneSetup
 
 os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
 
 if __name__ == "__main__":
-    PPOMLPWithReTuneSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
-    PPOMLPWithReTuneSetup.group_name = "test-scheduler"  # pyright: ignore
+    # Parse algorithm selection early to determine which setup to use
+    parser = DefaultArgumentParser()
+    temp_args, _ = parser.parse_known_args()
+    algorithm = getattr(temp_args, "algorithm", "ppo")
+
+    # Select setup class based on algorithm
+    if algorithm == "dqn":
+        SetupClass = DQNMLPWithReTuneSetup
+    else:
+        SetupClass = PPOMLPWithReTuneSetup
+
+    SetupClass.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
+    SetupClass.group_name = "test-scheduler"  # pyright: ignore
 
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
@@ -34,7 +45,7 @@ if __name__ == "__main__":
         "--test",
         "--total_steps", 20_000
     ):  # fmt: skip
-        setup = PPOMLPWithReTuneSetup(
+        setup = SetupClass(
             config_files=["experiments/default.cfg", "experiments/models/mlp/default.cfg"],
         )  # Replace with your own setup class
         with init_ray_with_setup(setup, runtime_env=get_runtime_env()):
