@@ -94,8 +94,27 @@ class WandbUploaderMixin(UploadHelperMixin):
 
         Filled in :meth:`upload_paths` when starting uploads.
         """
+
         self._monitor: Optional[ActorProxy[_WandbRunMonitor]] = None
         self._history_artifact: dict[str, list[wandb.Artifact]] = {}
+
+    def __getstate__(self):
+        state = (
+            super().__getstate__()  # pyright: ignore[reportAttributeAccessIssue]
+            if hasattr(super(), "__getstate__")
+            else self.__dict__.copy()
+        )
+        # Cannot pickle processes and weakdict
+        state.pop("_upload_to_trial", None)
+        state["_monitor"] = None
+        return state
+
+    def __setstate__(self, state):
+        if hasattr(super(), "__setstate__"):
+            super().__setstate__(state)  # pyright: ignore[reportAttributeAccessIssue]
+        else:
+            self.__dict__.update(state)
+        self._upload_to_trial = weakref.WeakKeyDictionary()
 
     def wandb_upload_results(
         self,
