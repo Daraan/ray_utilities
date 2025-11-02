@@ -145,7 +145,7 @@ class UploadHelperMixin:
                     error_code = ExitCode.TIMEOUT
                     break
                 line = None
-                if process.stdout:
+                if process.stdout and not process.stdout.closed:
                     # Avoid hanging: only read if data is available
                     if os.name == "posix":
                         try:
