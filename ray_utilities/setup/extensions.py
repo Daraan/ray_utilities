@@ -23,9 +23,8 @@ from __future__ import annotations
 
 import json
 import logging
-from copy import deepcopy
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, cast
 
 import optuna
 from ray import tune
@@ -75,16 +74,11 @@ def optuna_dist_to_ray_distribution(dist: optuna.distributions.BaseDistribution)
 
         if log:
             if step is not None:
-                _logger.warning(
-                    "Ray Tune does not support both log scaling and quantization "
-                    "for FloatDistribution. Dropping quantization (step=%s).",
-                    step,
-                )
+                return tune.qloguniform(lower, upper, step)
             return tune.loguniform(lower, upper)
 
         if step is not None:
             return tune.quniform(lower, upper, step)
-
         return tune.uniform(lower, upper)
 
     if isinstance(dist, optuna.distributions.IntDistribution):
@@ -92,10 +86,12 @@ def optuna_dist_to_ray_distribution(dist: optuna.distributions.BaseDistribution)
         upper = dist.high
         step = dist.step
         log = dist.log
+        # NOTE: step is at least one in optuna distributions
+        # Optunas upper bound is inclusive, Ray Tune's is exclusive, json we also use exclusive upper bound
 
         if log:
-            # Ray Tune's lograndint expects exclusive upper bound
-            # Optuna enforces step=1 when log=True for IntDistribution
+            if step > 1:  # NOTE: Step is at least 1
+                return tune.qlograndint(lower, upper + 1, step)
             return tune.lograndint(lower, upper + 1)
 
         if step > 1:
@@ -108,6 +104,9 @@ def optuna_dist_to_ray_distribution(dist: optuna.distributions.BaseDistribution)
     if isinstance(dist, optuna.distributions.CategoricalDistribution):
         return tune.choice(dist.choices)
 
+    # grid_search, sample_from (included function) and normal distribution, randn, qrandn cannot be expressed by
+    # Optuna interface.
+
     raise TypeError(
         f"Unsupported Optuna distribution type: {type(dist).__name__}. "
         "Supported types are FloatDistribution, IntDistribution, and CategoricalDistribution."
@@ -115,7 +114,7 @@ def optuna_dist_to_ray_distribution(dist: optuna.distributions.BaseDistribution)
 
 
 def dict_to_ray_distributions(
-    dist_dict: dict[str, dict],
+    dist_dict: dict[str, dict[str, Any]] | dict[Literal["grid_search"], Sequence[Any]],
 ) -> ParameterSpace[Any]:
     """Convert a dictionary of Optuna distributions to Ray Tune distributions.
 
@@ -130,8 +129,15 @@ def dict_to_ray_distributions(
         A dictionary mapping parameter names to Ray Tune distributions.
     """
     if "grid_search" in dist_dict:
-        return {"grid_search": dist_dict["grid_search"]}  # type: ignore[return-value]
-    return optuna_dist_to_ray_distribution(optuna.distributions.json_to_distribution(json.dumps(dist_dict)))
+        if len(dist_dict) != 1:
+            _logger.warning("A grid_search dict should only contain the grid_search key, ignoring others keys")
+        return {"grid_search": cast("Sequence[Any]", dist_dict["grid_search"])}
+    try:
+        return optuna_dist_to_ray_distribution(optuna.distributions.json_to_distribution(json.dumps(dist_dict)))
+    except (ValueError, TypeError):
+        # Assume key, value match tune functions
+        key, value = next(iter(dist_dict.items()))
+        return getattr(tune, key)(**value)  # pyright: ignore[reportCallIssue]
 
 
 def load_distributions_from_json(
@@ -192,7 +198,7 @@ class TunableSetupMixin(ExperimentSetupBase[ParserType_co, ConfigType_co, Algori
             init_config=init_config,
             load_config_files=load_config_files,
         )
-        new.tune_parameters = data.get("tune_parameters", {})
+        new.tune_parameters = data.get("tune_parameters") or {}
         return new
 
     def create_param_space(self) -> dict[str, Any]:
