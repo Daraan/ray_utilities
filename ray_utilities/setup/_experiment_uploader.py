@@ -193,8 +193,16 @@ class ExperimentUploader(WandbUploaderMixin, CometUploaderMixin[ParserType_co]):
                 if not lines:
                     logger.info("No failed uploads to report, file %s is empty.", comet_fail_file.resolve())
                     return
-                logger.error("Reporting %d failed uploads from file %s:", len(lines), comet_fail_file.resolve())
-                for line in lines:
+                # There is the possibility of duplicates. TODO: investigate why comet duplicates in the 100s
+                seen = set()
+                lines_cleaned = [line for line in lines if not (line in seen or seen.add(line))]
+                logger.error(
+                    "Reporting %d (%d with duplicated lines) failed uploads from file %s:",
+                    len(lines_cleaned),
+                    len(lines),
+                    comet_fail_file.resolve(),
+                )
+                for line in lines_cleaned:
                     COMET_LOGGER.error(" - %s", line)
             else:
                 logger.info("No failed uploads to report, file %s does not exist.", comet_fail_file.resolve())

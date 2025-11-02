@@ -1279,7 +1279,7 @@ def verify_wandb_run_history(
     if len(online_history) == 0:
         # data incomplete
         logger.error(
-            "No online wandb history data found for run %s. Last server step %d, offline step %d",
+            "No online wandb history data found for run %s. Last server step %s, offline step %s",
             run_id,
             run.lastHistoryStep,
             last_iteration,
