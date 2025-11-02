@@ -1276,7 +1276,7 @@ def verify_wandb_run_history(
                 rel_diff = float("nan")
             failures.append(_FailureTuple(metric_name, offline_value, online_value, rel_diff))
             logger.error(
-                "❌ Mismatch in %18s: offline last %8s vs online last %8s (%.1f %)."
+                "❌ Mismatch in %18s: offline last %8s vs online last %8s (%.1f %%)."
                 "On WandB only logged until %6d step total %3d entries. (run id: %s)",
                 metric_name,
                 offline_value,
