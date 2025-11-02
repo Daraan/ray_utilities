@@ -148,6 +148,7 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         --tag:core --comment "Core: Tune batch_size + minibatch_size Size \
         --comet offline+upload --wandb offline+upload \
         --log_level IMPORTANT_INFO --log_stats timers+learners exhaustive"
+    [x] (259cfd25110202005af03)
 
 
 
@@ -172,6 +173,15 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         pbt --quantile_fraction 0.1 --perturbation_interval 0.125
     [ ] (0549cd2511011846a6733, canceled slow)
     [ ] (0549cd25110201490ef43)
+
+    #### Acrobot
+    python experiments/tune_with_scheduler.py \
+        --tune batch_size minibatch_size --num_samples 1 \
+        --tag:core --tag:pbt --comment "Core: PBT Tune batch_size + minibatch_size Size exhaustive, single environment" \
+        --comet offline+upload@end --wandb offline+upload@end --offline_loggers json --log_level IMPORTANT_INFO --log_stats timers+learners \
+        --num_envs_per_env_runner 1 --buffer_length auto \
+        pbt --quantile_fraction 0.1 --perturbation_interval 0.125
+
 
 ### PBT 2
 

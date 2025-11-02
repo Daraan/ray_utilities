@@ -475,12 +475,14 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         if self._setup.args.wandb:  # When using remote we should increase this with local mode we do not need much
             # Reserve extra memory for wandb logger. Queue and Logging actor need ~1gb each, so
             bundles[0]["memory"] = bundles[0].get("memory", 0) + 0.25 * 1024 * 1024 * 1024
-        if self._setup.args.uuid_selector or self._setup.args.hostname_selector:
+        if self._setup.args.node_id_selector or self._setup.args.hostname_selector:
             hostname_label = (
                 {"hostname": self._setup.args.hostname_selector} if self._setup.args.hostname_selector else {}
             )
-            uuid_label = {"uuid": self._setup.args.uuid_selector} if self._setup.args.uuid_selector else {}
-            bundle_label_selector = [hostname_label | uuid_label for _ in bundles]
+            node_id_label = (
+                {"ray.io/node-id": self._setup.args.node_id_selector} if self._setup.args.node_id_selector else {}
+            )
+            bundle_label_selector = [hostname_label | node_id_label for _ in bundles]
         else:
             bundle_label_selector = None
         resource_requirements = PlacementGroupFactory(

@@ -874,19 +874,17 @@ class DefaultResourceArgParser(Tap):
     | Not in | Label matches none of the provided values. | `"{"hostname": “!<in(val1,val2)>”}"`
     """
 
-    uuid_selector: NotAModelParameter[RestoreOverride[Optional[str]]] = None
+    node_id_selector: NotAModelParameter[RestoreOverride[Optional[str]]] = None
     """
-    Scheduling selector for Ray cluster nodes based on uuid labels.
-
-    Note:
-        clusters must have been started with the --labels uuid=<value> option
+    Scheduling selector for Ray cluster nodes based on its ray.io/node-id labels.
+    This label is added by default to all nodes
 
     | Operator | Description | Example syntax |
     | --- | --- | --- |
-    | Equals | Label matches exactly one value. | `"{“uuid”: “<value>”}"`
-    | Not equal | Label matches anything by one value. | `"{“uuid”: “<!value>”}"`
-    | In | Label matches one of the provided values. | `"{“uuid”: “<in(val1,val2)>”}"`
-    | Not in | Label matches none of the provided values. | `"{“uuid”: “!<in(val1,val2)>”}"`
+    | Equals | Label matches exactly one value. | `"{ray.io/node-id”: “<value>”}"`
+    | Not equal | Label matches anything by one value. | `"{ray.io/node-id”: “<!value>”}"`
+    | In | Label matches one of the provided values. | `"{ray.io/node-id”: “<in(val1,val2)>”}"`
+    | Not in | Label matches none of the provided values. | `"{ray.io/node-id”: “!<in(val1,val2)>”}"`
     """
 
     def process_args(self) -> None:

@@ -109,7 +109,12 @@ else:
 def get_runtime_env() -> _RuntimeEnv:
     """Get the runtime environment for Ray tasks and actors."""
     if os.environ.get("_RAY_UTILITIES_RUNTIME_ENV_LOADED", "0") != "1":
-        working_dir = Path("outputs/shared/.ray_working_dir").as_posix()
+        working_dir = Path("outputs/shared/.ray_working_dir")
+        if not working_dir.exists():
+            logger.error("Working dir %s does not exist, setting working_dir to None", working_dir)
+            working_dir = None
+        else:
+            working_dir = working_dir.as_posix()
         original_working_dir = os.getcwd()
     else:
         working_dir = None
