@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import threading
 import time
+import weakref
 from pathlib import Path
 from textwrap import indent
 from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping, NamedTuple, Optional, Sequence, cast, overload
@@ -23,20 +24,20 @@ import ray.exceptions
 import tree
 from pyarrow.fs import LocalFileSystem
 from tqdm import tqdm
-from wandb import Api
 
 from ray_utilities.callbacks.upload_helper import AnyPopen, ExitCode, UploadHelperMixin
 from ray_utilities.constants import FORK_DATA_KEYS, FORK_FROM, get_run_id
-from ray_utilities.misc import RE_GET_TRIAL_ID, ExperimentKey, get_trials_from_tuner
+from ray_utilities.misc import RE_GET_TRIAL_ID, ExperimentKey, close_process_pipes, get_trials_from_tuner
 from ray_utilities.nice_logger import ImportantLogger
+from wandb import Api
 
 if TYPE_CHECKING:
-    import wandb
     from ray import tune
     from ray.actor import ActorProxy
     from ray.tune import ResultGrid
     from wandb.apis.public.runs import Run, Runs
 
+    import wandb
     from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor as _WandbRunMonitor
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ class WandbUploaderMixin(UploadHelperMixin):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._unfinished_gathered_uploads: list[AnyPopen] = []
-        self._upload_to_trial: dict[AnyPopen, str] = {}
+        self._upload_to_trial: weakref.WeakKeyDictionary[AnyPopen, str] = weakref.WeakKeyDictionary()
         """
         Mapping of uploading processes to their trial IDs.
 
@@ -543,6 +544,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         uploads = []
 
         if failed_uploads:
+            # Close stdout pipes for all failed uploads to prevent file descriptor leaks
             try:
                 formatted_failed = "\n".join(
                     f"returncode: {p.returncode} args: {' '.join(p.args)}"  # pyright: ignore[reportArgumentType, reportCallIssue]
@@ -584,7 +586,7 @@ class WandbUploaderMixin(UploadHelperMixin):
             return unfinished_uploads
         return None
 
-    def _create_sync_marker(self, process: AnyPopen, process_to_trial: Optional[dict[AnyPopen, str]] = None):
+    def _create_sync_marker(self, process: AnyPopen, process_to_trial: Optional[Mapping[AnyPopen, str]] = None):
         """Create a marker file in successfully synced run directories.
 
         Args:
@@ -621,32 +623,42 @@ class WandbUploaderMixin(UploadHelperMixin):
         self,
         failed_uploads: Iterable[AnyPopen],
         file_dir: Path,
-        process_to_trial: Optional[dict[AnyPopen, str]] = None,
+        process_to_trial: Optional[Mapping[AnyPopen, str]] = None,
     ) -> Path:
         with _failed_upload_file_lock:
             failed_file = file_dir / get_wandb_failed_upload_file()
             with failed_file.open("a") as f:
                 for process in failed_uploads:
-                    trial_id = process_to_trial.get(process, "unknown") if process_to_trial else "unknown"
-                    formatted_args = (
-                        " ".join(map(str, process.args))
-                        if not isinstance(process.args, (str, bytes)) and isinstance(process.args, Iterable)
-                        else process.args
-                    )
-                    err = ""
-                    if process.stdout:
-                        # Check if there's data available with a timeout
-                        out_data: list[bytes] | list[str]
-                        output_left: bytes | str = b""
-                        out_data, _, _ = select.select([process.stdout], [], [], 1.0)
-                        if out_data:
-                            output_left = process.stdout.read()
-                            output_left = output_left if isinstance(output_left, bytes) else "\n".join(output_left)  # pyright: ignore[reportArgumentType, reportCallIssue]
-                        if isinstance(output_left, bytes):
-                            output_left = output_left.decode("utf-8")
-                        if output_left:
-                            err = "\n" + indent(output_left, prefix=" " * 4) + "\n"
-                    f.write(f"{trial_id} : {formatted_args}{err}\n")
+                    try:
+                        trial_id = process_to_trial.get(process, "unknown") if process_to_trial else "unknown"
+                        formatted_args = (
+                            " ".join(map(str, process.args))
+                            if not isinstance(process.args, (str, bytes)) and isinstance(process.args, Iterable)
+                            else process.args
+                        )
+                        err = ""
+                        # Check if stdout is still open and readable
+                        if process.stdout and not process.stdout.closed:
+                            # Check if there's data available with a timeout
+                            out_data: list[bytes] | list[str]
+                            output_left: bytes | str = b""
+                            try:
+                                out_data, _, _ = select.select([process.stdout], [], [], 1.0)
+                                if out_data:
+                                    output_left = process.stdout.read()
+                                    output_left = (
+                                        output_left if isinstance(output_left, bytes) else "\n".join(output_left)
+                                    )  # pyright: ignore[reportArgumentType, reportCallIssue]
+                                if isinstance(output_left, bytes):
+                                    output_left = output_left.decode("utf-8")
+                            except (ValueError, OSError) as e:
+                                logger.debug("Could not read from process stdout: %s", e)
+                                output_left = ""
+                            if output_left:
+                                err = "\n" + indent(output_left, prefix=" " * 4) + "\n"
+                        f.write(f"{trial_id} : {formatted_args}{err}\n")
+                    finally:
+                        close_process_pipes(process)
         # TODO: If we write this AFTER tune is done the file will not be synced to remote storage!
         logger.warning("Wrote details of failed uploads to %s", failed_file.resolve())
         return failed_file

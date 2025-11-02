@@ -68,6 +68,8 @@ from pathlib import Path
 from textwrap import indent
 from typing import Literal, Optional, Sequence, cast, overload
 
+from ray_utilities.misc import close_process_pipes
+
 try:
     import comet_ml
 except ImportError:
@@ -447,13 +449,22 @@ class CometArchiveTracker(UploadHelperMixin):
             if timeout is not None:
                 cls._failure_aware_wait(process, timeout=timeout, report_upload=False, upload_service_name="Comet")
                 if process.poll() is None:
-                    _LOGGER.error("Timeout expired while waiting for comet upload process to finish")
+                    _LOGGER.error("Timeout expired while waiting for comet upload process to finish. Closing pipe")
                     return False
             done = process.poll() is not None
             if not done:
-                _LOGGER.error("Should only call _finish_upload with finished processes", stacklevel=2)
-            stdout = process.stdout.read() if process.stdout else "No stdout"
-            stderr = process.stderr.read() if process.stderr else ""
+                _LOGGER.error("Should only call _finish_upload with finished processes. Closing pipes.", stacklevel=2)
+            try:
+                stdout = process.stdout.read() if process.stdout else "No stdout"
+            except Exception as e:  # noqa: BLE001
+                _LOGGER.error("Error reading stdout: %s", e)
+                stdout = "Error reading stdout"
+            try:
+                stderr = process.stderr.read() if process.stderr else ""
+            except Exception as e:  # noqa: BLE001
+                _LOGGER.error("Error reading stderr: %s", e)
+                stderr = "Error reading stderr"
+            close_process_pipes(process)
         else:
             stdout = process.stdout
             stderr = process.stderr
@@ -465,9 +476,13 @@ class CometArchiveTracker(UploadHelperMixin):
         if success:
             _COMET_OFFLINE_LOGGER.info("Successfully uploaded to comet:\n%s", color_comet_log_strings(stdout))
         else:
-            _COMET_OFFLINE_LOGGER.error("Error while uploading to comet:\n%s", color_comet_log_strings(stdout))
+            _COMET_OFFLINE_LOGGER.error(
+                "Error while uploading to comet:\n%s - closing pipes", color_comet_log_strings(stdout)
+            )
         if process.stderr:
-            _COMET_OFFLINE_LOGGER.error("Error while uploading to comet:\n%s", color_comet_log_strings(stderr))
+            _COMET_OFFLINE_LOGGER.error(
+                "Error while uploading to comet:\n%s - closing pipes", color_comet_log_strings(stderr)
+            )
         # If not successful write failed upload file
         if not success:
             with _failed_upload_file_lock:

@@ -135,8 +135,21 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
     python experiments/tune.py --tune batch_size minibatch_size --num_samples 36 -J 6 --tag:core --comet offline+upload --wandb offline+upload --log_level IMPORTANT_INFO --log_stats timers+learners --comment "Core: Tune batch_size + minibatch_size Size exhaustive" --num_env_runners 1
     [x] ( 259cfd2510310125f2493 )
 
+
     // Seed 128
     python experiments/tune.py --tune minibatch_size batch_size --num_samples 36 --tag:core --seed 128 --tag:seed=128 --comment "Core: Tune batch_size + minibatch_size Size exhaustive"
+
+    #### Acrobot
+    python experiments/tune.py \
+        --env_type Acrobot-v1 \
+        --tune batch_size minibatch_size \
+        --num_env_runners 1 \
+        --num_samples 36 -J 8 \
+        --tag:core --comment "Core: Tune batch_size + minibatch_size Size \
+        --comet offline+upload --wandb offline+upload \
+        --log_level IMPORTANT_INFO --log_stats timers+learners exhaustive"
+
+
 
 ### 1 env only:
 
@@ -153,10 +166,12 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
     // only 1 env (also use buffer_length="auto")
     python experiments/tune_with_scheduler.py \
         --tune batch_size minibatch_size --num_samples 1 \
-        --tag:core --tag:pbt --comment "Core: Tune batch_size + minibatch_size Size exhaustive, single environment" \
-        --comet offline+upload --wandb offline --offline_loggers json --log_level IMPORTANT_INFO --log_stats timers+learners \
+        --tag:core --tag:pbt --comment "Core: PBT Tune batch_size + minibatch_size Size exhaustive, single environment" \
+        --comet offline+upload@end --wandb offline+upload@end --offline_loggers json --log_level IMPORTANT_INFO --log_stats timers+learners \
         --num_envs_per_env_runner 1 --buffer_length auto \
         pbt --quantile_fraction 0.1 --perturbation_interval 0.125
+    [ ] (0549cd2511011846a6733, canceled slow)
+    [ ] (0549cd25110201490ef43)
 
 ### PBT 2
 

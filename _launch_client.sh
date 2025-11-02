@@ -4,7 +4,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=50G
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --signal=B:SIGUSR1@600
 #SBATCH --output=outputs/slurm_logs/%j-ray-client-%x.out
 #SBATCH --error=outputs/slurm_logs/%j-ray-client-%x.err

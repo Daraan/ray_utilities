@@ -31,7 +31,7 @@ from ray_utilities.constants import (
     EVALUATED_THIS_STEP,
     FORK_FROM,
 )
-from ray_utilities.misc import ExperimentKey, make_experiment_key, warn_if_slow
+from ray_utilities.misc import ExperimentKey, close_process_pipes, make_experiment_key, warn_if_slow
 from ray_utilities.video.numpy_to_video import numpy_to_video
 
 from ._log_result_grouping import exclude_results, non_metric_results
@@ -670,6 +670,7 @@ class AdvCometLoggerCallback(
                     if t.is_alive():
                         _LOGGER.warning("Comet offline upload thread did not finish in time")
             for process in self._processes:
+                close_process_pipes(process)
                 if (retcode := process.poll()) is None:
                     _LOGGER.info("Comet offline is still in progress (%s)", process.args)
                     try:  # noqa: SIM105

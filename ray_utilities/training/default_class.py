@@ -17,13 +17,12 @@ import os
 import pathlib
 import pickle
 import sys
+import time
 from abc import ABCMeta
 from collections import defaultdict
 from copy import copy, deepcopy
 from inspect import isclass
 from pathlib import Path
-from pprint import pformat
-import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, ClassVar, Collection, Generic, Optional, TypedDict, TypeVar, cast, overload
 
@@ -52,7 +51,7 @@ from typing_extensions import Self, TypeAliasType
 from ray_utilities.callbacks.progress_bar import restore_pbar, save_pbar_state, update_pbar
 from ray_utilities.callbacks.trainable.trainable_callback import TrainableCallbackExtension
 from ray_utilities.config.parser.default_argument_parser import LOG_STATS, LogStatsChoices
-from ray_utilities.constants import FORK_FROM, PERTURBED_HPARAMS, RAY_VERSION, TUNE_RESULT_IS_A_COPY
+from ray_utilities.constants import CURRENT_STEP, FORK_FROM, PERTURBED_HPARAMS, RAY_VERSION, TUNE_RESULT_IS_A_COPY
 from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
 from ray_utilities.misc import AutoInt, find_threshold_divisor, get_current_step, get_filesystem_uri_prefix, is_pbar
 from ray_utilities.nice_logger import ImportantLogger, set_project_log_level
@@ -773,7 +772,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             budget["iterations_per_step_size"][step_idx],
             (
                 iterations
-                if isinstance(iterations := self.config.get("iterations", self.config["cli_args"]["iterations"]), int)
+                if isinstance(
+                    iterations := self.config.get(
+                        "iterations",
+                        self.config.get("cli_args", {}).get("iterations"),
+                    ),
+                    int,
+                )
                 else float("inf")
             ),
         )
@@ -783,7 +788,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             checkpoint_unit = self.config["cli_args"]["checkpoint_frequency_unit"]
             if checkpoint_unit == TRAINING_ITERATION:
                 max_iterations = min(max_iterations, checkpoint_freq)
-            elif checkpoint_unit == "current_step":
+            elif checkpoint_unit == CURRENT_STEP:
                 steps_per_iteration = self.algorithm_config.train_batch_size_per_learner
                 checkpoint_iterations = checkpoint_freq // steps_per_iteration
                 max_iterations = min(max_iterations, checkpoint_iterations)
@@ -811,7 +816,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     max_iterations = pbt_iterations
             else:
                 _logger.warning(
-                    _logger,
                     "Unknown time_attr %s for PBT, cannot adjust buffered training iterations accordingly.",
                     pbt_unit,
                 )
@@ -843,17 +847,31 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 )
             finally:
                 self._during_buffered_training = False
-                self._buffer_steps_left = buffer_goal - self.iteration
+                left_from_last_time = self._buffer_steps_left
+                self._buffer_steps_left = max(0, buffer_goal - self.iteration)
                 if self.iteration < buffer_goal:
                     _logger.important_info(
-                        "Did not finish iteration goal step %s with %s buffered iterations at step size %s. "
+                        "Did not finish buffered training at iteration %d instead of %d "
+                        "Wanted to train %d buffered iterations with step size %d - %d iterations leftover from last buffered training. "
                         "Likely timed out. Will adjust next buffered training to match goal.",
+                        self.iteration,
                         buffer_goal,
                         max_iterations,
                         self.algorithm_config.train_batch_size_per_learner,
+                        left_from_last_time,
                     )
                 else:
                     assert self._buffer_steps_left == 0
+        # Should be 0 and False anyway if we should end up here
+        if self._buffer_steps_left != 0 or self._during_buffered_training:
+            _logger.warning(
+                "Inconsistent buffered training state at the end of train(): "
+                "_buffer_steps_left=%s, _during_buffered_training=%s. Resetting both.",
+                self._buffer_steps_left,
+                self._during_buffered_training,
+            )
+        self._buffer_steps_left = 0
+        self._during_buffered_training = False
         return super().train()
 
     @override(tune.Trainable)

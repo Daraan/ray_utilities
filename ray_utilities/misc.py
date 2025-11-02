@@ -58,6 +58,7 @@ if TYPE_CHECKING:
     from ray.tune.experiment import Trial
 
     from ray_utilities.callbacks._wandb_monitor import WandbRunMonitor
+    from ray_utilities.callbacks.upload_helper import AnyPopen
     from ray_utilities.typing import ForkFromData, StrictAlgorithmReturnData
     from ray_utilities.typing.metrics import LogMetricsDict
 
@@ -989,29 +990,43 @@ def warn_if_slow(func: Callable) -> Callable:
         start_time = time.time()
         result = func(self, *args, **kwargs)
         elapsed_time = time.time() - start_time
-        if elapsed_time > 5.0:
+        if elapsed_time > 2.5:
             # Attempt to get the class name if the method is bound to an instance
             try:
                 class_name = self.__class__.__name__
                 if class_name:
                     _logger.warning(
-                        "Method '%s.%s' took %.2f seconds to execute, exceeding the 5s threshold.",
+                        "Method '%s.%s' took %.2f seconds to execute, exceeding the 2.5s threshold.",
                         class_name,
                         func.__name__,
                         elapsed_time,
                     )
                 else:
                     _logger.warning(
-                        "Function '%s' took %.2f seconds to execute, exceeding the 5s threshold.",
+                        "Function '%s' took %.2f seconds to execute, exceeding the 2.5s threshold.",
                         func.__name__,
                         elapsed_time,
                     )
             except AttributeError:
                 _logger.warning(
-                    "Function '%s' took %.2f seconds to execute, exceeding the 5s threshold. (Could not get attribute of class)",
+                    "Function '%s' took %.2f seconds to execute, exceeding the 2.5s threshold. (Could not get attribute of class)",
                     func.__name__,
                     elapsed_time,
                 )
         return result
 
     return wrapper
+
+
+def close_process_pipes(process: AnyPopen):
+    for std_pipe in (process.stdout, process.stderr):
+        if std_pipe and not std_pipe.closed:
+            try:
+                std_pipe.close()
+                _logger.debug("Closed stdout pipe for process %s. Returncode: %s", process.pid, process.returncode)
+            except Exception:
+                _logger.exception(
+                    "Error closing stdout pipe for failed upload process %s, Returncode: %s",
+                    process.pid,
+                    process.returncode,
+                )

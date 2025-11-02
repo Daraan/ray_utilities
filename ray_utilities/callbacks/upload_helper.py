@@ -148,12 +148,20 @@ class UploadHelperMixin:
                 if process.stdout:
                     # Avoid hanging: only read if data is available
                     if os.name == "posix":
-                        rlist, _, _ = select.select([process.stdout], [], [], 0.2)
-                        if rlist:
+                        try:
+                            rlist, _, _ = select.select([process.stdout], [], [], 0.2)
+                        except ValueError:
+                            logger.exception("Error selecting stdout for wandb upload process")
+                            rlist = []
+                            line = ""
+                        else:
                             line = process.stdout.readline()
                     else:
                         line = process.stdout.readline()
                 time_now = time.time()
+                # ray.tune.utils.util import warn_if_slow
+                # from ray.tune.execution import tune_controller
+
                 if time_now - last_time > 15:
                     logger.info(
                         "Still uploading trial %s (pid %s) to %s after %.1f seconds...",

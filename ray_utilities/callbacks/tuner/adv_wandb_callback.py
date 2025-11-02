@@ -22,6 +22,7 @@ from ray_utilities.callbacks.tuner.wandb_helpers import FutureArtifact, FutureFi
 from ray_utilities.callbacks.wandb import WandbUploaderMixin
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, EVALUATED_THIS_STEP, FORK_FROM, get_run_id
 from ray_utilities.misc import (
+    close_process_pipes,
     extract_trial_id_from_checkpoint,
     make_experiment_key,
     warn_if_slow,
@@ -45,10 +46,10 @@ from ._log_result_grouping import non_metric_results
 from ._save_video_callback import SaveVideoFirstCallback
 
 if TYPE_CHECKING:
-    import wandb
     from ray.actor import ActorProxy
     from ray.tune.experiment import Trial
 
+    import wandb
     from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor
     from ray_utilities.typing import ForkFromData
     from ray_utilities.typing.metrics import (
@@ -1052,6 +1053,9 @@ class AdvWandbLoggerCallback(
                         failed_uploads.append(process)
             if failed_uploads and trials and trials[0].local_experiment_path:
                 self._update_failed_upload_file(failed_uploads, Path(trials[0].local_experiment_path))
+            elif failed_uploads:
+                for process in failed_uploads:
+                    close_process_pipes(process)
         # Close all open monitor tabs
         try:
             if self._monitor:
