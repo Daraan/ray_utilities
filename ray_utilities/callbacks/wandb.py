@@ -241,7 +241,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         return True, False
 
     def _check_with_monitor_and_retry(self, process: AnyPopen, timeout=120) -> int:
-        logger.info("Process %s failed with returncode %d, checking parent with monitor", process, process.returncode)
+        logger.info("Process %s failed with returncode %s, checking parent with monitor", process, process.returncode)
 
         start = time.time()
         trial_id = self._upload_to_trial.get(process, "")
