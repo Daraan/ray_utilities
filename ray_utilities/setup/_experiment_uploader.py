@@ -11,6 +11,7 @@ from typing_extensions import Sentinel, TypeVar
 
 from ray_utilities._runtime_constants import COMET_OFFLINE_DIRECTORY
 from ray_utilities.callbacks.comet import COMET_FAILED_UPLOAD_FILE, CometArchiveTracker
+from ray_utilities.callbacks.upload_helper import ExitCode
 from ray_utilities.callbacks.wandb import WandbUploaderMixin, get_wandb_failed_upload_file
 from ray_utilities.constants import get_run_id
 from ray_utilities.misc import get_trials_from_tuner
@@ -109,6 +110,11 @@ class ExperimentUploader(WandbUploaderMixin, CometUploaderMixin[ParserType_co]):
                 for process in unfinished_wandb_uploads:
                     exit_code = self._failure_aware_wait(process, timeout=900, trial_id="", upload_service_name="wandb")
                     if exit_code != 0:
+                        if exit_code == ExitCode.COMET_ALREADY_UPLOADED:
+                            logger.warning(
+                                "Experiment was already uploaded to Comet, but zip file was not yet moved. "
+                                "Possibility that earlier run did not finish and need to be reuploaded (investigate)"
+                            )
                         try:
                             failed_runs.append(" ".join(process.args))  # pyright: ignore[reportArgumentType, reportCallIssue]
                         except TypeError:

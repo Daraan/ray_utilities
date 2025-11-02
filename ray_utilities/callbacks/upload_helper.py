@@ -61,6 +61,9 @@ class ExitCode(IntEnum):
     WANDB_UNKNOWN_ERROR = auto()
     """Process failed due to an unknown WandB specific error."""
 
+    COMET_ALREADY_UPLOADED = -1
+    """The experiment was already uploaded to Comet, but the zip file was not yet moved."""
+
     NO_PARENT_FOUND = 499
     """No parent found for the current run, but one was expected - this points at a implementation error."""
 
@@ -202,6 +205,9 @@ class UploadHelperMixin:
                             error_code = ExitCode.WANDB_BEHIND_STEP
                         elif "wandb file is empty" in line:
                             error_code = ExitCode.WANDB_FILE_EMPTY
+                        elif "experiment was already uploaded" in line:
+                            # we already uploaded to comet, zip not yet moved
+                            error_code = ExitCode.COMET_ALREADY_UPLOADED
                         else:
                             error_code = ExitCode.ERROR
                         if not recoverable:
