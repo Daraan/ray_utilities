@@ -29,11 +29,12 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
 
 import optuna
 from ray import tune
-from typing_extensions import Self, deprecated
+from typing_extensions import Self
 
 from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradientAccumulation
 from ray_utilities.callbacks.algorithm.dynamic_buffer_callback import DynamicBufferUpdate
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import add_dynamic_eval_callback_if_missing
+from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.setup.experiment_base import (
     AlgorithmType_co,
     ConfigType_co,
@@ -149,10 +150,11 @@ class TunableSetupMixin(ExperimentSetupBase[ParserType_co, ConfigType_co, Algori
 
     def __init__(self, *args, **kwargs):
         if self.__restored__:
-            return
-        self.tune_parameters: dict[str, ParameterSpace[Any] | optuna.distributions.BaseDistribution] = {}
+            _logger.debug("Not calling set_tune_parameters as instance is being restored.")
+        else:
+            self.tune_parameters: dict[str, ParameterSpace[Any] | optuna.distributions.BaseDistribution] = {}
+            self.set_tune_parameters()
         super().__init__(*args, **kwargs)
-        self.set_tune_parameters()
 
     def add_tune_parameter(self, name: str, param_space: ParameterSpace[Any]) -> None:
         """Add a parameter to the tuning space.
@@ -199,6 +201,20 @@ class TunableSetupMixin(ExperimentSetupBase[ParserType_co, ConfigType_co, Algori
             return param_space
         for parameter in self.args.tune:
             if parameter in self.tune_parameters:
+                if parameter in param_space:
+                    ImportantLogger.important_warning(
+                        _logger,
+                        "Overriding existing param_space entry for '%s' (%s) -> (%s).",
+                        parameter,
+                        param_space[parameter],
+                        self.tune_parameters[parameter],
+                    )
+                else:
+                    ImportantLogger.important_info(
+                        _logger,
+                        "Adding tuning parameter '%s' to param_space.",
+                        parameter,
+                    )
                 param_space[parameter] = self.tune_parameters[parameter]
         return param_space
 
@@ -289,10 +305,6 @@ class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType_co, ConfigType_co,
         :class:`SetupWithDynamicBatchSize`: Companion mixin for batch size dynamics
     """
 
-    rollout_size_sample_space: ClassVar[ParameterSpace[int]] = tune.grid_search(
-        [32, 64, 128, 256, 512, 1024, 2048, 3072, 4096, 2048 * 3, 8192]  # 4096 * 3, 16384]
-    )
-
     @classmethod
     def _get_callbacks_from_args(cls, args) -> list[type[RLlibCallback]]:
         # Can call the parent; might be None for ExperimentSetupBase
@@ -301,27 +313,6 @@ class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType_co, ConfigType_co,
             callbacks.append(DynamicBufferUpdate)
             add_dynamic_eval_callback_if_missing(callbacks)
         return callbacks
-
-    @classmethod
-    def _create_dynamic_buffer_params(cls):
-        return deepcopy(cls.rollout_size_sample_space)
-
-    def create_param_space(self) -> dict[str, Any]:
-        self._set_dynamic_parameters_to_tune()  # sets _dynamic_parameters_to_tune
-        if not self.args.tune or not (
-            (add_all := "all" in self._dynamic_parameters_to_tune) or "rollout_size" in self._dynamic_parameters_to_tune
-        ):
-            return super().create_param_space()
-        if not add_all:
-            self._dynamic_parameters_to_tune.remove(
-                "rollout_size"
-            )  # remove before calling super().create_param_space()
-        param_space = super().create_param_space()
-        # TODO: # FIXME "rollout_size" is not used anywhere
-        # however train_batch_size_per_learner is used with the DynamicBatchSize Setup
-        # which uses in ints dynamic variant gradient accumulation.
-        param_space["rollout_size"] = self._create_dynamic_buffer_params()
-        return param_space
 
 
 class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType_co, ConfigType_co, AlgorithmType_co]):
@@ -374,55 +365,12 @@ class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType_co, ConfigType_
             Evaluation callback
     """
 
-    batch_size_sample_space: ClassVar[ParameterSpace[int]] = tune.grid_search(
-        [64, 128, 256, 512, 1024, 2048, 3072, 4096, 2048 * 3, 8192]  # 4096 * 3, 16384]
-    )
-    """
-    Tune parameter space with batch sizes from 32 to 16384.
-    """
-
     @classmethod
     def _get_callbacks_from_args(cls, args) -> list[type[RLlibCallback]]:
-        # When used as a mixin, can call the parent; might be None for ExperimentSetupBase
+        # When used as a mixin, can call the parent; might be None for
         callbacks = super()._get_callbacks_from_args(args)
+        # TODO: Add dynamic minibatch scaling option
         if args.dynamic_batch:
             callbacks.append(DynamicGradientAccumulation)
             add_dynamic_eval_callback_if_missing(callbacks)
         return callbacks
-
-    @classmethod
-    def _create_dynamic_batch_size_params(cls):
-        """Create parameter space for dynamic batch size tuning.
-
-        Returns a deep copy of the class's batch size sample space for use in
-        hyperparameter optimization. The returned parameter space contains
-        batch size values that will be achieved through gradient accumulation.
-
-        Returns:
-            A Ray Tune parameter space containing batch size values for optimization.
-
-        Note:
-            The returned parameters represent effective batch sizes achieved through
-            gradient accumulation, not the gradient accumulation multiplier values directly.
-
-        Warning:
-            This method adds ``batch_size`` parameters to the tuning space, not
-            values for direct gradient accumulation control.
-        """
-        # TODO: control this somehow via args
-        return deepcopy(cls.batch_size_sample_space)
-
-    @deprecated("Use less hidden methods to set the dynamic parameters to tune.")
-    def create_param_space(self) -> dict[str, Any]:
-        self._set_dynamic_parameters_to_tune()  # sets _dynamic_parameters_to_tune
-        if not self.args.tune or not (
-            (add_all := "all" in self._dynamic_parameters_to_tune) or "batch_size" in self._dynamic_parameters_to_tune
-        ):
-            return super().create_param_space()
-        if not add_all:
-            self._dynamic_parameters_to_tune.remove("batch_size")  # remove before calling super().create_param_space()
-        # TODO: That in the dynamic variant gradient_accumulation is used and here train_batch_size_per_learner
-        # is contradictory naming
-        param_space = super().create_param_space()
-        param_space["train_batch_size_per_learner"] = self._create_dynamic_batch_size_params()
-        return param_space

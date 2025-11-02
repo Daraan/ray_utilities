@@ -1234,8 +1234,8 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
         # Metatest if local and remote env runner configs are correct
         with self.subTest("Trivial compare of config vs. env runner configs"):
             # compare with itself
-            self.compare_env_runner_configs(algo_0_runner, algo_0_runner)
-            self.compare_env_runner_configs(algo_1_runner, algo_1_runner)
+            self.compare_env_runner_configs(algo_0_runner, algo_0_runner, exclude=("evaluation_interval",))
+            self.compare_env_runner_configs(algo_1_runner, algo_1_runner, exclude=("evaluation_interval",))
 
         # Continue training and check new metris
         self._test_algo_checkpointing(

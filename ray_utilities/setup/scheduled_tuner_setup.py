@@ -84,6 +84,7 @@ class ScheduledTunerSetup(TunerSetup[SetupType_co]):
 class ReTunerSetup(ScheduledTunerSetup[SetupType_co]):
     def create_scheduler(self) -> schedulers.TrialScheduler:
         assert self._setup.args.command is not None
+        logger.warning("Creating ReTuneScheduler with hardcoded hyperparam_mutations.")
         return ReTuneScheduler(
             perturbation_interval=self._setup.args.command.perturbation_interval,
             resample_probability=self._setup.args.command.resample_probability,

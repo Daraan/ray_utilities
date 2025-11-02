@@ -29,6 +29,7 @@ class RunSlowTrialsFirstMixin(PopulationBasedTraining):
         candidates.sort(
             key=lambda trial: (
                 self._trial_state[trial].last_train_time,
+                trial.config.get("minibatch_size", 256),
                 trial.config.get("train_batch_size_per_learner", 512),
             )
         )

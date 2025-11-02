@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, cast
 
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
 from ray_utilities.callbacks.algorithm.model_config_saver_callback import save_model_config_and_architecture
+from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.warn import (
     warn_about_larger_minibatch_size,
     warn_if_batch_size_not_divisible,
@@ -354,9 +355,10 @@ def create_algorithm_config(
         callbacks.append(DiscreteEvalCallback)
     if args["env_seeding_strategy"] == "sequential":
         # Must set this in the trainable with seed_environments_for_config(config, env_seed)
-        logger.info(
+        ImportantLogger.important_info(
+            logger,
             "Using sequential env seed strategy, "
-            "Remember to call seed_environments_for_config(config, env_seed) with a seed acquired from the trial."
+            "Remember to call seed_environments_for_config(config, env_seed) with a seed acquired from the trial.",
         )
     elif args["env_seeding_strategy"] == "same":
         # TODO: could use env_seed here, allows to sample a constant random seed != args["seed"]
