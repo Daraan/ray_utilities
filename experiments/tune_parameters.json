@@ -1,11 +1,9 @@
 {
   "lr": {
-    "name": "FloatDistribution",
-    "attributes": {
-      "step": null,
-      "low": 1e-05,
-      "high": 0.1,
-      "log": true
+    "qloguniform": {
+      "lower": 5e-05,
+      "upper": 0.1,
+      "q": 5e-05
     }
   },
   "batch_size": {

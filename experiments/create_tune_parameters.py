@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from math import log2
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, Mapping
 
 from optuna.distributions import (
     BaseDistribution,
@@ -30,7 +30,9 @@ __all__ = [
     "write_distributions_to_json",
 ]
 
-GridSearch = dict[Literal["grid_search"], list[float | int | str]]
+GridSearch = Mapping[Literal["grid_search"], list[float | int | str]]
+
+DistributionDefinition = BaseDistribution | GridSearch | Mapping[str, Mapping[str, float | bool]]
 
 ACCUMULATION_BATCH_SIZE_BASE = DefaultArgumentParser.minibatch_size
 
@@ -41,9 +43,8 @@ max_exp = log2(MAX_DYNAMIC_BATCH_SIZE)
 assert max_exp.is_integer()
 max_exp = int(max_exp)
 
-default_distributions: dict[str, BaseDistribution | GridSearch] = {
-    # TODO log and step cannot be used togher
-    # "lr": FloatDistribution(5e-5, 1e-1, log=True, step=5e-5),
+default_distributions: dict[str, DistributionDefinition] = {
+    "lr": {"qloguniform": {"lower": 5e-5, "upper": 1e-1, "q": 5e-5}},
     "batch_size": {"grid_search": [128, 256, 512, 1024, 2048, 4096, 8192, 8192 * 2]},
     # NOTE: Upperbound of gradient_accumulation num_epochs * train_batch_size_per_learner / minibatch_size
     "gradient_accumulation": {"grid_search": list(range(1, max_exp + 1))},  # assume 512 as base
@@ -54,11 +55,11 @@ default_distributions: dict[str, BaseDistribution | GridSearch] = {
 
 
 def write_distributions_to_json(
-    distributions: dict[str, BaseDistribution | GridSearch] | None,
+    distributions: dict[str, DistributionDefinition] | None,
     output_file: Path | None = None,
 ) -> Path:
     """Write the given distributions to a JSON file."""
-    json_distributions: dict[str, dict] = {}
+    json_distributions: dict[str, Mapping] = {}
     if distributions is None:
         distributions = default_distributions
 
@@ -66,7 +67,7 @@ def write_distributions_to_json(
         if isinstance(dist, BaseDistribution):
             json_distributions[key] = json.loads(distribution_to_json(dist))
         else:
-            json_distributions[key] = {"grid_search": dist["grid_search"]}
+            json_distributions[key] = dist
 
     if output_file is None:
         output_file = Path(__file__).parent / "tune_parameters.json"

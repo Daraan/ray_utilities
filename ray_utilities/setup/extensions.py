@@ -134,7 +134,7 @@ def dict_to_ray_distributions(
         return {"grid_search": cast("Sequence[Any]", dist_dict["grid_search"])}
     try:
         return optuna_dist_to_ray_distribution(optuna.distributions.json_to_distribution(json.dumps(dist_dict)))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, KeyError):
         # Assume key, value match tune functions
         key, value = next(iter(dist_dict.items()))
         return getattr(tune, key)(**value)  # pyright: ignore[reportCallIssue]
