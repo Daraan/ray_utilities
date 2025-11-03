@@ -162,7 +162,7 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
     python experiments/tune_with_scheduler.py --tune batch_size minibatch_size --num_samples 2 --tag:core --tag:pbt --comet offline+upload --wandb offline --offline_loggers json --log_level IMPORTANT_INFO  --comment "Core: Tune batch_size + minibatch_size Size exhaustive" --num_env_runners 1 --evaluation_num_env_runners 1 --log_stats timers+learners pbt --quantile_fraction 0.1 --perturbation_interval 0.125
     [💥] Default-mlp-CartPole-v1-0549cd2510310950a3bb3 (incomplete)
     [x] (0549cd2510312359a666, unfinished)
-    [ ] (0549cd251101162659a73)
+    [x] (0549cd251101162659a73)  (some errors on last steps, uploaded)
 
     // only 1 env (also use buffer_length="auto")
     python experiments/tune_with_scheduler.py \
@@ -172,7 +172,7 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         --num_envs_per_env_runner 1 --buffer_length auto \
         pbt --quantile_fraction 0.1 --perturbation_interval 0.125
     [ ] (0549cd2511011846a6733, canceled slow)
-    [ ] (0549cd25110201490ef43)
+    [ ] (0549cd25110201490ef43)  errored at mid run
 
     #### Acrobot
     // 1 env only
@@ -182,7 +182,7 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         --tag:core --tag:pbt --comment "Core: PBT Tune batch_size + minibatch_size Size exhaustive, single environment" \
         --comet offline+upload@end --wandb offline+upload@end --offline_loggers json --log_level IMPORTANT_INFO --log_stats timers+learners \
         pbt --quantile_fraction 0.1 --perturbation_interval 0.125
-    [ ] ( 0549cd2511021624bba43)
+    [ ] ( 0549cd2511021624bba43) errored
 
 
     #### Lunar Lander

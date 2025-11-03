@@ -1268,11 +1268,23 @@ class ExperimentSetupBase(
             return True  # If the iteration is set manually do add a stopper
         return False if len({"iterations", "batch_size", "train_batch_size_per_learner"} & tune_keys) > 0 else None
 
-    def create_tuner(self: ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]) -> tune.Tuner:
+    _tuner_setup_cls = TunerSetup
+
+    @property
+    def tuner_setup_class(self):
+        return self._tuner_setup_cls
+
+    def create_tuner(
+        self: ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co], *, adv_loggers: bool = True
+    ) -> tune.Tuner:
         """Create a Ray Tune tuner for hyperparameter optimization.
 
         Creates a tuner with sensible defaults for reinforcement learning experiments,
         including episode return maximization and standard stopping criteria.
+
+        Args:
+            adv_loggers: If True (default), adds the advanced variants of the CSV, JSON, and TBX logger
+                instead of the default variants.
 
         Returns:
             Configured Ray Tune tuner ready for hyperparameter optimization.
@@ -1289,7 +1301,7 @@ class ExperimentSetupBase(
             :class:`TunerSetup`: Advanced tuner configuration options
             :class:`ray.tune.Tuner`: Underlying Ray Tune tuner class
         """
-        tuner_setup = TunerSetup(
+        tuner_setup = self.tuner_setup_class(
             setup=self,
             eval_metric=self.args.metric,
             eval_metric_order=self.args.mode,
@@ -1297,7 +1309,7 @@ class ExperimentSetupBase(
             trial_name_creator=self._tune_trial_name_creator,
         )
         # Create backup in dir, get run_config from tuner
-        tuner = tuner_setup.create_tuner()
+        tuner = tuner_setup.create_tuner(adv_loggers=adv_loggers)
         if hasattr(tuner, "_local_tuner"):
             assert tuner._local_tuner
             run_config = tuner._local_tuner.get_run_config()
@@ -1425,6 +1437,7 @@ class ExperimentSetupBase(
             with s3_fs.open_output_stream(s3_path) as f:
                 cloudpickle.dump(run_state, f)
             logger.info("Created experiment restore file at %s %s", s3_fs.type_name, s3_path)
+            # TODO Save copy in local dir as well, but local path is created later by ray.
         else:
             path_obj = Path(path)
             if path_obj.is_dir():

@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 import traceback
+from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, List, Optional, cast
@@ -23,6 +24,7 @@ from ray_utilities.callbacks.wandb import WandbUploaderMixin
 from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, EVALUATED_THIS_STEP, FORK_FROM, get_run_id
 from ray_utilities.misc import (
     close_process_pipes,
+    deep_freeze,
     extract_trial_id_from_checkpoint,
     make_experiment_key,
     warn_if_slow,
@@ -142,6 +144,7 @@ class AdvWandbLoggerCallback(
         self._gatherer_threads: list[threading.Thread] = []
         self._local_threads: dict[Trial, threading.Thread] = {}
         self._local_logging = True
+        self._seen_config_hashes: defaultdict[str, set[int]] = defaultdict(set)
 
     @property
     def _gather_uploads_lock(self) -> threading.Lock:
@@ -962,10 +965,22 @@ class AdvWandbLoggerCallback(
             # Do not eval metric if we did not log it, ray copies the entry.
             result.pop(EVALUATION_RESULTS, None)
 
-        result_clean = _clean_log(self.preprocess_videos(result))
+        result_clean = cast("dict[str, Any]", _clean_log(self.preprocess_videos(result)))
         if not self.log_config:
             # Config will be logged once log_trial_start
             result_clean.pop("config", None)  # type: ignore
+        elif "config" in result_clean:
+            # Check if we have seen the config for the current trial_id, log only at the steps
+            # where we actually change it. Note this creates a metric called config/...
+            result_clean.pop("cli_args", None)  # we never modify cli_args which should be run.config
+            config_hash = hash(deep_freeze(result_clean["config"]))
+            if config_hash in self._seen_config_hashes[self.get_trial_id(trial)]:
+                result_clean.pop("config", None)
+            else:
+                # improve by only logging the changed key.
+                self._seen_config_hashes[self.get_trial_id(trial)].add(config_hash)
+
+            # Check if the config has
         self._trial_queues[trial].put((_QueueItem.RESULT, result_clean))
 
     def on_trial_error(self, iteration: int, trials: List[Trial], trial: Trial, **info):

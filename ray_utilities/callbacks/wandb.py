@@ -340,9 +340,10 @@ class WandbUploaderMixin(UploadHelperMixin):
                     wandb_sync_files = list(run_dirs.glob("run-*.wandb.synced"))
                     if wandb_sync_files:
                         logger.warning(
-                            "Found WandB sync marker file(s) in %s: %s. This run was likely already uploaded to WandB.",
+                            "Found WandB sync marker file(s) in %s: %s. This run was likely already uploaded to WandB - %s.",
                             run_dirs,
                             [f.name for f in wandb_sync_files],
+                            "skipping" if skip_synced else "uploading anyway",
                         )
 
                     # Check for our custom sync marker if skip_synced is enabled
@@ -1125,6 +1126,9 @@ def verify_wandb_runs(
     return verify_results
 
 
+__logged_msg_for_path: set[tuple[str, str | Path]] = set()
+
+
 @overload
 def verify_wandb_run_history(
     *,
@@ -1212,9 +1216,13 @@ def verify_wandb_run_history(
     experiment_paths = list(Path(output_dir).glob("*" + experiment_id))
     if not experiment_paths:
         # When using a local path we have already the correct dir
-        logger.info(
-            "Did not find experiment paths for id %s in %s. Assuming correct path was given", experiment_id, output_dir
-        )
+        if (experiment_id, output_dir) not in __logged_msg_for_path:
+            logger.info(
+                "Did not find experiment paths for id %s in %s. Assuming correct path was given",
+                experiment_id,
+                output_dir,
+            )
+            __logged_msg_for_path.add((experiment_id, output_dir))
         experiment_paths = [output_dir]
     if len(experiment_paths) > 1:
         logger.warning(
@@ -1225,11 +1233,16 @@ def verify_wandb_run_history(
     experiment_path = Path(experiment_paths[0])
     if not experiment_path.exists():
         raise FileNotFoundError(str(experiment_path))
+    # TODO: If the run_id a fork is created "from_checkpoint" this does fail
     if ExperimentKey.FORK_SEPARATOR in run_id or (run and FORK_FROM in run.config):
         progress_files = list(experiment_path.glob(f"**/result*{run_id}.json"))
+        if len(progress_files) == 0 and "artifacts" in experiment_path.parts:
+            progress_files = list((experiment_path).glob(f"driver_artifacts/**/result*{run_id}.json"))
     else:
         # if it is not a fork then the normal result.json
         progress_files = list(experiment_path.glob(f"*id={run_id}*/result.json"))
+        if len(progress_files) == 0 and "artifacts" in experiment_path.parts:
+            progress_files = list((experiment_path).glob(f"driver_artifacts/*id={run_id}*/result.json"))
     if len(progress_files) != 1:
         logger.error(
             "Expected exactly one progress file for run ID %s in experiment path %s, found %d: %s",
@@ -1306,17 +1319,30 @@ def verify_wandb_run_history(
             except TypeError:
                 rel_diff = float("nan")
             failures.append(_FailureTuple(metric_name, offline_value, online_value, rel_diff))
-            logger.error(
-                "❌ Mismatch in %18s: offline last %8s vs online last %8s (%.1f %%)."
-                "On WandB only logged until %6d step total %3d entries. (run id: %s)",
-                metric_name,
-                offline_value,
-                online_value,
-                rel_diff,
-                last_log_step,
-                online_history.shape[0],
-                run_id,
-            )
+            if rel_diff > 0.5:
+                logger.error(
+                    "❌ Mismatch in %18s: offline last %8s vs online last %8s (%.1f %%)."
+                    "On WandB only logged until %6d step total %3d entries. (run id: %s)",
+                    metric_name,
+                    offline_value,
+                    online_value,
+                    rel_diff,
+                    last_log_step,
+                    online_history.shape[0],
+                    run_id,
+                )
+            else:
+                logger.warning(
+                    "⚠️ Minor mismatch in %18s: offline last %8s vs online last %8s (%.1f %%)."
+                    "On WandB only logged until %6d step total %3d entries. (run id: %s)",
+                    metric_name,
+                    offline_value,
+                    online_value,
+                    rel_diff,
+                    last_log_step,
+                    online_history.shape[0],
+                    run_id,
+                )
         else:
             logger.debug(
                 "🟩 Metric '%s' matches: offline == online: %s",

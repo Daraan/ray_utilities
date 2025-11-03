@@ -680,7 +680,7 @@ class _DefaultSetupArgumentParser(_GoalParser, Tap):
         This restores the entire Tune experiment including all trials and search state.
     """
 
-    restore_errored: NotAModelParameter[RestoreOverride[Literal["restart", "resume", False]]] = False
+    restore_errored: NotAModelParameter[RestoreOverride[Literal["restart", "resume", False]]] = "resume"
     """When restore_path is used controls the behavior of Tuner.restore resume_errored and restart_errored."""
 
     def configure(self) -> None:

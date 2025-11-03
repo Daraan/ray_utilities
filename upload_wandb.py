@@ -66,11 +66,15 @@ if __name__ == "__main__":
     # fork_file_present
     if first_arg_path.is_dir() and first_arg_path.exists():
         args.project = first_arg_path.name.rsplit("-", 1)[0]
+        if args.project == "driver_artifacts":
+            args.project = first_arg_path.parent.name.rsplit("-", 1)[0]
+            args.run_id = first_arg_path.parent.name.split("-")[-1]
+        else:
+            args.run_id = first_arg_path.name.split("-")[-1]
         assert args.experiment_path == "./outputs/experiments", (
             "When project is a path, experiment_path must be default."
         )  # noqa: E501
         args.experiment_path = str(first_arg_path.parent)
-        args.run_id = first_arg_path.name.split("-")[-1]
         fork_file_present = bool(list(first_arg_path.glob("pbt_fork_data*")))
         if fork_file_present:
             args.no_monitor = True
@@ -103,7 +107,7 @@ if __name__ == "__main__":
         print("Found", len(wandb_paths), "WandB paths to upload.")
         if not args.no_monitor:
             uploader._start_monitor_safe(args.project, entity=args.entity)
-        uploader.upload_paths(wandb_paths=wandb_paths, use_tqdm=True, wait=True)
+        uploader.upload_paths(wandb_paths=wandb_paths, use_tqdm=True, wait=True, skip_synced=False)
         print("All project uploads done. Verifying...")
         try:
             time.sleep(30)
