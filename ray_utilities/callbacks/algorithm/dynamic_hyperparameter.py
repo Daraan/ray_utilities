@@ -9,6 +9,7 @@ from ray.rllib.algorithms.callbacks import DefaultCallbacks
 from typing_extensions import Self
 
 from ray_utilities.callbacks.algorithm.callback_mixins import GetGlobalStepMixin
+from ray_utilities.callbacks.trainable.trainable_callback import TrainableCallbackExtension
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms.algorithm import Algorithm
@@ -31,7 +32,7 @@ class UpdateFunction(Protocol):
     ) -> None: ...
 
 
-class DynamicHyperparameterCallback(GetGlobalStepMixin, DefaultCallbacks, abc.ABC):
+class DynamicHyperparameterCallback(GetGlobalStepMixin, TrainableCallbackExtension, abc.ABC):
     @staticmethod
     def _update_worker(env_runner: EnvRunner | Learner, *args, key: str, value: Any):  # noqa: ARG004
         """

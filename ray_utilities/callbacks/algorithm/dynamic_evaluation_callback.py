@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class DynamicEvalInterval(TrainableCallbackExtension, StepCounterMixin, BudgetMixin, DynamicHyperparameterCallback):
+class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCallback):
     """
     Attributes:
         updater
