@@ -200,7 +200,10 @@ ignorelist = ["copyright"]
 split_on_trailing_comma = true
 include_trailing_comma = true
 profile = "black"
-known_third_party = ["default_arguments"] # This is a a lie, default_arguments should be at the top as it applies mocking
+known_third_party = [
+  "default_arguments",  # This is a a lie, default_arguments should be at the top as it applies mocking
+  "wandb",
+]
 line_length = 120
 
 [tool.pyright]

@@ -8,6 +8,7 @@ from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
 from ray_utilities.misc import extend_trial_name
 from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
+from ray_utilities.tune import validate_hyperparameters
 
 os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
 
@@ -45,23 +46,12 @@ if __name__ == "__main__":
         assert setup.args.tune
         hyperparameters = {k: HYPERPARAMETERS[k] for k in setup.args.tune}
         # TODO: Should put below logic into the Setup
-        if "batch_size" in setup.args.tune:  # convenience key
-            hyperparameters["train_batch_size_per_learner"] = hyperparameters.pop("batch_size")
-        # Check grid search length and fix minibatch_size
-        if (
-            len(hyperparameters) == 1
-            and isinstance(param := next(iter(hyperparameters.values())), dict)
-            and "grid_search" in param
-        ):
-            # If only tuning batch size with cyclic mutation, also tune minibatch size accordingly
-            if "minibatch_size" in hyperparameters:
-                # Limit grid to be <= train_batch_size_per_learner
-                param["grid_search"] = [v for v in param["grid_search"] if v <= setup.args.train_batch_size_per_learner]
-            if len(param["grid_search"]) < setup.args.num_samples:
-                # enlarge cyclic grid search values, Optuna shuffles
-                param["grid_search"] = (
-                    list(param["grid_search"]) * ((setup.args.num_samples // len(param["grid_search"])) + 1)
-                )[: setup.args.num_samples]
+        validate_hyperparameters(
+            hyperparameters,
+            setup.args.tune,
+            num_grid_samples=setup.args.num_samples,
+            train_batch_size_per_learner=setup.args.train_batch_size_per_learner,
+        )
 
         setup.param_space.update(hyperparameters)
 

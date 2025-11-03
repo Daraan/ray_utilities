@@ -175,12 +175,26 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
     [ ] (0549cd25110201490ef43)
 
     #### Acrobot
+    // 1 env only
     python experiments/tune_with_scheduler.py \
-        --tune batch_size minibatch_size --num_samples 1 \
+        --env_type Acrobot-v1 \
+        --tune batch_size minibatch_size --num_samples 2 \
         --tag:core --tag:pbt --comment "Core: PBT Tune batch_size + minibatch_size Size exhaustive, single environment" \
         --comet offline+upload@end --wandb offline+upload@end --offline_loggers json --log_level IMPORTANT_INFO --log_stats timers+learners \
+        pbt --quantile_fraction 0.1 --perturbation_interval 0.125
+    [ ] ( 0549cd2511021624bba43)
+
+
+    #### Lunar Lander
+    python experiments/tune_with_scheduler.py \
+        --env_type LunarLander-v3 \
+        --tune batch_size minibatch_size --num_samples 2 \
+        --tag:core --tag:pbt --comment "Core: PBT Tune batch_size + minibatch_size Size exhaustive, single environment" \
+        --comet offline+upload@end --wandb offline+upload@end --offline_loggers json --log_level IMPORTANT_INFO --log_stats timers+learners \
+        --node_id_selector \!c5bb98306bcd3167e9366dad27f641f672c76aebe95eb75110f0645e \
         --num_envs_per_env_runner 1 --buffer_length auto \
         pbt --quantile_fraction 0.1 --perturbation_interval 0.125
+    [ ] ( )
 
 
 ### PBT 2

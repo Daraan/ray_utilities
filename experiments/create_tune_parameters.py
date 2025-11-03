@@ -42,7 +42,8 @@ assert max_exp.is_integer()
 max_exp = int(max_exp)
 
 default_distributions: dict[str, BaseDistribution | GridSearch] = {
-    "lr": FloatDistribution(1e-5, 1e-1, log=True),
+    # TODO log and step cannot be used togher
+    # "lr": FloatDistribution(5e-5, 1e-1, log=True, step=5e-5),
     "batch_size": {"grid_search": [128, 256, 512, 1024, 2048, 4096, 8192, 8192 * 2]},
     # NOTE: Upperbound of gradient_accumulation num_epochs * train_batch_size_per_learner / minibatch_size
     "gradient_accumulation": {"grid_search": list(range(1, max_exp + 1))},  # assume 512 as base
