@@ -499,13 +499,18 @@ class ExperimentSetupBase(
         )
         return args
 
-    def args_to_dict(self, args: Optional[NamespaceType[ParserType_co] | dict[str, Any]] = None) -> dict[str, Any]:
+    def args_to_dict(
+        self, args: Optional[NamespaceType[ParserType_co] | Tap | dict[str, Any]] = None
+    ) -> dict[str, Any]:
         if args is None:
             args = self.args
         if isinstance(args, Tap):
             data = {k: getattr(args, k) for k in args.class_variables}
             if hasattr(args, "_command_str"):
-                data["_command_str"] = args._command_str
+                data["_command_str"] = args._command_str  # pyright: ignore[reportAttributeAccessIssue]
+                if hasattr(args, "command") and args.command:  # pyright: ignore[reportAttributeAccessIssue]
+                    # NOTE: This is a delegator - should work as it is a Tap class but test.
+                    data["COMMAND_ARGS"] = self.args_to_dict(args.command)  # pyright: ignore[reportAttributeAccessIssue]
             return data
         if isinstance(args, dict):
             return args.copy()
@@ -1474,15 +1479,17 @@ class ExperimentSetupBase(
         """
         if str(path).startswith("s3://"):
             if not str(path).endswith(RESTORE_FILE_NAME):
-                path = str(path).rstrip("/") + "/" + RESTORE_FILE_NAME
+                restore_file = str(path).rstrip("/") + "/" + RESTORE_FILE_NAME
+            else:
+                restore_file = str(path)
 
-            s3_fs, s3_path = FileSystem.from_uri(str(path))
+            s3_fs, s3_path = FileSystem.from_uri(str(restore_file))
             try:
                 with s3_fs.open_input_stream(s3_path) as f:
                     data = pickle.load(f)
-                logger.info("Restored experiment from S3 path %s", path)
+                logger.info("Restored experiment from S3 path %s", restore_file)
             except FileNotFoundError:
-                logger.error("Restore file %s does not exist in S3. Cannot restore experiment.", path)
+                logger.error("Restore file %s does not exist in S3. Cannot restore experiment.", restore_file)
                 raise
         else:
             path = Path(path)
@@ -1496,7 +1503,7 @@ class ExperimentSetupBase(
                 # Try to find a checkpoint:
                 try:
                     checkpoint_file = next(path.glob("**/checkpoint_*/state.pkl"))
-                except StopIteration as e:
+                except StopIteration:
                     raise FileNotFoundError(
                         f"Restore file {RESTORE_FILE_NAME} does not exist. "
                         f"Could also not find a checkpoint in {path}/**/checkpoint*."
@@ -1577,19 +1584,19 @@ class ExperimentSetupBase(
             for key, value in restore_overrides.items():
                 setattr(restored.args, key, value)
         # HACK: Temp to restore a PBT setup from checkpoint when global is not available
-        # if True and not restore_file.exists():
+        # if True:
         #    from ray_utilities.config.parser.pbt_scheduler_parser import PopulationBasedTrainingParser#
-
-        #    if not restored.args.command:
-        #        restored.args.command = PopulationBasedTrainingParser()
-        #        restored.args.command.quantile_fraction = 0.1875
-        #        restored.args.command.perturbation_interval = 0.125
-        #        restored.args.command._parsed = True
-        #        restored.args._command_str = "pbt"
-        #        restored.args.comet = "offline"
-        #        restored.args.wandb = "offline"
-        #    if not restored.args.restore_path:
-        #        restored.args.restore_path = str(path)
+        #    restored.args._process_subparsers()
+        # if not restored.args.command:
+        #    restored.args.command = PopulationBasedTrainingParser()
+        #    restored.args.quantile_fraction = 0.1875
+        #    restored.args.perturbation_interval = 0.125
+        #    restored.args.command._parsed = True
+        #    restored.args._command_str = "pbt"
+        #    restored.args.comet = "offline+upload@end"
+        #    restored.args.wandb = "offline+upload@end"
+        if not restored.args.restore_path:
+            restored.args.restore_path = str(path)
         return restored
 
     __restored__ = False
@@ -1763,6 +1770,7 @@ class ExperimentSetupBase(
 
         if config:
             new.config = config
+        command_args = data["args"].__dict__.pop("COMMAND_ARGS", None)
         new.args = data["args"]  # might be just a simple namespace
         if isinstance(new.parser, Tap):
             try:
@@ -1782,6 +1790,33 @@ class ExperimentSetupBase(
                 setattr(new.parser, arg, value)
             new._args_backup = data["args"]
             new.args = cast("ParserType_co", new.parser)
+        # Need to restore command subparser
+        try:
+            new.args._process_subparsers()
+        except:
+            logger.exception("Could not restore command subparser")
+        else:
+            # NOTE MIGHT NOT HAVE KEYS!
+            if command_args is not None:
+                for c_command, c_value in command_args.items():
+                    # The command is a delegator, set ONLY on main parser
+                    if hasattr(new.args, c_command):
+                        # check that we do not override something
+                        present = getattr(new.args, c_command)
+                        if present != c_value:
+                            logger.warning(
+                                "While restoring the command subparser found key %s in both the subparser and main parser."
+                                "The value in the main parser (%s) differs from the one in the subparser (%s). "
+                                "Using the value from the subparser.",
+                                c_command,
+                                present,
+                                c_value,
+                            )
+                            continue
+                    else:
+                        # subcommands are available on the main parser
+                        setattr(new.args, c_command, c_value)
+
         unchecked_keys.discard("args")
         new.setup(
             None,

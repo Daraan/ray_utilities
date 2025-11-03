@@ -123,8 +123,17 @@ class TrackForkedTrialsMixin(LoggerCallback):
             # assume we load for example from a checkpoint and the parent is currently not running
             # hence the id of the trial does not conflict with the parent
             fork_id = trial.trial_id
+        # from set_state we mgiht have string in the dict
+        if trial.trial_id in self._current_fork_ids:
+            self._current_fork_ids[trial] = self._current_fork_ids.pop(trial.trial_id)
+        if fork_id in self._current_fork_ids:
+            self._current_fork_ids[trial] = self._current_fork_ids.pop(fork_id)
         # Every trial can have only one fork_id as it is currently running
         self._current_fork_ids[trial] = fork_id
+        if trial.trial_id in self._trial_ids:
+            self._trial_ids[trial] = self._trial_ids.pop(trial.trial_id)
+        if trial.trial_id in self._past_trial_ids:
+            self._past_trial_ids[trial] = self._past_trial_ids.pop(trial.trial_id)
         if trial in self._trial_ids:
             self._past_trial_ids[trial].append(self._trial_ids[trial])
         elif not from_checkpoint:
@@ -266,19 +275,26 @@ class TrackForkedTrialsMixin(LoggerCallback):
             Dictionary containing trial tracking data. Trial objects are converted
             to trial IDs for pickling.
         """
-        forked_trials = {trial.trial_id: fork_data_list for trial, fork_data_list in self._forked_trials.items()}
+
+        def trial_id_state(trial: Trial | str) -> str:
+            if isinstance(trial, str):
+                return trial
+            return trial.trial_id
+
+        # When we restore, tune might call get_state while our trials are still saved as string
+        forked_trials = {trial_id_state(trial): fork_data_list for trial, fork_data_list in self._forked_trials.items()}
         for data in forked_trials.values():
             for fork_data in data:
                 fork_data.pop("parent_trial", None)
 
         return {
             "forked_trials": forked_trials,
-            "current_fork_ids": {trial.trial_id: fork_id for trial, fork_id in self._current_fork_ids.items()},
-            "past_trial_ids": {trial.trial_id: past_ids for trial, past_ids in self._past_trial_ids.items()},
-            "trial_ids": {trial.trial_id: trial_id for trial, trial_id in self._trial_ids.items()},
-            "currently_not_forked_trials": [trial.trial_id for trial in self._currently_not_forked_trials],
+            "current_fork_ids": {trial_id_state(trial): fork_id for trial, fork_id in self._current_fork_ids.items()},
+            "past_trial_ids": {trial_id_state(trial): past_ids for trial, past_ids in self._past_trial_ids.items()},
+            "trial_ids": {trial_id_state(trial): trial_id for trial, trial_id in self._trial_ids.items()},
+            "currently_not_forked_trials": [trial_id_state(trial) for trial in self._currently_not_forked_trials],
             "parent_trial_lookup": {
-                trial.trial_id: (parent.trial_id if isinstance(parent, Trial) else parent)
+                trial_id_state(trial): (parent.trial_id if isinstance(parent, Trial) else parent)
                 for trial, parent in self.parent_trial_lookup.items()
             },
         }

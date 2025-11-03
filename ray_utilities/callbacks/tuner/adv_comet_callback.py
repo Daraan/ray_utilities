@@ -237,7 +237,10 @@ class AdvCometLoggerCallback(
         state.update(
             {
                 "trials_created": self._trials_created,
-                "logged_architectures": [trial.trial_id for trial in self._logged_architectures],
+                # on restore we still have strings
+                "logged_architectures": [
+                    trial.trial_id if not isinstance(trial, str) else trial for trial in self._logged_architectures
+                ],
                 # "upload_intermediate": self.upload_intermediate,
                 # "online": self.online,
             }

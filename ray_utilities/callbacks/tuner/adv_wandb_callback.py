@@ -166,7 +166,9 @@ class AdvWandbLoggerCallback(
             {
                 "trials_created": self._trials_created,
                 "trials_started": self._trials_started,
-                "logged_architectures": [trial.trial_id for trial in self._logged_architectures],
+                "logged_architectures": [
+                    trial.trial_id if not isinstance(trial, str) else trial for trial in self._logged_architectures
+                ],
                 # "upload_intermediate": self.upload_intermediate,
                 "gather_timeout_min": self._gather_timeout_min,
                 # "active_trials_count": self._active_trials_count,
