@@ -27,7 +27,7 @@ if __name__ == "__main__":
         # --tune should use
         "--num_samples", 8,
         # Meta / less influential arguments for the experiment.
-        "--max_step_size", MAX_DYNAMIC_BATCH_SIZE,
+        "--max_step_size", max(MAX_DYNAMIC_BATCH_SIZE, *HYPERPARAMETERS["batch_size"]["grid_search"]), # pyright: ignore
         "--tags", "tune", # per default includes "<env_type>", "<agent_type>",
         "--comment", "Default training run. Tune batch size",
         "--env_seeding_strategy", "same",

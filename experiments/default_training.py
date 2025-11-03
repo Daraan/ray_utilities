@@ -23,13 +23,23 @@ os.environ.setdefault("RAY_DEDUP_LOGS_ALLOW_REGEX", "COMET|wandb")
 if __name__ == "__main__":
     PPOMLPSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
     PPOMLPSetup.group_name = "default-training"  # pyright: ignore
+
+    from experiments.create_tune_parameters import (
+        default_distributions,
+        load_distributions_from_json,
+        write_distributions_to_json,
+    )
+
+    HYPERPARAMETERS = load_distributions_from_json(write_distributions_to_json(default_distributions))
+
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
         "-a", DefaultArgumentParser.agent_type,
         # Meta / less influential arguments for the experiment.
         # Assure constant total_steps across experiments.
         "--num_samples", 3,
-        "--max_step_size", max(MAX_DYNAMIC_BATCH_SIZE, *PPOSetup.batch_size_sample_space["grid_search"]), # pyright: ignore
+        # Note we do not tune in this file but want to align it with the others
+        "--max_step_size", max(MAX_DYNAMIC_BATCH_SIZE, *HYPERPARAMETERS["batch_size"]["grid_search"]), # pyright: ignore
         "--tags", "static", "default",  # per default includes "<env_type>", "<agent_type>",
         # constant
         "--seed", "42",

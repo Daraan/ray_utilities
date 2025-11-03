@@ -29,7 +29,7 @@ if __name__ == "__main__":
         # Unlike PBT num_samples need to be set explicitly here
         # Note: Only use repetition if searcher reseeds trials
         "--num_samples", 3 * len(PPOMLPSetup.batch_size_sample_space["grid_search"]), # pyright: ignore
-        "--max_step_size", max(MAX_DYNAMIC_BATCH_SIZE, *PPOMLPSetup.batch_size_sample_space["grid_search"]), # pyright: ignore
+        "--max_step_size", max(MAX_DYNAMIC_BATCH_SIZE, *HYPERPARAMETERS["batch_size"]["grid_search"]), # pyright: ignore
         "--tags", "tune-batch_size", # per default includes "<env_type>", "<agent_type>",
         "--comment", "Default training run. Tune batch size",
         "--env_seeding_strategy", "same",
