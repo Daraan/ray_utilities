@@ -193,7 +193,7 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         --comet offline+upload@end --wandb offline+upload@end --offline_loggers json --log_level IMPORTANT_INFO --log_stats timers+learners \
         --buffer_length auto \
         pbt --quantile_fraction 0.1 --perturbation_interval 0.125
-    [ ] ( )
+    [ ] ( 0549cd2511021624bba43)
 
 
 ### PBT 2
