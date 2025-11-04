@@ -150,6 +150,18 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         --log_level IMPORTANT_INFO --log_stats timers+learners exhaustive"
     [x] (259cfd25110202005af03)
 
+    #### Lunar Lander
+    # new usage of num_samples
+    python experiments/tune.py \
+        --env_type LunarLander-v3 \
+        --tune batch_size minibatch_size \
+        --num_samples 2 \
+        --tag:core --comment "Core: Tune batch_size + minibatch_size Size \
+        --comet offline+upload --wandb offline+upload \
+        --log_level IMPORTANT_INFO --log_stats timers+learners exhaustive"
+    [ ] (259cfd25110414551cbf3) some errored, resume?
+
+
 
 
 ### 1 env only:
@@ -172,7 +184,7 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         --num_envs_per_env_runner 1 --buffer_length auto \
         pbt --quantile_fraction 0.1 --perturbation_interval 0.125
     [ ] (0549cd2511011846a6733, canceled slow)
-    [ ] (0549cd25110201490ef43)  errored at mid run
+    [ ] (0549cd25110201490ef43)  errored at mid run, no priority to continue
 
     #### Acrobot
     // 1 env only
@@ -184,7 +196,6 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         pbt --quantile_fraction 0.1 --perturbation_interval 0.125
     [ ] ( 0549cd2511021624bba43) errored
 
-
     #### Lunar Lander
     python experiments/tune_with_scheduler.py \
         --env_type LunarLander-v3 \
@@ -193,15 +204,36 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         --comet offline+upload@end --wandb offline+upload@end --offline_loggers json --log_level IMPORTANT_INFO --log_stats timers+learners \
         --buffer_length auto \
         pbt --quantile_fraction 0.1 --perturbation_interval 0.125
-    [ ] ( )
+    [ ] ( ) - needs replay wandb crashed
+    [ ] (0549cd2511041948f7293 )
+
 
 
 ### PBT 2
 
     // OPEN
 
-## B 2 --  Batch size AND Minibatch size scale -------
+## B 2 --  Batch size AND Minibatch size SCALE -------
 
+
+# Num envs
+
+## Tune Normal
+
+// Not that long
+
+
+## PBT
+
+    python experiments/tune_with_scheduler.py \
+        --tune num_envs_per_env_runner --num_samples 1 \
+        --tag:core --tag:pbt --comment "Core: PBT num environments" \
+        --comet offline+upload --wandb offline --offline_loggers json --log_level IMPORTANT_INFO \
+        --num_env_runners 1 --evaluation_num_env_runners 0 \
+        --log_stats timers+learners pbt --quantile_fraction 0.1 --perturbation_interval 0.125
+
+
+#
 
 TODO: Add check implementation and add minimum value (skip some combinations)
 experiments/tune.py --tune minibatch_scale batch_size --num_samples 36 --tag:core --seed 128 --tag:seed=128 --comment "Core: Tune minibatch_size Size exhaustive"

@@ -511,13 +511,10 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         bundles = resource_requirements.bundles
         # When tracking memory calculate RES - SHR
         # https://docs.ray.io/en/latest/ray-core/scheduling/memory-management.html
-        bundles[0]["memory"] = bundles[0].get("memory", 0) + 2.75 * 1024 * 1024 * 1024
+        bundles[0]["memory"] = bundles[0].get("memory", 0) + 2.5 * 1024 * 1024 * 1024
         if len(bundles) == 1:
             # No env runners, reserve some extra memory
-            bundles[0]["memory"] = bundles[0].get("memory", 0) + 0.75 * 1024 * 1024 * 1024
-        if self._setup.args.wandb:  # When using remote we should increase this with local mode we do not need much
-            # Reserve extra memory for wandb logger. Queue and Logging actor need ~1gb each, so
-            bundles[0]["memory"] = bundles[0].get("memory", 0) + 0.25 * 1024 * 1024 * 1024
+            bundles[0]["memory"] = bundles[0].get("memory", 0) + 0.5 * 1024 * 1024 * 1024
         if self._setup.args.node_id_selector or self._setup.args.hostname_selector:
             hostname_label = (
                 {"hostname": self._setup.args.hostname_selector} if self._setup.args.hostname_selector else {}

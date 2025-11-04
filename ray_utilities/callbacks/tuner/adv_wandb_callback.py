@@ -400,8 +400,8 @@ class AdvWandbLoggerCallback(
         )
         assert not TYPE_CHECKING or not issubclass(self._logger_actor_cls, _WandbNotInstalled)
         assert trial.local_path
+        # TODO: MedianStoppingPruner seems to not end trials correctly.
         wandb_init_kwargs["reinit"] = "create_new"  # <-- create a new run
-        # breakpoint()
         local_logging_actor = self._logger_actor_cls(
             logdir=os.getcwd(),  # <-- in init will call os.chdir, we do not want this in local mode
             queue=self._trial_queues[trial],
@@ -419,6 +419,8 @@ class AdvWandbLoggerCallback(
                 )
             except Exception:
                 _logger.exception("Error in logging actor for trial %s (restarts %d)", trial.trial_id, restarts)
+                if wandb_init_kwargs.get("mode") == "offline":
+                    raise  # cannot recover from online errors.
                 if restarts < 4:
                     run_logging_actor(restarts=restarts + 1)
                 else:

@@ -611,8 +611,8 @@ class TestHelpers(unittest.TestCase):
     def setUpClass(cls):
         os.environ["CI"] = "1"  # Indicate that we are in a CI environment
         cls._disable_ray_auto_init()
-        os.environ["RAY_UTILITIES_STORAGE_PATH"] = "./outputs/experiments/"
-        ExperimentSetupBase.storage_path = "./outputs/experiments/"
+        os.environ["RAY_UTILITIES_STORAGE_PATH"] = "./outputs/experiments/TESTING"
+        ExperimentSetupBase.storage_path = "./outputs/experiments/TESTING"
         sys.modules["selenium"] = mock.MagicMock()
         cls._setup_backup_mock: mock._patch_pass_arg[mock.MagicMock | mock.AsyncMock] = mock.patch.object(
             ExperimentSetupBase, ExperimentSetupBase._backup_for_restore.__name__, return_value=None

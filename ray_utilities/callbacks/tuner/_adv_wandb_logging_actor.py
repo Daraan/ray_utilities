@@ -132,7 +132,16 @@ class _LocalWandbLoggingActor(_WandbLoggingActor):
             )
 
     def _handle_checkpoint(self, checkpoint_path: str):
-        artifact = self._wandb.Artifact(name=f"checkpoint_{clean_invalid_characters(self._trial_name)}", type="model")
+        artifact_name = f"checkpoint_{clean_invalid_characters(self._trial_name)}"[:128]
+        if len(artifact_name) > 128:
+            *front, back = self._trial_name.split("id=")
+            back = back[:50]
+            if len(front) == 1:
+                front_name: str = front[0][:70]
+                artifact_name = f"checkpoint_{clean_invalid_characters(front_name + ' ... id=' + back)}"[:128]
+            else:  # multiple 'id=' in name, just truncate
+                artifact_name = artifact_name[:128]
+        artifact = self._wandb.Artifact(name=artifact_name, type="model")
         artifact.add_dir(checkpoint_path)
         self._run.log_artifact(artifact)
 

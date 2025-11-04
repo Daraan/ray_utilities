@@ -1402,6 +1402,7 @@ class OptunaArgumentParser(_GoalParser, Tap):
         False  # legacy argument name; possible replace with --tune later
     )
     # FIXME: Change to use keys from create_tune_parameters.
+    # NOTE: Need to be defined in add_argument below as well
     tune: NeverRestore[
         list[
             Literal["batch_size", "rollout_size", "minibatch_size", "minibatch_scale", "num_envs_per_env_runner", "all"]
@@ -1421,7 +1422,14 @@ class OptunaArgumentParser(_GoalParser, Tap):
             "--tune",
             nargs="+",
             default=False,
-            choices=["batch_size", "rollout_size", "minibatch_size", "minibatch_scale", "all"],
+            choices=[
+                "batch_size",
+                "rollout_size",
+                "minibatch_size",
+                "minibatch_scale",
+                "num_envs_per_env_runner",
+                "all",
+            ],
             type=_parse_tune_choices,
         )
 

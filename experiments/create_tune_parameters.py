@@ -52,7 +52,7 @@ default_distributions: dict[str, DistributionDefinition] = {
     # Need to skip too small minibatches, i.e. min 32, skip/resample. Alternatively use FloatDistribution
     "minibatch_scale": {"grid_search": [1 / 16, 1 / 8, 1 / 4, 1 / 2, 1.0]},
     # For high num_envs_per_env runner should adjust num_env_runners accordingly
-    "num_env_per_env_runner": {"grid_search": [1, 8, 16, 32]},
+    "num_envs_per_env_runner": {"grid_search": [1, 8, 16, 32]},
 }
 
 
