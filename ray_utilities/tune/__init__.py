@@ -14,7 +14,8 @@ from __future__ import annotations
 from typing import Any, Optional, Sequence
 
 
-def validate_hyperparameters(
+def update_hyperparameters(
+    param_space: dict[str, Any],
     hyperparameters: dict[str, Any],
     tune_parameters: Sequence[str],
     *,
@@ -33,6 +34,7 @@ def validate_hyperparameters(
     """
     if "batch_size" in tune_parameters:  # convenience key
         hyperparameters["train_batch_size_per_learner"] = hyperparameters.pop("batch_size")
+        param_space.pop("batch_size", None)
     # Check grid search length and fix minibatch_size
     if (
         len(hyperparameters) == 1
@@ -55,4 +57,7 @@ def validate_hyperparameters(
             param["grid_search"] = (list(param["grid_search"]) * ((num_grid_samples // len(param["grid_search"])) + 1))[
                 :num_grid_samples
             ]
+    if "batch_size" in hyperparameters:  # convenience key
+        hyperparameters["train_batch_size_per_learner"] = hyperparameters.pop("batch_size")
+    param_space.update(hyperparameters)
     return hyperparameters

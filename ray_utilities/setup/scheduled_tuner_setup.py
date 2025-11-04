@@ -9,6 +9,7 @@ from ray.tune.search.searcher import Searcher
 from ray.tune.stopper import CombinedStopper, MaximumIterationStopper, Stopper
 
 from ray_utilities.callbacks.tuner.sync_config_files_callback import SyncConfigFilesCallback
+from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 from ray_utilities.setup.tuner_setup import SetupType_co, TunerSetup
 from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
@@ -40,6 +41,13 @@ class ScheduledTunerSetup(TunerSetup[SetupType_co]):
 
     def create_tune_config(self) -> tune.TuneConfig:
         tune_config = super().create_tune_config()
+        if tune_config.scheduler is not None:
+            ImportantLogger.important_info(
+                logger,
+                "Overwriting existing scheduler %s for PBT with %s",
+                tune_config.scheduler,
+                self.create_scheduler(),
+            )
         tune_config.scheduler = self.create_scheduler()
         # Searcher are turned into SearchGenerators which are not OK, SearchAlgorithms are OK
         if isinstance(tune_config.search_alg, Searcher):

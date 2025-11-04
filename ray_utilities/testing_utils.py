@@ -609,6 +609,7 @@ class TestHelpers(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        os.environ["CI"] = "1"  # Indicate that we are in a CI environment
         cls._disable_ray_auto_init()
         os.environ["RAY_UTILITIES_STORAGE_PATH"] = "./outputs/experiments/"
         ExperimentSetupBase.storage_path = "./outputs/experiments/"

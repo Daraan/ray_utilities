@@ -31,7 +31,9 @@ from ray import train, tune
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.algorithms.ppo import PPO
 from ray.tune.execution.placement_groups import PlacementGroupFactory
+from ray.tune.schedulers import MedianStoppingRule
 from ray.tune.search.optuna import OptunaSearch
+from ray.tune.search.sample import Domain, Categorical
 from ray.tune.stopper import CombinedStopper, FunctionStopper
 from typing_extensions import TypeVar
 
@@ -292,16 +294,36 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
 
         When the minibatch_size is in the parameter space
         """
-        if self._setup.args.tune or self._setup.args.optimize_config:  # legacy argument
+        # If we only use grid_search and make no use of optuna's TPE sampler and we want pruning,
+        # just use rays MedianStoppingRule which supports custom time metrics.
+        use_ray_median_scheduler_instead = all(
+            not isinstance(v, Domain) or (isinstance(v, Categorical) and (len(v.categories) == 1 or v.is_grid()))
+            for v in self._setup.param_space.values()
+        )
+        if not use_ray_median_scheduler_instead and (
+            self._setup.args.tune or self._setup.args.optimize_config
+        ):  # legacy argument
+            # TODO: Using Bayesian Hyperband BOHB is a better alternative (can be used without scheduler)
+            # TODO: Can still use OptunaSearcher without pruner
+            # NOTE: Optuna's Pruner prune by training_iteration and not current step.
+            ImportantLogger.important_info(
+                logger,
+                "Using OptunaSearch as search space is more complex. %s",
+                (
+                    "Using Optunas Pruner."
+                    if not use_ray_median_scheduler_instead
+                    else "Not using Optunas Pruner, using Ray's MedianStoppingRule instead."
+                ),
+            )
             searcher, optuna_stopper = create_optuna_searcher(
                 hparams=self._setup.param_space,
                 study_name=self.get_experiment_name(),
                 seed=self._setup.args.seed,
                 metric=self.eval_metric,
                 mode=self.eval_metric_order,
-                pruner=bool(
-                    self._setup.args.tune or self._setup.args.optimize_config
-                ),  # TODO: ALWAYS TRUE, make optional add arguments
+                # NOTE: Use pruner only search spaces with random sampling.
+                # NOTE: Optunas Pruner does only support training_iteration based pruning.
+                pruner=not use_ray_median_scheduler_instead,
                 pruner_warmup_steps=self._setup.args.pruner_warmup_steps,
                 pruner_min_trials=self._setup.args.pruner_min_trials,
             )  # TODO: metric
@@ -320,6 +342,27 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             tune.ResumeConfig  # TODO
         stoppers = self.create_stoppers()
         searcher = self.create_searcher(stoppers)
+        use_ray_median_scheduler_instead = all(
+            not isinstance(v, Domain) or (isinstance(v, Categorical) and (len(v.categories) == 1 or v.is_grid()))
+            for v in self._setup.param_space.values()
+        )
+        if use_ray_median_scheduler_instead:
+            ImportantLogger.important_info(
+                logger, "Using MedianStoppingRule as scheduler space does not require sampling"
+            )
+            scheduler = MedianStoppingRule(
+                time_attr="current_step",
+                grace_period=8192 * 16,
+                # Trials are stopped to reach the same point in time - slow trials can come up
+                # This metrics controls for how much longer a trial is allowed to train before starting
+                # pausing it and starting a pending one.
+                min_time_slice=8192 * 8,
+                min_samples_required=int(min(8, max(3, 0.15 * self._setup.args.num_samples))),
+                # Instead of stopping bad trials, pause them and resume them at the very end
+                hard_stop=True,
+            )
+        else:
+            scheduler = None  # FIFO as default
         if len(stoppers) == 0:
             self._stopper = None
         elif len(stoppers) == 1:
@@ -333,7 +376,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             mode=self.eval_metric_order,
             trial_name_creator=self.trial_name_creator,
             max_concurrent_trials=None if self._setup.args.not_parallel else self._setup.args.num_jobs,
-            # scheduler=Fifo,
+            scheduler=scheduler,
             reuse_actors=False,  # self._setup.args.test,  # EXPERIMENTAL!
         )
 
