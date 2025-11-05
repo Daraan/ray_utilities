@@ -93,7 +93,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
                 disable_git=args.test,
                 # Internal setting
                 # Disable system metrics collection.
-                x_disable_stats=args.test,
+                x_disable_stats=True,
                 # Disable check for latest version of wandb, from PyPI.
                 # x_disable_update_check=not args.test,  # not avail in latest version
                 # When we are remote we do not get the output stream anyway, when we are local

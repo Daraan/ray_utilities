@@ -3,16 +3,14 @@ from __future__ import annotations
 import json
 import pathlib
 from inspect import isclass
-from typing import TYPE_CHECKING, Any, Collection, Literal, Optional, Sequence, cast
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, Collection, Literal, Optional, cast
 from unittest import mock
 
 from typing_extensions import Self
 
-from ray_utilities.callbacks.tuner.adv_comet_callback import AdvCometLoggerCallback
-from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
-from ray_utilities.callbacks.wandb import wandb_api
 from ray_utilities.constants import FORK_FROM
-from ray_utilities.misc import RE_GET_TRIAL_ID
+from ray_utilities.misc import RE_GET_TRIAL_ID, trial_name_creator
 from ray_utilities.setup.tuner_setup import TunerSetup
 from ray_utilities.training.default_class import DefaultTrainable
 from ray_utilities.training.helpers import get_args_and_config
@@ -21,8 +19,11 @@ if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
     from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
 
+    from ray_utilities.callbacks.tuner.adv_comet_callback import AdvCometLoggerCallback
+    from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
     from ray_utilities.config import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import ExperimentSetupBase
+    from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict
 
 
 class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
@@ -37,11 +38,23 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
         start_step: Optional[int] = None,
         algorithm_overrides: dict[str, Any] | None = None,
         model_config: dict[str, Any] | DefaultModelConfig | None = None,
-        loggers: Collection[Literal["comet", "wandb"]] = ("comet", "wandb"),
+        loggers: Collection[Literal["comet", "wandb"]] = (
+            # "comet",
+            "wandb",
+        ),
+        # For trial
+        trainable_name: str,
+        trial_id: str,
+        trial_name_creator=trial_name_creator,
         **kwargs,
     ):
         if replay_file is not None:
             self.replay_file = pathlib.Path(replay_file)
+        if not config:
+            with self.replay_file.open("r") as f:
+                first_line = f.readline()
+                first_result = json.loads(first_line)
+                config = first_result["config"]
 
         self._replay_iteration = 0
         if start_step is not None:
@@ -53,7 +66,19 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
         self._first_result = next(self._replay_step())
         self._start_iteration = start_iteration or 0
         super().__init__(config, algorithm_overrides=algorithm_overrides, model_config=model_config, **kwargs)
-        self._calbacks = self._make_callbacks(loggers)
+        from ray.tune.experiment.trial import Trial
+
+        self._mock_trial = Trial(
+            trainable_name=trainable_name,
+            config=config,
+            trial_name_creator=trial_name_creator,
+            trial_id=trial_id,
+            stub=True,
+        )
+        mock_storage = SimpleNamespace(trial_driver_staging_path=self.replay_file.parent, trial_working_directory="na")
+        print("local path will be", self.replay_file.parent)
+        self._mock_trial.storage = mock_storage
+        self._callbacks = self._make_callbacks(loggers)
 
     @classmethod
     def define(  # pyright: ignore[reportIncompatibleMethodOverride]
@@ -78,27 +103,19 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
         )
         self._replay_generator = self._replay_step()
         if self._start_iteration > 0:
-            for _ in range(self._start_iteration):
+            i = -1
+            for i in range(self._start_iteration):  # noqa: B007
                 next(self._replay_generator)
+                self._iteration += 1
+                self._iterations_since_restore += 1
+            print("Skipped to iteration", i + 1)
         return args, config, algorithm, None
-
-    def _replay_step(self):
-        with open(self.replay_file, "r") as f:
-            for line in f:
-                try:
-                    yield json.loads(line)
-                except json.JSONDecodeError:
-                    print(f"Could not decode line in replay file {self.replay_file}: '{line}'")
-                    raise
-                self._replay_iteration += 1
-
-    def step(self):
-        return next(self._replay_generator)
 
     def _make_callbacks(
         self, loggers: Collection[Literal["comet", "wandb"]]
     ) -> dict[str, AdvCometLoggerCallback | AdvWandbLoggerCallback]:
         # Let tuner restore callbacks?
+        self._setup.args.wandb = "offline+upload@end"
         tuner_setup = TunerSetup(
             setup=self._setup,
             eval_metric=self._setup.args.metric,
@@ -108,15 +125,17 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
         )
         callbacks = {}
         if "wandb" in loggers:
-            callbacks["wandb"] = tuner_setup.create_wandb_logger()
+            callbacks["wandb"] = wandb_callback = tuner_setup.create_wandb_logger()
+            wandb_callback.on_trial_start(0, [self._mock_trial], self._mock_trial)
         if "comet" in loggers:
-            callbacks["comet"] = tuner_setup.create_comet_logger()
+            callbacks["comet"] = comet_callback = tuner_setup.create_comet_logger()
+            comet_callback.on_trial_start(0, [self._mock_trial], self._mock_trial)
         return callbacks
 
     def create_wandb_run(self, mode="offline"):
         import wandb  # noqa: PLC0415
 
-        logger = cast("AdvWandbLoggerCallback", self._calbacks["wandb"])
+        logger = cast("AdvWandbLoggerCallback", self._callbacks["wandb"])
 
         self._first_result["config"]
 
@@ -157,27 +176,97 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
         self.wandb_run = wandb.init(**wandb_init_kwargs, mode=mode, dir=trial_dir)
         return self.wandb_run
 
+    def _replay_step(self):
+        with open(self.replay_file, "r") as f:
+            for line in f:
+                try:
+                    yield json.loads(line)
+                except json.JSONDecodeError:
+                    print(f"Could not decode line in replay file {self.replay_file}: '{line}'")
+                    raise
+                self._replay_iteration += 1
+
+    def step(self):
+        return next(self._replay_generator)
+
+    def end_replay(self):
+        for callback in self._callbacks.values():
+            callback.on_experiment_end([self._mock_trial])
+
+    def train(self) -> AutoExtendedLogMetricsDict:
+        try:
+            result = super().train()
+        except StopIteration:
+            self.end_replay()
+            return {}  # pyright: ignore[reportReturnType]
+        if isinstance(result, list):
+            results = result
+        else:
+            results = [result]
+        print("Replayed iteration:", self.iteration)
+        for result in results:
+            for callback in self._callbacks.values():
+                callback.on_trial_result(self.iteration, [], trial=self._mock_trial, result=result)
+
+        return result  # pyright: ignore[reportReturnType]
+
 
 if __name__ == "__main__":
     import argparse
-    from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
     import sys
+
+    from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 
     parser = argparse.ArgumentParser()
     parser.add_argument("replay_file", type=str)
-    parser.add_argument("--project", type=str, required=True)
+    parser.add_argument("--trainable_name", type=str, default=None)
+    parser.add_argument("--project", type=str, default=None)
     parser.add_argument("--group", type=str, default=None)
     args, extra = parser.parse_known_args()
+    replay_path = pathlib.Path(args.replay_file)
+    if not replay_path.exists():
+        raise FileNotFoundError(f"Replay file {replay_path} does not exist.")
+    with replay_path.open("r") as f:
+        first_line = f.readline()
+        first_result = json.loads(first_line)
+        config = first_result["config"]
+        if not args.trainable_name:
+            args.trainable_name = first_result["config"].get("trainable_name", "ReplayTrainable")
+        if not args.group:
+            args.group = config["experiment_group"]
+        if not args.project:
+            args.project = config.get("experiment_name")
+            if args.project is None:
+                project, experiment_id = replay_path.parts[replay_path.parts.index("experiments") + 1].rsplit("-", 1)
+                args.project = project
+        trial_id = config.get("trial_id")
+        if trial_id is None:
+            if replay_path.name == "result.json":
+                trial_id = RE_GET_TRIAL_ID.search(args.replay_file).groupdict("trial_id")["trial_id"]
+            else:
+                # named result-fork.trial_id.json
+                trial_id = replay_path.stem.split("-")[-1]
+
     PPOMLPSetup.PROJECT = args.project
     PPOMLPSetup.group_name = args.group  # pyright: ignore[reportAttributeAccessIssue]
-
     Trainable: type[ReplayTrainable] = ReplayTrainable.define(
         PPOMLPSetup,
         replay_file=args.replay_file,
     )
     sys.argv = sys.argv[:1] + extra
-    trainable = Trainable(replay_file=args.replay_file)
-    run = trainable.create_wandb_run()
-    for result in trainable._replay_step():
-        trainable.wandb_run.log(result)
-    trainable.wandb_run.finish()
+    trainable = Trainable(
+        replay_file=replay_path,
+        config=config,
+        trial_id=trial_id,
+        trainable_name=args.trainable_name,
+        start_iteration=23,
+    )
+    while True:
+        result = trainable.train()
+        if not result:
+            break
+    print("Replay finished.")
+    # run = trainable.create_wandb_run()
+    # for result in trainable._replay_step():
+    #    trainable.wandb_run.log(result)
+    # trainable.wandb_run.finish()

@@ -64,6 +64,9 @@ class _LocalWandbLoggingActor(_WandbLoggingActor):
     _run: wandb.Run
     _dummy_actor: Optional[ActorProxy[_DummyRemoteActor]] = None
 
+    __warned_no_trial_name = False
+    run_initialized: bool = False
+
     def run(self):
         # Since we're running in a separate process already, use threads.
         try:
@@ -72,6 +75,7 @@ class _LocalWandbLoggingActor(_WandbLoggingActor):
             start = time.time()
             with redirect_stderr(strerr), redirect_stdout(strout):
                 self._run = run = self._wandb.init(*self.args, **self.kwargs)
+            self.run_initialized = True
             end = time.time()
             ImportantLogger.important_info(
                 logger,
@@ -95,7 +99,10 @@ class _LocalWandbLoggingActor(_WandbLoggingActor):
                 break
 
             if item_type == _QueueItem.CHECKPOINT:
-                self._handle_checkpoint(item_content)
+                try:
+                    self._handle_checkpoint(item_content)
+                except Exception as e:
+                    logger.error("Error saving checkpoint for trial %s in WandB: %s", self._trial_name, e)
                 continue
 
             assert item_type == _QueueItem.RESULT
@@ -132,9 +139,17 @@ class _LocalWandbLoggingActor(_WandbLoggingActor):
             )
 
     def _handle_checkpoint(self, checkpoint_path: str):
-        artifact_name = f"checkpoint_{clean_invalid_characters(self._trial_name)}"[:128]
+        if self._trial_name is None and not self.__warned_no_trial_name:
+            logger.warning(
+                "WandB Logging Actor: Trial name is None, cannot create proper artifact name for checkpoint at %s",
+                checkpoint_path,
+            )
+            self.__warned_no_trial_name = True
+
+        trial_name = self._trial_name or "unknown_trial_name"
+        artifact_name = f"checkpoint_{clean_invalid_characters(trial_name)}"[:128]
         if len(artifact_name) > 128:
-            *front, back = self._trial_name.split("id=")
+            *front, back = trial_name.split("id=")
             back = back[:50]
             if len(front) == 1:
                 front_name: str = front[0][:70]

@@ -419,8 +419,15 @@ class AdvWandbLoggerCallback(
                 )
             except Exception:
                 _logger.exception("Error in logging actor for trial %s (restarts %d)", trial.trial_id, restarts)
-                if wandb_init_kwargs.get("mode") == "offline":
-                    raise  # cannot recover from online errors.
+                if wandb_init_kwargs.get("mode") == "offline" and not local_logging_actor.run_initialized:
+                    # If error happend during init we cannot recover but otherwise we can also in offline mode
+                    _logger.error(
+                        "Cannot restart logging actor for trial %s in offline mode. wandb.init failed. Settings: %s",
+                        local_logging_actor._trial_name,
+                        wandb_init_kwargs,
+                    )
+                    breakpoint()
+                    raise  # cannot recover from online errors - that happen during init
                 if restarts < 4:
                     run_logging_actor(restarts=restarts + 1)
                 else:

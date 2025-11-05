@@ -617,7 +617,11 @@ class WandbUploaderMixin(UploadHelperMixin):
             # Extract run directories from process args
             # process.args format: ['wandb', 'sync', '/path/to/run1', '/path/to/run2', '--append']
             if not isinstance(process.args, (str, bytes)) and isinstance(process.args, Iterable):
-                run_paths = [arg for arg in process.args[2:] if arg != "--append" and not arg.startswith("-")]
+                run_paths = [
+                    arg
+                    for arg in process.args[2:]
+                    if arg != "--append" and not (not isinstance(arg, str) or arg.startswith("-"))
+                ]
             else:
                 logger.warning("Cannot extract run paths from process args: %s", process.args)
                 return
@@ -1039,7 +1043,9 @@ class WandbUploaderMixin(UploadHelperMixin):
         output_dir: Optional[str] = None,
         *,
         single_experiment: Optional[str] = None,
-    ):
+        verbose: int = 10,
+        run_per_page: int = 32,
+    ) -> dict[Run | RunNotFound, list[_FailureTuple] | Exception]:
         if output_dir is None:
             # might be S3 bucket
             output_dir = os.environ.get("RAY_UTILITIES_STORAGE_PATH", "./outputs/experiments/")
@@ -1052,6 +1058,8 @@ class WandbUploaderMixin(UploadHelperMixin):
             output_dir=output_dir,
             experiment_id=experiment_id or get_run_id(),
             single_experiment=single_experiment,
+            verbose=verbose,
+            run_per_page=run_per_page,
         )
 
     def __ray_shutdown__(self):
@@ -1074,6 +1082,18 @@ class _FailureTuple(NamedTuple):
     online_value: Any
     rel_difference: float = float("nan")
 
+    @property
+    def minor(self):
+        return abs(self.rel_difference) < 0.05
+
+
+class RunNotFound:
+    def __init__(self, run_id: str):
+        self.id = run_id
+
+    def __str__(self):
+        return f"RunNotFound(run_id={self.id})"
+
 
 def verify_wandb_runs(
     *,
@@ -1082,6 +1102,8 @@ def verify_wandb_runs(
     experiment_id: str,
     output_dir: Optional[str] = None,
     single_experiment: Optional[str] = None,
+    verbose: int = 10,
+    run_per_page: int = 32,
 ):
     if output_dir is None:
         output_dir = os.environ.get("RAY_UTILITIES_STORAGE_PATH", "./outputs/experiments/")
@@ -1089,17 +1111,43 @@ def verify_wandb_runs(
     if entity is None:
         entity = api.default_entity
     # get all runs of the project with the given experiment key
-    runs: Runs | Iterable[Run]
+    runs: Runs | Sequence[Run]
     if single_experiment:
         run = api.run(f"{entity}/{project}/{single_experiment}")
         runs = [run]
     else:
-        runs = api.runs(f"{entity}/{project}", filters={"config.experiment_id": experiment_id}, per_page=32)
-    verify_results: dict[Run, list[_FailureTuple] | Exception] = {}
+        runs = api.runs(f"{entity}/{project}", filters={"config.experiment_id": experiment_id}, per_page=run_per_page)
+    verify_results: dict[Run | RunNotFound, list[_FailureTuple] | Exception] = {}
     logged_tb_once = False
+    # NOTE WE DO NOT CHECK OFFLINE RUNS HERE - possibility of missing upload
+    # Get runs in output_dir
+    offline_run_ids = set()
+    if output_dir is not None:
+        experiment_dir = next(Path(output_dir).glob("*" + experiment_id))
+        # Supports tmpdir with driver_artifacts subdir
+        offline_results = list(Path(output_dir).glob("*" + experiment_id + "/**/result*.json"))
+        if len(offline_results) != len(runs):
+            logger.error("Offline results count %d does not match wandb runs %d", len(offline_results), len(runs))
+        elif verbose > 2:
+            logger.info("🟢 Number of offline runs to online runs match")
+        unknown_count = 0
+        for offline_path in offline_results:
+            if offline_path.name == "result.json":
+                match = RE_GET_TRIAL_ID.search(str(offline_path.parent.name))
+                if match:
+                    run_id = match["trial_id"]
+                else:
+                    logger.error("Could not extract trial_id from offline path %s", offline_path)
+                    run_id = f"unknown-{unknown_count}"
+                    unknown_count += 1
+            else:
+                run_id = offline_path.stem.rsplit("-", 1)[-1]
+            offline_run_ids.add(run_id)
+
     for run in runs:
+        offline_run_ids.remove(run.id)
         try:
-            failures = verify_wandb_run_history(run=run, output_dir=output_dir)
+            failures = verify_wandb_run_history(run=run, output_dir=output_dir, verbose=verbose)
             verify_results[run] = failures
         except Exception as e:  # noqa: PERF203
             if not logged_tb_once:
@@ -1115,11 +1163,24 @@ def verify_wandb_runs(
             entity,
             experiment_id,
         )
+    if len(offline_run_ids) > 0:
+        logger.error(
+            "Found %d offline wandb runs in %s without corresponding online run: %s",
+            len(offline_run_ids),
+            experiment_dir,
+            offline_run_ids,
+        )
+        verify_results.update(
+            {RunNotFound(run_id): Exception("No corresponding online wandb run found.") for run_id in offline_run_ids}
+        )
     for run, failure in verify_results.items():
         if isinstance(failure, Exception):
             logger.error("Verification for wandb run %s failed with exception: %s", run.id, str(failure))
         elif failure:
-            logger.error("Wandb run %s history verification failed: %s", run.id, failure)
+            if all(f.minor for f in failure):
+                logger.warning("Wandb run %s history has minor discrepancies: %s", run.id, failure)
+            else:
+                logger.error("Wandb run %s history verification failed: %s", run.id, failure)
         else:
             ImportantLogger.important_info(logger, "Wandb run %s history verified successfully.", run.id)
 
@@ -1134,7 +1195,8 @@ def verify_wandb_run_history(
     *,
     output_dir: Optional[str] = None,
     run: Run,
-): ...
+    verbose: int = 10,
+) -> list[_FailureTuple]: ...
 
 
 @overload
@@ -1146,7 +1208,8 @@ def verify_wandb_run_history(
     experiment_id: Optional[str] = None,
     output_dir: Optional[str] = None,
     run: Optional[Run] = None,
-): ...
+    verbose: int = 10,
+) -> list[_FailureTuple]: ...
 
 
 def verify_wandb_run_history(
@@ -1157,6 +1220,7 @@ def verify_wandb_run_history(
     experiment_id: Optional[str] = None,
     output_dir: Optional[str] = None,
     run: Optional[Run] = None,
+    verbose: int = 10,
 ) -> list[_FailureTuple]:
     """Verify the online wandb history against the offline JSON file.
 
@@ -1331,7 +1395,7 @@ def verify_wandb_run_history(
                     online_history.shape[0],
                     run_id,
                 )
-            else:
+            elif verbose > 2:
                 logger.warning(
                     "⚠️ Minor mismatch in %18s: offline last %8s vs online last %8s (%.1f %%)."
                     "On WandB only logged until %6d step total %3d entries. (run id: %s)",
@@ -1343,7 +1407,7 @@ def verify_wandb_run_history(
                     online_history.shape[0],
                     run_id,
                 )
-        else:
+        elif verbose > 3:
             logger.debug(
                 "🟩 Metric '%s' matches: offline == online: %s",
                 metric_name,

@@ -47,6 +47,7 @@ def get_parser() -> argparse.ArgumentParser:
     upload_parser = subparsers.add_parser("upload", help="Upload WandB logs for a run.")
     add_common_arguments(upload_parser)
     upload_parser.add_argument("--no-monitor", action="store_true", help="Do not start the monitor thread.")
+    upload_parser.add_argument("--first-verify", action="store_true", help="Do not start the monitor thread.")
 
     # Verify subparser
     verify_parser = subparsers.add_parser("verify", help="Verify WandB run without uploading files.")
@@ -107,6 +108,30 @@ if __name__ == "__main__":
         print("Found", len(wandb_paths), "WandB paths to upload.")
         if not args.no_monitor:
             uploader._start_monitor_safe(args.project, entity=args.entity)
+        if args.first_verify:
+            print("Performing initial verification before upload...")
+            try:
+                failures = uploader.verify_wandb_uploads(
+                    experiment_id=args.run_id,
+                    output_dir=args.experiment_path,
+                    single_experiment=args.experiment_key,
+                    verbose=2,
+                    run_per_page=64,
+                )
+            except KeyboardInterrupt:
+                print("Verification interrupted by user.")
+            else:
+                # Skip those paths that did not report an error
+                wandb_paths = [
+                    path
+                    for path in wandb_paths
+                    # skip minor failures as likely offline data is missing
+                    if any(
+                        isinstance(failure, Exception) or any(not f.minor for f in failure)
+                        for run, failure in failures.items()
+                        if run.id in str(path)
+                    )
+                ]
         uploader.upload_paths(wandb_paths=wandb_paths, use_tqdm=True, wait=True, skip_synced=False)
         print("All project uploads done. Verifying...")
         try:

@@ -49,6 +49,13 @@ class ExitCode(IntEnum):
     Solution: Visit the run page of the parent to trigger creation of the history artifact. Potentially wait and retry.
     """
 
+    WANDB_SERVER_UNAVAILABLE = auto()
+    """
+    Process failed because WandB server is currently unavailable (e.g., HTTP 503).
+
+    Solution: Wait and retry later.
+    """
+
     WANDB_FILE_EMPTY = auto()
     """
     Upload process failed because of an empty header: "wandb file is empty".
@@ -149,18 +156,22 @@ class UploadHelperMixin:
                     break
                 line = None
                 if process.stdout and not process.stdout.closed:
-                    # Avoid hanging: only read if data is available
-                    if os.name == "posix":
-                        try:
-                            rlist, _, _ = select.select([process.stdout], [], [], 0.2)
-                        except ValueError:
-                            logger.exception("Error selecting stdout for wandb upload process")
-                            rlist = []
-                            line = ""
+                    try:
+                        # Avoid hanging: only read if data is available
+                        if os.name == "posix":
+                            try:
+                                rlist, _, _ = select.select([process.stdout], [], [], 0.2)
+                            except ValueError:
+                                logger.exception("Error selecting stdout for wandb upload process")
+                                rlist = []
+                                line = ""
+                            else:
+                                # somehow this could still raise ValueError: I/O operation on closed file.
+                                line = process.stdout.readline()
                         else:
                             line = process.stdout.readline()
-                    else:
-                        line = process.stdout.readline()
+                    except (IOError, OSError, ValueError) as e:
+                        logger.error("Error reading stdout for wandb upload process: %s", e)
                 time_now = time.time()
                 # ray.tune.utils.util import warn_if_slow
                 # from ray.tune.execution import tune_controller
@@ -198,6 +209,9 @@ class UploadHelperMixin:
                             # Low chance that still in progress, but likely parent upload failed
                             recoverable = True
                             error_code = ExitCode.WANDB_PARENT_NOT_FOUND
+                        elif "experiment was already uploaded" in line:
+                            # we already uploaded to comet, zip not yet moved
+                            error_code = ExitCode.COMET_ALREADY_UPLOADED
                         elif "fromStep is greater than the run's last step" in line:
                             # run-*-history artifact needs to be updated to the latest step
                             # need to visit the website to trigger the update
@@ -205,9 +219,9 @@ class UploadHelperMixin:
                             error_code = ExitCode.WANDB_BEHIND_STEP
                         elif "wandb file is empty" in line:
                             error_code = ExitCode.WANDB_FILE_EMPTY
-                        elif "experiment was already uploaded" in line:
-                            # we already uploaded to comet, zip not yet moved
-                            error_code = ExitCode.COMET_ALREADY_UPLOADED
+                        elif "Response [503]" in line or "currently unavailable" in line:
+                            recoverable = True  # but likely not by waiting here
+                            error_code = ExitCode.WANDB_SERVER_UNAVAILABLE
                         else:
                             error_code = ExitCode.ERROR
                         if not recoverable:

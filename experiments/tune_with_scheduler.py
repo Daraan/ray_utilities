@@ -61,14 +61,7 @@ if __name__ == "__main__":
             trial_name_creator=extend_trial_name(insert=["<batch_size>"], prepend="Tune_BatchSize_WithScheduler"),
         )
         assert setup.args.tune
-        hyperparameters = update_hyperparameters(
-            setup.param_space,
-            {k: HYPERPARAMETERS[k] for k in setup.args.tune},
-            setup.args.tune,
-            num_grid_samples=setup.args.num_samples,
-            train_batch_size_per_learner=setup.args.train_batch_size_per_learner,
-        )
-        mutations: dict[str, KeepMutation[object]] = {k: KeepMutation() for k in hyperparameters.keys()}
+        mutations: dict[str, KeepMutation[object]] = {k: KeepMutation() for k in setup.args.tune}
 
         setup.args.command.set_hyperparam_mutations(mutations)  # pyright: ignore[reportArgumentType]
         with init_ray_with_setup(setup, runtime_env=get_runtime_env()):
