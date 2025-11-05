@@ -37,9 +37,11 @@ def update_hyperparameters(
         hyperparameters (dict): A dictionary of hyperparameter configurations.
     """
     hyperparameters = deepcopy(hyperparameters)
+    tune_parameters = list(tune_parameters)
     if "batch_size" in tune_parameters:  # convenience key
         hyperparameters["train_batch_size_per_learner"] = hyperparameters.pop("batch_size")
         param_space.pop("batch_size", None)
+        tune_parameters[tune_parameters.index("batch_size")] = "train_batch_size_per_learner"
     # Check grid search length and fix minibatch_size
     if (
         len(hyperparameters) == 1
