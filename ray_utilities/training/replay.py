@@ -203,8 +203,14 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
             results = result
         else:
             results = [result]
-        print("Replayed iteration:", self.iteration)
         for result in results:
+            print(
+                "Replayed iteration:",
+                self.iteration,
+                "current_step",
+                result.get("current_step", "n/a"),
+            )
+            print("Result keys:", list(result.keys()))
             for callback in self._callbacks.values():
                 callback.on_trial_result(self.iteration, [], trial=self._mock_trial, result=result)
 
@@ -219,6 +225,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("replay_file", type=str)
+    parser.add_argument("--start", type=int, default=None)
     parser.add_argument("--trainable_name", type=str, default=None)
     parser.add_argument("--project", type=str, default=None)
     parser.add_argument("--group", type=str, default=None)
@@ -259,7 +266,7 @@ if __name__ == "__main__":
         config=config,
         trial_id=trial_id,
         trainable_name=args.trainable_name,
-        start_iteration=23,
+        start_iteration=args.start,
     )
     while True:
         result = trainable.train()

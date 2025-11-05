@@ -527,7 +527,8 @@ def log_metrics_to_new_layout(metrics: LogMetricsDict) -> NewLogMetricsDict:
         merges them.
     """
     new_metrics = deepcopy(metrics)  # pyright: ignore[reportAssignmentType]
-    new_metrics["training"] = cast("_LogMetricsEnvRunnersResultsDict", new_metrics.pop(ENV_RUNNER_RESULTS, {}))  # pyright: ignore[reportGeneralTypeIssues]
+    if "training" not in new_metrics:
+        new_metrics["training"] = cast("_LogMetricsEnvRunnersResultsDict", new_metrics.pop(ENV_RUNNER_RESULTS, {}))  # pyright: ignore[reportGeneralTypeIssues]
     if CURRENT_STEP in new_metrics:
         new_metrics.pop(NUM_ENV_STEPS_SAMPLED_LIFETIME, None)  # superseeded by current_step
     if EVALUATION_RESULTS in new_metrics:

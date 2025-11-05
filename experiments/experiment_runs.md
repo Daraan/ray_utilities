@@ -248,6 +248,7 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         --total_steps 524288 --use_exact_total_steps \
         --log_stats timers+learners pbt --quantile_fraction 0.1 --perturbation_interval 0.125
     [ ] (0549cd25110422496a333) - canceled error; not uploaded to Wandb
+    [ ] (0549cd25110520296c5b3)
 
     python experiments/tune_with_scheduler.py \
         --tune num_envs_per_env_runner batch_size --num_samples 2 \
@@ -261,7 +262,7 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         - 0549cd251104225098923X52a89C06F52a89C62S1NFA
         - 0549cd251104225098923X52a89C13F52a89C62S1NFA
         - 0549cd251104225098923X52a89C12F52a89C61S16C8
-
+    [ ] (0549cd2511052028cb8e3)
 
     // Acrobot
 
