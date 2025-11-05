@@ -13,6 +13,7 @@ from ray_utilities.setup import PPOSetup
 from ray_utilities.setup.extensions import load_distributions_from_json
 from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 from ray_utilities.setup.scheduled_tuner_setup import PPOMLPWithPBTSetup
+from ray_utilities.tune import update_hyperparameters
 from ray_utilities.tune.scheduler.top_pbt_scheduler import KeepMutation
 
 # Replace outputs to be more human readable and less nested
@@ -28,7 +29,9 @@ os.environ.setdefault("RAY_DEDUP_LOGS_ALLOW_REGEX", "COMET|wandb")
 if __name__ == "__main__":
     PPOMLPSetup.PROJECT = "dev-workspace"  # Upper category on Comet / WandB
     PPOMLPSetup.group_name = "debugging"  # pyright: ignore
-    HYPERPARAMETERS = load_distributions_from_json(write_distributions_to_json(default_distributions))
+    HYPERPARAMETERS = load_distributions_from_json(
+        write_distributions_to_json(default_distributions, PPOMLPWithPBTSetup.TUNE_PARAMETER_FILE)
+    )
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
         "-a", DefaultArgumentParser.agent_type,
@@ -47,7 +50,6 @@ if __name__ == "__main__":
         "--comment", "Debug - delete me",
         "--offline_loggers", "0",
     ):  # fmt: skip
-        # Replace with your own setup class
         if "pbt" in sys.argv:
             setup = PPOMLPWithPBTSetup(
                 config_files=["experiments/pbt.cfg", "experiments/default.cfg", "experiments/models/mlp/default.cfg"],
@@ -55,29 +57,15 @@ if __name__ == "__main__":
             )
             assert setup.args.tune
             hyperparameters = {k: HYPERPARAMETERS[k] for k in setup.args.tune}
-            if "batch_size" in setup.args.tune:  # convenience key
-                hyperparameters["train_batch_size_per_learner"] = hyperparameters.pop("batch_size")
-            # Check grid search length and fix minibatch_size
-            if (
-                len(hyperparameters) == 1
-                and isinstance(param := next(iter(hyperparameters.values())), dict)
-                and "grid_search" in param
-            ):
-                # If only tuning batch size with cyclic mutation, also tune minibatch size accordingly
-                if "minibatch_size" in hyperparameters:
-                    # Limit grid to be <= train_batch_size_per_learner
-                    param["grid_search"] = [
-                        v for v in param["grid_search"][2:-2] if v <= setup.args.train_batch_size_per_learner
-                    ]
-                if len(param["grid_search"]) < setup.args.num_samples:
-                    # enlarge cyclic grid search values, Optuna shuffles
-                    param["grid_search"] = (
-                        list(param["grid_search"]) * ((setup.args.num_samples // len(param["grid_search"][2:-2])) + 1)
-                    )[: setup.args.num_samples]
+            hyperparameters = update_hyperparameters(
+                setup.param_space,
+                hyperparameters,
+                setup.args.tune,
+                num_grid_samples=setup.args.num_samples,
+                train_batch_size_per_learner=setup.args.train_batch_size_per_learner,
+            )
 
             mutations: dict[str, KeepMutation[object]] = {k: KeepMutation() for k in hyperparameters.keys()}
-            setup.param_space.update(hyperparameters)
-
             setup.args.command.set_hyperparam_mutations(mutations)  # pyright: ignore[reportArgumentType]
         else:
             setup: PPOSetup[DefaultArgumentParser] = PPOMLPSetup(

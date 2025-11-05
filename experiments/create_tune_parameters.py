@@ -58,7 +58,7 @@ default_distributions: dict[str, DistributionDefinition] = {
 
 def write_distributions_to_json(
     distributions: dict[str, DistributionDefinition] | None,
-    output_file: Path | None = None,
+    output_file: Path | str | None = None,
 ) -> Path:
     """Write the given distributions to a JSON file."""
     json_distributions: dict[str, Mapping] = {}
@@ -73,6 +73,8 @@ def write_distributions_to_json(
 
     if output_file is None:
         output_file = Path(__file__).parent / "tune_parameters.json"
+    elif isinstance(output_file, str):
+        output_file = Path(output_file)
 
     with output_file.open("w") as f:
         json.dump(json_distributions, f, indent=2)

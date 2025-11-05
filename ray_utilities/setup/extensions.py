@@ -41,6 +41,7 @@ from ray_utilities.setup.experiment_base import (
     ParserType_co,
     SetupCheckpointDict,
 )
+from ray_utilities.tune import update_hyperparameters
 
 if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
@@ -141,7 +142,7 @@ def dict_to_ray_distributions(
 
 
 def load_distributions_from_json(
-    json_dict: dict[str, Any] | Path,
+    json_dict: dict[str, Any] | Path | str,
 ) -> dict[str, ParameterSpace[Any]]:
     if isinstance(json_dict, str):
         json_dict = Path(json_dict)
@@ -205,23 +206,13 @@ class TunableSetupMixin(ExperimentSetupBase[ParserType_co, ConfigType_co, Algori
         param_space = super().create_param_space()
         if not self.args.tune:
             return param_space
-        for parameter in self.args.tune:
-            if parameter in self.tune_parameters:
-                if parameter in param_space:
-                    ImportantLogger.important_warning(
-                        _logger,
-                        "Overriding existing param_space entry for '%s' (%s) -> (%s).",
-                        parameter,
-                        param_space[parameter],
-                        self.tune_parameters[parameter],
-                    )
-                else:
-                    ImportantLogger.important_info(
-                        _logger,
-                        "Adding tuning parameter '%s' to param_space.",
-                        parameter,
-                    )
-                param_space[parameter] = self.tune_parameters[parameter]
+        update_hyperparameters(
+            self.param_space,
+            self.tune_parameters,
+            self.args.tune or [],
+            num_grid_samples=self.args.num_samples,
+            train_batch_size_per_learner=self.args.train_batch_size_per_learner,
+        )
         return param_space
 
     def _load_optuna_from_json(self, json_dict: dict[str, Any]) -> None:
@@ -265,7 +256,7 @@ class TunableSetupMixin(ExperimentSetupBase[ParserType_co, ConfigType_co, Algori
             json_dict = json.loads(json_dict.read_text())
             assert isinstance(json_dict, dict)
         for name, param_space in json_dict.items():
-            self.add_tune_parameter(name, param_space)
+            self.add_tune_parameter(name, load_distributions_from_json({name: param_space})[name])
 
 
 class SetupForDynamicTuning(ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]):

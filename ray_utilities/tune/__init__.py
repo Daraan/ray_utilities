@@ -11,7 +11,11 @@ Key Components:
 
 from __future__ import annotations
 
+import logging
+from copy import deepcopy
 from typing import Any, Optional, Sequence
+
+logger = logging.getLogger(__name__)
 
 
 def update_hyperparameters(
@@ -32,6 +36,7 @@ def update_hyperparameters(
     Args:
         hyperparameters (dict): A dictionary of hyperparameter configurations.
     """
+    hyperparameters = deepcopy(hyperparameters)
     if "batch_size" in tune_parameters:  # convenience key
         hyperparameters["train_batch_size_per_learner"] = hyperparameters.pop("batch_size")
         param_space.pop("batch_size", None)
@@ -59,5 +64,12 @@ def update_hyperparameters(
             ]
     if "batch_size" in hyperparameters:  # convenience key
         hyperparameters["train_batch_size_per_learner"] = hyperparameters.pop("batch_size")
-    param_space.update(hyperparameters)
+    for matching_keys in set(tune_parameters) & param_space.keys() & hyperparameters.keys():
+        logger.warning(
+            "Overwriting parameter '%s' in param_space with value from hyperparameters: %s -> %s",
+            matching_keys,
+            param_space[matching_keys],
+            hyperparameters[matching_keys],
+        )
+    param_space.update({k: v for k, v in hyperparameters.items() if k in tune_parameters})
     return hyperparameters

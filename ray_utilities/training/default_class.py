@@ -988,6 +988,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 _logger,
                 "Algorithm.config does not match the new_algo_config passed to _rebuild_algorithm_if_necessary. "
                 "Update the algorithm config to the new one before calling this method.",
+                stacklevel=2,
             )
             self.algorithm.config = new_algo_config
         # TODO: Also need update if model_config / rl_module changed

@@ -44,11 +44,9 @@ if __name__ == "__main__":
         )
         # Set hyperparameters to tune
         assert setup.args.tune
-        hyperparameters = {k: HYPERPARAMETERS[k] for k in setup.args.tune}
-        # TODO: Should put below logic into the Setup
-        update_hyperparameters(
+        hyperparameters = update_hyperparameters(
             setup.param_space,
-            hyperparameters,
+            {k: HYPERPARAMETERS[k] for k in setup.args.tune},
             setup.args.tune,
             num_grid_samples=setup.args.num_samples,
             train_batch_size_per_learner=setup.args.train_batch_size_per_learner,

@@ -229,9 +229,50 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         --tune num_envs_per_env_runner --num_samples 1 \
         --tag:core --tag:pbt --comment "Core: PBT num environments" \
         --comet offline+upload --wandb offline --offline_loggers json --log_level IMPORTANT_INFO \
+        --minibatch_size 256 \
         --num_env_runners 1 --evaluation_num_env_runners 0 \
-        --log_stats timers+learners pbt --quantile_fraction 0.1 --perturbation_interval 0.125
+        --total_steps 524288 --use_exact_total_steps \
+        --log_stats timers+learners pbt --quantile_fraction 0.1 --perturbation_interval 0.25
 
+    [ ] (0549cd2511042048d8bd3) - needs wandb upload, batch_size 256 variant (less perturbations)
+        - need replay:
+            - 0549cd2511042048d8bd3X32d97C00F32d97C01S0cMK (40% missing)
+
+    [ ] (0549cd2511042239764e3) minibatch_size 128
+
+    python experiments/tune_with_scheduler.py \
+        --tune num_envs_per_env_runner batch_size --num_samples 2 \
+        --tag:core --tag:pbt --comment "Core: PBT num_environments to batch_size & minibatch_scale" \
+        --comet offline+upload --wandb offline+upload@end --offline_loggers json --log_level IMPORTANT_INFO \
+        --minibatch_scale 0.25 \
+        --total_steps 524288 --use_exact_total_steps \
+        --log_stats timers+learners pbt --quantile_fraction 0.1 --perturbation_interval 0.125
+    [ ] (0549cd25110422496a333) - canceled error; not uploaded to Wandb
+
+    python experiments/tune_with_scheduler.py \
+        --tune num_envs_per_env_runner batch_size --num_samples 2 \
+        --tag:core --tag:pbt --comment "Core: PBT num_environments to batch_size & minibatch_scale" \
+        --comet offline+upload --wandb offline+upload@end --offline_loggers json --log_level IMPORTANT_INFO \
+        --minibatch_scale 0.125 \
+        --total_steps 524288 --use_exact_total_steps \
+        --log_stats timers+learners pbt --quantile_fraction 0.1 --perturbation_interval 0.125
+    [ ] (0549cd251104225098923) - canceled error; not uploaded to Wandb
+        - many need replay
+        - 0549cd251104225098923X52a89C06F52a89C62S1NFA
+        - 0549cd251104225098923X52a89C13F52a89C62S1NFA
+        - 0549cd251104225098923X52a89C12F52a89C61S16C8
+
+
+    // Acrobot
+
+     python experiments/tune_with_scheduler.py \
+        --env_type Acrobot-v1 \
+        --tune num_envs_per_env_runner --num_samples 1 \
+        --tag:core --tag:pbt --comment "Core: PBT num environments" \
+        --comet offline+upload --wandb offline --offline_loggers json --log_level IMPORTANT_INFO \
+        --minibatch_size 256 \
+        --total_steps 524288 --use_exact_total_steps \
+        --log_stats timers+learners pbt --quantile_fraction 0.1 --perturbation_interval 0.25
 
 #
 

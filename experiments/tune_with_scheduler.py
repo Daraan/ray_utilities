@@ -29,7 +29,9 @@ if __name__ == "__main__":
 
     PPOMLPWithPBTSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
     PPOMLPWithPBTSetup.group_name = "pbt:batch_size"  # pyright: ignore
-    HYPERPARAMETERS = load_distributions_from_json(write_distributions_to_json(default_distributions))
+    HYPERPARAMETERS = load_distributions_from_json(
+        write_distributions_to_json(default_distributions, PPOMLPWithPBTSetup.TUNE_PARAMETER_FILE)
+    )
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
         "--tune", "batch_size",
@@ -59,10 +61,9 @@ if __name__ == "__main__":
             trial_name_creator=extend_trial_name(insert=["<batch_size>"], prepend="Tune_BatchSize_WithScheduler"),
         )
         assert setup.args.tune
-        hyperparameters = {k: HYPERPARAMETERS[k] for k in setup.args.tune}
-        update_hyperparameters(
+        hyperparameters = update_hyperparameters(
             setup.param_space,
-            hyperparameters,
+            {k: HYPERPARAMETERS[k] for k in setup.args.tune},
             setup.args.tune,
             num_grid_samples=setup.args.num_samples,
             train_batch_size_per_learner=setup.args.train_batch_size_per_learner,

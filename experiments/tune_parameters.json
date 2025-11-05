@@ -57,7 +57,7 @@
       1.0
     ]
   },
-  "num_env_per_env_runner": {
+  "num_envs_per_env_runner": {
     "grid_search": [
       1,
       8,

@@ -156,7 +156,7 @@ setup_environment_vars() {
     # add submit dir to PYTHONPATH, use empty if not set
     # NOTE: WORKSPACE_DIR could be a remote S3 path
 
-    export OUTPUT_DIR="${WORKSPACE_DIR}/outputs/experiments"
+    export OUTPUT_DIR="${WORKSPACE_DIR}/outputs/shared/experiments"
     export USE_BACKUP_DUMP_DIR=1
     export BACKUP_DUMP_DIR="${TEMP_BACKUP_DUMP_DIR:-${WORKSPACE_DIR}/ray_job_backup}/"
 
