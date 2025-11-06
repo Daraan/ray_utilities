@@ -71,7 +71,7 @@ _NOT_FOUND = Sentinel("_NOT_FOUND")
 
 _logger = logging.getLogger(__name__)
 
-RE_GET_TRIAL_ID = re.compile(r"id=(?P<trial_id>(?P<trial_id_part1>[a-zA-Z0-9]{5,6})(?:_(?P<trial_number>[0-9]{5}))?)")
+RE_GET_TRIAL_ID = re.compile(r"id=(?P<trial_id>(?P<trial_id_part1>[a-zA-Z0-9]{5,8})(?:_(?P<trial_number>[0-9]{5}))?)")
 """Regex pattern to extract the trial ID from checkpoint paths.
 
 This pattern assumes the trial ID is in the format 'id=<part1>[_<trial_number>]',

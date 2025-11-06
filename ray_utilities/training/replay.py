@@ -7,10 +7,12 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Collection, Literal, Optional, cast
 from unittest import mock
 
-from typing_extensions import Self
+from ray.tune.experiment.trial import Trial
+from typing_extensions import Self, deprecated
 
+from ray_utilities.callbacks.wandb import WandbUploaderMixin, wandb_api
 from ray_utilities.constants import FORK_FROM
-from ray_utilities.misc import RE_GET_TRIAL_ID, trial_name_creator
+from ray_utilities.misc import RE_GET_TRIAL_ID, ExperimentKey, trial_name_creator
 from ray_utilities.setup.tuner_setup import TunerSetup
 from ray_utilities.training.default_class import DefaultTrainable
 from ray_utilities.training.helpers import get_args_and_config
@@ -19,9 +21,11 @@ if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
     from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
 
+    import wandb
     from ray_utilities.callbacks.tuner.adv_comet_callback import AdvCometLoggerCallback
     from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
     from ray_utilities.config import DefaultArgumentParser
+    from ray_utilities.config.parser.default_argument_parser import OnlineLoggingOption
     from ray_utilities.setup.experiment_base import ExperimentSetupBase
     from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict
 
@@ -46,6 +50,8 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
         trainable_name: str,
         trial_id: str,
         trial_name_creator=trial_name_creator,
+        upload_mode: OnlineLoggingOption = "offline+upload@end",
+        wandb_run: Optional[wandb.Run] = None,
         **kwargs,
     ):
         if replay_file is not None:
@@ -55,6 +61,11 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
                 first_line = f.readline()
                 first_result = json.loads(first_line)
                 config = first_result["config"]
+        self._tags = []
+        if wandb_run is not None:
+            self._tags = wandb_run.tags
+            self._comment = wandb_run.notes
+        self._wandb_upload_mode = upload_mode
 
         self._replay_iteration = 0
         if start_step is not None:
@@ -66,6 +77,7 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
         self._first_result = next(self._replay_step())
         self._start_iteration = start_iteration or 0
         super().__init__(config, algorithm_overrides=algorithm_overrides, model_config=model_config, **kwargs)
+        self._setup.args.comment = self._comment
         from ray.tune.experiment.trial import Trial
 
         self._mock_trial = Trial(
@@ -78,7 +90,9 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
         mock_storage = SimpleNamespace(trial_driver_staging_path=self.replay_file.parent, trial_working_directory="na")
         print("local path will be", self.replay_file.parent)
         self._mock_trial.storage = mock_storage
-        self._callbacks = self._make_callbacks(loggers)
+        self._callbacks = self._make_callbacks(
+            loggers,
+        )
 
     @classmethod
     def define(  # pyright: ignore[reportIncompatibleMethodOverride]
@@ -115,7 +129,11 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
         self, loggers: Collection[Literal["comet", "wandb"]]
     ) -> dict[str, AdvCometLoggerCallback | AdvWandbLoggerCallback]:
         # Let tuner restore callbacks?
-        self._setup.args.wandb = "offline+upload@end"
+        self._setup.args.wandb = self._wandb_upload_mode
+        # ordered unique tags
+        self._setup.args.tags = list(
+            (dict.fromkeys(self._setup.args.tags, True) | dict.fromkeys(self._tags or [], True)).keys()
+        )
         tuner_setup = TunerSetup(
             setup=self._setup,
             eval_metric=self._setup.args.metric,
@@ -132,6 +150,7 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
             comet_callback.on_trial_start(0, [self._mock_trial], self._mock_trial)
         return callbacks
 
+    @deprecated("use tune methods instead")
     def create_wandb_run(self, mode="offline"):
         import wandb  # noqa: PLC0415
 
@@ -166,6 +185,7 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
         if FORK_FROM in config:
             wandb_init_kwargs["fork_from"] = config[FORK_FROM]
             wandb_init_kwargs["name"] = logger.make_forked_trial_name(trial_dir.name, config[FORK_FROM])
+        # query online for tags
 
         # if we resume do no set trial name to not overwrite it
         wandb_init_kwargs.update(logger.kwargs)
@@ -217,63 +237,138 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
         return result  # pyright: ignore[reportReturnType]
 
 
+_API = None
 if __name__ == "__main__":
+
+    def gather_whole_experiment(path: pathlib.Path):
+        return list(path.glob("**/result*.json"))
+
     import argparse
+    import logging
     import sys
 
+    import ray_utilities.constants
     from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
+
+    logger = logging.getLogger(__name__)
 
     parser = argparse.ArgumentParser()
     parser.add_argument("replay_file", type=str)
+    parser.add_argument("--experiment", action="store_true", default=False, help="Replay the whole experiment")
     parser.add_argument("--start", type=int, default=None)
     parser.add_argument("--trainable_name", type=str, default=None)
     parser.add_argument("--project", type=str, default=None)
     parser.add_argument("--group", type=str, default=None)
+    parser.add_argument("--new_id", nargs="?", const=True, type=str, default=None)
+    parser.add_argument("--ignore-old-wandb-paths", action="store_true", default=False)
     args, extra = parser.parse_known_args()
-    replay_path = pathlib.Path(args.replay_file)
-    if not replay_path.exists():
-        raise FileNotFoundError(f"Replay file {replay_path} does not exist.")
-    with replay_path.open("r") as f:
-        first_line = f.readline()
-        first_result = json.loads(first_line)
-        config = first_result["config"]
-        if not args.trainable_name:
-            args.trainable_name = first_result["config"].get("trainable_name", "ReplayTrainable")
-        if not args.group:
-            args.group = config["experiment_group"]
-        if not args.project:
-            args.project = config.get("experiment_name")
-            if args.project is None:
-                project, experiment_id = replay_path.parts[replay_path.parts.index("experiments") + 1].rsplit("-", 1)
-                args.project = project
-        trial_id = config.get("trial_id")
-        if trial_id is None:
-            if replay_path.name == "result.json":
-                trial_id = RE_GET_TRIAL_ID.search(args.replay_file).groupdict("trial_id")["trial_id"]
-            else:
-                # named result-fork.trial_id.json
-                trial_id = replay_path.stem.split("-")[-1]
+    _API = wandb_api()
+    if args.experiment:
+        replay_files = gather_whole_experiment(pathlib.Path(args.replay_file))
+    else:
+        replay_files = [pathlib.Path(args.replay_file)]
+    if args.new_id is True:
+        new_trial_id_base = Trial.generate_id()
 
-    PPOMLPSetup.PROJECT = args.project
-    PPOMLPSetup.group_name = args.group  # pyright: ignore[reportAttributeAccessIssue]
-    Trainable: type[ReplayTrainable] = ReplayTrainable.define(
-        PPOMLPSetup,
-        replay_file=args.replay_file,
-    )
-    sys.argv = sys.argv[:1] + extra
-    trainable = Trainable(
-        replay_file=replay_path,
-        config=config,
-        trial_id=trial_id,
-        trainable_name=args.trainable_name,
-        start_iteration=args.start,
-    )
-    while True:
-        result = trainable.train()
-        if not result:
-            break
-    print("Replay finished.")
-    # run = trainable.create_wandb_run()
-    # for result in trainable._replay_step():
-    #    trainable.wandb_run.log(result)
-    # trainable.wandb_run.finish()
+    if args.ignore_old_wandb_paths:
+        # Depending in the situation we do not want to re-upload the old wandb_paths.
+        # Need to know which are old
+        old_wandb_paths = {
+            wandb_run for replay_path in replay_files for wandb_run in (replay_path.parent / "wandb").glob("*run*")
+        }
+
+    for replay_path in replay_files:
+        if not replay_path.exists():
+            raise FileNotFoundError(f"Replay file {replay_path} does not exist.")
+        with replay_path.open("r") as f:
+            first_line = f.readline()
+            first_result = json.loads(first_line)
+            run_id = first_result["config"]["run_id"]
+            logger.info(f"For replay changing RUN_ID to {run_id}")  # noqa: G004
+            ray_utilities.constants._RUN_ID = run_id
+            config = first_result["config"]
+            if args.ignore_old_wandb_paths:
+                config["wandb"] = "offline"
+            if not args.trainable_name:
+                args.trainable_name = first_result["config"].get("trainable_name", "ReplayTrainable")
+            if not args.group:
+                args.group = config["experiment_group"]
+            if not args.project:
+                args.project = config.get("experiment_name")
+                if args.project is None:
+                    project, experiment_id = replay_path.parts[replay_path.parts.index("experiments") + 1].rsplit(
+                        "-", 1
+                    )
+                    args.project = project
+            trial_id = config.get("trial_id")
+            if trial_id is None:
+                if replay_path.name == "result.json":
+                    trial_id = RE_GET_TRIAL_ID.search(str(replay_path)).groupdict("trial_id")["trial_id"]
+                else:
+                    # named result-fork.trial_id.json
+                    trial_id = replay_path.stem.split("-")[-1]
+            original_trial_id = trial_id
+            if args.new_id is not None:
+                if args.new_id is True:
+                    if "_" in trial_id:
+                        # carry over the counter
+                        trial_id = f"{new_trial_id_base}_{trial_id.split('_', 1)[1]}"  # pyright: ignore[reportPossiblyUnboundVariable]
+                    elif ExperimentKey.FORK_SEPARATOR in trial_id:
+                        # this is hard if we want to keep the fork info
+                        original_id_base = trial_id.split(ExperimentKey.FORK_SEPARATOR, 1)[0].split(
+                            ExperimentKey.RUN_ID_SEPARATOR, 1
+                        )[1]
+                        trial_id = trial_id.replace(original_id_base, new_trial_id_base)  # pyright: ignore[reportPossiblyUnboundVariable]
+                elif args.new_id == "clone":
+                    trial_id = original_trial_id + "_clone"
+                else:
+                    new_trial_id = args.new_id
+                    if "_" not in trial_id and ExperimentKey.FORK_SEPARATOR not in trial_id:
+                        # carry over counter if a simple id was passed
+                        trial_id = f"{new_trial_id}_{trial_id.split('_', 1)[1]}"
+                    else:
+                        trial_id = new_trial_id
+
+        PPOMLPSetup.PROJECT = args.project
+        PPOMLPSetup.group_name = args.group  # pyright: ignore[reportAttributeAccessIssue]
+        Trainable: type[ReplayTrainable] = ReplayTrainable.define(
+            PPOMLPSetup,
+            replay_file=args.replay_file,
+        )
+        sys.argv = sys.argv[:1] + extra
+        api = _API or wandb_api()
+        try:
+            run: wandb.Run | None = api.run(f"{args.project}/{original_trial_id}")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Could not fetch wandb run for {args.project}/{original_trial_id}: {e}")  # noqa: G004
+            run = None
+        trainable = Trainable(
+            replay_file=replay_path,
+            config=config,
+            trial_id=trial_id,
+            trainable_name=args.trainable_name,
+            start_iteration=args.start,
+            upload_mode="offline+upload@end" if not args.ignore_old_wandb_paths else "offline",
+            wandb_run=run,
+            trial_name_creator=lambda _trial, run=run: run.name if run is not None else trial_name_creator,
+        )
+        while True:
+            result = trainable.train()
+            if not result:
+                break
+        print("Replay finished.")
+        # run = trainable.create_wandb_run()
+        # for result in trainable._replay_step():
+        #    trainable.wandb_run.log(result)
+        # trainable.wandb_run.finish()
+    if args.ignore_old_wandb_paths:
+        # Depending in the situation we do not want to re-upload the old wandb_paths.
+        # Filter out old wandb_paths from the new ones
+        new_wandb_paths = {
+            wandb_run
+            for replay_path in replay_files
+            for wandb_run in (replay_path.parent / "wandb").glob("*run*")
+            if wandb_run not in old_wandb_paths
+        }  # pyright: ignore[reportPossiblyUnboundVariable]
+        # Upload new wandb runs
+        WandbUploaderMixin().upload_paths(list(new_wandb_paths))

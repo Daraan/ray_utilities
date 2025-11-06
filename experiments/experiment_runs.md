@@ -30,7 +30,7 @@ python experiments/default_training.py --num_samples 3 --seed 128
 ### Tune Normal
 
     python experiments/tune_batch_size.py --tune batch_size --num_samples 16 --comet offline+upload --wandb offline+upload --tag:core --comment "Core: Tune Batch Size exhaustive"
-    [ ] ( 23d5ab25102718001bba3 local & 23d5ab25102720579eba3)
+    [x] ( 23d5ab25102720579eba3)
 
     // Seed 128
 
@@ -101,6 +101,14 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
 
 // use 16000?
 
+### Tune as gradient accumulation
+
+    experiments/tune.py \
+        --batch_size 128 --tune accumulate_gradients_every --num_samples 2 \
+        --tag:tune:accumulate_gradients_every --tag:core --comment "Core: Tune accumulate_gradients_every base 128" \
+        --comet offline+upload --wandb offline+upload --log_stats timers+learners \
+        --log_level INFO
+
 ### PBT
 
 // Use BasicVariantGenerator so that minibatch_size <= train_batch_size
@@ -160,6 +168,7 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         --comet offline+upload --wandb offline+upload \
         --log_level IMPORTANT_INFO --log_stats timers+learners exhaustive"
     [ ] (259cfd25110414551cbf3) some errored, resume?
+    [ ]  0549cd251106103384aa3 some missing
 
 
 
@@ -205,7 +214,7 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         --buffer_length auto \
         pbt --quantile_fraction 0.1 --perturbation_interval 0.125
     [ ] ( ) - needs replay wandb crashed
-    [ ] (0549cd2511041948f7293 )
+    [ ] (0549cd2511041948f7293 ) many not uploaded
 
 
 
@@ -236,7 +245,7 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
 
     [ ] (0549cd2511042048d8bd3) - needs wandb upload, batch_size 256 variant (less perturbations)
         - need replay:
-            - 0549cd2511042048d8bd3X32d97C00F32d97C01S0cMK (40% missing)
+            - 0549cd2511042048d8bd3X32d97C00F32d97C01S0cMK (40% missing of train metrics)
 
     [ ] (0549cd2511042239764e3) minibatch_size 128
 
