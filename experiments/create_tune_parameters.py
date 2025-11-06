@@ -46,8 +46,8 @@ max_exp = int(max_exp)
 default_distributions: dict[str, DistributionDefinition] = {
     "lr": {"qloguniform": {"lower": 5e-5, "upper": 1e-1, "q": 5e-5}},
     "batch_size": {"grid_search": [128, 256, 512, 1024, 2048, 4096, 8192, 8192 * 2]},
-    # NOTE: Upperbound of gradient_accumulation num_epochs * train_batch_size_per_learner / minibatch_size
-    "gradient_accumulation": {"grid_search": list(range(1, max_exp + 1))},  # assume 512 as base
+    # NOTE: Upperbound of accumulate_gradients_every num_epochs * train_batch_size_per_learner / minibatch_size
+    "accumulate_gradients_every": {"grid_search": list(range(1, max_exp + 1))},  # assume 128 as base
     "minibatch_size": {"grid_search": [2**i for i in range(base_exp, max_exp + 1)]},
     # Need to skip too small minibatches, i.e. min 32, skip/resample. Alternatively use FloatDistribution
     "minibatch_scale": {"grid_search": [1 / 16, 1 / 8, 1 / 4, 1 / 2, 1.0]},

@@ -34,14 +34,22 @@ python experiments/default_training.py --num_samples 3 --seed 128
 
     // Seed 128
 
-    python experiments/tune_batch_size.py --tune batch_size --num_samples 16 --comet offline+upload --wandb offline+upload --tag:core --comment "Core: Tune Batch Size exhaustive" --seed 128 --tag:seed=128
+    python experiments/tune_batch_size.py
+        --tune batch_size --num_samples 16 \
+        --seed 128 --tag:seed=128 \
+        --comet offline+upload --wandb offline+upload \
+        --tag:core --comment "Core: Tune Batch Size exhaustive"
 
 ### PBT
 // num_samples is multiplied by number of population members, i.e. 2x8 = 16
 // Keep 3 top trials. Guarantees top quantile is not pure and also at least one resample once into the top trial.
 // 3 / 16 = 0.1875  (0.15 enough with ceiling)
 
-    python experiments/tune_with_scheduler.py --tune batch_size --num_samples 2 --tag:core --comment "Core: Tune Batch Size (PBT)" pbt --quantile_fraction 0.1875 --perturbation_interval 0.125
+    python experiments/tune_with_scheduler.py \
+        --tune batch_size --num_samples 2 \
+        --tag:core --comment "Core: Tune Batch Size (PBT)" \
+        --comet offline+upload --wandb offline+upload \
+        pbt --quantile_fraction 0.1875 --perturbation_interval 0.125
 
     // Seed 128
     python experiments/tune_with_scheduler.py --tune batch_size --num_samples 2 --tag:core --comment "Core: Tune Batch Size (PBT)" --seed 128 --tag:seed=128 pbt --quantile_fraction 0.1875 --perturbation_interval 0.125

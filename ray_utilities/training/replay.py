@@ -18,6 +18,7 @@ from ray_utilities.training.default_class import DefaultTrainable
 from ray_utilities.training.helpers import get_args_and_config
 
 if TYPE_CHECKING:
+    from ray_utilities.typing import ForkFromData
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
     from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
 
@@ -61,10 +62,13 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
                 first_line = f.readline()
                 first_result = json.loads(first_line)
                 config = first_result["config"]
+        assert config is not None
         self._tags = []
         if wandb_run is not None:
             self._tags = wandb_run.tags
             self._comment = wandb_run.notes
+        else:
+            self._comment = config.get("comment", "")
         self._wandb_upload_mode = upload_mode
 
         self._replay_iteration = 0
@@ -74,10 +78,10 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
             for start_iteration, step in enumerate(self._replay_step()):  # noqa: B007, PLR1704
                 if step["current_step"] >= (start_step or 0):
                     break
-        self._first_result = next(self._replay_step())
+        # self._first_result = next(self._replay_step())
         self._start_iteration = start_iteration or 0
         super().__init__(config, algorithm_overrides=algorithm_overrides, model_config=model_config, **kwargs)
-        self._setup.args.comment = self._comment
+        self._setup.args.comment = self._comment or None
         from ray.tune.experiment.trial import Trial
 
         self._mock_trial = Trial(
@@ -89,7 +93,7 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
         )
         mock_storage = SimpleNamespace(trial_driver_staging_path=self.replay_file.parent, trial_working_directory="na")
         print("local path will be", self.replay_file.parent)
-        self._mock_trial.storage = mock_storage
+        self._mock_trial.storage = mock_storage  # pyright: ignore[reportAttributeAccessIssue]
         self._callbacks = self._make_callbacks(
             loggers,
         )
@@ -224,13 +228,13 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
         else:
             results = [result]
         for result in results:
-            print(
-                "Replayed iteration:",
-                self.iteration,
-                "current_step",
-                result.get("current_step", "n/a"),
-            )
-            print("Result keys:", list(result.keys()))
+            if self.iteration % 10 == 0:
+                print(
+                    "Replayed iteration:",
+                    self.iteration,
+                    "current_step",
+                    result.get("current_step", "n/a"),
+                )
             for callback in self._callbacks.values():
                 callback.on_trial_result(self.iteration, [], trial=self._mock_trial, result=result)
 
@@ -242,6 +246,39 @@ if __name__ == "__main__":
 
     def gather_whole_experiment(path: pathlib.Path):
         return list(path.glob("**/result*.json"))
+
+    def config_from_result_file(replay_path: pathlib.Path, *, is_fork: bool = False, fork_step: int | None = None):
+        if not is_fork:
+            with replay_path.open("r") as f:
+                first_line = f.readline()
+                first_result = json.loads(first_line)
+                return first_result["config"]
+        # Iterate until FORK_FROM is found with matching step
+        if fork_step is None:
+            raise ValueError("fork_step must be specified for forked experiments.")
+        config = None
+        return_next = False
+        with replay_path.open("r") as f:
+            for line in f:
+                result = json.loads(line)
+                if "current_step" not in result:
+                    raise ValueError("Result does not contain current_step.")
+                if result["current_step"] < fork_step:
+                    continue
+                config = result["config"]
+                if FORK_FROM in config:
+                    # Check if fork_step matches
+                    fork_data = cast("ForkFromData", config[FORK_FROM])
+                    if fork_data.get("parent_env_steps") == fork_step:
+                        return config  # found correct
+                    parent_data = fork_data["parent_time"]
+                    if parent_data[0] == "current_step" and parent_data[1] == fork_step:
+                        return config
+                    if result["current_step"] == fork_step:
+                        return_next = True
+                if return_next:
+                    return config
+        raise ValueError(f"Could not find FORK_FROM at step {fork_step} in {replay_path}. .json incomplete?")
 
     import argparse
     import logging
@@ -277,7 +314,9 @@ if __name__ == "__main__":
             wandb_run for replay_path in replay_files for wandb_run in (replay_path.parent / "wandb").glob("*run*")
         }
 
+    failures = []
     for replay_path in replay_files:
+        input("press for next")
         if not replay_path.exists():
             raise FileNotFoundError(f"Replay file {replay_path} does not exist.")
         with replay_path.open("r") as f:
@@ -286,7 +325,22 @@ if __name__ == "__main__":
             run_id = first_result["config"]["run_id"]
             logger.info(f"For replay changing RUN_ID to {run_id}")  # noqa: G004
             ray_utilities.constants._RUN_ID = run_id
-            config = first_result["config"]
+            if ExperimentKey.FORK_SEPARATOR in replay_path.name:
+                # Determine parent step
+                parent_steps = replay_path.stem.split(ExperimentKey.FORK_SEPARATOR)[-1].split(
+                    ExperimentKey.STEP_SEPARATOR
+                )[-1]
+                import base62
+
+                parent_steps = base62.decode(parent_steps)
+                try:
+                    config = config_from_result_file(replay_path, is_fork=True, fork_step=parent_steps)
+                except ValueError:
+                    logger.exception(f"Could not find config for {replay_path}. .json incomplete?")
+                    failures.append(replay_path)
+                    continue
+            else:
+                config = first_result["config"]
             if args.ignore_old_wandb_paths:
                 config["wandb"] = "offline"
             if not args.trainable_name:
@@ -319,8 +373,8 @@ if __name__ == "__main__":
                             ExperimentKey.RUN_ID_SEPARATOR, 1
                         )[1]
                         trial_id = trial_id.replace(original_id_base, new_trial_id_base)  # pyright: ignore[reportPossiblyUnboundVariable]
-                elif args.new_id == "clone":
-                    trial_id = original_trial_id + "_clone"
+                elif args.new_id.startswith("clone"):
+                    trial_id = original_trial_id + "_" + args.new_id
                 else:
                     new_trial_id = args.new_id
                     if "_" not in trial_id and ExperimentKey.FORK_SEPARATOR not in trial_id:
@@ -342,6 +396,14 @@ if __name__ == "__main__":
         except Exception as e:  # noqa: BLE001
             logger.error(f"Could not fetch wandb run for {args.project}/{original_trial_id}: {e}")  # noqa: G004
             run = None
+        if ExperimentKey.FORK_SEPARATOR in replay_path.name:
+            # need to determine if we fork existing parent or also cloned parent
+            if args.new_id.startswith("clone") and args.experiment:
+                # need to update fork_from to new cloned
+                cast("ForkFromData", config[FORK_FROM])["parent_fork_id"] = (
+                    cast("ForkFromData", config[FORK_FROM])["parent_fork_id"] + "_" + args.new_id
+                )
+
         trainable = Trainable(
             replay_file=replay_path,
             config=config,
@@ -350,7 +412,7 @@ if __name__ == "__main__":
             start_iteration=args.start,
             upload_mode="offline+upload@end" if not args.ignore_old_wandb_paths else "offline",
             wandb_run=run,
-            trial_name_creator=lambda _trial, run=run: run.name if run is not None else trial_name_creator,
+            trial_name_creator=(lambda _trial, run=run: run.name) if run is not None else trial_name_creator,
         )
         while True:
             result = trainable.train()
@@ -362,6 +424,8 @@ if __name__ == "__main__":
         #    trainable.wandb_run.log(result)
         # trainable.wandb_run.finish()
     if args.ignore_old_wandb_paths:
+        import base62
+
         # Depending in the situation we do not want to re-upload the old wandb_paths.
         # Filter out old wandb_paths from the new ones
         new_wandb_paths = {
@@ -371,4 +435,24 @@ if __name__ == "__main__":
             if wandb_run not in old_wandb_paths
         }  # pyright: ignore[reportPossiblyUnboundVariable]
         # Upload new wandb runs
-        WandbUploaderMixin().upload_paths(list(new_wandb_paths))
+        # We have no dependency ordering here :/
+
+        # We have no upload groups here, sort in an intelligent way
+        # TODO: NEED TO UPDATE FORK_FROM TO THE NEW IDS IF FORKED
+        new_wandb_paths = list(new_wandb_paths)
+
+        basic_runs = [p for p in new_wandb_paths if ExperimentKey.FORK_SEPARATOR not in p.name]
+        WandbUploaderMixin().upload_paths(basic_runs, wait=True)
+        other = [p for p in new_wandb_paths if p not in basic_runs]
+        other.sort(
+            key=lambda p: (
+                ExperimentKey.FORK_SEPARATOR in p.name,
+                ExperimentKey.COUNT_SEPARATOR not in p.name
+                or base62.decode(p.stem.split(ExperimentKey.COUNT_SEPARATOR)[-1].split("_")[0].strip(" -_")),
+            )
+        )
+        WandbUploaderMixin().upload_paths(other)
+    if failures:
+        logger.error("Failures during replay of the following files:")
+        for failure in failures:
+            print(failure)

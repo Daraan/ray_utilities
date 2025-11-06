@@ -190,6 +190,8 @@ def make_fork_from_csv_line(fork_data: ForkFromData, *, trial_id: Optional[str] 
             contents += f"{metric}, {value}, "
         elif data is not _NOT_FOUND:
             contents += f"{data}, "
+        else:
+            contents += " , "  # empty cell
     return contents.rstrip(", ") + "\n"
 
 
