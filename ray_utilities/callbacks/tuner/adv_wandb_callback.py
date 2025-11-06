@@ -422,12 +422,18 @@ class AdvWandbLoggerCallback(
                 if wandb_init_kwargs.get("mode") == "offline" and not local_logging_actor.run_initialized:
                     # If error happend during init we cannot recover but otherwise we can also in offline mode
                     _logger.error(
-                        "Cannot restart logging actor for trial %s in offline mode. wandb.init failed. Settings: %s",
+                        "Cannot start logging actor for trial %s in offline mode. wandb.init failed. Settings: %s",
                         local_logging_actor._trial_name,
                         wandb_init_kwargs,
                     )
-                    breakpoint()
-                    raise  # cannot recover from online errors - that happen during init
+                    # If we resume and the previous run did not report finish we run into an error here.
+                    if wandb_init_kwargs.get("resume") in ("must", True):
+                        # if we resume a run and the previous run with the same id has not finished wandb.init will fail
+                        # restarting might help but it did show it was not reliable
+                        _logger.error("Error while resuming a run. Waiting and trying again...")
+                        time.sleep(10)
+                    else:
+                        raise  # cannot recover from online errors - that happen during init
                 if restarts < 4:
                     run_logging_actor(restarts=restarts + 1)
                 else:
@@ -521,6 +527,11 @@ class AdvWandbLoggerCallback(
             wandb_init_kwargs["resume"] = "must"
             wandb_init_kwargs["id"] = previous_trial_id
             _logger.info("Resuming WandB run with ID %s", previous_trial_id)
+            if self._local_logging:
+                # wandb run should have finished else we might run into errors
+                # We cannot kill threads but kill_on_timeout will at least put out a warning, if it still alive.
+                # TODO: possibly force finish the run; need it as a variable.
+                self._wait_for_trial_actor(trial, timeout=60.0)
         elif is_fork:
             # Forking - the fork_from is already set in wandb_init_kwargs
             _logger.info("Forking WandB run: new ID %s from parent %s", new_trial_id, wandb_init_kwargs["fork_from"])
@@ -668,7 +679,7 @@ class AdvWandbLoggerCallback(
         if trial_to_watch and trial_to_watch in self._local_threads:
             self._local_threads[trial_to_watch].join(timeout)
             if timeout > 0 and kill_on_timeout:
-                _logger.error("Cannot force kill thread for trial %s - thread may be stuck", trial_to_watch.trial_id)
+                _logger.warning("Cannot force kill thread for trial %s - thread may be stuck", trial_to_watch.trial_id)
         for trial, thread in list(self._local_threads.items()):
             if not thread.is_alive():
                 self._local_threads.pop(trial, None)

@@ -339,7 +339,7 @@ class WandbUploaderMixin(UploadHelperMixin):
                     # Check for WandB's own sync marker
                     wandb_sync_files = list(run_dirs.glob("run-*.wandb.synced"))
                     if wandb_sync_files:
-                        logger.warning(
+                        logger.info(
                             "Found WandB sync marker file(s) in %s: %s. This run was likely already uploaded to WandB - %s.",
                             run_dirs,
                             [f.name for f in wandb_sync_files],
