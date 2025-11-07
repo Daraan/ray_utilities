@@ -351,6 +351,8 @@ class AdvWandbLoggerCallback(
         wandb_init_kwargs.update(self.kwargs)
         if fork_from:
             wandb_init_kwargs.setdefault("tags", []).append("forked")
+        if "__ptb_main_branch__" in trial.config:
+            wandb_init_kwargs.setdefault("tags", []).append("pbt_main_branch")
         if "settings" in wandb_init_kwargs:
             # assure that we do not modify this
             wandb_init_kwargs["settings"] = cast("wandb.Settings", wandb_init_kwargs["settings"]).model_copy()

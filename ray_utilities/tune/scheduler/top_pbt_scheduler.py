@@ -878,6 +878,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
 
             self._num_checkpoints += 1
             trial.config["_top_pbt_is_in_upper_quantile"] = True
+            trial.config["__pbt_main_branch__"] = True
         else:
             state.last_checkpoint = None  # not a top trial
 
@@ -974,6 +975,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             # Mark trial as perturbed
             for k in self.additional_config_keys:
                 trial.config.pop(k, None)
+            trial.config.pop("__pbt_main_branch__", None)
             # Set info which trial was forked from
             parent_iteration = self._trial_state[trial_to_clone].last_training_iteration
             fork_data: ForkFromData = {

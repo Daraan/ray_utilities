@@ -338,7 +338,12 @@ if __name__ == "__main__":
             raise FileNotFoundError(f"Replay file {replay_path} does not exist.")
         with replay_path.open("r") as f:
             first_line = f.readline()
-            first_result = json.loads(first_line)
+            try:
+                first_result = json.loads(first_line)
+            except json.JSONDecodeError:
+                logger.error(f"Could not decode first line of {replay_path}: '{first_line}'")  # noqa: G004
+                failures.append(replay_path)
+                continue
             run_id = first_result["config"]["run_id"]
             logger.info(f"For replay changing RUN_ID to {run_id}")  # noqa: G004
             ray_utilities.constants._RUN_ID = run_id

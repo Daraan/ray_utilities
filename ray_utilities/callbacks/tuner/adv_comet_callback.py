@@ -423,6 +423,8 @@ class AdvCometLoggerCallback(
             assert trial in self._trial_experiments
         else:
             experiment = self._trial_experiments[trial]
+        if "__ptb_main_branch__" in trial.config:
+            tags.append("pbt_main_branch")
 
         experiment.set_name(trial_name)
         experiment.add_tags(tags)
