@@ -133,6 +133,18 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
     python experiments/tune_with_scheduler.py --batch_size 8192 --tune minibatch_size --num_samples 2 --tag:core --comment "Core: Tune Minibatch Size (PBT)" --wandb offline+upload@end --comet offline+upload --log_stats timers+learners pbt --quantile_fraction 0.1875 --perturbation_interval 0.125
     [ ] (0549cd251027004189c43 - needs upload and verification)
 
+    python experiments/tune_with_scheduler.py \
+        --env_type CartPole-v1 \
+        --tune minibatch_size \
+        --num_samples 1 \
+        --batch_size 8192 \
+        --tag:core --log_stats learners \
+        --comment "Core: Tune Minibatch Size (PBT)" \
+        --comet  offline+upload@end  --wandb  offline+upload@end  --tag:pbt  \
+        pbt  --perturbation_interval 0.125 --quantile_fraction 0.125
+    [ ] (0549cd2511071329baf53)
+
+
 #### PBT 2 ?
 
     // OPEN
@@ -278,8 +290,8 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         - 0549cd251104225098923X52a89C06F52a89C62S1NFA
         - 0549cd251104225098923X52a89C13F52a89C62S1NFA
         - 0549cd251104225098923X52a89C12F52a89C61S16C8
-    [ ] (0549cd2511052028cb8e3)
-        - replay 0549cd2511052028cb8e3X91aa6C26F91aa6C00S0H32 (offline missing?)
+    [x] (0549cd2511052028cb8e3) - failed, only interesting for start (1st perturbation)
+
 
     // Acrobot
 

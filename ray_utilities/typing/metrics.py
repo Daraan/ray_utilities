@@ -134,6 +134,9 @@ class _LogMetricsBase(TypedDict):
     Included only when > 1
     """
 
+    effective_train_batch_size: NotRequired[int]
+    """Effective batch size during SGD training. This is minibatch_size * accumulate_gradients_every."""
+
     num_training_step_calls_per_iteration: NotRequired[int]
     """How training_steps was called between two train.report() calls."""
 

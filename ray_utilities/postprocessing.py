@@ -604,6 +604,8 @@ def create_log_metrics(
         "minibatch_size": result["config"]["minibatch_size"],
         # While this could be a config parameter, we can also just calculate it here
         "minibatch_scale": result["config"]["minibatch_size"] / result["config"]["_train_batch_size_per_learner"],
+        "effective_train_batch_size": result["config"]["minibatch_size"]
+        * result["config"]["learner_config_dict"].get("accumulate_gradients_every", 1),
     }
     if (grad_accum := result["config"]["learner_config_dict"].get("accumulate_gradients_every", None)) is not None:
         metrics["accumulate_gradients_every"] = grad_accum
