@@ -1392,6 +1392,15 @@ def verify_wandb_run_history(
         failures.append(_FailureTuple("No online history found", last_iteration, run.lastHistoryStep))
         # TODO: Could clean sync marker, could check local dir in /tmp
         return failures
+    if len(online_history) != len(offline_data):
+        logger.error(
+            "❌ Mismatch in number of history entries for run %s: offline %d vs online %d",
+            run_id,
+            len(offline_data),
+            len(online_history),
+        )
+        failures.append(_FailureTuple("num_history_entries", len(offline_data), len(online_history)))
+
     last_log_step = online_history.iloc[-1]._step
     online_iterations = online_history.iloc[-1].training_iteration
     online_last_step = online_history.iloc[-1].current_step

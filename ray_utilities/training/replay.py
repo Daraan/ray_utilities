@@ -463,6 +463,7 @@ if __name__ == "__main__":
             trial_id=trial_id,
             trainable_name=args.trainable_name,
             start_iteration=args.start,
+            # NOTE: If we upload at end this blocks, but no upload block below
             upload_mode="offline+upload@end" if not args.ignore_old_wandb_paths else "offline",
             wandb_run=run,
             trial_name_creator=(lambda _trial, run=run: run.name) if run is not None else trial_name_creator,

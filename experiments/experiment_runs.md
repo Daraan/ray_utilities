@@ -57,14 +57,30 @@ python experiments/default_training.py --num_samples 3 --seed 128
 
 #### PBT with just 1 sample range, do twice. Guarantees full exploration range for trial.
 
-    python experiments/tune_with_scheduler.py --tune batch_size --num_samples 1 --tag:core --comment "Core: Tune Batch Size (PBT)" pbt --quantile_fraction 0.125 --perturbation_interval 0.125
+    python experiments/tune_with_scheduler.py \
+         --env_type CartPole-v1 \
+         --tune batch_size \
+         --num_samples 1 \
+         --tag:core --log_stats learners \
+         --comment "Core: PBT Batch Size exhaustive" \
+         --comet  offline+upload@end  --wandb  offline+upload@end    --tag:pbt  \
+         pbt  --perturbation_interval 0.125 --quantile_fraction 0.1
+
+    [ ]  0549cd2511071358c3033
+
 
     // Seed 128
-    python experiments/tune_with_scheduler.py --tune batch_size --num_samples 1 --tag:core --comment "Core: Tune Batch Size (PBT)" --seed 128 --tag:seed=128 pbt --comet offline+upload@end --wandb offline+upload@end --quantile_fraction 0.125 --perturbation_interval 0.125
-    [ ]
+    python experiments/tune_with_scheduler.py \
+         --env_type CartPole-v1 \
+         --tune batch_size \
+         --num_samples 1 \
+         --tag:core --log_stats learners \
+         --seed 128 --tag:seed=128 \
+         --comment "Core: PBT Batch Size exhaustive" \
+         --comet  offline+upload@end  --wandb  offline+upload@end    --tag:pbt  \
+         pbt  --perturbation_interval 0.125 --quantile_fraction 0.1
 
     // Seed 256
-    python experiments/tune_with_scheduler.py --tune batch_size --num_samples 1 --tag:core --comment "Core: Tune Batch Size (PBT)" --seed 256 --tag:seed=256 pbt --quantile_fraction 0.125 --perturbation_interval 0.125
 
 
 ## ------------ Minibatch size (SGD batch size) ---------
@@ -89,12 +105,11 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
 
     // Seed 128
     python experiments/tune.py --batch_size 2048 --tune minibatch_size --tag:tune:minibatch_size --num_samples 12 --tag:core --evaluation_num_env_runners 1 --seed 128 --tag:seed=128 --comment "Core: Tune minibatch_size Size exhaustive"
-    [ ] (259cfd25102509323cf03, aborted, 259cfd2510251623b46f3 (needs replay to finish))
+    [x] (259cfd25102509323cf03, 259cfd2510251623b46f3)
 
-    // specific file:
     // Seed 128
     python experiments/tune_batch_size.py --batch_size 2048 --tune minibatch_size --num_samples 12 --tag:core --seed 128 --tag:seed=128 --comment "Core: Tune minibatch_size Size exhaustive"
-    [ ] (259cfd25102501165267)
+    [x] (259cfd25102501165267)
 
 
 #### Batch size 8196
@@ -102,7 +117,8 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
     // 8192 variants: +2 = 8 variants
 
     experiments/tune.py --batch_size 8192 --tune minibatch_size --tag:tune:minibatch_size --num_samples 16 --tag:core --comment "Core: Tune minibatch_size Size exhaustive"
-    [ ] (259cfd2510270101ee6f3 DWS (completed, needs upload!), 259cfd2510271107333d3 61252 (likely duplicate))
+    [ ] (259cfd2510270101ee6f3 DWS (completed, needs upload!)) - missing
+    [ ] (259cfd2510271107333d3 61252 (likely duplicate))
 
     // Seed 128
     experiments/tune.py --batch_size 8192 --tune minibatch_size --tag:tune:minibatch_size --num_samples 16 --tag:core --seed 128 --tag:seed=128 --comment "Core: Tune minibatch_size Size exhaustive"
@@ -291,6 +307,7 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         - 0549cd251104225098923X52a89C13F52a89C62S1NFA
         - 0549cd251104225098923X52a89C12F52a89C61S16C8
     [x] (0549cd2511052028cb8e3) - failed, only interesting for start (1st perturbation)
+    [ ] Redo low prio
 
 
     // Acrobot
