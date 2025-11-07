@@ -118,7 +118,8 @@ class TrackForkedTrialsMixin(LoggerCallback):
         to the trial when we fork it again.
         """
         if fork_data is not None:
-            fork_id = self.make_forked_trial_id(trial, fork_data)
+            if (fork_id := fork_data.get("fork_id_this_trial")) is None:
+                fork_id = self.make_forked_trial_id(trial, fork_data)
         else:
             # assume we load for example from a checkpoint and the parent is currently not running
             # hence the id of the trial does not conflict with the parent

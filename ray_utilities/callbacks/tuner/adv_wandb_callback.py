@@ -296,6 +296,12 @@ class AdvWandbLoggerCallback(
             trial_name = self.make_forked_trial_name(trial, fork_data)
             # Set experiment key using dict-based fork data
             config.setdefault("experiment_key", make_experiment_key(trial, fork_data))
+            if trial_id != config["experiment_key"]:
+                _logger.error(
+                    "Logged trial_id and config['experiment'] do not match: %s vs %s",
+                    trial_id,
+                    config["experiment_key"],
+                )
         else:
             # No fork info present in config; use non-fork key
             # Use get_trial_id to get the consistent trial ID

@@ -8,9 +8,10 @@ from typing import TYPE_CHECKING, Any, Collection, Literal, Optional, cast
 from unittest import mock
 
 from ray.tune.experiment.trial import Trial
+from tap import Tap
 from typing_extensions import Self, deprecated
 
-from ray_utilities.callbacks.wandb import WandbUploaderMixin, wandb_api
+from ray_utilities.callbacks.wandb import RunNotFound, WandbUploaderMixin, wandb_api
 from ray_utilities.constants import FORK_FROM
 from ray_utilities.misc import RE_GET_TRIAL_ID, ExperimentKey, trial_name_creator
 from ray_utilities.setup.tuner_setup import TunerSetup
@@ -18,7 +19,6 @@ from ray_utilities.training.default_class import DefaultTrainable
 from ray_utilities.training.helpers import get_args_and_config
 
 if TYPE_CHECKING:
-    from ray_utilities.typing import ForkFromData
     from ray.rllib.algorithms import Algorithm, AlgorithmConfig
     from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
 
@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from ray_utilities.config import DefaultArgumentParser
     from ray_utilities.config.parser.default_argument_parser import OnlineLoggingOption
     from ray_utilities.setup.experiment_base import ExperimentSetupBase
+    from ray_utilities.typing import ForkFromData
     from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict
 
 
@@ -289,6 +290,16 @@ if __name__ == "__main__":
 
     logger = logging.getLogger(__name__)
 
+    class Parser(Tap):
+        replay_file: str
+        experiment: bool = False  # Replay the whole experiment
+        start: Optional[int] = None
+        trainable_name: Optional[str] = None
+        project: Optional[str] = None
+        group: Optional[str] = None
+        new_id: Optional[str | Literal[True]] = None
+        ignore_old_wandb_paths: bool = False
+
     parser = argparse.ArgumentParser()
     parser.add_argument("replay_file", type=str)
     parser.add_argument("--experiment", action="store_true", default=False, help="Replay the whole experiment")
@@ -299,6 +310,7 @@ if __name__ == "__main__":
     parser.add_argument("--new_id", nargs="?", const=True, type=str, default=None)
     parser.add_argument("--ignore-old-wandb-paths", action="store_true", default=False)
     args, extra = parser.parse_known_args()
+    args = cast("Parser", args)
     _API = wandb_api()
     if args.experiment:
         replay_files = gather_whole_experiment(pathlib.Path(args.replay_file))
@@ -315,8 +327,13 @@ if __name__ == "__main__":
         }
 
     failures = []
+    uploader = WandbUploaderMixin()
+    import ray
+
+    ray.init()
+
     for replay_path in replay_files:
-        input("press for next")
+        # input("press for next")
         if not replay_path.exists():
             raise FileNotFoundError(f"Replay file {replay_path} does not exist.")
         with replay_path.open("r") as f:
@@ -354,6 +371,7 @@ if __name__ == "__main__":
                         "-", 1
                     )
                     args.project = project
+
             trial_id = config.get("trial_id")
             if trial_id is None:
                 if replay_path.name == "result.json":
@@ -361,6 +379,35 @@ if __name__ == "__main__":
                 else:
                     # named result-fork.trial_id.json
                     trial_id = replay_path.stem.split("-")[-1]
+            # Before we replay it verify if it does need replay (last step + all intermediate steps exist)
+            # region verify
+            uploader = WandbUploaderMixin()
+            uploader.project = args.project
+            verify_failures = uploader.verify_wandb_uploads(
+                experiment_id=config["run_id"], output_dir=replay_path.parent.parent.parent, single_experiment=trial_id
+            )
+            if not verify_failures or all(
+                not (
+                    isinstance(run, RunNotFound) or isinstance(failure, Exception) or any(not f.minor for f in failure)
+                )
+                for run, failure in verify_failures.items()
+            ):
+                logger.info("Replay of {replay_path} not needed, all steps uploaded.")
+                if args.new_id and args.new_id is not True and args.new_id.startswith("clone"):
+                    choice = ""
+                    while choice.lower() not in ("y", "n"):
+                        choice = input(
+                            f"Replay of {replay_path} not needed, all steps uploaded. "
+                            f"Do you want to clone it anyway under new ID {args.new_id}? (y/n): "
+                        )
+                    if choice.lower() == "y":
+                        pass
+                    else:
+                        continue
+                else:
+                    continue
+
+            # endregion
             original_trial_id = trial_id
             if args.new_id is not None:
                 if args.new_id is True:
@@ -398,11 +445,17 @@ if __name__ == "__main__":
             run = None
         if ExperimentKey.FORK_SEPARATOR in replay_path.name:
             # need to determine if we fork existing parent or also cloned parent
-            if args.new_id.startswith("clone") and args.experiment:
+            fork_data = cast("ForkFromData", config[FORK_FROM])
+            if args.new_id and args.new_id is not True and args.new_id.startswith("clone") and args.experiment:
                 # need to update fork_from to new cloned
-                cast("ForkFromData", config[FORK_FROM])["parent_fork_id"] = (
-                    cast("ForkFromData", config[FORK_FROM])["parent_fork_id"] + "_" + args.new_id
-                )
+                fork_data["parent_fork_id"] = fork_data["parent_fork_id"] + "_" + args.new_id
+            fork_data["fork_id_this_trial"] = trial_id
+            # define ID for this trial. NOTE: Might not work with comet as too long.
+            config["experiment_key"] = trial_id
+
+            # TODO: Should write this data into the fork file
+            # Data might also be missing
+            # fork_csv = pd.read_csv(replay_path.parent / "forked_from.csv")
 
         trainable = Trainable(
             replay_file=replay_path,
@@ -432,18 +485,20 @@ if __name__ == "__main__":
             wandb_run
             for replay_path in replay_files
             for wandb_run in (replay_path.parent / "wandb").glob("*run*")
-            if wandb_run not in old_wandb_paths
-        }  # pyright: ignore[reportPossiblyUnboundVariable]
+            if wandb_run not in old_wandb_paths  # pyright: ignore[reportPossiblyUnboundVariable]
+        }
         # Upload new wandb runs
-        # We have no dependency ordering here :/
 
-        # We have no upload groups here, sort in an intelligent way
-        # TODO: NEED TO UPDATE FORK_FROM TO THE NEW IDS IF FORKED
+        # There is no real dependency ordering here, have no upload groups here, sort in an intelligent way
         new_wandb_paths = list(new_wandb_paths)
 
         basic_runs = [p for p in new_wandb_paths if ExperimentKey.FORK_SEPARATOR not in p.name]
-        WandbUploaderMixin().upload_paths(basic_runs, wait=True)
+        uploader = WandbUploaderMixin()
+        uploader.project = args.project
+        if basic_runs:
+            uploader.upload_paths(basic_runs, wait=True, use_tqdm=True)
         other = [p for p in new_wandb_paths if p not in basic_runs]
+        # NOTE: Required parent could still end up in a parallel upload, hope wait and retry is enough to catch up.
         other.sort(
             key=lambda p: (
                 ExperimentKey.FORK_SEPARATOR in p.name,
@@ -451,7 +506,7 @@ if __name__ == "__main__":
                 or base62.decode(p.stem.split(ExperimentKey.COUNT_SEPARATOR)[-1].split("_")[0].strip(" -_")),
             )
         )
-        WandbUploaderMixin().upload_paths(other)
+        uploader.upload_paths(other, parallel_uploads=2, wait=True, use_tqdm=True)
     if failures:
         logger.error("Failures during replay of the following files:")
         for failure in failures:

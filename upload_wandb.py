@@ -6,13 +6,13 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from pathlib import Path
 import time
+from pathlib import Path
 
 import argcomplete
-
 import ray
 
+from ray_utilities.callbacks.wandb import RunNotFound
 
 logger = logging.getLogger(__name__)
 
@@ -85,10 +85,14 @@ if __name__ == "__main__":
     uploader = WandbUploaderMixin()
     uploader.project = args.project
     if args.command == "verify":
-        uploader.verify_wandb_uploads(
+        failures = uploader.verify_wandb_uploads(
             experiment_id=args.run_id, output_dir=args.experiment_path, single_experiment=args.experiment_key
         )
-        sys.exit(0)
+        success = not failures or all(
+            not (isinstance(run, RunNotFound) or isinstance(failure, Exception) or any(not f.minor for f in failure))
+            for run, failure in failures.items()
+        )
+        sys.exit(success)
     try:
         experiment_dir = Path(args.experiment_path)
         if args.experiment_key:

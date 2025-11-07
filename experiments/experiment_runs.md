@@ -125,14 +125,13 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
 
     // Variants: 128, 256, 512, 1024, 2048 * 2 samples = 10
     python experiments/tune_with_scheduler.py --batch_size 2048 --tune minibatch_size --num_samples 2 --tag:core --comment "Core: Tune Minibatch Size (PBT)" --wandb offline+upload@end --comet offline+upload --log_stats timers+learners pbt --quantile_fraction 0.1875 --perturbation_interval 0.125
-    [ ] ( 0549cd251026185347773 - need replay, failedBUGGED?, 0549cd25102700448a383 DWS failed)
     [ ] (61260 0549cd2510271138ffd13, 0549cd2510280059d2cf3)
 
 #### Batch Size 8192
     // +  2*2 samples = 14 variants
 
     python experiments/tune_with_scheduler.py --batch_size 8192 --tune minibatch_size --num_samples 2 --tag:core --comment "Core: Tune Minibatch Size (PBT)" --wandb offline+upload@end --comet offline+upload --log_stats timers+learners pbt --quantile_fraction 0.1875 --perturbation_interval 0.125
-    [ ] (61c13725102619431f683 DWS-FAILED-BUGGED, 0549cd251027004189c43 - needs upload and verification)
+    [ ] (0549cd251027004189c43 - needs upload and verification)
 
 #### PBT 2 ?
 
@@ -280,6 +279,7 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         - 0549cd251104225098923X52a89C13F52a89C62S1NFA
         - 0549cd251104225098923X52a89C12F52a89C61S16C8
     [ ] (0549cd2511052028cb8e3)
+        - replay 0549cd2511052028cb8e3X91aa6C26F91aa6C00S0H32 (offline missing?)
 
     // Acrobot
 
