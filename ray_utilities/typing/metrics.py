@@ -134,6 +134,9 @@ class _LogMetricsBase(TypedDict):
     Included only when > 1
     """
 
+    num_environments: NotRequired[int]
+    """Number of parallel environments used during sampling. Product of num_envs_per_env_runner * num_env_runners."""
+
     effective_train_batch_size: NotRequired[int]
     """Effective batch size during SGD training. This is minibatch_size * accumulate_gradients_every."""
 
