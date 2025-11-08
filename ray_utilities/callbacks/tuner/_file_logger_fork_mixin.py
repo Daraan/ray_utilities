@@ -71,6 +71,17 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
         """
         ...
 
+    @abstractmethod
+    def _trim_history_back_to_fork_step(self, trial: Trial, copied_file: Path, fork_data: ForkFromData) -> None:
+        """When the history file is copied, the parent trial might have already continued,
+        need to trim the logged history back to the fork step.
+
+        Args:
+            trial: The trial being set up
+            fork_step: The global step at which the trial was forked
+        """
+        ...
+
     _trial_files: dict[Trial, TextIO]
     """Mapping of trials to their open file handles or paths. Used to track if trial is actively logged"""
 
@@ -102,7 +113,7 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
         return self._make_forked_trial_file_name(parent_trial, parent_fork_id)
 
     def _sync_parent_file(
-        self, trial: Trial, parent_trial: Trial, parent_file_name: str, local_file_path: Path
+        self, trial: Trial, parent_trial: Trial, parent_file_name: str, local_file_path: Path, fork_data: ForkFromData
     ) -> bool:
         """Sync parent trial's file to the forked trial's location.
 
@@ -137,6 +148,10 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
                         stat_result.free,
                     )
                 return False
+            else:
+                # When the parent trial has continued, we need to trim the copied file to match the fork step
+                self._trim_history_back_to_fork_step(trial, local_file_path, fork_data)
+
             return True
 
         # Different nodes - sync via remote storage
@@ -290,7 +305,7 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
             parent_trial := self.parent_trial_lookup.get(trial), Trial
         ):
             parent_file_name = self._get_parent_file_name(parent_trial)
-            file_copied = self._sync_parent_file(trial, parent_trial, parent_file_name, local_file_path)
+            file_copied = self._sync_parent_file(trial, parent_trial, parent_file_name, local_file_path, fork_data)
 
         # Try to load from checkpoint if parent trial sync didn't work
         if not file_copied:

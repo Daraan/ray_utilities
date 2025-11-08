@@ -28,6 +28,7 @@ from ray_utilities.postprocessing import remove_videos
 if TYPE_CHECKING:
     from ray.tune.experiment.trial import Trial
 
+    from ray_utilities.typing import ForkFromData
     from ray_utilities.typing.metrics import AnyLogMetricsDict
 
 
@@ -104,16 +105,39 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, JsonLog
             local_file_path,
         )
 
+    def _trim_history_back_to_fork_step(self, trial: Trial, copied_file: Path, fork_data: ForkFromData) -> None:
+        """When the history file is copied, the parent trial might have already continued,
+        need to trim the logged history back to the fork step.
+        """
+        fork_step = fork_data["parent_training_iteration"]
+        # remove all lines after fork step
+        temp_file = copied_file.with_suffix(".tmp")
+        with copied_file.open("r") as infile, temp_file.open("w") as outfile:
+            for line in infile:
+                try:
+                    data = json.loads(line)
+                    if data.get("training_iteration", 0) <= fork_step:
+                        outfile.write(line)
+                    else:
+                        break
+                except json.JSONDecodeError:
+                    # skip invalid lines
+                    continue
+        temp_file.replace(copied_file)
+
     @warn_if_slow
     def log_trial_result(self, iteration: int, trial: Trial, result: dict[str, Any] | AnyLogMetricsDict):
         if not result.get(EVALUATED_THIS_STEP, True):
             # Do not eval metric if we did not log it, ray copies the entry.
             result.pop(EVALUATION_RESULTS, None)
-        super().log_trial_result(
-            iteration,
-            trial,
-            remove_videos(result),
-        )
+        try:
+            super().log_trial_result(
+                iteration,
+                trial,
+                remove_videos(result),
+            )
+        except OSError as e:
+            logger.error("Error logging trial result: %s", e)
 
     def log_trial_start(self, trial: Trial):
         # NOTE: Because JsonLoggerCallback.log_trial_start is not compatible with forked trials

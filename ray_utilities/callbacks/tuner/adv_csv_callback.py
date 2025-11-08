@@ -26,6 +26,7 @@ from ray_utilities.postprocessing import remove_videos
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from ray_utilities.typing import ForkFromData
     from ray.tune.experiment.trial import Trial
 
     from ray_utilities.typing.metrics import AnyLogMetricsDict
@@ -93,6 +94,23 @@ class AdvCSVLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, CSVLogge
             trial.trial_id,
             local_file_path,
         )
+
+    def _trim_history_back_to_fork_step(self, trial: Trial, copied_file: Path, fork_data: ForkFromData) -> None:
+        """When the history file is copied, the parent trial might have already continued,
+        need to trim the logged history back to the fork step.
+        """
+        fork_step = fork_data["parent_training_iteration"]
+        # remove all lines after fork step
+        temp_file = copied_file.with_suffix(".tmp")
+        with copied_file.open("r") as infile, temp_file.open("w") as outfile:
+            for i, line in enumerate(infile):
+                # we have a csv file here and we cannot be 100% sure about the header.
+                # we keep the header + fork_step lines
+                if i == 0 or i <= fork_step:
+                    outfile.write(line)
+                else:
+                    break
+        temp_file.replace(copied_file)
 
     def log_trial_result(self, iteration: int, trial: "Trial", result: AnyLogMetricsDict):  # pyright: ignore[reportIncompatibleMethodOverride]
         if self.metric:
