@@ -31,6 +31,7 @@ python experiments/default_training.py --num_samples 3 --seed 128
 
     python experiments/tune_batch_size.py --tune batch_size --num_samples 16 --comet offline+upload --wandb offline+upload --tag:core --comment "Core: Tune Batch Size exhaustive"
     [x] ( 23d5ab25102720579eba3)
+    (x) ported excel
 
     // Seed 128
 
@@ -45,17 +46,7 @@ python experiments/default_training.py --num_samples 3 --seed 128
 // Keep 3 top trials. Guarantees top quantile is not pure and also at least one resample once into the top trial.
 // 3 / 16 = 0.1875  (0.15 enough with ceiling)
 
-    python experiments/tune_with_scheduler.py \
-        --tune batch_size --num_samples 2 \
-        --tag:core --comment "Core: Tune Batch Size (PBT)" \
-        --comet offline+upload --wandb offline+upload \
-        pbt --quantile_fraction 0.1875 --perturbation_interval 0.125
-
-    // Seed 128
-    python experiments/tune_with_scheduler.py --tune batch_size --num_samples 2 --tag:core --comment "Core: Tune Batch Size (PBT)" --seed 128 --tag:seed=128 pbt --quantile_fraction 0.1875 --perturbation_interval 0.125
-
-
-#### PBT with just 1 sample range, do twice. Guarantees full exploration range for trial.
+#### CartPole-v1
 
     python experiments/tune_with_scheduler.py \
          --env_type CartPole-v1 \
@@ -67,6 +58,7 @@ python experiments/default_training.py --num_samples 3 --seed 128
          pbt  --perturbation_interval 0.125 --quantile_fraction 0.1
 
     [ ]  0549cd2511071358c3033
+    (x) ported excel
 
 
     // Seed 128
@@ -81,6 +73,33 @@ python experiments/default_training.py --num_samples 3 --seed 128
          pbt  --perturbation_interval 0.125 --quantile_fraction 0.1
 
     // Seed 256
+
+#### Acrobot-v1
+
+    python experiments/tune_with_scheduler.py \
+        --env_type Acrobot-v1 \
+        --tune batch_size \
+        --num_samples 1 \
+        --tag:core --log_stats learners \
+        --comment "Core: PBT Batch Size exhaustive" \
+        --comet  offline+upload@end  --wandb  offline+upload@end    --tag:pbt  \
+        pbt  --perturbation_interval 0.125 --quantile_fraction 0.1
+    [ ] ( 0549cd2511071655d5f13)
+    (x) ported excel
+
+
+#### Lunar Lander
+    python experiments/tune_with_scheduler.py \
+        --env_type LunarLander-v3 \
+        --tune batch_size \
+        --num_samples 1 \
+        --tag:core --log_stats learners \
+        --comment "Core: PBT Batch Size exhaustive" \
+        --comet  offline+upload@end  --wandb  offline+upload@end    --tag:pbt  \
+        pbt  --perturbation_interval 0.125 --quantile_fraction 0.1
+    [ ] (0549cd25110716588c5b3)
+    (x) ported excel
+
 
 
 ## ------------ Minibatch size (SGD batch size) ---------
@@ -106,10 +125,12 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
     // Seed 128
     python experiments/tune.py --batch_size 2048 --tune minibatch_size --tag:tune:minibatch_size --num_samples 12 --tag:core --evaluation_num_env_runners 1 --seed 128 --tag:seed=128 --comment "Core: Tune minibatch_size Size exhaustive"
     [x] (259cfd25102509323cf03, 259cfd2510251623b46f3)
+    (x) ported excel
 
     // Seed 128
     python experiments/tune_batch_size.py --batch_size 2048 --tune minibatch_size --num_samples 12 --tag:core --seed 128 --tag:seed=128 --comment "Core: Tune minibatch_size Size exhaustive"
     [x] (259cfd25102501165267)
+    (x) ported excel
 
 
 #### Batch size 8196
@@ -117,8 +138,9 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
     // 8192 variants: +2 = 8 variants
 
     experiments/tune.py --batch_size 8192 --tune minibatch_size --tag:tune:minibatch_size --num_samples 16 --tag:core --comment "Core: Tune minibatch_size Size exhaustive"
-    [ ] (259cfd2510270101ee6f3 DWS (completed, needs upload!)) - missing
-    [ ] (259cfd2510271107333d3 61252 (likely duplicate))
+    [x] 259cfd2510270101ee6f3 (on DWS)
+    [ ] (259cfd2510271107333d3 (on DWS)) - duplicate?
+    (x) ported excel
 
     // Seed 128
     experiments/tune.py --batch_size 8192 --tune minibatch_size --tag:tune:minibatch_size --num_samples 16 --tag:core --seed 128 --tag:seed=128 --comment "Core: Tune minibatch_size Size exhaustive"
@@ -140,14 +162,67 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
 #### Batch Size 2048
 
     // Variants: 128, 256, 512, 1024, 2048 * 2 samples = 10
-    python experiments/tune_with_scheduler.py --batch_size 2048 --tune minibatch_size --num_samples 2 --tag:core --comment "Core: Tune Minibatch Size (PBT)" --wandb offline+upload@end --comet offline+upload --log_stats timers+learners pbt --quantile_fraction 0.1875 --perturbation_interval 0.125
-    [ ] (61260 0549cd2510271138ffd13, 0549cd2510280059d2cf3)
+    python experiments/tune_with_scheduler.py \
+        --tune minibatch_size \
+        --batch_size 2048  --num_samples 2 \
+        --tag:core --comment "Core: Tune Minibatch Size (PBT)" --wandb offline+upload@end --comet offline+upload --log_stats timers+learners \
+        pbt --quantile_fraction 0.1875 --perturbation_interval 0.125
+    [ ] 0549cd2510271138ffd13 - replayed, incomplete
+    [x] 0549cd2510280059d2cf3 (only until 600k)
+    (x) ported excel
+
+    python experiments/tune_with_scheduler.py \
+        --env_type CartPole-v1 \
+        --tune minibatch_size \
+        --num_samples 1 \
+        --batch_size 2048 \
+        --tag:core --log_stats learners \
+        --comment "Core: PBT Minibatch Size" \
+        --comet  offline+upload  --wandb  offline+upload@end  --tag:pbt  \
+        pbt  --perturbation_interval 0.125 --quantile_fraction 0.1
+
+    [ ] (0549cd25110716493f903)
+    (x) ported to excel
+
+##### Acrobot
+
+    python experiments/tune_with_scheduler.py \
+        --env_type Acrobot-v1 \
+        --tune minibatch_size \
+        --num_samples 1 \
+        --batch_size 2048 \
+        --tag:core --log_stats learners \
+        --comment "Core: Tune Minibatch Size (PBT)" \
+        --comet  offline+upload@end  --wandb  offline+upload@end    --tag:pbt  \
+        pbt  --perturbation_interval 0.125 --quantile_fraction 0.1
+    [ ] (0549cd25110717333fc03)
+    (x) ported to excel
+
+##### Lunar Lander
+
+    python experiments/tune_with_scheduler.py \
+         --env_type LunarLander-v3 \
+         --tune minibatch_size \
+         --num_samples 1 \
+         --batch_size 2048 \
+         --tag:core --log_stats learners \
+         --comment "Core: Tune Minibatch Size (PBT)" \
+         --comet  offline+upload@end  --wandb  offline+upload@end    --tag:pbt  \
+         pbt  --perturbation_interval 0.125 --quantile_fraction 0.1
+    [ ]  0549cd251107173649ec3
+    (x) ported to excel
 
 #### Batch Size 8192
     // +  2*2 samples = 14 variants
 
-    python experiments/tune_with_scheduler.py --batch_size 8192 --tune minibatch_size --num_samples 2 --tag:core --comment "Core: Tune Minibatch Size (PBT)" --wandb offline+upload@end --comet offline+upload --log_stats timers+learners pbt --quantile_fraction 0.1875 --perturbation_interval 0.125
-    [ ] (0549cd251027004189c43 - needs upload and verification)
+    python experiments/tune_with_scheduler.py \
+        --batch_size 8192 --tune minibatch_size \
+        --num_samples 2 \
+        --tag:core --comment "Core: Tune Minibatch Size (PBT)" \
+        --wandb offline+upload@end --comet offline+upload --log_stats timers+learners \
+        pbt --quantile_fraction 0.1875 --perturbation_interval 0.125
+    [x] (0549cd251027004189c43 - some broken)
+    (x) ported to excel
 
     python experiments/tune_with_scheduler.py \
         --env_type CartPole-v1 \
@@ -158,7 +233,8 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         --comment "Core: Tune Minibatch Size (PBT)" \
         --comet  offline+upload@end  --wandb  offline+upload@end  --tag:pbt  \
         pbt  --perturbation_interval 0.125 --quantile_fraction 0.125
-    [ ] (0549cd2511071329baf53)
+    [x] (0549cd2511071329baf53)
+    (x) ported to excel
 
 
 #### PBT 2 ?
@@ -177,12 +253,14 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
 
     python experiments/tune.py --tune batch_size minibatch_size --num_samples 36 -J 6 --tag:core --comet offline+upload --wandb offline+upload --log_level IMPORTANT_INFO --log_stats timers+learners --comment "Core: Tune batch_size + minibatch_size Size exhaustive" --num_env_runners 1
     [x] ( 259cfd2510310125f2493 )
+    [x] (259cfd251026204463b13)
+    (x) ported to excel
 
 
     // Seed 128
     python experiments/tune.py --tune minibatch_size batch_size --num_samples 36 --tag:core --seed 128 --tag:seed=128 --comment "Core: Tune batch_size + minibatch_size Size exhaustive"
 
-    #### Acrobot
+#### Acrobot
     python experiments/tune.py \
         --env_type Acrobot-v1 \
         --tune batch_size minibatch_size \
@@ -192,8 +270,9 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         --comet offline+upload --wandb offline+upload \
         --log_level IMPORTANT_INFO --log_stats timers+learners exhaustive"
     [x] (259cfd25110202005af03)
+    (x) ported to excel
 
-    #### Lunar Lander
+#### Lunar Lander
     # new usage of num_samples
     python experiments/tune.py \
         --env_type LunarLander-v3 \
@@ -203,7 +282,7 @@ NOTE: for optuna should duplicate the entries in the grid search instead of incr
         --comet offline+upload --wandb offline+upload \
         --log_level IMPORTANT_INFO --log_stats timers+learners exhaustive"
     [ ] (259cfd25110414551cbf3) some errored, resume?
-    [ ]  0549cd251106103384aa3 some missing
+    [ ] 0549cd251106103384aa3 some missing  - not uploaded
 
 
 

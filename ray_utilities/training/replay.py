@@ -218,6 +218,8 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
         for callback in self._callbacks.values():
             callback.on_experiment_end([self._mock_trial])
 
+    __last_step_print: int = -8000
+
     def train(self) -> AutoExtendedLogMetricsDict:
         try:
             result = super().train()
@@ -229,13 +231,15 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
         else:
             results = [result]
         for result in results:
-            if self.iteration % 10 == 0:
+            current_step = result.get("current_step", None)  # pyright: ignore[reportAttributeAccessIssue]
+            if self.iteration % 10 == 0 and (current_step is None or (current_step - self.__last_step_print) >= 8000):
                 print(
                     "Replayed iteration:",
                     self.iteration,
                     "current_step",
-                    result.get("current_step", "n/a"),
+                    current_step or "n/a",
                 )
+                self.__last_step_print = current_step or -8000
             for callback in self._callbacks.values():
                 callback.on_trial_result(self.iteration, [], trial=self._mock_trial, result=result)
 

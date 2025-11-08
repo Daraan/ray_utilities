@@ -1167,7 +1167,9 @@ def verify_wandb_runs(
                 offline_run_ids.add(run_id)
 
     for run in runs:
-        offline_run_ids.remove(run.id)
+        if run.id not in offline_run_ids:
+            logger.warning("Got unexpected online wandb run without offline data: %s", run.id)
+        offline_run_ids.discard(run.id)
         try:
             failures = verify_wandb_run_history(run=run, output_dir=output_dir, verbose=verbose)
             verify_results[run] = failures
