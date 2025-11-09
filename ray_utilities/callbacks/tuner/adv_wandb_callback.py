@@ -704,9 +704,11 @@ class AdvWandbLoggerCallback(
 
         super()._cleanup_logging_actors(timeout, kill_on_timeout)
 
+    @warn_if_slow
     def log_trial_save(self, trial: "Trial"):
-        _logger.info("Saving trial %s checkpoint - logging current WandB data.", trial.trial_id)
         if trial in self._trial_queues:  # is not checked on super.
+            if self.upload_checkpoints and trial.checkpoint:
+                _logger.info("Saving trial %s checkpoint - logging current WandB data.", trial.trial_id)
             super().log_trial_save(trial)
         else:
             _logger.error("Cannot log trial save for trial %s as no logging actor/queue found.", trial.trial_id)

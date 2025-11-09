@@ -129,7 +129,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
                 *self.EXCLUDE_METRICS,
                 # "fault_tolerance",
             ],
-            upload_checkpoints="core" in self._setup.create_tags(),
+            upload_checkpoints=False,  # "core" in self._setup.create_tags(),
             save_code=False,  # Code diff
             # For more keywords see: https://docs.wandb.ai/ref/python/init/
             # Log gym
