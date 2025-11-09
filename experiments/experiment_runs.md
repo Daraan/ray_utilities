@@ -57,7 +57,7 @@ python experiments/default_training.py --num_samples 3 --seed 128
          --comet  offline+upload@end  --wandb  offline+upload@end    --tag:pbt  \
          pbt  --perturbation_interval 0.125 --quantile_fraction 0.1
 
-    [ ]  0549cd2511071358c3033
+    [ ]  0549cd2511071358c3033 - some broken
     (x) ported excel
 
 
@@ -97,7 +97,8 @@ python experiments/default_training.py --num_samples 3 --seed 128
         --comment "Core: PBT Batch Size exhaustive" \
         --comet  offline+upload@end  --wandb  offline+upload@end    --tag:pbt  \
         pbt  --perturbation_interval 0.125 --quantile_fraction 0.1
-    [ ] (0549cd25110716588c5b3)
+    [ ] (0549cd25110716588c5b3) - some missing
+    [ ] (0549cd25110813282dd23)
     (x) ported excel
 
 

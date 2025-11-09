@@ -145,6 +145,11 @@ class AdvWandbLoggerCallback(
         self._local_threads: dict[Trial, threading.Thread] = {}
         self._local_logging = True
         self._seen_config_hashes: defaultdict[str, set[int]] = defaultdict(set)
+        self._last_config_log: dict[str, tuple[int, int]] = {}
+        """
+        Track iteration of last config log per trial ID, we want to log duplicates from time to time but not often.
+        Tracks as tuple of (training_iteration, current_step)
+        """
 
     @property
     def _gather_uploads_lock(self) -> threading.Lock:
@@ -1004,11 +1009,33 @@ class AdvWandbLoggerCallback(
             # where we actually change it. Note this creates a metric called config/...
             result_clean.pop("cli_args", None)  # we never modify cli_args which should be run.config
             config_hash = hash(deep_freeze(result_clean["config"]))
-            if config_hash in self._seen_config_hashes[self.get_trial_id(trial)]:
-                result_clean.pop("config", None)
+            # Maybe faster:
+            # import hashlib
+            # import json
+            # config_serialized = json.dumps(result_clean["config"], sort_keys=True, default=str)
+            # config_hash = hashlib.md5(config_serialized.encode("utf-8")).hexdigest()
+
+            trial_id = self.get_trial_id(trial)
+            if config_hash in self._seen_config_hashes[trial_id]:
+                last_log_iteration, last_log_step = self._last_config_log.get(trial_id, (0, 0))
+                # Log from time to time no not have too spikey steps.
+                if (
+                    last_log_iteration + 32 <= result_clean["training_iteration"]
+                    or last_log_step + 16384 * 2 <= result_clean["current_step"]
+                ):
+                    self._last_config_log[trial_id] = (
+                        result_clean["training_iteration"],
+                        result_clean["current_step"],
+                    )
+                else:
+                    result_clean.pop("config", None)
             else:
                 # improve by only logging the changed key.
-                self._seen_config_hashes[self.get_trial_id(trial)].add(config_hash)
+                self._seen_config_hashes[trial_id].add(config_hash)
+                self._last_config_log[trial_id] = (
+                    result_clean["training_iteration"],
+                    result_clean["current_step"],
+                )
 
             # Check if the config has
         self._trial_queues[trial].put((_QueueItem.RESULT, result_clean))
