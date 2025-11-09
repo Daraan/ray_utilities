@@ -332,6 +332,9 @@ class CyclicMutation(Generic[_T]):
         return v
 
 
+SAVE_ALL_CHECKPOINTS = False
+
+
 class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
     """Enhanced Population Based Training scheduler with grid search and flexible quantiles.
 
@@ -849,10 +852,12 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             mutation.set_value(value)
         self._deep_update_mutation(self._hyperparam_mutations, new_skip=new_skips)
 
+        # Keep checkpoints for all trials:
         # NOTE: NEEDS the _exploit wrapper to pause the trial, otherwise this causes the last trial to be terminated
         # if it is in the lower quantile,see https://github.com/ray-project/ray/issues/57906
-        logger.debug("Instructing %s to save.", trial)
-        checkpoint = tune_controller._schedule_trial_save(trial, result=state.last_result)
+        if SAVE_ALL_CHECKPOINTS:
+            logger.debug("Instructing %s to save.", trial)
+            checkpoint = tune_controller._schedule_trial_save(trial, result=state.last_result)
 
         # Only keep checkpoints for top trials
         if trial in upper_quantile:
@@ -873,8 +878,10 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
                 logger.debug("Keeping checkpoint of trial %s for exploit.", trial)
 
                 # TODO: possible # FIXME does this create two checkpoint with Trainable Auto saving?
-                # state.last_checkpoint = tune_controller._schedule_trial_save(trial, result=state.last_result)
-                state.last_checkpoint = checkpoint
+                if SAVE_ALL_CHECKPOINTS:
+                    state.last_checkpoint = checkpoint  # pyright: ignore[reportPossiblyUnboundVariable]
+                else:
+                    state.last_checkpoint = tune_controller._schedule_trial_save(trial, result=state.last_result)
 
             self._num_checkpoints += 1
             trial.config["_top_pbt_is_in_upper_quantile"] = True
@@ -964,12 +971,15 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
                     self._custom_explore_fn.set_next_trial(trial)
                     self._custom_explore_fn.add_seed = self._trial_state[trial_to_clone].current_env_steps
             # HACK: To save a checkpoint AND not terminate the actor we need to fake this a bit:
-            trial_status = trial.status
-            if trial_status != Trial.PAUSED:
-                trial.status = Trial.PAUSED  # fake to keep actor alive
-            self._exploit(tune_controller, trial, trial_to_clone)
-            if trial_status != Trial.PAUSED:
-                trial.status = trial_status  # reset
+            if SAVE_ALL_CHECKPOINTS:
+                trial_status = trial.status
+                if trial_status != Trial.PAUSED:
+                    trial.status = Trial.PAUSED  # fake to keep actor alive
+                self._exploit(tune_controller, trial, trial_to_clone)
+                if trial_status != Trial.PAUSED:
+                    trial.status = trial_status  # reset
+            else:
+                self._exploit(tune_controller, trial, trial_to_clone)
             if self._reseed_seen_configs(trial.config, trial):
                 trial.set_config(trial.config)
             # Mark trial as perturbed
@@ -1017,6 +1027,9 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
                         parent_fork_id=fork_data["parent_fork_id"],
                     )
                 )
+            if tune_controller._queued_trial_decisions.get(trial.trial_id, None) == self.CONTINUE:
+                # WORKAROUND for https://github.com/ray-project/ray/issues/58483. Prevent KeyError during buffered training
+                tune_controller._queued_trial_decisions.pop(trial.trial_id)
         else:
             trial.config["_top_pbt_perturbed"] = False
             # Add current env step to seed data
