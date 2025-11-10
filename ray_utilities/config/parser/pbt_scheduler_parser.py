@@ -212,6 +212,8 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining), Subco
 
         num_samples = self.parent.num_samples if self.parent else 1  # pyright: ignore[reportOptionalMemberAccess]
 
-        return TopPBTTrialScheduler(**args, hyperparam_mutations=self.hyperparam_mutations, num_samples=num_samples)
+        return TopPBTTrialScheduler(
+            **args, hyperparam_mutations=self.hyperparam_mutations, num_samples=num_samples, prune_late_trials=True
+        )
 
     # See _ScalingPopulationBasedTrainingParser.process_args to leverage RLLib arguments as well

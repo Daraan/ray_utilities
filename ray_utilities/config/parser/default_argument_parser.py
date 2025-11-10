@@ -1406,7 +1406,16 @@ class OptunaArgumentParser(_GoalParser, Tap):
     # FIXME: Change to use keys from create_tune_parameters.
     # NOTE: Need to be defined in add_argument below as well
     tune: NeverRestore[
-        list[Literal["batch_size", "minibatch_size", "minibatch_scale", "num_envs_per_env_runner", "all"]]
+        list[
+            Literal[
+                "batch_size",
+                "minibatch_size",
+                "minibatch_scale",
+                "num_envs_per_env_runner",
+                "accumulate_gradients_every",
+                "all",
+            ]
+        ]
         | Literal[False]
     ] = False
     """List of dynamic parameters to be tuned"""
@@ -1427,6 +1436,7 @@ class OptunaArgumentParser(_GoalParser, Tap):
                 "minibatch_size",
                 "minibatch_scale",
                 "num_envs_per_env_runner",
+                "accumulate_gradients_every",
                 "all",
             ],
             type=_parse_tune_choices,

@@ -24,6 +24,7 @@ from collections.abc import Iterable
 from functools import partial
 from itertools import cycle
 from pathlib import Path
+from time import time as get_time
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -90,11 +91,15 @@ if TYPE_CHECKING:
     class _PBTTrialState2(_PBTTrialState):
         def __init__(self, trial: Trial):
             super().__init__(trial)
+
+            # NOTE: These are type-check ONLY. Need to be set on_trial_add
             self.last_training_iteration: int  # not present before on_trial_add
             """The training iteration at which the last result was reported."""
 
             self.current_env_steps: int | None
             """The amount of (exact) env steps sampled"""
+
+            self.last_update_timestamp: float = get_time()
 
 
 def _grid_search_sample_function(grid_search_space: Iterable[_T], *, repeat=True) -> Callable[[], _T]:
@@ -423,6 +428,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         synch: bool = False,
         reseed: bool = True,
         num_samples: int = 1,
+        prune_late_trials: bool = False,
     ):
         # if not hyperparam_mutations and custom_explore_fn is None:
         #    # Use a dummy function to log the perturbed hyperparams
@@ -487,6 +493,9 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         """Number of samples from the parameter space."""
 
         self._seen_config_hashes: set[int] = set()
+
+        self.prune_late_trials = prune_late_trials
+        """Whether to prune trials that are slow and perform bad"""
 
     @classmethod
     def _deep_update_mutation(
@@ -650,6 +659,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             self._trial_state[trial].current_env_steps = 0
             self.current_trial_keys[trial] = trial.trial_id
             self._fork_ids[trial, None] = trial.trial_id  # initial fork id is trial id
+        self._trial_state[trial].last_update_timestamp = get_time()
 
         # When using more than 1 sample and seeding_strategy="same" we end up with identical configs
         # Need to change something in the config to make them different
@@ -986,6 +996,10 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             for k in self.additional_config_keys:
                 trial.config.pop(k, None)
             trial.config.pop("__pbt_main_branch__", None)
+            if trial.config["minibatch_size"] in self.__sampled_this_perturbation:
+                breakpoint()
+            else:
+                self.__sampled_this_perturbation.add(trial.config["minibatch_size"])
             # Set info which trial was forked from
             parent_iteration = self._trial_state[trial_to_clone].last_training_iteration
             fork_data: ForkFromData = {
@@ -1055,6 +1069,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             state.current_env_steps = get_current_step(result)  # pyright: ignore[reportArgumentType, reportAttributeAccessIssue]
         except KeyError:
             state.current_env_steps = None  # pyright: ignore[reportAttributeAccessIssue]
+        state.last_update_timestamp = get_time()  # pyright: ignore[reportAttributeAccessIssue]
         return score
 
     def reset_exploitations(self):
@@ -1111,15 +1126,10 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         return contents
 
     @warn_if_slow
-    def _perturbation_sync_mode(
-        self, tune_controller: TuneController, time: int, quantiles: Optional[Tuple[List[Trial], List[Trial]]] = None
-    ):
+    def _perturbation_sync_mode(self, tune_controller: TuneController, time: int):
         # Copied from PopulationBasedTraining
         logger.info("PBT: Starting perturbation")
-        if quantiles is None:
-            lower_quantile, upper_quantile = self._quantiles()
-        else:
-            lower_quantile, upper_quantile = quantiles
+        lower_quantile, upper_quantile = self._quantiles()
         all_trials = tune_controller.get_trials()
         not_in_quantile = [t for t in all_trials if t not in lower_quantile and t not in upper_quantile]
 
@@ -1140,37 +1150,57 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         logger.debug("Next perturb at time %s", self._next_perturbation_sync)
 
     @warn_if_slow
-    def on_trial_result(self, tune_controller: TuneController, trial: Trial, result: Dict) -> str:
+    def on_trial_result(self, tune_controller: TuneController, trial: Trial, result: dict) -> str:
+        # TODO: How does buffered training affect this, when we receive buffered results we could clear all results first
+        self.__sampled_this_perturbation = set()
         decision = super().on_trial_result(tune_controller, trial, result)
         if decision != self.CONTINUE:
             return decision
         # do not wait for a slow and bad last trial in synch mode
         if not self._synch:
             return decision
-        current_time = result[self._time_attr]
-        if current_time < self._burn_in_period:
+        time_of_slow_interval = result[self._time_attr]
+        if time_of_slow_interval < self._burn_in_period:
             return decision
         state = self._trial_state[trial]
-        time_since_perturb = current_time - state.last_perturbation_time
+        time_since_perturb = time_of_slow_interval - state.last_perturbation_time
         # if it is too early or too late, do nothing
+        # TODO: If there is no big temporal difference we should also wait, some trials are started later and are behind just for that reason
         if (
             time_since_perturb < 0.66 * self._perturbation_interval
             or time_since_perturb > 0.95 * self._perturbation_interval
         ):
             return decision
-        # Check that this is the last trial to reach the perturbation time
-        if any(
-            self._trial_state[t].last_train_time < self._next_perturbation_sync and t != trial
-            for t in tune_controller.get_live_trials()
-        ):
+        # If we are less than 5 min behind ignore
+        if get_time() - max(state.last_update_timestamp for state in self._trial_state.values()) < 300:
             return decision
-        lower_quantile, upper_quantile = self._quantiles()
-        if trial not in lower_quantile[:3]:
+        # Check this is in the 5% of not-yet finished trials
+        if (
+            still_active_trials := sum(
+                self._trial_state[t].last_train_time < self._next_perturbation_sync and t != trial
+                for t in tune_controller.get_live_trials()
+            )
+        ) <= len(tune_controller.get_live_trials()) * 0.05:
             return decision
-        # last trial is slow and bad. Start exploitation early
-        logger.info("Last trial %s is a bad performing straggler. Starting early PBT perturbation.", trial)
-        self._save_trial_state(state, current_time, result, trial)
-        self._perturbation_sync_mode(tune_controller, current_time, (lower_quantile, upper_quantile))
+        # NOTE: In the quantiles we have the results of the finished trials and the results of the slow trials from the *last* perturbation interval
+        lowest_scores = [state.last_score for state in self._trial_state.values() if state.last_score is not None]
+        if len(lowest_scores) == 0:
+            return decision
+        # We assume quantiles are sorted
+        if result[self._metric] > lowest_scores[min(3, int(len(lowest_scores) * 0.33)) - 1]:
+            return decision
+        # last trial is slow and in worst 33%. Pause trial and if last start perturbation
+        # When return of super() is CONTINUE we should not have had a perturbation this result - expect when the trial is slow but not in the lower_quantile
+        perturbation_time = max(state.last_train_time for state in self._trial_state.values())
+        self._save_trial_state(state, perturbation_time, result, trial)
+        # TODO If there are multiple slow do not perturb yet just pause the others.
+        if still_active_trials == 0:
+            logger.info("Last trial %s is a bad performing straggler. Starting early PBT perturbation.", trial)
+            self._perturbation_sync_mode(tune_controller, perturbation_time)
+        else:
+            logger.info(
+                "Last trial %s is a bad performing straggler. Pausing early and waiting for other slow trials", trial
+            )
         return self.NOOP if trial.status == Trial.PAUSED else self.PAUSE
 
     def on_trial_complete(
@@ -1195,6 +1225,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             Dictionary containing scheduler state. Trial objects are converted
             to trial IDs for serialization.
         """
+        # TODO: possiblly use self.__dict__
         state = super().get_state() if hasattr(super(), "get_state") else {}  # pyright: ignore[reportAttributeAccessIssue]
 
         # Convert Trial keys to trial IDs for serialization
@@ -1219,6 +1250,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
                 "fork_data_file": str(self._fork_data_file) if self._fork_data_file else None,
                 "num_samples": self._num_samples,
                 "seen_config_hashes": list(self._seen_config_hashes),
+                "prune_late_trials": self.prune_late_trials,
             }
         )
         return state
@@ -1266,6 +1298,8 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
 
         self._num_samples = state.get("num_samples", 1)
         self._seen_config_hashes = set(state.get("seen_config_hashes", []))
+
+        self.prune_late_trials = state.get("prune_late_trials", False)
 
         logger.info(
             "Restored TopPBTTrialScheduler state: %d trial seeds, %d fork ids, %d seen configs",

@@ -218,7 +218,10 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         with patch_args("--tune", "batch_size", "batch_size"):
             with self.assertLogs(logger, level="WARNING") as cm:
                 AlgorithmSetup().create_param_space()
-            self.assertTrue(any("Unused dynamic tuning parameters: ['batch_size']" in out for out in cm.output))
+            self.assertTrue(
+                any("Unused dynamic tuning parameters: ['batch_size']" in out for out in cm.output),
+                f"Phrase not found in {cm.output}",
+            )
         type_hints = te.get_type_hints(DefaultArgumentParser)["tune"]
         self.assertIs(te.get_origin(type_hints), te.Union)
         th_args = te.get_args(type_hints)

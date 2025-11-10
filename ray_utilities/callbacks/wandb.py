@@ -1138,6 +1138,9 @@ def verify_wandb_runs(
     if output_dir is not None:
         # Supports tmpdir with driver_artifacts subdir
         offline_results = list(Path(output_dir).glob("*" + experiment_id + "/**/result*.json"))
+        if len(offline_results) == 0:
+            breakpoint()
+            pass  # try with different pattern
         if not single_experiment and len(offline_results) != len(runs):
             logger.error("Offline results count %d does not match wandb runs %d", len(offline_results), len(runs))
         elif not single_experiment and verbose > 2:
@@ -1165,6 +1168,8 @@ def verify_wandb_runs(
                 else:
                     run_id = offline_path.stem.rsplit("-", 1)[-1]
                 offline_run_ids.add(run_id)
+    else:
+        logger.warning("No output_dir provided, cannot check for offline wandb data.")
 
     for run in runs:
         if run.id not in offline_run_ids:
