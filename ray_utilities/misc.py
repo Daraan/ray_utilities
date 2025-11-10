@@ -231,11 +231,12 @@ def trial_name_creator(trial: Trial) -> str:
         _exp_number, experiment_tag = experiment_tag.split("_", 1)
         tag_list = experiment_tag.split("=")
         if "config_files" in tag_list:
+            # remove config_files from tag
             idx = tag_list.index("config_files")
             tag_list.pop(idx + 1)
             tag_list.pop(idx)
         experiment_tag = _exp_number + "_" + "=".join(tag_list)
-    if len(trial.experiment_tag) > 80:
+    if len(experiment_tag) > 80:
         # too many infos in tag
         experiment_tag = ""
     fields = [

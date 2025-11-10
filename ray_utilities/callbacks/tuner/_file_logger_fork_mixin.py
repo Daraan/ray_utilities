@@ -198,7 +198,7 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
                         )
                         # restore old
                         Path(parent_remote_file_path.parent, parent_remote_file_path.name + ".old").resolve().rename(
-                            parent_remote_file_path.name
+                            Path(parent_remote_file_path.parent, parent_remote_file_path.name).resolve()
                         )
 
                 logger.debug(

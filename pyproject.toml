@@ -11,7 +11,7 @@ description = "Utilities for Ray RLlib and related workflows. Includes experimen
 license = { file = "LICENSE" }
 requires-python = ">=3.9"
 authors = [
-  { name = "Daniel Sperber", email = "daniel.sperber@gmail.com" }
+  { name = "Daniel Sperber", email = "github.ray_utilities.blurry@9ox.net" }
 ]
   classifiers = [
     "Programming Language :: Python :: 3",

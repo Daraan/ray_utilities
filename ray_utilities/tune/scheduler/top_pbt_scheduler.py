@@ -1111,8 +1111,66 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         return contents
 
     @warn_if_slow
+    def _perturbation_sync_mode(
+        self, tune_controller: TuneController, time: int, quantiles: Optional[Tuple[List[Trial], List[Trial]]] = None
+    ):
+        # Copied from PopulationBasedTraining
+        logger.info("PBT: Starting perturbation")
+        if quantiles is None:
+            lower_quantile, upper_quantile = self._quantiles()
+        else:
+            lower_quantile, upper_quantile = quantiles
+        all_trials = tune_controller.get_trials()
+        not_in_quantile = [t for t in all_trials if t not in lower_quantile and t not in upper_quantile]
+
+        # Move upper quantile trials to beginning and lower quantile
+        # to end. This ensures that checkpointing of strong trials
+        # occurs before exploiting of weaker ones.
+        all_trials = upper_quantile + not_in_quantile + lower_quantile
+        for t in all_trials:
+            self._trial_state[t].last_perturbation_time = time
+            self._checkpoint_or_exploit(t, tune_controller, upper_quantile, lower_quantile)
+
+        all_train_times = [self._trial_state[t].last_train_time for t in tune_controller.get_trials()]
+        max_last_train_time = max(all_train_times)
+        self._next_perturbation_sync = max(
+            self._next_perturbation_sync + self._perturbation_interval,
+            max_last_train_time,
+        )
+        logger.debug("Next perturb at time %s", self._next_perturbation_sync)
+
+    @warn_if_slow
     def on_trial_result(self, tune_controller: TuneController, trial: Trial, result: Dict) -> str:
-        return super().on_trial_result(tune_controller, trial, result)
+        decision = super().on_trial_result(tune_controller, trial, result)
+        if decision != self.CONTINUE:
+            return decision
+        # do not wait for a slow and bad last trial in synch mode
+        if not self._synch:
+            return decision
+        current_time = result[self._time_attr]
+        if current_time < self._burn_in_period:
+            return decision
+        state = self._trial_state[trial]
+        time_since_perturb = current_time - state.last_perturbation_time
+        # if it is too early or too late, do nothing
+        if (
+            time_since_perturb < 0.66 * self._perturbation_interval
+            or time_since_perturb > 0.95 * self._perturbation_interval
+        ):
+            return decision
+        # Check that this is the last trial to reach the perturbation time
+        if any(
+            self._trial_state[t].last_train_time < self._next_perturbation_sync and t != trial
+            for t in tune_controller.get_live_trials()
+        ):
+            return decision
+        lower_quantile, upper_quantile = self._quantiles()
+        if trial not in lower_quantile[:3]:
+            return decision
+        # last trial is slow and bad. Start exploitation early
+        logger.info("Last trial %s is a bad performing straggler. Starting early PBT perturbation.", trial)
+        self._perturbation_sync_mode(tune_controller, current_time, (lower_quantile, upper_quantile))
+        return self.NOOP if trial.status == Trial.PAUSED else self.PAUSE
 
     def on_trial_complete(
         self, tune_controller: TuneController, trial: Trial, result: FlatLogMetricsDict | dict[str, Any]

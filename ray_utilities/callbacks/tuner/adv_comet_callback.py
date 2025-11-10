@@ -238,9 +238,9 @@ class AdvCometLoggerCallback(
             {
                 "trials_created": self._trials_created,
                 # on restore we still have strings
-                "logged_architectures": [
+                "logged_architectures": {
                     trial.trial_id if not isinstance(trial, str) else trial for trial in self._logged_architectures
-                ],
+                },
                 # "upload_intermediate": self.upload_intermediate,
                 # "online": self.online,
             }
@@ -263,7 +263,7 @@ class AdvCometLoggerCallback(
         self._trials_created = state.get("trials_created", 0)
         # Convert trial IDs back to trial objects when they restart
         # For now, just clear the set - it will be repopulated
-        self._logged_architectures = state.get("logged_architectures", set())
+        self._logged_architectures = set(state.get("logged_architectures", set()))
         # self.upload_intermediate = state.get("upload_intermediate", False)
         # online is set in __init__, but restore it if available
         # if "online" in state:

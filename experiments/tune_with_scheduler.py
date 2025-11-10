@@ -57,10 +57,12 @@ if __name__ == "__main__":
     ):  # fmt: skip
         setup = PPOMLPWithPBTSetup(
             config_files=["experiments/pbt.cfg", "experiments/default.cfg", "experiments/models/mlp/default.cfg"],
-            # TODO: Trials are reused, trial name might be wrong then
-            trial_name_creator=extend_trial_name(insert=["<batch_size>"], prepend="Tune_BatchSize_WithScheduler"),
+            # TODO: Trials are reused, trial name might be wrong then,
         )
         assert setup.args.tune
+        setup._tune_trial_name_creator = extend_trial_name(
+            append=[f"<{k}>" for k in setup.args.tune], prepend="PBT_" + "_".join(setup.args.tune)
+        )
         mutations: dict[str, KeepMutation[object]] = {k: KeepMutation() for k in setup.args.tune}
 
         setup.args.command.set_hyperparam_mutations(mutations)  # pyright: ignore[reportArgumentType]
