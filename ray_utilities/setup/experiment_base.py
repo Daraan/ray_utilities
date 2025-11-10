@@ -815,7 +815,8 @@ class ExperimentSetupBase(
         param_space["experiment_name"] = self.project
         param_space["experiment_group"] = self.group_name
         self.param_space = param_space
-        del self._dynamic_parameters_to_tune
+        if hasattr(self, "_dynamic_parameters_to_tune"):
+            del self._dynamic_parameters_to_tune
         if self._config_files:
             # Store config files for trial to sync when using a scheduler or remote node.
             param_space["_config_files"] = self._config_files

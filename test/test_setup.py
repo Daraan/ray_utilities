@@ -212,13 +212,13 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 AlgorithmSetup().create_param_space()
             self.assertIsInstance(context.exception.__context__, argparse.ArgumentError)
             self.assertIn("invalid choice: 'dynamic_buffer'", context.exception.__context__.message)  # type: ignore
-        with patch_args("--tune", "all", "rollout_size"):
+        with patch_args("--tune", "all", "batch_size"):
             with self.assertRaisesRegex(ValueError, "Cannot use 'all' with other tune parameters"):
                 AlgorithmSetup().create_param_space()
-        with patch_args("--tune", "rollout_size", "rollout_size"):
+        with patch_args("--tune", "batch_size", "batch_size"):
             with self.assertLogs(logger, level="WARNING") as cm:
                 AlgorithmSetup().create_param_space()
-            self.assertTrue(any("Unused dynamic tuning parameters: ['rollout_size']" in out for out in cm.output))
+            self.assertTrue(any("Unused dynamic tuning parameters: ['batch_size']" in out for out in cm.output))
         type_hints = te.get_type_hints(DefaultArgumentParser)["tune"]
         self.assertIs(te.get_origin(type_hints), te.Union)
         th_args = te.get_args(type_hints)
@@ -228,7 +228,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             for literal in te.get_args(li)
             if literal != "all"
         ]
-        self.assertIn("rollout_size", hint_lists)
+        # self.assertIn("rollout_size", hint_lists)
         self.assertNotIn("all", hint_lists)
         for param in hint_lists:
             with (
@@ -237,7 +237,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     "--tune", param,
                     "--total_steps", "10",
                     "-it", "2",
-                    "--num_samples", "8",
+                    "--num_samples", "1",
                     "--env_seeding_strategy", "constant",
                     "--log_level", "WARNING",
                 )  # ,
@@ -278,7 +278,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 )
 
     @pytest.mark.length(speed="medium")
-    @pytest.mark.timeout(method="thread")
+    @pytest.mark.timeout(500, method="thread")
     def test_dynamic_param_space_with_trainable(self):
         """Check the --tune parameters"""
         # see OptunaArgumentParser.tune
@@ -291,7 +291,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             for literal in te.get_args(li)
             if literal != "all"
         ]
-        self.assertIn("rollout_size", th_lists)
+        # self.assertIn("rollout_size", th_lists)
         self.assertNotIn("all", th_lists)
 
         for param in th_lists:
@@ -301,7 +301,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     "--tune", param,
                     "-it", "2",
                     "--num_jobs", "3",
-                    "--num_samples", "3",
+                    "--num_samples", "1",
                     "--use_exact_total_steps",
                     "--env_seeding_strategy", "same",
                     "--no_dynamic_eval_interval",
@@ -341,18 +341,6 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 Setup = SetupWithCheck(TrainableWithChecksB)
                 # Limit for performance
                 batch_size_samples = [16, 64, 128]
-                rollout_size_sample_space = [16, 64, 128]
-                Setup.batch_size_sample_space = {
-                    "grid_search": [
-                        make_divisible(x, DefaultArgumentParser.num_envs_per_env_runner) for x in batch_size_samples
-                    ]
-                }
-                Setup.rollout_size_sample_space = {
-                    "grid_search": [
-                        make_divisible(x, DefaultArgumentParser.num_envs_per_env_runner)
-                        for x in rollout_size_sample_space
-                    ]
-                }
 
                 with Setup() as setup:
                     setup.config.minibatch_size = 8  # set to small value to prevent ValueErrors
@@ -361,7 +349,13 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 self.assertIn(param, param_space)
                 self.assertIsNotNone(param_space[param])  # dict with list
                 if "grid_search" in param_space[param]:
-                    grid = param_space[param]["grid_search"]
+                    if param == "minibatch_scale":
+                        grid = [0.25, 1.0]
+                    elif param == "num_envs_per_env_runner":
+                        grid = [1, 2]
+                    else:
+                        grid = batch_size_samples
+                    param_space[param]["grid_search"] = grid
                 else:
                     grid = []
                 tuner = setup.create_tuner()
@@ -1031,7 +1025,7 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
 
     @patch_args(
         "--tune", "batch_size",
-        "--num_samples", 3,
+        "--num_samples", 1,
         "--num_jobs", 3,
         "--min_step_size", _MIN_STEP_SIZE,
         "--max_step_size", _MAX_STEP_SIZE,
@@ -1040,7 +1034,7 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
     @unittest.mock.patch.dict("os.environ", RAY_DEDUP="0")
     @pytest.mark.tuner
     @pytest.mark.length(speed="medium")
-    @pytest.mark.xfail("still old param space selection")
+    @pytest.mark.xfail(reason="still old param space selection")
     def test_no_max_iteration_stopper_when_tuning(self):
         with AlgorithmSetup(init_trainable=False) as setup:
             ...

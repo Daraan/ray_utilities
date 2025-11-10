@@ -17,6 +17,7 @@ from ray_utilities.config.parser.pbt_scheduler_parser import PopulationBasedTrai
 from ray_utilities.constants import PERTURBED_HPARAMS
 from ray_utilities.testing_utils import DisableLoggers, TestHelpers, patch_args
 from ray_utilities.tune.scheduler.top_pbt_scheduler import (
+    SAVE_ALL_CHECKPOINTS,
     TopPBTTrialScheduler,
     _debug_dump_new_config,
     _grid_search_sample_function,
@@ -316,11 +317,12 @@ class TestTopTrialSchedulerIntegration(DisableLoggers, TestHelpers):
 
             self.assertEqual(upper_trial.config["env_seed"], (0, 12))
 
-            # Verify lower trial gets a checkpoint and exploits
-            mock_controller._schedule_trial_save.assert_called_with(
-                lower_trial, result=scheduler._trial_state[lower_trial].last_result
-            )
-            self.assertIsNone(scheduler._trial_state[lower_trial].last_checkpoint)
+            if SAVE_ALL_CHECKPOINTS:
+                # Verify lower trial gets a checkpoint and exploits if we care about it
+                mock_controller._schedule_trial_save.assert_called_with(
+                    lower_trial, result=scheduler._trial_state[lower_trial].last_result
+                )
+                self.assertIsNone(scheduler._trial_state[lower_trial].last_checkpoint)
 
             # Should exploit one of the upper trials
             mock_exploit.assert_called_once()

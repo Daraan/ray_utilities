@@ -1393,8 +1393,10 @@ class ScalingPBTSubparser(OptionalExtensionsArgs, SubcommandHandlerBase[Populati
 
 def _parse_tune_choices(
     value: str | Literal[False],
-) -> Literal["batch_size", "rollout_size", "all", False]:
-    return value  # type: ignore[return-value]
+) -> str | Literal[False]:
+    if value is False or value.lower() in ("false", "0", "none"):
+        return False
+    return value
 
 
 class OptunaArgumentParser(_GoalParser, Tap):
@@ -1404,9 +1406,7 @@ class OptunaArgumentParser(_GoalParser, Tap):
     # FIXME: Change to use keys from create_tune_parameters.
     # NOTE: Need to be defined in add_argument below as well
     tune: NeverRestore[
-        list[
-            Literal["batch_size", "rollout_size", "minibatch_size", "minibatch_scale", "num_envs_per_env_runner", "all"]
-        ]
+        list[Literal["batch_size", "minibatch_size", "minibatch_scale", "num_envs_per_env_runner", "all"]]
         | Literal[False]
     ] = False
     """List of dynamic parameters to be tuned"""
@@ -1424,7 +1424,6 @@ class OptunaArgumentParser(_GoalParser, Tap):
             default=False,
             choices=[
                 "batch_size",
-                "rollout_size",
                 "minibatch_size",
                 "minibatch_scale",
                 "num_envs_per_env_runner",

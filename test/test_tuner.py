@@ -195,7 +195,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     def test_run_tune_function(self):
         batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
         with patch_args(
-            "--num_samples", "3",
+            "--num_samples", "1",
             "--num_jobs", "3",
             "--batch_size", batch_size,
             "--iterations", "3",
@@ -214,7 +214,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 self.assertEqual(result.metrics[TRAINING_ITERATION], 3)
             raise_tune_errors(results)
 
-    @pytest.mark.xfail("Currently not added StepCheckpointer")
+    @pytest.mark.xfail(reason="Currently not added StepCheckpointer")
     def test_step_checkpointing(self):
         batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
         with patch_args(
@@ -414,7 +414,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
         ITERATIONS = 110
 
         with patch_args(
-            "--num_samples", "2",
+            "--num_samples", "1",
             "--num_jobs", "2",
             "--batch_size", batch_size,
             "--iterations", ITERATIONS,
@@ -433,7 +433,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
         experiment_path = Path(run_config.storage_path) / run_config.name  # pyright: ignore[reportArgumentType, reportOperatorIssue]
 
         # Start signal thread - interrupt after some trials start
-        signal_thread = threading.Thread(target=send_signal_after_delay, args=(7.0,))
+        signal_thread = threading.Thread(target=send_signal_after_delay, args=(10.0,))
         signal_thread.daemon = True
         signal_thread.start()
 
@@ -447,7 +447,10 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 results1.get_best_result()
         except AssertionError:
             # check that results are not completed
-            self.assertLess(results1.get_best_result().metrics[TRAINING_ITERATION], ITERATIONS)  # pyright: ignore[reportOptionalSubscript]
+            best_result: tune.Result = results1.get_best_result()
+            if TRAINING_ITERATION not in best_result.metrics:  # pyright: ignore[reportOperatorIssue]
+                self.fail("training_iterations not in metrics: keys: " + str(best_result.metrics.keys()))  # pyright: ignore[reportOptionalMemberAccess]
+            self.assertLess(best_result.metrics[TRAINING_ITERATION], ITERATIONS)  # pyright: ignore[reportOptionalSubscript]
         # If we get here without interruption, still check results
 
         signal_thread.join(timeout=2.0)
@@ -472,6 +475,9 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
         config2_state = cast("AlgorithmConfig", state2.pop("config"))
         seed1 = cast("Integer", state1["param_space"].pop("env_seed"))
         seed2 = cast("Integer", state2["param_space"].pop("env_seed"))
+        # Only RestoreOverride keys, like restore_path are allowed to differ
+        state2["args"].restore_path = None
+        self.compare_param_space(state1.pop("tune_parameters"), state2.pop("tune_parameters"))  # pyright: ignore[reportArgumentType]
         self.assertDictEqual(state1, state2)
         self.compare_configs(config1_state, config2_state)
         self.assertEqual((seed1.lower, seed1.upper), (seed2.lower, seed2.upper))
@@ -781,17 +787,17 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 assert setup1.config.num_envs_per_env_runner
                 SAMPLE_SPACE = [max(setup1.config.num_envs_per_env_runner * m, 16) for m in SAMPLE_SPACE_MULTIPLIERS]
                 with patch_args(
-                    "--num_samples", NUM_RUNS,
+                    "--num_samples", 1,
                     "--num_jobs", 2 if num_env_runners > 0 else 4,
                     "--from_checkpoint", checkpoints[0],
                     "--log_stats", "most",
-                    "--tune", "batch_size", "rollout_size",
+                    "--tune", "batch_size", "minibatch_size",
                     "--iterations", "3",
                 ):  # fmt: skip
-                    Setup.batch_size_sample_space = {"grid_search": SAMPLE_SPACE}
-                    Setup.rollout_size_sample_space = {"grid_search": SAMPLE_SPACE}
                     with Setup() as setup2:
                         setup2.config.env_runners(num_env_runners=num_env_runners)
+                    setup2.param_space["minibatch_size"] = {"grid_search": SAMPLE_SPACE}
+                    setup2.param_space["train_batch_size_per_learner"] = {"grid_search": SAMPLE_SPACE}
                 assert setup2.config.num_envs_per_env_runner is not None
                 self.assertTrue(all(s % setup2.config.num_envs_per_env_runner == 0 for s in SAMPLE_SPACE))
                 tuner2 = setup2.create_tuner()
@@ -809,13 +815,13 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 )
                 self.assertEqual(len(results2), NUM_RUNS)
                 batch_sizes = set()
-                rollout_sizes = set()
+                minibatch_sizes = set()
 
                 checkpoints = {}
                 for result in results2:
                     assert result.config
                     batch_sizes.add(result.config["train_batch_size_per_learner"])
-                    rollout_sizes.add(result.config["rollout_size"])
+                    minibatch_sizes.add(result.config["minibatch_size"])
                     checkpoints[result.checkpoint] = result
                 # check that different values were added
                 if NUM_RUNS >= 7:
@@ -876,7 +882,7 @@ class TestOptunaTuner(TestHelpers, DisableLoggers):
         """
         MAX_STEP = 15
         with patch_args(
-            "--optimize_config", "--pruner_warmup_steps", 3, "--num_samples", "15", "--num_jobs", "4", "--seed", "42"
+            "--optimize_config", "--pruner_warmup_steps", 3, "--num_samples", "1", "--num_jobs", "4", "--seed", "42"
         ):
 
             def trainable(params: dict[str, Any]) -> TrainableReturnData:

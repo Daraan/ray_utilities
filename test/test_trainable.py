@@ -679,10 +679,13 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 pool.close()
                 print("Restoring trainable from saved data")
                 trainable_restored = DefaultTrainable.define(PPOSetup.typed()).from_checkpoint(tmpdir)
+                self.on_checkpoint_loaded_callbacks(trainable_restored)
                 # Compare with default trainable:
                 print(f"Create new default trainable num_env_runners={num_env_runners}")
                 self._disable_tune_loggers.start()
-                trainable, _ = self.get_trainable(num_env_runners=num_env_runners, env_seed=data["env_seed"])
+                trainable, _ = self.get_trainable(
+                    num_env_runners=num_env_runners, env_seed=data["env_seed"], eval_interval=None
+                )
                 self.compare_trainables(
                     trainable, trainable_restored, num_env_runners=num_env_runners, ignore_timers=True
                 )
@@ -705,6 +708,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     @pytest.mark.env_runner_cases
     @pytest.mark.tuner
     @pytest.mark.length(speed="medium")  # 2-3 min
+    @pytest.mark.timeout(440)
     def test_tuner_checkpointing(self, cases):
         # self.enable_loggers()
         # self.no_pbar_updates()

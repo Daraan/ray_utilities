@@ -1500,6 +1500,10 @@ class TestHelpers(unittest.TestCase):
             nan_to_zero_hist_leaves(state1, key=None, remove_all=True, replace="NaN"),
             nan_to_zero_hist_leaves(state2, key=None, remove_all=True, replace="NaN"),
         )
+        # Need to remove domains from compare
+        self.compare_param_space(setup_state1["tune_parameters"], setup_state2["tune_parameters"])
+        setup_state1.pop("tune_parameters")
+        setup_state2.pop("tune_parameters")
         self.assertDictEqual(setup_state1, setup_state2)
 
     def compare_param_space(self, param_space1: dict[str, Any], param_space2: dict[str, Any]):
@@ -1508,7 +1512,8 @@ class TestHelpers(unittest.TestCase):
             return
         self.assertCountEqual(param_space1, param_space2)
         self.assertEqual(param_space1.keys(), param_space2.keys())
-        self.assertDictEqual(param_space1["cli_args"], param_space2["cli_args"])
+        if "cli_args" in param_space1 or "cli_args" in param_space2:
+            self.assertDictEqual(param_space1["cli_args"], param_space2["cli_args"])
         for key in param_space1.keys():  # noqa: PLC0206
             value1 = param_space1[key]
             value2 = param_space2[key]
@@ -1659,7 +1664,7 @@ class TestHelpers(unittest.TestCase):
             keys.remove("config_files")
 
             if "tune_parameters" in setup_data1 and "tune_parameters" in setup_data2:
-                self.assertDictEqual(setup_data1["tune_parameters"], setup_data2["tune_parameters"])
+                self.compare_param_space(setup_data1["tune_parameters"], setup_data2["tune_parameters"])
                 keys.remove("tune_parameters")
 
             self.assertEqual(len(keys), 0, f"Unchecked keys: {keys}")  # checked all params

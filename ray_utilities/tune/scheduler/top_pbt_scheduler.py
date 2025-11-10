@@ -1169,6 +1169,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             return decision
         # last trial is slow and bad. Start exploitation early
         logger.info("Last trial %s is a bad performing straggler. Starting early PBT perturbation.", trial)
+        self._save_trial_state(state, current_time, result, trial)
         self._perturbation_sync_mode(tune_controller, current_time, (lower_quantile, upper_quantile))
         return self.NOOP if trial.status == Trial.PAUSED else self.PAUSE
 
