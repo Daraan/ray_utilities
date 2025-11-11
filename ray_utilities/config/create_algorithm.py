@@ -274,10 +274,12 @@ def create_algorithm_config(
     try:
         cast("PPOConfig", config).training(
             minibatch_size=args["minibatch_size"],
+            num_epochs=32,
         )
     except TypeError:
         cast("PPOConfig", config).training(
             sgd_minibatch_size=args["minibatch_size"],
+            num_sgd_iter=32,
         )
     if isinstance(config, PPOConfig):
         config.training(
