@@ -615,6 +615,11 @@ class ExperimentSetupBase(
         self.args = self.postprocess_args(parsed)
         if self.args.restore_path:
             logger.info("restore_path is set. NOTE: Auto restore will only work with setup = Setup(parse_args=True)")
+        if self.args.test and (
+            test_storage_path := os.environ.get("RAY_UTILITIES_TEST_STORAGE_PATH", "./outputs/experiments/test")
+        ) not in ("", "0"):
+            logger.info("Test mode active, setting storage_path to %s", test_storage_path)
+            self.storage_path = test_storage_path
         return self.args
 
     # endregion
@@ -1330,7 +1335,10 @@ class ExperimentSetupBase(
             logger.warning("No storage path or name set in the RunConfig, cannot backup the setup state.")
         else:
             # Can point to S3 etc. Do not use PATH for joining, will mess up s3://
-            storage_path = os.path.join(run_config.storage_path, run_config.name)
+            if self.args.test:  # Do not use S3 on test runs
+                storage_path = ".outputs/experiments/test/"
+            else:
+                storage_path = os.path.join(run_config.storage_path, run_config.name)
             self._backup_for_restore(storage_path)
         return tuner
 
