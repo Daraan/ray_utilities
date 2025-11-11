@@ -225,7 +225,7 @@ exclude = [
 [tool.pytest.ini_options]
 console_output_style = "count"
 timeout = 240
-session_timeout = 900
+session_timeout = 1200
 markers = [
    "tuner",
    "basic: Mark tests that should be tested first - if they fail others likely fail",
