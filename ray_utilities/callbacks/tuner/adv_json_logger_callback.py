@@ -137,6 +137,7 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, JsonLog
                 trial.get_ray_actor_ip(),
                 trial.node_ip,
             )
+            breakpoint()
         try:
             super().log_trial_result(
                 iteration,

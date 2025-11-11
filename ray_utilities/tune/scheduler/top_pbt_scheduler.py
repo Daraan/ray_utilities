@@ -999,14 +999,14 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             # XXX remove DEBUG
             import os
 
-            if (
-                "CI" not in os.environ
-                and "minibatch_size" in trial.config
-                and trial.config["minibatch_size"] in self.__sampled_this_perturbation
-            ):
-                breakpoint()
-            else:
-                self.__sampled_this_perturbation.add(trial.config["minibatch_size"])
+            if "CI" not in os.environ:
+                if (
+                    "minibatch_size" in trial.config
+                    and trial.config["minibatch_size"] in self.__sampled_this_perturbation
+                ):
+                    breakpoint()
+                else:
+                    self.__sampled_this_perturbation.add(trial.config["minibatch_size"])
             # Set info which trial was forked from
             parent_iteration = self._trial_state[trial_to_clone].last_training_iteration
             fork_data: ForkFromData = {

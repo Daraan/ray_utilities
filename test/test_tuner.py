@@ -414,7 +414,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
         ITERATIONS = 110
 
         with patch_args(
-            "--num_samples", "1",
+            "--num_samples", "2",
             "--num_jobs", "2",
             "--batch_size", batch_size,
             "--iterations", ITERATIONS,
@@ -435,7 +435,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
         experiment_path = Path(run_config.storage_path) / run_config.name  # pyright: ignore[reportArgumentType, reportOperatorIssue]
 
         # Start signal thread - interrupt after some trials start
-        signal_thread = threading.Thread(target=send_signal_after_delay, args=(30.0,))
+        signal_thread = threading.Thread(target=send_signal_after_delay, args=(20.0,))
         signal_thread.daemon = True
         signal_thread.start()
 
@@ -790,7 +790,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 assert setup1.config.num_envs_per_env_runner
                 SAMPLE_SPACE = [max(setup1.config.num_envs_per_env_runner * m, 16) for m in SAMPLE_SPACE_MULTIPLIERS]
                 with patch_args(
-                    "--num_samples", 1,
+                    "--num_samples", NUM_RUNS,
                     "--num_jobs", 2 if num_env_runners > 0 else 4,
                     "--from_checkpoint", checkpoints[0],
                     "--log_stats", "most",
@@ -885,7 +885,7 @@ class TestOptunaTuner(TestHelpers, DisableLoggers):
         """
         MAX_STEP = 15
         with patch_args(
-            "--optimize_config", "--pruner_warmup_steps", 3, "--num_samples", "1", "--num_jobs", "4", "--seed", "42"
+            "--optimize_config", "--pruner_warmup_steps", 3, "--num_samples", "15", "--num_jobs", "4", "--seed", "42"
         ):
 
             def trainable(params: dict[str, Any]) -> TrainableReturnData:
@@ -909,6 +909,8 @@ class TestOptunaTuner(TestHelpers, DisableLoggers):
                 def create_param_space(self):
                     return {
                         "fake_result": tune.grid_search([*[1] * 3, *[2] * 3, *[3] * 3, *[4] * 3, *[5] * 3]),
+                        # Need non-trivial search space for OptunaSearch & Pruner to be added
+                        "random_feature": tune.uniform(0, 1),
                         "module": "OptunaTest",
                         "env": "CartPole-v1",
                     }
@@ -920,6 +922,7 @@ class TestOptunaTuner(TestHelpers, DisableLoggers):
                 setup.config.training(num_epochs=2, train_batch_size_per_learner=64, minibatch_size=64)
                 setup.config.evaluation(evaluation_interval=1)
 
+            # Removed the Optuna Pruner for grid search cases
             with self.assertLogs(optuna_logger, level="INFO") as log:
                 _results = run_tune(setup)
 
@@ -1389,15 +1392,15 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             "--perturbation_interval", perturbation_interval,
         ):  # fmt: skip
             Setup = SetupWithCheck(CheckTrainableForTop, PPOMLPWithPBTSetup)
-            Setup.batch_size_sample_space = {"grid_search": batch_sizes}  # start values?
             setup = Setup(
                 config_files=["experiments/models/mlp/default.cfg"],
                 # TODO: Trials are reused, trial name might be wrong then
             )
+            setup.param_space["train_batch_size_per_learner"] = tune.grid_search(batch_sizes)
             assert setup.args.command
             setup.args.command.set_hyperparam_mutations(
                 {
-                    "train_batch_size_per_learner": CyclicMutation(Setup.batch_size_sample_space["grid_search"]),
+                    "train_batch_size_per_learner": CyclicMutation(batch_sizes),
                     "fcnet_hiddens": KeepMutation([2]),
                 }
             )

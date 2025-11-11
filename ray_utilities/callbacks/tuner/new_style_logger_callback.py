@@ -32,7 +32,6 @@ class NewStyleLoggerCallback(LoggerCallback):
     for their results dict.
     """
 
-    @warn_if_slow
     def on_trial_result(
         self,
         iteration: int,

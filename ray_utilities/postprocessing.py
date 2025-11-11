@@ -581,7 +581,9 @@ def create_log_metrics(
         environment_results[SEEDS]["seed_sequence"] = list(s_seq)
     elif environment_results and SEED in environment_results:
         s_seq: Deque = environment_results[SEED]["initial_seed"]
-        environment_results[SEED]["initial_seed"] = list(s_seq) if len(s_seq) > 1 else s_seq[0]
+        environment_results[SEED]["initial_seed"] = (
+            list(s_seq) if len(s_seq) > 1 else s_seq[0] if not isinstance(s_seq, (int, float)) else s_seq
+        )
 
     current_step = get_current_step(result)
     metrics: LogMetricsDict = {
