@@ -344,8 +344,6 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                         metrics["param_value"] = self._param_to_check  # pyright: ignore[reportGeneralTypeIssues]
 
                 Setup = SetupWithCheck(TrainableWithChecksB)
-                # Limit for performance
-                batch_size_samples = [16, 64, 128]
 
                 with Setup() as setup:
                     setup.config.minibatch_size = 8  # set to small value to prevent ValueErrors
@@ -359,7 +357,8 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     elif param == "num_envs_per_env_runner":
                         grid = [1, 2]
                     else:
-                        grid = batch_size_samples
+                        # Use default grid values for batch size parameters
+                        grid = [16, 64, 128]
                     param_space[param]["grid_search"] = grid
                 else:
                     grid = []
@@ -1041,13 +1040,8 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
     @pytest.mark.length(speed="medium")
     @pytest.mark.xfail(reason="still old param space selection")
     def test_no_max_iteration_stopper_when_tuning(self):
-        with AlgorithmSetup(init_trainable=False) as setup:
-            ...
-        # self.assertDictEqual(
-        #    setup.param_space["train_batch_size_per_learner"],
-        #    ...,
-        #    # AlgorithmSetup.batch_size_sample_space,  # pyright: ignore[reportArgumentType]
-        # )
+        setup = AlgorithmSetup()
+        # TODO: Compare setup.param_space["train_batch_size_per_learner"] with expected values
 
         def fake_trainable(params):
             i = -1
@@ -1078,7 +1072,7 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
 
         set_project_log_level(_logger, "WARN", pkg_name=None)
 
-        class FakeTrainable(DefaultTrainable):
+        class FakeTrainable(DefaultTrainable["DefaultArgumentParser", "AlgorithmConfig", "Algorithm"]):
             def step(self):  # pyright: ignore[reportIncompatibleMethodOverride]
                 i = self.iteration + 1
                 if i < 2:
