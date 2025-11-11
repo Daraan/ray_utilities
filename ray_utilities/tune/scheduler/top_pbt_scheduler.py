@@ -1375,15 +1375,14 @@ class TopPB2Scheduler(TopPBTTrialScheduler, PB2):
             hyperparam_mutations: Dictionary defining how to mutate hyperparameters.
             time_attr: Attribute used to track training progress.
             custom_explore_fn: Custom function for exploring new hyperparameters.
-            num_samples: Number of samples for each trial.
-            reinit_model_on_exploit: Whether to reinitialize the GP model after each exploit.
         """
         super().__init__(
             time_attr=time_attr,
             metric=metric,
             mode=mode,
             perturbation_interval=perturbation_interval,
-            hyperparam_bounds=hyperparam_mutations,  # pyright: ignore[reportArgumentType]
+            # TODO: Figure out MRO issue, PB2 is named hyperparam_bounds
+            hyperparam_bounds=hyperparam_mutations,
             quantile_fraction=quantile_fraction,
             # resample_probability=0,
             custom_explore_fn=custom_explore_fn,  # only used on explore (see _exploit function, get_new_config)
