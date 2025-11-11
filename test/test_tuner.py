@@ -1512,7 +1512,7 @@ class PBTQuantileNaNTest(unittest.TestCase):
                 self.assertEqual(abs(min_ordered_results[-1]), 10)
 
 
-class MockPBTTrialState:
+class MockPBTTrialState(MagicMock):
     def __init__(
         self,
         last_score,
@@ -1524,6 +1524,7 @@ class MockPBTTrialState:
         current_env_steps=900,
         last_update_timestamp=None,
     ):
+        super().__init__()
         self.last_score = last_score
         self.last_checkpoint = last_checkpoint
         self.last_perturbation_time = last_perturbation_time

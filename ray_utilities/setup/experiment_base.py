@@ -615,6 +615,11 @@ class ExperimentSetupBase(
         self.args = self.postprocess_args(parsed)
         if self.args.restore_path:
             logger.info("restore_path is set. NOTE: Auto restore will only work with setup = Setup(parse_args=True)")
+        if self.args.test and (
+            test_storage_path := os.environ.get("RAY_UTILITIES_TEST_STORAGE_PATH", "./outputs/experiments/test")
+        ) not in ("", "0"):
+            logger.info("Test mode active, setting storage_path to %s", test_storage_path)
+            self.storage_path = test_storage_path
         return self.args
 
     # endregion
