@@ -48,6 +48,7 @@ from ray.tune.execution.tune_controller import TuneController
 from ray.tune.experiment import Trial
 from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.schedulers.pbt import PopulationBasedTraining, _fill_config
+from ray.tune.schedulers.pb2 import PB2
 from typing_extensions import Sentinel
 
 from ray_utilities.constants import FORK_FROM, PERTURBED_HPARAMS, get_run_id
@@ -1325,3 +1326,68 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             len(self._fork_ids),
             len(self._seen_config_hashes),
         )
+
+
+class TopPB2Scheduler(TopPBTTrialScheduler, PB2):
+    """Population Based 2 Training Scheduler.
+
+    This scheduler extends the TopPBTTrialScheduler to implement hyperparameter sampling
+    using a Gaussian Process (GP) to model the performance of trials and
+    guide the exploration of hyperparameters.
+
+    PB2 enhances the traditional PBT approach by incorporating a probabilistic model
+    that predicts the performance of different hyperparameter configurations, allowing
+    for more informed decisions during the exploitation and exploration phases.
+
+    References:
+        - [Population Based Training of Neural Networks](https://arxiv.org/abs/1711.09846)
+
+
+    How PB2 and TopPBTTrialScheduler interact:
+        - TopPBT defines _quantiles in a top vs. rest manner.
+        - PB2 patches _get_new_config, with Bayesian optimization based sampling. This changes
+            how _exploit works:
+            - _exploit -> _get_new_config -> pb2._explore -> pb2._select_config (GP) select point within [low, high]
+        - KeepMutation, or similar NOT SUPPORTED YET
+    """
+
+    def __init__(
+        self,
+        time_attr: str = "current_step",
+        metric: Optional[str] = None,
+        mode: Optional[str] = None,
+        perturbation_interval: float = 60.0,
+        # Values must be tuples of (min, max) for each hyperparameter
+        hyperparam_mutations: dict[str, dict | list | tuple] | None = None,
+        quantile_fraction: float = 0.25,
+        *,
+        log_config: bool = True,
+        require_attrs: bool = True,
+        synch: bool = False,
+        custom_explore_fn: Optional[Callable[[dict], dict]] = None,
+    ):
+        """Initialize the PB2 scheduler.
+
+        Args:
+            perturbation_interval: Number of training iterations between perturbations.
+            quantile_fraction: Fraction of trials to consider as top performers.
+            hyperparam_mutations: Dictionary defining how to mutate hyperparameters.
+            time_attr: Attribute used to track training progress.
+            custom_explore_fn: Custom function for exploring new hyperparameters.
+            num_samples: Number of samples for each trial.
+            reinit_model_on_exploit: Whether to reinitialize the GP model after each exploit.
+        """
+        super().__init__(
+            time_attr=time_attr,
+            metric=metric,
+            mode=mode,
+            perturbation_interval=perturbation_interval,
+            hyperparam_bounds=hyperparam_mutations,  # pyright: ignore[reportArgumentType]
+            quantile_fraction=quantile_fraction,
+            # resample_probability=0,
+            custom_explore_fn=custom_explore_fn,  # only used on explore (see _exploit function, get_new_config)
+            log_config=log_config,
+            require_attrs=require_attrs,
+            synch=synch,
+        )
+        # Todo to support KeepMutation, write a _get_new_config and validate_bounds to allow for special values.

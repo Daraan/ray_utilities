@@ -68,7 +68,11 @@ jax = [
 argcomplete = [
   "argcomplete",
 ]
-
+# PopulationBasedTraining with Gaussian Processes sampling:
+PB2 = [
+  "scikit-learn",
+  "GPy",
+]
 [tool.black]
 line-length = 120
 target-version = ['py39', 'py310', 'py311']
