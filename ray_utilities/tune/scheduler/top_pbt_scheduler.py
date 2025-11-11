@@ -1340,7 +1340,8 @@ class TopPB2Scheduler(TopPBTTrialScheduler, PB2):
     for more informed decisions during the exploitation and exploration phases.
 
     References:
-        - [Population Based Training of Neural Networks](https://arxiv.org/abs/1711.09846)
+        - [Population Based Training of Neural Networks (PBT)](https://arxiv.org/abs/1711.09846)
+        - [Population Based Bandits (PB2)](https://arxiv.org/abs/2002.02518)
 
 
     How PB2 and TopPBTTrialScheduler interact:

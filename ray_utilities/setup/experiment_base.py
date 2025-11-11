@@ -1336,7 +1336,7 @@ class ExperimentSetupBase(
         else:
             # Can point to S3 etc. Do not use PATH for joining, will mess up s3://
             if self.args.test:  # Do not use S3 on test runs
-                storage_path = ".outputs/experiments/test/"
+                storage_path = "./outputs/experiments/test"
             else:
                 storage_path = os.path.join(run_config.storage_path, run_config.name)
             self._backup_for_restore(storage_path)
