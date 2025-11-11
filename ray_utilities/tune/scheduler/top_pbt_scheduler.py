@@ -996,7 +996,14 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             for k in self.additional_config_keys:
                 trial.config.pop(k, None)
             trial.config.pop("__pbt_main_branch__", None)
-            if trial.config["minibatch_size"] in self.__sampled_this_perturbation:
+            # XXX remove DEBUG
+            import os
+
+            if (
+                "CI" not in os.environ
+                and "minibatch_size" in trial.config
+                and trial.config["minibatch_size"] in self.__sampled_this_perturbation
+            ):
                 breakpoint()
             else:
                 self.__sampled_this_perturbation.add(trial.config["minibatch_size"])

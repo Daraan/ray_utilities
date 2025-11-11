@@ -423,6 +423,8 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             "--checkpoint_frequency_unit", "iterations",
             "--checkpoint_frequency", "50",
             "--offline_loggers", "json",
+            "--log_stats", "more",
+            "--buffer_length", "1",
         ):  # fmt: skip
             with MLPSetup(init_trainable=False) as setup1:
                 setup1.config.training(num_epochs=2, minibatch_size=batch_size)
@@ -433,7 +435,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
         experiment_path = Path(run_config.storage_path) / run_config.name  # pyright: ignore[reportArgumentType, reportOperatorIssue]
 
         # Start signal thread - interrupt after some trials start
-        signal_thread = threading.Thread(target=send_signal_after_delay, args=(10.0,))
+        signal_thread = threading.Thread(target=send_signal_after_delay, args=(30.0,))
         signal_thread.daemon = True
         signal_thread.start()
 
@@ -449,6 +451,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             # check that results are not completed
             best_result: tune.Result = results1.get_best_result()
             if TRAINING_ITERATION not in best_result.metrics:  # pyright: ignore[reportOperatorIssue]
+                # happens if trial is still in pending state
                 self.fail("training_iterations not in metrics: keys: " + str(best_result.metrics.keys()))  # pyright: ignore[reportOptionalMemberAccess]
             self.assertLess(best_result.metrics[TRAINING_ITERATION], ITERATIONS)  # pyright: ignore[reportOptionalSubscript]
         # If we get here without interruption, still check results

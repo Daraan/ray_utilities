@@ -340,9 +340,10 @@ class WandbUploaderMixin(UploadHelperMixin):
                 for run_dirs in offline_runs:
                     # Check for WandB's own sync marker
                     wandb_sync_files = list(run_dirs.glob("run-*.wandb.synced"))
-                    if wandb_sync_files:
+                    if wandb_sync_files and skip_synced:
                         logger.info(
-                            "Found WandB sync marker file(s) in %s: %s. This run was likely already uploaded to WandB - %s.",
+                            "Found WandB sync marker file(s) in %s: %s. "
+                            "This run was likely already uploaded to WandB - %s.",
                             run_dirs,
                             [f.name for f in wandb_sync_files],
                             "skipping" if skip_synced else "uploading anyway",
@@ -508,7 +509,7 @@ class WandbUploaderMixin(UploadHelperMixin):
                         len(upload_groups),
                         group.index((trial_id, run_dirs)) + 1,
                         len(group),
-                        run_dirs,
+                        [p.name for p in run_dirs],
                     )
                     process = subprocess.Popen(
                         ["wandb", "sync", *[d.as_posix() for d in run_dirs], "--append"],

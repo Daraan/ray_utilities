@@ -43,6 +43,7 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         """
         self._set_budget_on__init__(learner_config_dict=learner_config_dict)
         self.every_n_steps_before: tuple[int, int] | None = every_n_steps_before
+        self._original_interval: Optional[int] = None
         super().__init__(update_function or self._update_eval_interval, "TBA - DynamicBufferUpdate")
 
     def _update_eval_interval(
@@ -103,7 +104,7 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
                 (
                     get_dynamic_evaluation_intervals(
                         step_sizes,
-                        eval_freq=self._original_interval,
+                        eval_freq=self._original_interval,  # 16. Does this hold on restore? Algorithm.eval_interval will be the restored value in __init__
                         batch_size=algorithm.config.train_batch_size_per_learner,  # pyright: ignore[reportOptionalMemberAccess]
                         take_root=True,
                     )
@@ -124,6 +125,16 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
                 self._evaluation_intervals[step_size] = 1
         logger.info("Dynamic evaluation intervals: %s", self._evaluation_intervals)
 
+    def get_state(self) -> dict[str, Any]:
+        return {
+            "every_n_steps_before": self.every_n_steps_before,
+            "original_interval": self._original_interval,
+        }
+
+    def set_state(self, state: dict[str, Any]) -> None:
+        self.every_n_steps_before = state["every_n_steps_before"]
+        self._original_interval = state["original_interval"]
+
     def on_algorithm_init(
         self,
         *,
@@ -135,7 +146,8 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         assert self._budget
         assert algorithm.config
         # TODO: When loading checkpoints and original differs from loaded, this is a problem
-        self._original_interval = algorithm.config.evaluation_interval
+        if self._original_interval is None:
+            self._original_interval = algorithm.config.evaluation_interval
         self._set_evaluation_intervals(algorithm=algorithm)
         self._set_step_counter_on_algorithm_init(algorithm=algorithm, metrics_logger=metrics_logger)
         super().on_algorithm_init(algorithm=algorithm, metrics_logger=metrics_logger)

@@ -2,7 +2,7 @@
 #SBATCH --job-name=ray-client
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=50G
 #SBATCH --time=24:00:00
 #SBATCH --signal=B:SIGUSR1@600
@@ -404,7 +404,7 @@ if [ "${RUN_PYTHON_SCRIPT}" = "false" ]; then
         --num-cpus="${SLURM_CPUS_PER_TASK}" \
         --num-gpus="${SLURM_GPUS_PER_TASK:-0}" \
         --temp-dir="${RAY_TMPDIR}" \
-        --labels="node=$(hostname -s),head=false" \
+        --labels="hostname=$(hostname -s),head=false" \
         --block; then
         echo "ERROR: Failed to connect to Ray cluster"
         if [ "${CONNECTION_MODE}" = "job_id" ]; then

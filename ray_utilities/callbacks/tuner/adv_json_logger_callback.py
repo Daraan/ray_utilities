@@ -130,6 +130,13 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, JsonLog
         if not result.get(EVALUATED_THIS_STEP, True):
             # Do not eval metric if we did not log it, ray copies the entry.
             result.pop(EVALUATION_RESULTS, None)
+        # XXX DEBUG
+        if "effective_train_batch_size" not in result:
+            logger.warning(
+                "effective_train_batch_size not in result metrics, cannot log it in AdvJsonLoggerCallback. Actor IP %s on node IP %s",
+                trial.get_ray_actor_ip(),
+                trial.node_ip,
+            )
         try:
             super().log_trial_result(
                 iteration,

@@ -150,8 +150,21 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
                 return False
             else:
                 # When the parent trial has continued, we need to trim the copied file to match the fork step
-                self._trim_history_back_to_fork_step(trial, local_file_path, fork_data)
+                try:
+                    self._trim_history_back_to_fork_step(trial, local_file_path, fork_data)
+                except Exception:  # noqa: BLE001
+                    import traceback  # noqa: PLC0415
 
+                    logger.exception(
+                        "Error trimming copied parent file for trial %s from trial %s",
+                        trial.trial_id,
+                        parent_trial.trial_id,
+                    )
+                    with Path(local_file_path.parent, "ru_errors.log").open("a") as err_log:
+                        err_log.write(
+                            f"Error trimming copied parent file for trial {trial.trial_id} "
+                            f"from trial {parent_trial.trial_id}\n" + traceback.format_exc()
+                        )
             return True
 
         # Different nodes - sync via remote storage

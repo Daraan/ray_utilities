@@ -273,7 +273,7 @@ class UploadHelperMixin:
                                 process,
                                 timeout=min(max(10, timeout - (time_now - start) - 10), 200),
                                 terminate_on_timeout=False,
-                                prev_out=stdout_accum,
+                                prev_out=stdout_accum.strip(),
                                 trial_id=trial_id,
                             )
                         error_code = ExitCode.TIMEOUT
