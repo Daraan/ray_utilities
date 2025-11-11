@@ -1067,8 +1067,25 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
                     trial.set_config(trial_config_reseeded)
 
     def _save_trial_state(
-        self, state: _PBTTrialState | _PBTTrialState2, time: int, result: AlgorithmReturnData | dict, trial: Trial
+        self,
+        state: _PBTTrialState | _PBTTrialState2,
+        time: int,
+        result: AlgorithmReturnData | dict,
+        trial: Trial,
+        *,
+        update_timestamp: bool = True,
     ):
+        """Save trial state, optionally updating the wall-clock timestamp.
+
+        Args:
+            state: Trial state object to update.
+            time: Training time value from time_attr.
+            result: Training result dictionary.
+            trial: The trial being updated.
+            update_timestamp: If True, updates last_update_timestamp to current wall-clock time.
+                Set to False when saving state during pause/perturbation bookkeeping to avoid
+                interfering with slow trial detection logic.
+        """
         score = super()._save_trial_state(state, time, cast("dict", result), trial)
         # Save training iteration for the step for loggers like WandB / Comet
         state.last_training_iteration = result[TRAINING_ITERATION]  # pyright: ignore[reportAttributeAccessIssue]
@@ -1076,7 +1093,8 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             state.current_env_steps = get_current_step(result)  # pyright: ignore[reportArgumentType, reportAttributeAccessIssue]
         except KeyError:
             state.current_env_steps = None  # pyright: ignore[reportAttributeAccessIssue]
-        state.last_update_timestamp = get_time()  # pyright: ignore[reportAttributeAccessIssue]
+        if update_timestamp:
+            state.last_update_timestamp = get_time()  # pyright: ignore[reportAttributeAccessIssue]
         return score
 
     def reset_exploitations(self):
@@ -1178,8 +1196,12 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             or time_since_perturb > 0.95 * self._perturbation_interval
         ):
             return decision
-        # If we are less than 5 min behind ignore
-        if get_time() - max(state.last_update_timestamp for state in self._trial_state.values()) < 300:
+        # If we are less than 5 min behind other trials (excluding current), ignore
+        # Exclude current trial from comparison to avoid self-comparison
+        other_trial_timestamps = [
+            self._trial_state[t].last_update_timestamp for t in self._trial_state if t is not trial
+        ]
+        if other_trial_timestamps and get_time() - max(other_trial_timestamps) < 300:
             return decision
         # Check this is in the 5% of not-yet finished trials
         if (
@@ -1187,7 +1209,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
                 self._trial_state[t].last_train_time < self._next_perturbation_sync and t != trial
                 for t in tune_controller.get_live_trials()
             )
-        ) <= len(tune_controller.get_live_trials()) * 0.05:
+        ) > len(tune_controller.get_live_trials()) * 0.05:
             return decision
         # NOTE: In the quantiles we have the results of the finished trials and the results of the slow trials from the *last* perturbation interval
         lowest_scores = [state.last_score for state in self._trial_state.values() if state.last_score is not None]
@@ -1199,7 +1221,8 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         # last trial is slow and in worst 33%. Pause trial and if last start perturbation
         # When return of super() is CONTINUE we should not have had a perturbation this result - expect when the trial is slow but not in the lower_quantile
         perturbation_time = max(state.last_train_time for state in self._trial_state.values())
-        self._save_trial_state(state, perturbation_time, result, trial)
+        # Save state without updating timestamp to avoid interfering with other slow trials' detection
+        self._save_trial_state(state, perturbation_time, result, trial, update_timestamp=False)
         # TODO If there are multiple slow do not perturb yet just pause the others.
         if still_active_trials == 0:
             logger.info("Last trial %s is a bad performing straggler. Starting early PBT perturbation.", trial)

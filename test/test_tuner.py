@@ -14,7 +14,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from unittest import mock
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -27,6 +27,7 @@ from ray.rllib.utils.metrics import (
 )
 from ray.train._internal.storage import StorageContext
 from ray.tune import CheckpointConfig
+from ray.tune.execution.tune_controller import TuneController
 from ray.tune.experiment import Trial
 from ray.tune.logger import (
     CSVLoggerCallback,
@@ -35,6 +36,7 @@ from ray.tune.logger import (
 )
 from ray.tune.result import SHOULD_CHECKPOINT, TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.schedulers.pb2 import PB2
+from ray.tune.schedulers.pbt import PopulationBasedTraining
 from ray.tune.schedulers.pbt import logger as ray_pbt_logger
 from ray.tune.search.optuna import OptunaSearch
 from ray.tune.stopper import CombinedStopper
@@ -80,10 +82,10 @@ from ray_utilities.tune.searcher.optuna_searcher import _logger as optuna_logger
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import AlgorithmConfig
-    from ray.tune.execution.tune_controller import TuneController
     from ray.tune.result_grid import ResultGrid
     from ray.tune.search.sample import Integer
 
+    from ray_utilities.tune.scheduler.top_pbt_scheduler import _PBTTrialState2
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
     from ray_utilities.typing.metrics import LogMetricsDict
     from ray_utilities.typing.trainable_return import TrainableReturnData
@@ -1508,6 +1510,399 @@ class PBTQuantileNaNTest(unittest.TestCase):
                 self.assertIn(t2, min_other_trials)
                 self.assertIn(t3, min_top)
                 self.assertEqual(abs(min_ordered_results[-1]), 10)
+
+
+class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
+    """Tests for handling slow and bad performing trials in synchronous PBT mode."""
+
+    def setUp(self):
+        """Set up test fixtures for slow trial tests."""
+        super().setUp()
+        self.scheduler = TopPBTTrialScheduler(
+            metric="reward",
+            mode="max",
+            perturbation_interval=1000,
+            burn_in_period=100,
+            hyperparam_mutations={
+                "lr": {"grid_search": [0.001, 0.01, 0.1]},
+            },
+            quantile_fraction=0.25,
+            synch=True,  # Enable synchronous mode for slow trial handling
+        )
+
+        # Create mock TuneController
+        self.mock_controller = MagicMock(spec=TuneController)
+        self.mock_controller.get_trials.return_value = []
+        self.mock_controller.get_live_trials.return_value = []
+        self.mock_controller._queued_trial_decisions = {}
+
+        # Create 20 trials with varying performance, need 20 for 5% hurdle
+        self.trials = []
+        current_time = time.time()
+        for i in range(20):
+            trial = MagicMock(spec=Trial)
+            trial.trial_id = f"trial_{i}"
+            trial.is_finished.return_value = False
+            trial.status = Trial.RUNNING
+            trial.config = {"lr": 0.001}
+
+            state = cast("_PBTTrialState2", MagicMock())
+            state.last_score = 50 + i * 5  # Scores from 50 to 145
+            state.last_checkpoint = None
+            state.last_perturbation_time = 0
+            state.last_train_time = 900  # Just before perturbation interval
+            state.last_result = {"reward": state.last_score, TRAINING_ITERATION: 1}
+            state.last_training_iteration = 1
+            state.current_env_steps = 900
+            # Set all trials to have recent timestamps by default
+            state.last_update_timestamp = current_time
+
+            self.trials.append(trial)
+            trial.run_metadata = MagicMock()
+            trial.run_metadata.checkpoint_manager.checkpoint_config.num_to_keep = 4
+            trial.experiment_tag = f"testing_{i}"
+            trial.local_experiment_path = "./outputs/experiments/TESTING"
+            self.scheduler.on_trial_add(self.mock_controller, trial)
+            self.scheduler._trial_state[trial] = state
+
+        self.scheduler._next_perturbation_sync = 1000
+
+    def test_slow_trial_not_in_early_perturbation_window(self):
+        """Test that trials outside the early perturbation window (66%-95%) are not paused."""
+        # Trial at 50% of interval - too early
+        trial = self.trials[0]
+        state = self.scheduler._trial_state[trial]
+        state.last_train_time = 500
+        state.last_perturbation_time = 0
+
+        result = {
+            "reward": 50,
+            self.scheduler._time_attr: 500,
+            TRAINING_ITERATION: 1,
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+
+        decision = self.scheduler.on_trial_result(self.mock_controller, trial, result)
+
+        # Should continue, not pause
+        self.assertEqual(decision, self.scheduler.CONTINUE)
+
+    def test_slow_trial_too_late_for_early_perturbation(self):
+        """Test that trials past 95% of interval are not paused early."""
+        # Trial at 96% of interval - too late
+        trial = self.trials[0]
+        state = self.scheduler._trial_state[trial]
+        state.last_train_time = 960
+        state.last_perturbation_time = 0
+
+        result = {
+            "reward": 50,
+            self.scheduler._time_attr: 960,
+            TRAINING_ITERATION: 1,
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+
+        decision = self.scheduler.on_trial_result(self.mock_controller, trial, result)
+
+        # Should continue, not pause
+        self.assertEqual(decision, self.scheduler.CONTINUE)
+
+    def test_slow_trial_within_time_threshold_not_paused(self):
+        """Test that slow trials within 5 min of last update are not paused."""
+        trial = self.trials[0]
+        state = self.scheduler._trial_state[trial]
+        state.last_train_time = 700
+        state.last_perturbation_time = 0
+        # Set recent update timestamp (within 5 min)
+        current_time = time.time()
+        state.last_update_timestamp = current_time - 100
+
+        # Make all other trials have recent updates too
+        for t in self.trials:
+            self.scheduler._trial_state[t].last_update_timestamp = current_time - 50
+
+        result = {
+            "reward": 50,
+            self.scheduler._time_attr: 700,
+            TRAINING_ITERATION: 1,
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+
+        decision = self.scheduler.on_trial_result(self.mock_controller, trial, result)
+
+        # Should continue because time threshold not met
+        self.assertEqual(decision, self.scheduler.CONTINUE)
+
+    def test_slow_trial_not_in_bottom_5_percent_continues(self):
+        """Test that trials not in the slowest 5% continue normally."""
+        # Set up: 8 trials finished, 2 still active (not in bottom 5% of 10)
+        for i, trial in enumerate(self.trials[:-2]):
+            self.scheduler._trial_state[trial].last_train_time = 1000
+
+        slow_trial = self.trials[-2]
+        state = self.scheduler._trial_state[slow_trial]
+        state.last_train_time = 700
+        state.last_perturbation_time = 0
+        current_time = time.time()
+        state.last_update_timestamp = current_time - 400  # Old enough
+
+        result = {
+            "reward": 50,
+            self.scheduler._time_attr: 700,
+            TRAINING_ITERATION: 1,
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+
+        decision = self.scheduler.on_trial_result(self.mock_controller, slow_trial, result)
+
+        # Should continue because 2/10 = 20% > 5%
+        self.assertEqual(decision, self.scheduler.CONTINUE)
+
+    def test_slow_trial_good_performance_continues(self):
+        """Test that slow trials with good performance (not in bottom 33%) continue."""
+        # Set up: all other trials finished
+        current_time = time.time()
+        for trial in self.trials[1:]:
+            self.scheduler._trial_state[trial].last_train_time = 1000
+            self.scheduler._trial_state[trial].last_update_timestamp = current_time - 1000
+
+        slow_trial = self.trials[0]
+        state = self.scheduler._trial_state[slow_trial]
+        state.last_train_time = 700
+        state.last_perturbation_time = 0
+        state.last_score = 80  # Good score, in top 33%
+        state.last_update_timestamp = current_time - 400
+
+        # Set up lowest_scores so 80 is not in bottom 33%
+        for i, t in enumerate(self.trials):
+            self.scheduler._trial_state[t].last_score = 50 + i * 5
+
+        result = {
+            "reward": 80,
+            self.scheduler._time_attr: 700,
+            TRAINING_ITERATION: 1,
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+
+        decision = self.scheduler.on_trial_result(self.mock_controller, slow_trial, result)
+
+        # Should continue because performance is good
+        self.assertEqual(decision, self.scheduler.CONTINUE)
+
+    def test_slow_bad_trial_is_last_triggers_perturbation(self):
+        """Test that the last slow, bad trial triggers early perturbation."""
+        # All trials finished except the slow, bad one
+        current_time = time.time()
+        for trial in self.trials[1:]:
+            self.scheduler._trial_state[trial].last_train_time = 1000
+            # Set timestamps more than 300 seconds ago
+            self.scheduler._trial_state[trial].last_update_timestamp = current_time - 1000
+
+        slow_trial = self.trials[0]
+        state = self.scheduler._trial_state[slow_trial]
+        state.last_train_time = 700
+        state.last_perturbation_time = 0
+        state.last_score = 52  # Bad score, in bottom 33%
+        # Slow trial timestamp should be more than 300 seconds behind the max
+        state.last_update_timestamp = current_time - 400
+
+        result = {
+            "reward": 52,
+            self.scheduler._time_attr: 700,
+            TRAINING_ITERATION: 1,
+            "time_total_s": 700,  # Add required field for parent class
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+        self.mock_controller.get_trials.return_value = self.trials
+        # Mock parent class to return CONTINUE so our early perturbation logic runs
+        with (
+            patch.object(PopulationBasedTraining, "on_trial_result", return_value=TopPBTTrialScheduler.CONTINUE),
+            patch.object(self.scheduler, "_perturbation_sync_mode") as mock_perturb,
+        ):
+            _decision = self.scheduler.on_trial_result(self.mock_controller, slow_trial, result)
+
+            # Should trigger perturbation
+            mock_perturb.assert_called_once()
+            # Verify perturbation was called with correct time
+            call_args = mock_perturb.call_args[0]
+            self.assertEqual(call_args[0], self.mock_controller)
+            self.assertEqual(call_args[1], 1000)  # max of all last_train_times
+
+    def test_slow_bad_trial_not_last_is_paused(self):
+        """Test that slow, bad trials that are not the last one are paused."""
+        # 2 slow trials, rest finished
+        current_time = time.time()
+        for trial in self.trials:
+            self.scheduler._trial_state[trial].last_train_time = 1000
+            self.scheduler._trial_state[trial].last_update_timestamp = current_time - 1000
+
+        slow_trial_1 = self.trials[0]
+        slow_trial_2 = self.trials[1]
+
+        # Slow trials have not reported yet
+        for slow_trial in [slow_trial_1, slow_trial_2]:
+            state = self.scheduler._trial_state[slow_trial]
+            state.last_train_time = 500
+            state.last_perturbation_time = 0
+            state.last_score = 52
+            state.last_update_timestamp = current_time - 1400
+
+        result = {
+            "reward": 52,
+            self.scheduler._time_attr: 700,
+            TRAINING_ITERATION: 1,
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+        self.mock_controller.get_trials.return_value = self.trials
+
+        with patch.object(self.scheduler, "_perturbation_sync_mode") as mock_perturb:
+            decision = self.scheduler.on_trial_result(self.mock_controller, slow_trial_1, result)
+
+            # Should pause and not trigger perturbation (still waiting for slow_trial_2)
+            self.assertEqual(decision, self.scheduler.PAUSE)
+            mock_perturb.assert_not_called()
+            self.scheduler._trial_state[slow_trial_1].last_perturbation_time = 1000
+            slow_trial_1.status = Trial.PAUSED if decision in (self.scheduler.NOOP, self.scheduler.PAUSE) else decision
+            self.assertEqual(slow_trial_1.status, Trial.PAUSED)
+        # As we pause trial1 we update the max last_update_timestamp, trial2 will therefore continue
+        # With slow trial 2 we get perturbation
+        with patch.object(self.scheduler, "_perturbation_sync_mode") as mock_perturb:
+            decision = self.scheduler.on_trial_result(self.mock_controller, slow_trial_2, result)
+
+            self.assertEqual(decision, self.scheduler.PAUSE)
+            mock_perturb.assert_called()
+
+    def test_slow_trial_already_paused_returns_noop(self):
+        """Test that already paused slow trials return NOOP instead of PAUSE."""
+        # All trials finished except the slow one
+        current_time = time.time()
+        for trial in self.trials[1:]:
+            self.scheduler._trial_state[trial].last_train_time = 1000
+            self.scheduler._trial_state[trial].last_update_timestamp = current_time - 1000
+
+        slow_trial = self.trials[0]
+        slow_trial.status = Trial.PAUSED
+        state = self.scheduler._trial_state[slow_trial]
+        state.last_train_time = 700
+        state.last_perturbation_time = 0
+        state.last_score = 52
+        state.last_update_timestamp = current_time - 400
+
+        result = {
+            "reward": 52,
+            self.scheduler._time_attr: 700,
+            TRAINING_ITERATION: 1,
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+        self.mock_controller.get_trials.return_value = self.trials
+
+        # Multiple slow trials, so won't trigger perturbation
+        self.scheduler._trial_state[self.trials[1]].last_train_time = 700
+        self.scheduler._trial_state[self.trials[1]].last_update_timestamp = current_time - 400
+
+        decision = self.scheduler.on_trial_result(self.mock_controller, slow_trial, result)
+
+        # Should return NOOP for already paused trial
+        self.assertEqual(decision, self.scheduler.NOOP)
+
+    def test_slow_trial_state_saved_correctly(self):
+        """Test that slow trial state is saved at perturbation time."""
+        # All trials finished except the slow one
+        current_time = time.time()
+        for trial in self.trials[1:]:
+            self.scheduler._trial_state[trial].last_train_time = 1000
+            self.scheduler._trial_state[trial].last_update_timestamp = current_time - 1000
+
+        slow_trial = self.trials[0]
+        state = self.scheduler._trial_state[slow_trial]
+        state.last_train_time = 700
+        state.last_perturbation_time = 0
+        state.last_score = 52
+        state.last_update_timestamp = current_time - 1400
+
+        result = {
+            "reward": 52,
+            self.scheduler._time_attr: 700,
+            TRAINING_ITERATION: 5,
+            "current_step": 12345,
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+        self.mock_controller.get_trials.return_value = self.trials
+        slow_trial.run_metadata = MagicMock()
+
+        with patch.object(self.scheduler, "_perturbation_sync_mode"):
+            self.scheduler.on_trial_result(self.mock_controller, slow_trial, result)
+
+            # Verify state was saved with correct values
+            self.assertEqual(state.last_training_iteration, 5)
+            self.assertEqual(state.current_env_steps, 12345)
+            self.assertIsNotNone(state.last_update_timestamp)
+
+    def test_slow_trial_non_synch_mode_no_early_perturbation(self):
+        """Test that non-synchronous mode doesn't trigger early perturbation."""
+        # Create scheduler in non-synch mode
+        scheduler = TopPBTTrialScheduler(
+            metric="reward",
+            mode="max",
+            perturbation_interval=1000,
+            hyperparam_mutations={"lr": {"grid_search": [0.001, 0.01]}},
+            synch=False,  # Non-synchronous mode
+        )
+
+        trial = self.trials[0]
+        state = cast("_PBTTrialState2", MagicMock())
+        state.last_train_time = 700
+        state.last_perturbation_time = 0
+        state.last_score = 52
+        current_time = time.time()
+        state.last_update_timestamp = current_time - 400
+
+        scheduler._trial_state[trial] = state
+        scheduler._next_perturbation_sync = 1000
+
+        result = {
+            "reward": 52,
+            scheduler._time_attr: 700,
+            TRAINING_ITERATION: 1,
+        }
+
+        with patch.object(scheduler, "_perturbation_sync_mode") as mock_perturb:
+            # Mock the parent class to return CONTINUE
+            # with patch.object(PopulationBasedTraining, "on_trial_result", return_value=scheduler.CONTINUE):
+            decision = scheduler.on_trial_result(self.mock_controller, trial, result)
+
+            # Should continue normally, no early perturbation in non-synch mode
+            self.assertEqual(decision, scheduler.CONTINUE)
+            mock_perturb.assert_not_called()
+
+    def test_slow_trial_before_burn_in_continues(self):
+        """Test that slow trials before burn-in period are not paused."""
+        trial = self.trials[0]
+        state = self.scheduler._trial_state[trial]
+        state.last_train_time = 50
+        state.last_perturbation_time = 0
+
+        result = {
+            "reward": 50,
+            self.scheduler._time_attr: 50,  # Before burn_in_period of 100
+            TRAINING_ITERATION: 1,
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+
+        decision = self.scheduler.on_trial_result(self.mock_controller, trial, result)
+
+        # Should continue because still in burn-in period
+        self.assertEqual(decision, self.scheduler.CONTINUE)
 
 
 if __name__ == "__main__":
