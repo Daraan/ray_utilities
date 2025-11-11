@@ -227,8 +227,8 @@ class ResetSeedEnvsCallback(SeedEnvsCallbackBase):
         worker_index, suffix = self._get_worker_info(env_context)
 
         starting_seed = seed_sequence.generate_state(1)
-        first_observation, info = env.reset(seed=int(starting_seed[0]))
-        logger.info(
+        first_observation, _info = env.reset(seed=int(starting_seed[0]))
+        logger.debug(
             "Seeding %s envs with seed=%s - "
             "created from env_seed=%s, worker_index %s/%s, evaluation=%s, vector_index=%s.%s. "
             "First observation (each env):\n%s",
