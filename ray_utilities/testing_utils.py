@@ -1180,7 +1180,9 @@ class TestHelpers(unittest.TestCase):
                     err_msg=f"Key '{key}' not equal in both states {msg}",
                 )
 
-    def compare_env_runner_configs(self, algo: Algorithm, algo_restored: Algorithm, *, ignore_overrides_key=True):
+    def compare_env_runner_configs(
+        self, algo: Algorithm, algo_restored: Algorithm, *, ignore_overrides_key=True, exclude=()
+    ):
         self.set_max_diff(self.maxDiff and max(self.maxDiff or 0, 20000))
 
         def assertCleanDictEqual(a, b, *args, **kwargs):  # noqa: N802
@@ -1191,6 +1193,9 @@ class TestHelpers(unittest.TestCase):
 
         algo_config_dict = algo.config.to_dict()
         algo_restored_config_dict = algo_restored.config.to_dict()
+        for excluded in exclude:
+            algo_config_dict.pop(excluded, None)
+            algo_restored_config_dict.pop(excluded, None)
         if ignore_overrides_key:
             self.compare_configs(
                 self.filter_incompatible_remote_config(
@@ -1764,6 +1769,8 @@ class TestHelpers(unittest.TestCase):
                     trainable.algorithm,
                     trainable2.algorithm,
                     ignore_overrides_key=ignore_restored_overrides_key,
+                    # Ignore evaluation_interval that is set by DynamicEvalCallback, but not needed on EnvRunners
+                    exclude=("evaluation_interval",),
                 )
 
     # endregion
