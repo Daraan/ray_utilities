@@ -41,9 +41,9 @@ class PPOTorchLearnerWithGradientAccumulation(PPOTorchLearner):
         accumulate_gradients_every = self.config.learner_config_dict["accumulate_gradients_every"]
         update_gradients_this_step = self._step_count % accumulate_gradients_every == 0
 
+        # Only zero gradients at the start of a new accumulation cycle
         if (self._step_count - 1) % accumulate_gradients_every == 0:
             for optim in self._optimizer_parameters:
-                # `set_to_none=True` is a faster way to zero out the gradients.
                 optim.zero_grad(set_to_none=True)
 
         if self._grad_scalers is not None:
@@ -57,18 +57,22 @@ class PPOTorchLearnerWithGradientAccumulation(PPOTorchLearner):
             return {}
 
         total_loss.backward()
+
         if update_gradients_this_step:
             self._gradient_updates += 1
             self._last_gradient_update_step = self._step_count
             _logger.debug("Updating gradients for step %s", self._step_count)
+
+            # Only scale and copy gradients when actually applying them
             if accumulate_gradients_every != 1:
-                grads = {
-                    pid: p.grad / accumulate_gradients_every if p.grad is not None else p.grad
-                    for pid, p in self._params.items()
-                }
-            else:  # No accumulation
-                grads = {pid: p.grad for pid, p in self._params.items()}
-            return grads  # pyright: ignore[reportReturnType]  # contains None
+                # In-place division to avoid creating new tensors
+                for p in self._params.values():
+                    if p.grad is not None:
+                        p.grad.div_(accumulate_gradients_every)
+
+            # Return existing gradients
+            return {pid: p.grad for pid, p in self._params.items()}
+
         _logger.debug(
             "Skipping gradient update for step %s, accumulating gradients",
             self._step_count,
@@ -90,10 +94,11 @@ class PPOTorchLearnerWithGradientAccumulation(PPOTorchLearner):
         # otherwise could call it with 0 timesteps
 
     def update(self, *args, timesteps: dict[str, Any], **kwargs) -> dict[str, Any]:
-        timesteps[NUM_ENV_STEPS_SAMPLED_LIFETIME] = sum(map(len, kwargs["training_data"].episodes))
-        self._accumulated_time_steps += timesteps[NUM_ENV_STEPS_SAMPLED_LIFETIME]
-        # _update -> compute gradients is called num_epochs * batch_size / minibatch_size
-        # e.g. 2048 * 30 / 128 = 480 steps per update as default
+        # Cache the episode data reference to avoid repeated lookups
+        training_data = kwargs["training_data"]
+        episode_steps = sum(map(len, training_data.episodes))
+        timesteps[NUM_ENV_STEPS_SAMPLED_LIFETIME] = episode_steps
+        self._accumulated_time_steps += episode_steps
         return super().update(*args, timesteps=timesteps, **kwargs)
 
     def get_state(
