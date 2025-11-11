@@ -996,17 +996,6 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             for k in self.additional_config_keys:
                 trial.config.pop(k, None)
             trial.config.pop("__pbt_main_branch__", None)
-            # XXX remove DEBUG
-            import os
-
-            if "CI" not in os.environ:
-                if (
-                    "minibatch_size" in trial.config
-                    and trial.config["minibatch_size"] in self.__sampled_this_perturbation
-                ):
-                    breakpoint()
-                else:
-                    self.__sampled_this_perturbation.add(trial.config["minibatch_size"])
             # Set info which trial was forked from
             parent_iteration = self._trial_state[trial_to_clone].last_training_iteration
             fork_data: ForkFromData = {
@@ -1177,7 +1166,6 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
     @warn_if_slow
     def on_trial_result(self, tune_controller: TuneController, trial: Trial, result: dict) -> str:
         # TODO: How does buffered training affect this, when we receive buffered results we could clear all results first
-        self.__sampled_this_perturbation = set()
         decision = super().on_trial_result(tune_controller, trial, result)
         if decision != self.CONTINUE:
             return decision

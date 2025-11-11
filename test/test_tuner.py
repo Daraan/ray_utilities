@@ -1512,6 +1512,28 @@ class PBTQuantileNaNTest(unittest.TestCase):
                 self.assertEqual(abs(min_ordered_results[-1]), 10)
 
 
+class MockPBTTrialState:
+    def __init__(
+        self,
+        last_score,
+        last_checkpoint=None,
+        last_perturbation_time=0,
+        last_train_time=900,
+        last_result=None,
+        last_training_iteration=1,
+        current_env_steps=900,
+        last_update_timestamp=None,
+    ):
+        self.last_score = last_score
+        self.last_checkpoint = last_checkpoint
+        self.last_perturbation_time = last_perturbation_time
+        self.last_train_time = last_train_time
+        self.last_result = last_result if last_result is not None else {"reward": last_score, TRAINING_ITERATION: 1}
+        self.last_training_iteration = last_training_iteration
+        self.current_env_steps = current_env_steps
+        self.last_update_timestamp = last_update_timestamp
+
+
 class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
     """Tests for handling slow and bad performing trials in synchronous PBT mode."""
 
@@ -1546,16 +1568,16 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
             trial.status = Trial.RUNNING
             trial.config = {"lr": 0.001}
 
-            state = cast("_PBTTrialState2", MagicMock())
-            state.last_score = 50 + i * 5  # Scores from 50 to 145
-            state.last_checkpoint = None
-            state.last_perturbation_time = 0
-            state.last_train_time = 900  # Just before perturbation interval
-            state.last_result = {"reward": state.last_score, TRAINING_ITERATION: 1}
-            state.last_training_iteration = 1
-            state.current_env_steps = 900
-            # Set all trials to have recent timestamps by default
-            state.last_update_timestamp = current_time
+            state = MockPBTTrialState(
+                last_score=50 + i * 5,
+                last_checkpoint=None,
+                last_perturbation_time=0,
+                last_train_time=900,
+                last_result={"reward": 50 + i * 5, TRAINING_ITERATION: 1},
+                last_training_iteration=1,
+                current_env_steps=900,
+                last_update_timestamp=current_time,
+            )
 
             self.trials.append(trial)
             trial.run_metadata = MagicMock()
@@ -1563,7 +1585,7 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
             trial.experiment_tag = f"testing_{i}"
             trial.local_experiment_path = "./outputs/experiments/TESTING"
             self.scheduler.on_trial_add(self.mock_controller, trial)
-            self.scheduler._trial_state[trial] = state
+            self.scheduler._trial_state[trial] = cast("_PBTTrialState2", state)
 
         self.scheduler._next_perturbation_sync = 1000
 

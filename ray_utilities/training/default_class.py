@@ -838,7 +838,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             try:
                 if max_iterations >= 16:
                     _logger.info(
-                        "Training for max_iterations=%s (leftover %d)with %s steps per iteration (buffered).",
+                        "Training for max_iterations=%s (leftover %d) with %s steps per iteration (buffered).",
                         max_iterations,
                         self._buffer_steps_left,
                         self.algorithm_config.train_batch_size_per_learner,
@@ -846,15 +846,16 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 # Tune can handle multiple results in a list
                 return self.train_buffered(
                     buffer_time_s=min(300, max(60, max_iterations * 30)), max_buffer_length=max_iterations
-                )
+                )  # pyright: ignore[reportReturnType]
             finally:
                 self._during_buffered_training = False
                 left_from_last_time = self._buffer_steps_left
                 self._buffer_steps_left = max(0, buffer_goal - self.iteration)
                 if self.iteration < buffer_goal:
-                    _logger.important_info(
+                    _logger.info(
                         "Did not finish buffered training. Stopped at iteration %d instead of %d "
-                        "Only trained %d/%d buffered iterations with step size %d - %d iterations leftover from last buffered training. "
+                        "Only trained %d/%d buffered iterations with step size %d - "
+                        "%d iterations leftover from last buffered training. "
                         "Likely timed out. Will adjust next buffered training to match goal.",
                         self.iteration,
                         buffer_goal,

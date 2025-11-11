@@ -47,7 +47,9 @@ def get_parser() -> argparse.ArgumentParser:
     upload_parser = subparsers.add_parser("upload", help="Upload WandB logs for a run.")
     add_common_arguments(upload_parser)
     upload_parser.add_argument("--no-monitor", action="store_true", help="Do not start the monitor thread.")
-    upload_parser.add_argument("--first-verify", action="store_true", help="Do not start the monitor thread.")
+    upload_parser.add_argument(
+        "--first-verify", action="store_true", help="Perform verification before uploading files."
+    )
 
     # Verify subparser
     verify_parser = subparsers.add_parser("verify", help="Verify WandB run without uploading files.")
@@ -92,7 +94,7 @@ if __name__ == "__main__":
             not (isinstance(run, RunNotFound) or isinstance(failure, Exception) or any(not f.minor for f in failure))
             for run, failure in failures.items()
         )
-        sys.exit(success)
+        sys.exit(0 if success else 1)
     try:
         experiment_dir = Path(args.experiment_path)
         if args.experiment_key:

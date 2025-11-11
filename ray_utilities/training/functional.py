@@ -282,11 +282,6 @@ def training_step(
     # Reduce to key-metrics
     metrics: TrainableReturnData | LogMetricsDict = {}  # type: ignore[assignment]
     metrics = create_log_metrics(result, discrete_eval=discrete_eval, log_stats=log_stats)
-    if "effective_train_batch_size" not in metrics:
-        logger.warning(
-            "effective_train_batch_size not in metrics, cannot log it in training_step. Trial info:", algo._trial_info
-        )
-        breakpoint()
 
     # Possibly use if train.get_context().get_local/global_rank() == 0 to save videos
     # Unknown if should save video here and clean from metrics or save in a callback later is faster.

@@ -133,11 +133,11 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, JsonLog
         # XXX DEBUG
         if "effective_train_batch_size" not in result:
             logger.warning(
-                "effective_train_batch_size not in result metrics, cannot log it in AdvJsonLoggerCallback. Actor IP %s on node IP %s",
+                "effective_train_batch_size not in result metrics, "
+                "cannot log it in AdvJsonLoggerCallback. Actor IP %s on node IP %s",
                 trial.get_ray_actor_ip(),
                 trial.node_ip,
             )
-            breakpoint()
         try:
             super().log_trial_result(
                 iteration,
