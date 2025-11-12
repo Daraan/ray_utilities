@@ -153,14 +153,14 @@ def _patch_learner_config_with_param_space(
         object.__setattr__(config, "learner_config_dict", current_config_dict)
     if current_config_dict:
         args["__overwritten_keys__"]["learner_config_dict"] = current_config_dict
-    matching_keys_left = set(current_config_dict.keys()) - checked_keys
+    matching_keys_left = set(current_config_dict.keys()).intersection(hparams.keys() - checked_keys)
     if matching_keys_left:
         ImportantLogger.important_info(
             logger, "Found matching keys in hparams not applied to learner_config_dict: %s", matching_keys_left
         )
 
 
-def _patch_with_param_space(
+def _patch_config_with_param_space(
     args: dict[str, Any],
     config: _AlgorithmConfigT,
     *,
@@ -211,7 +211,7 @@ def _patch_with_param_space(
 
     for key in same_keys:
         args[key] = hparams[key]
-        if config_inplace:
+        if config_inplace and hasattr(config, key):
             object.__setattr__(config, key, hparams[key])
         args["__overwritten_keys__"][key] = hparams[key]
     if not args["__overwritten_keys__"]:
@@ -219,10 +219,109 @@ def _patch_with_param_space(
     elif not config_inplace:
         is_frozen = config._is_frozen
         config = cast("_AlgorithmConfigT", config.copy(copy_frozen=False))
+        # NOTE: This might set attributes that to no belong to the config
         config.update_from_dict(args["__overwritten_keys__"])
         if is_frozen:
             config.freeze()
     assert config.minibatch_size or 0 <= config.train_batch_size_per_learner
+    return args, config
+
+
+def _post_patch_config_with_param_space(
+    args: dict[str, Any], config: AlgorithmConfig, env_seed: int | Sequence[int] | _NOT_FOUND | None
+) -> None:
+    """
+    In-place post processing after patching config with param space.
+
+    Should update important attributes based on the updated args
+    """
+    minibatch_scale = args.get("minibatch_scale", args.get("cli_args", {}).get("minibatch_scale", None))
+    if minibatch_scale is not None:
+        new_batch_size = int(config.train_batch_size_per_learner * minibatch_scale)
+        if config.minibatch_size != new_batch_size:
+            warn_about_larger_minibatch_size(
+                minibatch_size=new_batch_size,
+                train_batch_size_per_learner=config.train_batch_size_per_learner,
+                note_adjustment=True,
+            )
+            logger.info(
+                "Adjusting minibatch_size %d -> %d based on minibatch_scale %f",
+                config.minibatch_size,
+                new_batch_size,
+                minibatch_scale,
+            )
+            args["minibatch_size"] = new_batch_size
+            object.__setattr__(config, "minibatch_size", new_batch_size)
+    # Change learner class if needed
+    if args["accumulate_gradients_every"] > 1 or args["dynamic_batch"]:
+        # import lazy as currently not used elsewhere
+        from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
+            PPOTorchLearnerWithGradientAccumulation,
+        )
+
+        learner_class = PPOTorchLearnerWithGradientAccumulation
+        if not issubclass(config.learner_class, learner_class):
+            # need to account for mixer classes - take bases expect last
+            # TODO: This is not 100% save better add correct learner class if accumulate_gradients is a tune parameter in Setup
+            logger.info("Changing learner class to %s", learner_class)
+            try:
+                config.learners(
+                    learner_class=mix_learners(  # pyright: ignore[reportCallIssue]
+                        [*config.learner_class.__bases__[:1], learner_class]
+                    )
+                )
+            except TypeError:
+                # Deprecated keyword
+                config.training(
+                    learner_class=mix_learners(  # pyright: ignore[reportCallIssue]
+                        [*config.learner_class.__bases__[:1], learner_class]
+                    )  # pyright: ignore[reportCallIssue]
+                )
+    # Seeded environments - sequential seeds have to be set here, env_seed comes from Tuner
+    if args["env_seeding_strategy"] == "sequential":
+        # Warn if a seed is set but no env_seed is present
+        if (env_seed is None or env_seed is _NOT_FOUND) and "cli_args" in args and args["cli_args"]["seed"] is not None:
+            logger.warning(
+                "cli_args has a seed(%d) set but env_seed is None, sequential seeding will not work. "
+                "Assure that env_seed is passed as a parameter when creating the Trainable, "
+                "e.g. sample env_seed by tune. Falling back to cli_args seed and env_seeding_strategy='same'.",
+                args["cli_args"]["seed"],
+            )
+            env_seed = args["cli_args"]["seed"]
+        elif env_seed is _NOT_FOUND:
+            env_seed = None
+        assert env_seed is not _NOT_FOUND
+        seed_environments_for_config(config, env_seed)
+    elif args["env_seeding_strategy"] == "same":
+        # prefer seed coming from tuner
+        seed_environments_for_config(config, env_seed if env_seed is not _NOT_FOUND else args["seed"])
+    elif args["env_seeding_strategy"] == "constant":  # use default seed of class
+        seed_environments_for_config(config, SeedEnvsCallback.env_seed)
+    else:  # random
+        seed_environments_for_config(config, None)
+
+    # endregion seeding
+
+
+def patch_config_with_param_space(
+    args: dict[str, Any],
+    config: _AlgorithmConfigT,
+    *,
+    hparams: dict[str, Any],
+    config_inplace: bool = False,
+) -> tuple[dict[str, Any], _AlgorithmConfigT]:
+    """Patch args and config with hyperparameters from param space.
+
+    Args:
+        args: Arguments dictionary to patch.
+        config: AlgorithmConfig to patch.
+        hparams: Hyperparameters from param space.
+        config_inplace: Whether to modify the config in place. Defaults to False.
+    Returns:
+        Tuple of patched args and config.
+    """
+    args, config = _patch_config_with_param_space(args, config, hparams=hparams, config_inplace=config_inplace)
+    _post_patch_config_with_param_space(args, config, env_seed=hparams.get("env_seed", _NOT_FOUND))
     return args, config
 
 
@@ -264,55 +363,7 @@ def get_args_and_config(
         raise ValueError("Either setup or setup_class must be provided.")
     if model_config is not None:
         patch_model_config(config, model_config)
-    args, config = _patch_with_param_space(args, config, hparams=hparams)
-    # Change learner class if needed
-    if args["accumulate_gradients_every"] > 1 or args["dynamic_batch"]:
-        # import lazy as currently not used elsewhere
-        from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
-            PPOTorchLearnerWithGradientAccumulation,
-        )
-
-        learner_class = PPOTorchLearnerWithGradientAccumulation
-        if not issubclass(config.learner_class, learner_class):
-            # need to account for mixer classes - take bases expect last
-            # TODO: This is not 100% save better add correct learner class if accumulate_gradients is a tune parameter in Setup
-            try:
-                config.learners(learner_class=mix_learners([*config.learner_class.__bases__[:1], learner_class]))  # pyright: ignore[reportCallIssue]
-            except TypeError:
-                # Deprecated keyword
-                config.training(
-                    learner_class=mix_learners([*config.learner_class.__bases__[:1], learner_class])  # pyright: ignore[reportCallIssue]
-                )
-
-    env_seed: int | Sequence[int] | None = hparams.get("env_seed", _NOT_FOUND)
-    # Seeded environments - sequential seeds have to be set here, env_seed comes from Tuner
-    if args["env_seeding_strategy"] == "sequential":
-        # Warn if a seed is set but no env_seed is present
-        if (
-            (env_seed is None or env_seed is _NOT_FOUND)
-            and "cli_args" in hparams
-            and hparams["cli_args"]["seed"] is not None
-        ):
-            logger.warning(
-                "cli_args has a seed(%d) set but env_seed is None, sequential seeding will not work. "
-                "Assure that env_seed is passed as a parameter when creating the Trainable, "
-                "e.g. sample env_seed by tune. Falling back to cli_args seed and env_seeding_strategy='same'.",
-                hparams["cli_args"]["seed"],
-            )
-            env_seed = hparams["cli_args"]["seed"]
-        elif env_seed is _NOT_FOUND:
-            env_seed = None
-        assert env_seed is not _NOT_FOUND
-        seed_environments_for_config(config, env_seed)
-    elif args["env_seeding_strategy"] == "same":
-        # prefer seed coming from tuner
-        seed_environments_for_config(config, env_seed if env_seed is not _NOT_FOUND else args["seed"])
-    elif args["env_seeding_strategy"] == "constant":  # use default seed of class
-        seed_environments_for_config(config, SeedEnvsCallback.env_seed)
-    else:  # random
-        seed_environments_for_config(config, None)
-
-    # endregion seeding
+    args, config = patch_config_with_param_space(args, config, hparams=hparams)
 
     return args, config
 

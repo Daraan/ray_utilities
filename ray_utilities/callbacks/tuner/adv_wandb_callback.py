@@ -1009,7 +1009,7 @@ class AdvWandbLoggerCallback(
         elif "config" in result_clean:
             # Check if we have seen the config for the current trial_id, log only at the steps
             # where we actually change it. Note this creates a metric called config/...
-            result_clean.pop("cli_args", None)  # we never modify cli_args which should be run.config
+            result_clean["config"].pop("cli_args", None)  # we never modify cli_args which should be run.config
             config_hash = hash(deep_freeze(result_clean["config"]))
             # Maybe faster:
             # import hashlib

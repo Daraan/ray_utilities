@@ -62,6 +62,7 @@ from ray_utilities.training.helpers import (
     get_algorithm_callback_states,
     get_args_and_config,
     get_total_steps,
+    patch_config_with_param_space,
     patch_model_config,
     rebuild_learner_group,
     set_algorithm_callback_states,
@@ -551,7 +552,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         """
         # NOTE: Called during __init__
         # Setup algo, config, args, etc.
-        breakpoint()
         if not hasattr(self, "setup_class"):
             raise ValueError(
                 f"setup_class is not set on {self}. "
@@ -1017,6 +1017,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # if new_algo_config is evaluation config cannot get another evaluation config
             and eval_config.num_env_runners != self.algorithm.eval_env_runner_group.num_remote_env_runners()
         )
+        # TODO: Check if learners need update, i.e. change in learner class
+
         if env_runners_need_update:
             if self.algorithm.env_runner_group:
                 # end old
@@ -1114,9 +1116,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         if PERTURBED_HPARAMS in self.config:
             perturbed: dict[str, Any] = {k: self.config[k] for k in self.config[PERTURBED_HPARAMS]}
             # assert perturbed == self.config[PERTURBED_HPARAMS]
-            setup_config = setup_config.update_from_dict(perturbed)
+            _, setup_config = patch_config_with_param_space(
+                self.config.get("cli_args", {}).copy() | perturbed, setup_config, hparams=self.config | perturbed
+            )
             # Remove __perturbed__ from config so that a future checkpoint hparams does not see them as highest priority
             self._perturbed_config: Optional[dict[str, Any]] = self.config.pop(PERTURBED_HPARAMS)
+            self._setup.config = setup_config  # pyright: ignore[reportAttributeAccessIssue]
+            # NOTE: in set_state the config might be recreated / changed depending on state
         else:
             perturbed = {}
             self._perturbed_config = None
@@ -1247,7 +1253,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             keys_to_process.remove("state")
             # TODO: sync env runner states?
             # FIXME: reloaded might not have same amount of env_runners if created with a different amount
-
             assert len(keys_to_process) == 0, f"Not all keys were processed during load_checkpoint: {keys_to_process}"
         elif checkpoint is not None:
             components = {c[0] for c in self.get_checkpointable_components()}
@@ -1534,8 +1539,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             algorithm_state_dict["_train_batch_size_per_learner"] = algorithm_state_dict.pop(
                 "train_batch_size_per_learner"
             )
+        ATTR_NOT_FOUND = object()
         for k in algorithm_state_dict.keys():
-            ATTR_NOT_FOUND = object()
             cls_attr = getattr(algorithm_state_dict["class"], k, ATTR_NOT_FOUND)
             if cls_attr is ATTR_NOT_FOUND:  # instance attribute
                 continue
@@ -1551,6 +1556,12 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             new_algo_config = AlgorithmConfig.from_state(algorithm_state_dict)
         else:  # take setup from reset_config
             new_algo_config = self._setup.config
+        patch_config_with_param_space(
+            self.config.get("cli_args", self._args_during_setup) | (self._perturbed_config or {}),
+            new_algo_config,
+            hparams=self.config | (self._perturbed_config or {}),
+            config_inplace=True,
+        )
         if type(new_algo_config) is not type(self.algorithm_config):
             _logger.warning(
                 "Restored config class %s differs from expected class %s", type(new_algo_config), type(self.config)
