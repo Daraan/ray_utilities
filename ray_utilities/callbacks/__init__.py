@@ -39,6 +39,7 @@ LOG_IGNORE_ARGS = (
     "log_stats",
     "log_level",
     "pid",
+    "offline_loggers",
 )
 """
 Arguments that control logging and execution behavior rather than experiment hyperparameters.

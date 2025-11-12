@@ -551,6 +551,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         """
         # NOTE: Called during __init__
         # Setup algo, config, args, etc.
+        breakpoint()
         if not hasattr(self, "setup_class"):
             raise ValueError(
                 f"setup_class is not set on {self}. "
