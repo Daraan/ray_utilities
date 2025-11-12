@@ -1853,7 +1853,7 @@ class ExperimentSetupBase(
         # Need to restore command subparser
         try:
             new.args._process_subparsers()
-        except:
+        except (SystemExit, Exception):
             logger.exception("Could not restore command subparser")
         else:
             # NOTE MIGHT NOT HAVE KEYS!

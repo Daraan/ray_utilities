@@ -156,7 +156,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
         self.assertEqual(result["current_step"], 64)
 
     @patch_args("--minibatch_scale", "1.0", "--batch_size", "256", "--minibatch_size", "64")
-    def test_minibatch_trainable(self):
+    def test_minibatch_scale_trainable(self):
         """Test that minibatch_scale is applied at trainable level"""
         with PPOSetup() as setup:
             # check if override works
