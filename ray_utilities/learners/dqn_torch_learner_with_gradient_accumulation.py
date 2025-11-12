@@ -100,14 +100,12 @@ class DQNTorchLearnerWithGradientAccumulation(DQNTorchLearner):
             self._last_gradient_update_step = self._step_count
             _logger.debug("Updating gradients for step %s", self._step_count)
 
-            # Scale gradients by the accumulation factor
+            # Only scale and copy gradients when actually applying them
             if accumulate_gradients_every != 1:
-                grads = {
-                    pid: p.grad / accumulate_gradients_every if p.grad is not None else p.grad
-                    for pid, p in self._params.items()
-                }
-            else:  # No accumulation
-                grads = {pid: p.grad for pid, p in self._params.items()}
+                for p in self._params.values():
+                    if p.grad is not None:
+                        p.grad.div_(accumulate_gradients_every)
+            grads = {pid: p.grad for pid, p in self._params.items()}
             return grads  # pyright: ignore[reportReturnType]  # contains None
 
         _logger.debug(
