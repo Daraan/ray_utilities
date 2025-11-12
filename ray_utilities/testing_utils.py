@@ -509,6 +509,9 @@ class DisableLoggers(unittest.TestCase):
         super().tearDown()
 
 
+ALLOW_TEST_WITH_ACTIVE_CLUSTER = True
+
+
 class InitRay(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -517,13 +520,24 @@ class InitRay(unittest.TestCase):
         if not ray.is_initialized():
             # NOTE: might have already been started (in surprising ways) by another test
             # e.g. EnvRunnerGroup creation. In that case runtime_env is NOT applied!
-            ray.init(
-                include_dashboard=False,
-                ignore_reinit_error=True,
-                num_cpus=cls._num_cpus,
-                object_store_memory=1024**3 // 2,  # 512MB
-                runtime_env=get_runtime_env(),
-            )
+            try:
+                ray.init(
+                    address="127.0.0.1:8266",
+                    include_dashboard=False,
+                    ignore_reinit_error=True,
+                    num_cpus=cls._num_cpus,
+                    object_store_memory=1024**3 // 2,  # 512MB
+                    runtime_env=get_runtime_env(),
+                )
+            except ValueError as e:
+                if "connecting to an existing cluster" in str(e) and ALLOW_TEST_WITH_ACTIVE_CLUSTER:
+                    ray.init(
+                        ignore_reinit_error=True,
+                        runtime_env=get_runtime_env(),
+                    )
+                else:
+                    raise
+
         super().setUpClass()
 
     @classmethod
@@ -1211,9 +1225,12 @@ class TestHelpers(unittest.TestCase):
             self.compare_configs(
                 (algo.env_runner.config.to_dict()),
                 algo_config_dict,  # pyright: ignore[reportOptionalMemberAccess]
+                ignore=exclude,
             )
             restored_env_runner_config_dict = algo_restored.env_runner.config.to_dict()
-            self.compare_configs(restored_env_runner_config_dict, algo_restored_config_dict)
+            for excluded in exclude:
+                restored_env_runner_config_dict.pop(excluded, None)
+            self.compare_configs(restored_env_runner_config_dict, algo_restored_config_dict, ignore=exclude)
             if ignore_overrides_key:
                 assertCleanDictEqual(
                     {k: v for k, v in restored_env_runner_config_dict.items() if k != "_restored_overrides"},
@@ -1232,7 +1249,7 @@ class TestHelpers(unittest.TestCase):
                 algo_config_dict,
                 ("Local config" if config is local_config else "Remote config")
                 + f" {i}/{len(remote_configs)} does not match algo config",
-                ignore=["evaluation_interval"],  # DynamicEvalCallback only modifies local
+                ignore=exclude,
             )
         remote_configs_restored = algo_restored.env_runner_group.foreach_env_runner(
             lambda r: r.config.to_dict(), local_env_runner=False
@@ -1247,12 +1264,14 @@ class TestHelpers(unittest.TestCase):
                 algo_restored_config_dict,
                 ("Local config" if config is local_config_restored else "Remote config")
                 + f" {i}/{len(remote_configs_restored) + 1} does not match restored config",
+                ignore=exclude,
             )
             self.compare_configs(
                 config,
                 algo_config_dict,
                 ("Local config" if config is local_config_restored else "Remote config")
                 + f" {i}/{len(remote_configs_restored) + 1} does not match algo config",
+                ignore=exclude,
             )
 
     def compare_configs(
@@ -1769,7 +1788,7 @@ class TestHelpers(unittest.TestCase):
                     trainable.algorithm,
                     trainable2.algorithm,
                     ignore_overrides_key=ignore_restored_overrides_key,
-                    # Ignore evaluation_interval that is set by DynamicEvalCallback, but not needed on EnvRunners
+                    # Ignore evaluation_interval that is set by DynamicEvalCallback, but not synced to EnvRunners
                     exclude=("evaluation_interval",),
                 )
 

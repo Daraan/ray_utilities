@@ -13,6 +13,7 @@ import ray
 from packaging.version import Version
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
+from ray.rllib.callbacks.callbacks import RLlibCallback
 from ray.rllib.core import COMPONENT_LEARNER, COMPONENT_METRICS_LOGGER, COMPONENT_RL_MODULE, DEFAULT_MODULE_ID
 from ray.rllib.env import INPUT_ENV_SPACES
 from ray.rllib.utils.metrics import (
@@ -36,7 +37,6 @@ from ray_utilities.warn import (
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
-    from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
     from ray.rllib.env.env_runner import EnvRunner
     from ray.rllib.env.multi_agent_env_runner import MultiAgentEnvRunner
@@ -769,4 +769,56 @@ def rebuild_learner_group(algorithm: Algorithm) -> None:
             multi_rl_module_ckpt_dir=multi_rl_module_ckpt_dir,
             modules_to_load=modules_to_load,
             rl_module_ckpt_dirs=rl_module_ckpt_dirs,
+        )
+
+
+def get_algorithm_callback_states(algorithm: Algorithm) -> dict[str, dict[str, Any]]:
+    """
+    Returns the states of all algorithm callbacks as a dictionary.
+
+    Args:
+        algorithm: The algorithm to get the callback states from.
+    Returns:
+        A dictionary mapping callback names to their state dictionaries.
+    """
+    if not algorithm.callbacks:
+        return {}
+    algorithm_callback_states = {}
+    # case single class
+    if isinstance(algorithm.callbacks, RLlibCallback) and hasattr(algorithm.callbacks, "get_state"):
+        algorithm_callback_states[type(algorithm.callbacks).__name__] = algorithm.callbacks.get_state()  # pyright: ignore[reportAttributeAccessIssue]
+    elif isinstance(algorithm.callbacks, (list, tuple)):
+        for callback in algorithm.callbacks:
+            if hasattr(callback, "get_state"):
+                algorithm_callback_states[type(callback).__name__] = callback.get_state()  # pyright: ignore[reportAttributeAccessIssue]
+    return algorithm_callback_states
+
+
+def set_algorithm_callback_states(algorithm: Algorithm, callback_states: dict[str, dict[str, Any]]) -> None:
+    """
+    Sets the states of all algorithm callbacks from the given state dictionary.
+
+    Args:
+        algorithm: The algorithm to set the callback states for.
+        callback_states: A dictionary mapping callback names to their state dictionaries.
+    """
+    if not algorithm.callbacks:
+        return
+    # case single class
+    names = set(callback_states.keys())
+    if isinstance(algorithm.callbacks, RLlibCallback) and hasattr(algorithm.callbacks, "set_state"):
+        callback_name = type(algorithm.callbacks).__name__
+        if callback_name in callback_states:
+            algorithm.callbacks.set_state(callback_states[callback_name])  # pyright: ignore[reportAttributeAccessIssue]
+            names.discard(callback_name)
+    elif isinstance(algorithm.callbacks, (list, tuple)):
+        for callback in algorithm.callbacks:
+            callback_name = type(callback).__name__
+            if callback_name in callback_states and hasattr(callback, "set_state"):
+                callback.set_state(callback_states[callback_name])  # pyright: ignore[reportAttributeAccessIssue]
+                names.discard(callback_name)
+    if names:
+        logger.warning(
+            "Could not set states for callbacks with names: %s. They are not present in the algorithm callbacks.",
+            names,
         )

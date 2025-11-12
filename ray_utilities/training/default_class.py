@@ -59,10 +59,12 @@ from ray_utilities.training.functional import training_step
 from ray_utilities.training.helpers import (
     create_running_reward_updater,
     episode_iterator,
+    get_algorithm_callback_states,
     get_args_and_config,
     get_total_steps,
     patch_model_config,
     rebuild_learner_group,
+    set_algorithm_callback_states,
     setup_trainable,
     sync_env_runner_states_after_reload,
 )
@@ -155,12 +157,19 @@ class TrainableStateDict(TypedDict):
 
     algorithm: NotRequired[StateDict]  # component; can be ignored
     """Algorithm state (optional since algorithm may handle its own checkpointing)."""
+
     algorithm_config: StateDict
     """Serialized algorithm configuration."""
+
     algorithm_overrides: Optional[dict[str, Any]]
     """Configuration overrides applied to the algorithm."""
+
+    algorithm_callback_states: NotRequired[dict[str, Any]]
+    """States of algorithm callbacks."""
+
     iteration: int
     """Current training iteration number."""
+
     pbar_state: RayTqdmState | TqdmState | RangeState
     """Progress bar state for restoration."""
 
@@ -1419,6 +1428,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 if isinstance(self._algorithm_overrides, AlgorithmConfig)
                 else self._algorithm_overrides
             ),
+            "algorithm_callback_states": get_algorithm_callback_states(self.algorithm),
             "iteration": self._iteration,
             "pbar_state": pbar_state,
             "reward_updaters": reward_updaters_state,
@@ -1583,17 +1593,19 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # Update env_runners after restore
         # check if config has been restored correctly - TODO: Remove after more testing
         if self._algorithm:
+            # XXX Remove
             from ray_utilities.testing_utils import TestHelpers
 
-            config1_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm_config.to_dict())
-            config2_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm.env_runner.config.to_dict())
-            if self._algorithm.env_runner and (config1_dict != config2_dict):
-                _logger.info(  # Sync below will make configs match
-                    "Updating env_runner config after restore, did not match after set_state",
-                )
-                self._algorithm.env_runner.config = self.algorithm_config.copy(copy_frozen=True)
-                if self._algorithm.learner_group is not None and self._algorithm.learner_group.is_local:
-                    self._algorithm.learner_group._learner.config = self.algorithm_config.copy(copy_frozen=True)  # pyright: ignore[reportOptionalMemberAccess]
+            if self._algorithm.env_runner:
+                config1_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm_config.to_dict())
+                config2_dict = TestHelpers.filter_incompatible_remote_config(self.algorithm.env_runner.config.to_dict())
+                if config1_dict != config2_dict:
+                    _logger.info(  # Sync below will make configs match
+                        "Updating env_runner config after restore, did not match after set_state",
+                    )
+                    self._algorithm.env_runner.config = self.algorithm_config.copy(copy_frozen=True)
+                    if self._algorithm.learner_group is not None and self._algorithm.learner_group.is_local:
+                        self._algorithm.learner_group._learner.config = self.algorithm_config.copy(copy_frozen=True)  # pyright: ignore[reportOptionalMemberAccess]
         if self._algorithm is not None:  # Otherwise algorithm will be created later
             self._rebuild_algorithm_if_necessary(new_algo_config)
             sync_env_runner_states_after_reload(self.algorithm)  # NEW, Test, sync states here
@@ -1609,6 +1621,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     ):
                         last_value = stat.values[-1]
                         stat._prev_merge_values = defaultdict(lambda val=last_value: val)  # pyright: ignore[reportAttributeAccessIssue]
+            # Restore callback states
+            set_algorithm_callback_states(self.algorithm, state.get("algorithm_callback_states", {}))
+            keys_to_process.remove("algorithm_callback_states")
+        elif state.get("algorithm_callback_states", None):
+            _logger.warning("Cannot restore algorithm callback states as algorithm is not set up during set_state")
         keys_to_process.remove("algorithm_config")
         keys_to_process.remove("algorithm_overrides")
         # endregion
