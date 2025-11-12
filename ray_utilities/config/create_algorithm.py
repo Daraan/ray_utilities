@@ -233,6 +233,14 @@ def create_algorithm_config(
         num_gpus_per_learner=1 if args["gpu"] else 0,  # Can also use fraction to share GPU
     )
     config.framework(framework)
+    if learner_class is None:
+        if args["accumulate_gradients_every"] > 1 or args["dynamic_batch"]:
+            # import lazy as currently not used elsewhere
+            from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
+                PPOTorchLearnerWithGradientAccumulation,
+            )
+
+            learner_class = PPOTorchLearnerWithGradientAccumulation
     learner_mix: list[type[Learner]] = [learner_class or config.learner_class]
     if not args.get("keep_masked_samples", False):
         from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner  # noqa: PLC0415

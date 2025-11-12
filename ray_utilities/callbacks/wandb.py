@@ -815,7 +815,10 @@ class WandbUploaderMixin(UploadHelperMixin):
                     # Check header
                     header = [p.strip() for p in lines[0].split(",")]
                     if len(lines) < 2:
-                        logger.error("No fork relationship data found in info file %s - assuming an error happened.", fork_info_file)
+                        logger.error(
+                            "No fork relationship data found in info file %s - assuming an error happened.",
+                            fork_info_file,
+                        )
                         return {}
                     # moved parent_id added parent_fork_id at position 1
                     assert tuple(header[:2]) == tuple(FORK_DATA_KEYS[:2]) or (

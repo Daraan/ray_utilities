@@ -27,6 +27,7 @@ from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallba
 from ray_utilities.config import seed_environments_for_config
 from ray_utilities.constants import ENVIRONMENT_RESULTS, RAY_VERSION, SEED, SEEDS
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, calculate_steps
+from ray_utilities.learners import mix_learners
 from ray_utilities.misc import AutoInt
 from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.warn import (
@@ -114,6 +115,51 @@ def patch_model_config(config: AlgorithmConfig, model_config: dict[str, Any] | D
             config._rl_module_spec.model_config = dataclasses.asdict(config._rl_module_spec.model_config) | model_config
 
 
+_learner_config_dict_update_keys = {
+    "dynamic_buffer": "dynamic_buffer",
+    "dynamic_batch": "dynamic_batch",
+    "total_steps": "total_steps",
+    "remove_masked_samples": ("not", "keep_masked_samples"),
+    "min_dynamic_buffer_size": "min_step_size",
+    "max_dynamic_buffer_size": "max_step_size",
+    "accumulate_gradients_every": "accumulate_gradients_every",
+}
+
+
+def _patch_learner_config_with_param_space(
+    args: dict[str, Any],
+    config: AlgorithmConfig,
+    *,
+    hparams: dict[str, Any],
+    config_inplace: bool = False,
+):
+    current_config_dict = config.learner_config_dict.copy() or {}
+    checked_keys = set()
+    for dest_key, source_key in _learner_config_dict_update_keys.items():
+        checked_keys.add(source_key if isinstance(source_key, str) else source_key[1])
+        if isinstance(source_key, tuple):
+            # special handling for negation
+            if source_key[0] == "not":
+                value = hparams.get(source_key[1], _NOT_FOUND)
+                if value is not _NOT_FOUND:
+                    value = not value
+            else:
+                raise ValueError(f"Unknown special handling for learner_config_dict key {source_key}")
+        else:
+            value = hparams.get(source_key, _NOT_FOUND)
+        if value is not _NOT_FOUND:
+            current_config_dict[dest_key] = value
+    if config_inplace:
+        object.__setattr__(config, "learner_config_dict", current_config_dict)
+    if current_config_dict:
+        args["__overwritten_keys__"]["learner_config_dict"] = current_config_dict
+    matching_keys_left = set(hparams.keys()) - checked_keys
+    if matching_keys_left:
+        ImportantLogger.important_info(
+            logger, "Found matching keys in hparams not applied to learner_config_dict: %s", matching_keys_left
+        )
+
+
 def _patch_with_param_space(
     args: dict[str, Any],
     config: _AlgorithmConfigT,
@@ -125,8 +171,8 @@ def _patch_with_param_space(
     args["__overwritten_keys__"] = {}
     if "model_config" in hparams:
         patch_model_config(config, hparams["model_config"])
-    if not same_keys:
-        logger.debug("No keys to patch in args with hparams: %s", hparams)
+    _patch_learner_config_with_param_space(config=config, args=args, hparams=hparams, config_inplace=config_inplace)
+    if not same_keys and (not args["__overwritten_keys__"] or config_inplace):
         return args, config
     msg_dict = {k: f"{args[k]} -> {hparams[k]}" for k in same_keys}
 
@@ -162,12 +208,15 @@ def _patch_with_param_space(
             args["__overwritten_keys__"]["minibatch_size"] = new_batch_size
 
     logger.info("Patching args with hparams: %s", msg_dict)
+
     for key in same_keys:
         args[key] = hparams[key]
         if config_inplace:
             object.__setattr__(config, key, hparams[key])
         args["__overwritten_keys__"][key] = hparams[key]
-    if not config_inplace:
+    if not args["__overwritten_keys__"]:
+        logger.debug("No keys to patch in args with hparams: %s", hparams)
+    elif not config_inplace:
         is_frozen = config._is_frozen
         config = cast("_AlgorithmConfigT", config.copy(copy_frozen=False))
         config.update_from_dict(args["__overwritten_keys__"])
@@ -216,9 +265,24 @@ def get_args_and_config(
     if model_config is not None:
         patch_model_config(config, model_config)
     args, config = _patch_with_param_space(args, config, hparams=hparams)
-    # endregion
+    # Change learner class if needed
+    if args["accumulate_gradients_every"] > 1 or args["dynamic_batch"]:
+        # import lazy as currently not used elsewhere
+        from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
+            PPOTorchLearnerWithGradientAccumulation,
+        )
 
-    # region seeding
+        learner_class = PPOTorchLearnerWithGradientAccumulation
+        if not issubclass(config.learner_class, learner_class):
+            # need to account for mixer classes - take bases expect last
+            # TODO: This is not 100% save better add correct learner class if accumulate_gradients is a tune parameter in Setup
+            try:
+                config.learners(learner_class=mix_learners([*config.learner_class.__bases__[:1], learner_class]))  # pyright: ignore[reportCallIssue]
+            except TypeError:
+                # Deprecated keyword
+                config.training(
+                    learner_class=mix_learners([*config.learner_class.__bases__[:1], learner_class])  # pyright: ignore[reportCallIssue]
+                )
 
     env_seed: int | Sequence[int] | None = hparams.get("env_seed", _NOT_FOUND)
     # Seeded environments - sequential seeds have to be set here, env_seed comes from Tuner
@@ -408,7 +472,10 @@ def setup_trainable(
         elif checkpoint_loader := (
             setup or setup_class
         ):  # TODO: possibly do not load algorithm and let Trainable handle it (should be an option)
-            algo = checkpoint_loader.algorithm_from_checkpoint(args["from_checkpoint"], config=config)
+            algo = checkpoint_loader.algorithm_from_checkpoint(
+                args["from_checkpoint"],
+                config=config,  # pyright: ignore[reportArgumentType]
+            )
             sync_env_runner_states_after_reload(algo)
             if config.algo_class is not None and not isinstance(algo, config.algo_class):
                 logger.warning(

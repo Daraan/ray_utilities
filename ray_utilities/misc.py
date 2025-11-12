@@ -315,27 +315,33 @@ def extend_trial_name(
                 if value is _NOT_FOUND:
                     _logger.warning("Key %s not found in trial config, skipping insertion into trial name.", key)
                     continue
-                start += f"_{key[1:-1]}={value}"
+                addition = f"{key[1:-1]}={value}"
             else:
-                start += f"_{key}"
+                addition = key
+            if addition not in base:  # possibly already added as tag
+                start += f"_{addition}"
         for key in prepend:
             if _is_key(key):
                 value = trial.config.get(_format_key(key), _NOT_FOUND)
                 if value is _NOT_FOUND:
                     _logger.warning("Key %s not found in trial config, skipping prepending into trial name.", key)
                     continue
-                start = f"{key[1:-1]}={value}_" + start
+                addition = f"{key[1:-1]}={value}"
             else:
-                start = f"{key}_" + start
+                addition = key
+            if addition not in base:
+                start = f"{addition}_" + start
         for key in append:
             if _is_key(key):
                 value = trial.config.get(_format_key(key), _NOT_FOUND)
                 if value is _NOT_FOUND:
                     _logger.warning("Key %s not found in trial config, skipping appending into trial name.", key)
                     continue
-                end += f"_{key[1:-1]}={value}"
+                addition = f"{key[1:-1]}={value}"
             else:
-                end += f"_{key}"
+                addition = key
+            if addition not in base:
+                end += f"_{addition}"
         return start + "_id=" + end
 
     return extended_trial_name_creator

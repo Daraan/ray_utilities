@@ -95,7 +95,8 @@ def mix_learners(learners: Sequence[type[Learner | Any]]):
 
     See Also:
         :class:`_MixedLearnerMeta`: Metaclass used for mixed learner classes
-        :class:`ray_utilities.learners.leaner_with_debug_connector.LearnerWithDebugConnectors`: Example debugging learner mixin
+        :class:`ray_utilities.learners.leaner_with_debug_connector.LearnerWithDebugConnectors`:
+            Example debugging learner mixin
 
     """
     assert learners, "At least one learner class must be provided."

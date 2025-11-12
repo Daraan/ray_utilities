@@ -21,6 +21,7 @@ from ray.util.multiprocessing import Pool
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN, FORK_FROM, PERTURBED_HPARAMS
 from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
+from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import PPOTorchLearnerWithGradientAccumulation
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup, PPOSetup
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup
 from ray_utilities.testing_utils import (
@@ -407,6 +408,14 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
         self.assertEqual(trainable._total_steps["total_steps"], budget["total_steps"])  # evened default value
         self.assertEqual(trainable._setup.args.iterations, budget["total_iterations"])
         trainable.stop()
+
+    @mock_trainable_algorithm(mock_learner=False)
+    def test_learner_class_changed(self):
+        setup = PPOSetup()
+        trainable = setup.trainable_class({"accumulate_gradients_every": 2})
+        self.assertTrue(issubclass(trainable.algorithm_config.learner_class, PPOTorchLearnerWithGradientAccumulation))
+        trainable = setup.trainable_class({"accumulate_gradients_every": 1})
+        self.assertFalse(issubclass(trainable.algorithm_config.learner_class, PPOTorchLearnerWithGradientAccumulation))
 
 
 class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
