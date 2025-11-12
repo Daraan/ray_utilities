@@ -65,6 +65,7 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
         for algo in (algorithm, setup.trainable_class().algorithm_config.build_algo()):
             with self.subTest("setup.config" if algo is algorithm else "trainable.algorithm_config"):
                 apply_calls: list[_ApplyCall] = []
+                assert algo.learner_group is not None
                 learner: PPOTorchLearnerWithGradientAccumulation = algo.learner_group._learner  # pyright: ignore[reportAssignmentType, reportOptionalMemberAccess]
                 # Track gradient application calls
                 original_apply_gradients = learner.apply_gradients
@@ -73,6 +74,7 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
                 learner: PPOTorchLearnerWithGradientAccumulation = (
                     algo.learner_group._learner  # pyright: ignore[reportAssignmentType, reportOptionalMemberAccess]
                 )
+                assert algo.config is not None
                 self.assertEqual(
                     algo.config.learner_config_dict["accumulate_gradients_every"],  # pyright: ignore[reportOptionalMemberAccess]
                     2,
@@ -131,6 +133,7 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
         self.assertEqual(setup.config.learner_config_dict["accumulate_gradients_every"], 1)
         trainable = setup.trainable_class()
         self.assertTrue(is_algorithm_callback_added(trainable.algorithm_config, DynamicGradientAccumulation))
+        assert trainable.algorithm.learner_group is not None
         learner: PPOTorchLearnerWithGradientAccumulation = trainable.algorithm.learner_group._learner  # pyright: ignore[reportAssignmentType, reportOptionalMemberAccess]
         self.assertEqual(  # at start not accumulation, then 2, 4, ...
             learner.config.learner_config_dict["accumulate_gradients_every"],
@@ -281,8 +284,8 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
         Test that gradients are summed up during accumulation and applied correctly.
 
         NOTE:
-            When apply_gradients is called. The .grad attribute is replaced by grad / accumulate_gradients_every
-            and further proccess by post
+            When apply_gradients is called, the .grad attribute is replaced by grad / accumulate_gradients_every
+            via in-place division and further processed by postprocessing.
         """
         batch_size = 32
         accumulate_every = 2
@@ -323,16 +326,20 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
                 optim.zero_grad(set_to_none=True)
             for loss in loss_per_module.values():
                 loss.backward(retain_graph=True)
-            unaccumulated_grads.append(param_tensor.grad.clone())  # pyright: ignore[reportOptionalMemberAccess] # This is only accumulated for one step
+            unaccumulated_grads.append(
+                param_tensor.grad.clone()  # pyright: ignore[reportOptionalMemberAccess]
+            )  # pyright: ignore[reportOptionalMemberAccess] # This is only accumulated for one step
             for ref, grad in grads_backup.items():
                 learner._params[ref].grad = grad
             result = original_compute_gradients(loss_per_module, **kwargs)  # pyright: ignore[reportArgumentType]
-            # Grad should not be None here.
-            raw_gradients.append(param_tensor.grad.detach().clone())  # pyright: ignore[reportOptionalMemberAccess]
+            # After compute_gradients, grad has been accumulated and possibly divided (in-place)
+            assert param_tensor.grad is not None
+            raw_gradients.append(param_tensor.grad.detach().clone())
             # unaccumulated and raw_gradients (accumulated) should never match, except when set to None one step later
             with (
                 self.assertRaises(AssertionError, msg=f"Gradients matched at step {learner._step_count}")
-                if accumulate_every != 1 and learner._step_count % accumulate_every != 1  # pyright: ignore[reportUnnecessaryComparison]
+                if accumulate_every != 1  # pyright: ignore[reportUnnecessaryComparison]
+                and learner._step_count % accumulate_every != 1
                 else nullcontext()
             ):
                 torch.testing.assert_close(
@@ -340,7 +347,11 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
                 )
 
             # grad already divided:
-            updated_gradients.append({param_ref: result[param_ref].detach().clone()} if len(result) > 0 else {})  # pyright: ignore[reportAttributeAccessIssue]
+            updated_gradients.append(
+                {param_ref: result[param_ref].detach().clone()}  # pyright: ignore[reportAttributeAccessIssue]
+                if len(result) > 0
+                else {}
+            )
             return result
 
         learner.compute_gradients = mock_compute_gradients  # pyright: ignore[reportAttributeAccessIssue]
@@ -382,16 +393,20 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
 
         grad_step2 = unaccumulated_grads[1]  # grad is accumulated
 
-        # The gradient at step 2 should be the sum of gradients from step 1 and step 2, divided by accumulate_every
-        # To check summing, we accumulate manually
+        # With in-place division, raw_gradients[1] now contains the already-divided gradient
+        # So it should equal (grad_step1 + grad_step2) / accumulate_every
         manual_sum = grad_step1 + grad_step2
+        manual_mean = manual_sum / accumulate_every
+
         torch.testing.assert_close(
-            raw_gradients[1], manual_sum, msg="Raw accumulated gradient should be the sum of step gradients"
+            raw_gradients[1],
+            manual_mean,
+            msg="Raw gradient should be the mean (sum/accumulate_every) after in-place division",
         )
-        # The applied gradient should be close to manual_sum / accumulate_every
-        # Note: current_grad = learner._params[param_ref].grad is further processed
+
+        # The updated_gradients should match the raw_gradients since they're the same reference
         torch.testing.assert_close(
             updated_gradients[1][param_ref],
-            manual_sum / accumulate_every,  # summed and mean gradient
+            manual_mean,
             msg="Applied gradient should be the mean of accumulated gradients",
         )
