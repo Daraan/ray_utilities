@@ -42,6 +42,7 @@ if sys.version_info < (3, 11):
 import gymnasium as gym
 from gymnasium.envs.registration import VectorizeMode
 from ray.rllib.algorithms.callbacks import DefaultCallbacks, make_multi_callbacks
+from ray.rllib.algorithms.dqn import DQNConfig
 from ray.rllib.algorithms.ppo.ppo import PPOConfig
 from ray.rllib.core.rl_module import RLModule, RLModuleSpec
 from ray.tune import logger as tune_logger
@@ -294,6 +295,10 @@ def create_algorithm_config(
     except TypeError:  # old interface
         config.training(learner_config_dict=learner_config_dict)
 
+    # Get algorithm type from args
+    algorithm_type = args.get("algorithm", "ppo")
+
+    # Common training configuration for all algorithms
     config.training(
         gamma=0.99,
         # with a growing number of Learners and to increase the learning rate as follows:
@@ -305,17 +310,20 @@ def create_algorithm_config(
         train_batch_size_per_learner=args["train_batch_size_per_learner"],
         grad_clip=0.5,
     )
-    try:
-        cast("PPOConfig", config).training(
-            minibatch_size=args["minibatch_size"],
-            num_epochs=32,
-        )
-    except TypeError:
-        cast("PPOConfig", config).training(
-            sgd_minibatch_size=args["minibatch_size"],
-            num_sgd_iter=32,
-        )
-    if isinstance(config, PPOConfig):
+
+    # Algorithm-specific training configuration
+    if algorithm_type == "ppo":
+        assert isinstance(config, PPOConfig)
+        try:
+            cast("PPOConfig", config).training(
+                minibatch_size=args["minibatch_size"],
+                num_epochs=32,
+            )
+        except TypeError:
+            cast("PPOConfig", config).training(
+                sgd_minibatch_size=args["minibatch_size"],
+                num_sgd_iter=32,
+            )
         config.training(
             # PPO Specific
             use_critic=True,
@@ -326,6 +334,20 @@ def create_algorithm_config(
             use_kl_loss=False,
             use_gae=True,  # Must be true to use "truncate_episodes"
         )
+    elif algorithm_type == "dqn":
+        assert isinstance(config, DQNConfig)
+        config.training(
+            # DQN Specific
+            # TODO: verify if correct defaults and present.
+            target_network_update_freq=args.get("target_network_update_freq", 500),
+            num_steps_sampled_before_learning_starts=args.get("num_steps_sampled_before_learning_starts", 1000),
+            tau=args.get("tau", 1.0),
+            epsilon=args.get("epsilon", [(0, 1.0), (10000, 0.05)]),
+            double_q=args.get("double_q", True),
+            dueling=args.get("dueling", True),
+        )
+    else:
+        logger.warning("No specific training configuration for algorithm type '%s'", algorithm_type)
     if model_config is not None and "vf_share_layers" not in model_config:
         # Workaround for https://github.com/ray-project/ray/issues/58715 avoid no sync mishaps
         from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig  # noqa: PLC0415
