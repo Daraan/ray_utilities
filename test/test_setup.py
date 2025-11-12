@@ -202,8 +202,8 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         self.assertEqual(setup.project.rstrip("-v0123456789"), "Test-mlp-CartPole")
 
     @pytest.mark.tuner
-    @pytest.mark.length(speed="medium")  # still not that slow
-    @pytest.mark.timeout(300, method="thread")
+    # @pytest.mark.length(speed="medium")  # still not that slow
+    @pytest.mark.timeout(method="thread")
     def test_dynamic_param_spaces(self):
         # Test warning and failure
         with patch_args("--tune", "dynamic_buffer"):
@@ -250,7 +250,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             ):  # fmt: skip
                 if param == "batch_size":  # shortcut name
                     param = "train_batch_size_per_learner"  # noqa: PLW2901
-                setup = AlgorithmSetup()
+                setup = AlgorithmSetup(init_trainable=False)
                 param_space = setup.create_param_space()
                 self.assertIn(param, param_space)
                 self.assertIsNotNone(param_space[param])  # dict with list
@@ -283,7 +283,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 )
 
     @pytest.mark.length(speed="medium")
-    @pytest.mark.timeout(500, method="thread")
+    @pytest.mark.timeout(300, method="thread")
     def test_dynamic_param_space_with_trainable(self):
         """Check the --tune parameters"""
         # see OptunaArgumentParser.tune
@@ -300,16 +300,19 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         self.assertNotIn("all", th_lists)
 
         for param in th_lists:
-            # run 3 jobs in parallel
+            # run 4 jobs in parallel
             with (
                 patch_args(
                     "--tune", param,
                     "-it", "2",
-                    "--num_jobs", "3",
+                    "--num_jobs", "4",
                     "--num_samples", "1",
                     "--use_exact_total_steps",
                     "--env_seeding_strategy", "same",
                     "--no_dynamic_eval_interval",
+                    *(("--train_batch_size_per_learner", "128") if param not in ("batch_size", "train_batch_size_per_learner") else ()),
+                    "--num_envs_per_env_runner", 1,
+                    "--log_level", "IMPORTANT_INFO",
                 )  # ,
                 # self.assertNoLogs(logger, level="WARNING"),
             ):  # fmt: skip
