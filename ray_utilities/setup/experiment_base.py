@@ -21,6 +21,7 @@ import contextlib
 import io
 import logging
 import os
+import shutil
 import sys
 import warnings
 from abc import ABC, abstractmethod
@@ -179,6 +180,10 @@ class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, Algor
 
     trial_name_creator: NotRequired[Optional[Callable[[TuneTrial], str]]]
     """Optional trial name creator function for Ray Tune trials."""
+
+    tune_parameters: NotRequired[dict[str, Any]]
+    """Domain information for parameters to be tuned"""
+    # TODO: rename? parameter_domains?
 
 
 class ExperimentSetupBase(
@@ -412,6 +417,7 @@ class ExperimentSetupBase(
             if isinstance(self.parser, Tap):
                 logger.info("When using parse_args with a loaded config, argument parsing will be skipped.")
                 parse_args = False  # cannot parse again
+        self.__copied_to_working_dir = False
         self.setup(
             pre_parsed_args,
             init_config=init_config,
@@ -475,6 +481,7 @@ class ExperimentSetupBase(
         if init_param_space:
             # relies on trainable to get its name
             self.param_space: dict[str, Any] | _MaybeNone = self.create_param_space()
+        self._update_working_dir(copy_tune_parameters=init_param_space)
 
     # region Argument Parsing
 
@@ -1410,6 +1417,49 @@ class ExperimentSetupBase(
     # endregion
 
     # region save and restore
+
+    def _update_working_dir(self, *, copy_tune_parameters: bool = True):
+        """
+        We want to update the working dir only once during the first setup - possibly also when restored, but not
+        when the trainable is created. Could do this only when not ray.is_initialized()
+        """
+        if ray.is_initialized():
+            logger.info(
+                "Ray is already initialized, not updating working_dir. Create the setup class before initializing ray."
+            )
+            return
+        runtime_env = get_runtime_env()
+        working_dir = runtime_env.get("working_dir", None)
+        if not working_dir:
+            if self._config_files:
+                logger.warning(
+                    "Config files %s were specified, but no working_dir is set in the runtime_env. "
+                    "These files will not be copied to the working_dir of the Ray workers.",
+                    self._config_files,
+                )
+            return
+        # Copy all .cfg files and tune_parameters.json to working_dir
+        working_dir_path = Path(working_dir)
+        working_dir_path.mkdir(parents=True, exist_ok=True)
+        for cfg_file in self._config_files:
+            src_path = Path(cfg_file)
+            if src_path.exists() and src_path.is_file():
+                dest_path = working_dir_path / src_path.name
+                shutil.copy2(src_path, dest_path)
+                logger.debug("Copied config file %s to working_dir %s", src_path, dest_path)
+            else:
+                logger.warning("Could not find local config file %s to copy to working_dir.", src_path)
+        if not copy_tune_parameters:
+            return
+        # Also save tune_parameters.json
+        tune_params_path = working_dir_path / "tune_parameters.json"
+        local_tune_parameters = Path("experiments", "tune_parameters.json")
+        if local_tune_parameters.exists() and local_tune_parameters.is_file():
+            shutil.copy2(local_tune_parameters, tune_params_path)
+            logger.debug("Copied tune_parameters.json to working_dir %s", tune_params_path)
+        else:
+            logger.warning("Could not find local tune_parameters.json to copy to working_dir.")
+        self.__copied_to_working_dir = True
 
     def get_state(self) -> SetupCheckpointDict[ParserType_co, ConfigType_co, AlgorithmType_co]:
         """

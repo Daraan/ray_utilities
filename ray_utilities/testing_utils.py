@@ -755,7 +755,7 @@ class TestHelpers(unittest.TestCase):
         "--min_step_size", "64",  # try not to adjust total_steps
         "--max_step_size", "64",  # try not to adjust total_steps
         "--num_envs_per_env_runner", "1",
-        "--no_dynamic_eval_interval",
+       # "--no_dynamic_eval_interval",
     )  # fmt: skip
     def get_trainable(
         self,
@@ -764,7 +764,7 @@ class TestHelpers(unittest.TestCase):
         env_seed: int | None | _NOT_PROVIDED = _NOT_PROVIDED,
         train: bool = True,
         fast_model: bool = True,
-        eval_interval: Optional[int] = 1,
+        eval_interval: Optional[int] = None,
         class_only: bool = False,
     ) -> (
         tuple[DefaultTrainable[DefaultArgumentParser[Any | None], PPOConfig, PPO], None]
@@ -793,6 +793,7 @@ class TestHelpers(unittest.TestCase):
         )
         if eval_interval is not None:
             overrides["evaluation_interval"] = eval_interval
+        # TODO: Should modify DynamicEvalInterval to evaluate every iteration if wanted.
         if env_seed is _NOT_PROVIDED:
             # use a random but reproducible seed
             if not hasattr(self, "_env_seed_rng"):
