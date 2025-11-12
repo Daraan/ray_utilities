@@ -1335,7 +1335,10 @@ class ExperimentSetupBase(
             logger.warning("No storage path or name set in the RunConfig, cannot backup the setup state.")
         else:
             # Can point to S3 etc. Do not use PATH for joining, will mess up s3://
-            storage_path = os.path.join(run_config.storage_path, run_config.name)
+            if self.args.test:  # Do not use S3 on test runs
+                storage_path = "./outputs/experiments/test"
+            else:
+                storage_path = os.path.join(run_config.storage_path, run_config.name)
             self._backup_for_restore(storage_path)
         return tuner
 
