@@ -153,7 +153,7 @@ def _patch_learner_config_with_param_space(
         object.__setattr__(config, "learner_config_dict", current_config_dict)
     if current_config_dict:
         args["__overwritten_keys__"]["learner_config_dict"] = current_config_dict
-    matching_keys_left = set(hparams.keys()) - checked_keys
+    matching_keys_left = set(current_config_dict.keys()) - checked_keys
     if matching_keys_left:
         ImportantLogger.important_info(
             logger, "Found matching keys in hparams not applied to learner_config_dict: %s", matching_keys_left
