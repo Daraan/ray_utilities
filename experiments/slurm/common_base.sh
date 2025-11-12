@@ -147,7 +147,7 @@ setup_environment_vars() {
 
     # Set common environment variables for Ray workers
     export RAY_DEDUP_LOGS_ALLOW_REGEX="COMET|wandb"
-    export RAY_TMPDIR="${SLURM_TMPDIR:-/tmp}/ray_${SLURM_JOB_ID}"
+    export RAY_TMPDIR="${TMPDIR:-/tmp}/ray_client_${SLURM_JOB_ID}"
 
     export RAY_UTILITIES_NEW_LOG_FORMAT="1"
 

@@ -111,7 +111,7 @@ setup_environment_vars "${PYTHON_SCRIPT}"
 # Ray configuration
 RAY_PORT="${RAY_PORT:-6379}"
 RAY_OBJECT_STORE="${RAY_OBJECT_STORE:-5}"  # GB
-RAY_TMPDIR="${SLURM_TMPDIR:-/tmp}/ray_${SLURM_JOB_ID}"
+RAY_TMPDIR="${TMPDIR:-/tmp}/ray_client_${SLURM_JOB_ID}"
 
 echo "========================================================================"
 echo "Ray Utilities Generic Experiment - Job ${SLURM_JOB_ID}"

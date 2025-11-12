@@ -303,7 +303,7 @@ fi
 
 # Ray configuration for worker node
 RAY_OBJECT_STORE="${RAY_OBJECT_STORE:-10}"  # GB
-RAY_TMPDIR="${SLURM_TMPDIR:-/tmp}/ray_client_${SLURM_JOB_ID}"
+RAY_TMPDIR="${TMPDIR:-/tmp}/ray_client_${SLURM_JOB_ID}"
 
 # Output directories (likely unused)
 LOG_DIR="${WORKSPACE_DIR}/outputs/slurm_logs"

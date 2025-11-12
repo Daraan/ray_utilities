@@ -286,7 +286,7 @@ DASHBOARD_AGENT_GRPC_PORT=$((6703 + USER_PORT_OFFSET_MINOR))
 # ============================================================================
 
 RAY_OBJECT_STORE="${RAY_OBJECT_STORE:-20}"  # GB
-RAY_TMPDIR="${SLURM_TMPDIR:-/tmp}/ray_head_${SLURM_JOB_ID}"
+RAY_TMPDIR="${TMPDIR:-/tmp}/ray_client_${SLURM_JOB_ID}"
 OUTPUT_DIR="${OUTPUT_DIR:-${WORKSPACE_DIR}/outputs}"
 LOG_DIR="${OUTPUT_DIR}/slurm_logs"
 IDLE_CHECK_ENABLED="${IDLE_CHECK_ENABLED:-true}"
