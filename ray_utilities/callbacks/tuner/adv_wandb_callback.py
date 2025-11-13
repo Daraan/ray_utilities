@@ -678,7 +678,10 @@ class AdvWandbLoggerCallback(
                 self._sync_offline_run_if_available(trial)
 
     def _cleanup_logging_actors(
-        self, timeout=0.0, kill_on_timeout: bool = False, trial_to_watch: Optional[Trial] = None
+        self,
+        timeout=0.0,
+        kill_on_timeout: bool = False,
+        trial_to_watch: Optional[Trial] = None,  # noqa: FBT001, FBT002
     ):
         """Clean up logging actors that have finished uploading to wandb.
 

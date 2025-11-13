@@ -243,9 +243,7 @@ def run_tune(
             setup.verify_wandb_uploads(get_run_id(), output_dir=local_output_dir)
     finally:
         if (
-            setup.args.wandb
-            and "upload" in setup.args.wandb
-            and os.environ.get("RAY_UTILITIES_NO_MONITOR", "0") != "1" != "1"
+            setup.args.wandb and "upload" in setup.args.wandb and os.environ.get("RAY_UTILITIES_NO_MONITOR", "0") != "1"
         ) or setup._monitor is not None:
             ImportantLogger.important_warning(logger, "Cleaning up WandB monitor...")
             setup._stop_monitor()

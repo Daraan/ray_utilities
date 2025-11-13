@@ -662,6 +662,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             self.current_trial_keys[trial] = trial.trial_id
             self._fork_ids[trial, None] = trial.trial_id  # initial fork id is trial id
         self._trial_state[trial].last_update_timestamp = get_time()
+        self._trial_state[trial].total_time_spent = 0.0  # use restored value from fork instead of 0?
 
         # When using more than 1 sample and seeding_strategy="same" we end up with identical configs
         # Need to change something in the config to make them different
@@ -1001,7 +1002,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             # Set info which trial was forked from
             parent_iteration = self._trial_state[trial_to_clone].last_training_iteration
             fork_data: ForkFromData = {
-                "parent_trial_id": trial_to_clone.trial_id,  # NOTE: This is the pure trial_id, does not support
+                "parent_trial_id": trial_to_clone.trial_id,  # NOTE: This is the constant Trial.trial_id
                 "parent_trial": trial_to_clone,
                 "parent_training_iteration": parent_iteration,
                 "parent_time": Forktime(self._time_attr, self._trial_state[trial_to_clone].last_train_time),

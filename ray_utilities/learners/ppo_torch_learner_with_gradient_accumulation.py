@@ -56,7 +56,7 @@ class PPOTorchLearnerWithGradientAccumulation(PPOTorchLearner):
             assert total_loss == 0
             return {}
 
-        total_loss.backward()
+        total_loss.backward()  # pyright: ignore[reportAttributeAccessIssue]
 
         if update_gradients_this_step:
             self._gradient_updates += 1
@@ -114,6 +114,7 @@ class PPOTorchLearnerWithGradientAccumulation(PPOTorchLearner):
                 "step_count": self._step_count,
                 "gradient_updates": self._gradient_updates,
                 "last_gradient_update_step": self._last_gradient_update_step,
+                "accumulated_time_steps": self._accumulated_time_steps,
             }
         )
         return state_dict
@@ -123,3 +124,4 @@ class PPOTorchLearnerWithGradientAccumulation(PPOTorchLearner):
         self._step_count = state.get("step_count", 0)
         self._gradient_updates = state.get("gradient_updates", 0)
         self._last_gradient_update_step = state.get("last_gradient_update_step", None)
+        self._accumulated_time_steps = state.get("accumulated_time_steps", 0)

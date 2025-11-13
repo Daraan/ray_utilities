@@ -261,7 +261,10 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     grid = []
                 if param == "minibatch_size":
                     # Apply constraint to expectation
-                    assert "train_batch_size_per_learner" not in param_space
+                    assert "train_batch_size_per_learner" not in param_space, (
+                        "Expected 'train_batch_size_per_learner' to not be in param_space when testing minibatch_size. "
+                        "If this assertion fails, check the setup logic and parameter space construction."
+                    )
                     grid = [mb for mb in grid if mb <= setup.config.train_batch_size_per_learner]
 
                 def fake_trainable(params, param=param):

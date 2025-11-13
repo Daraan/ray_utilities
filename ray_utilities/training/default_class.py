@@ -419,16 +419,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # XXX For debugging do not raise level currently
         if log_level or self._log_level:
             set_project_log_level(logging.getLogger(__name__.split(".")[0]), log_level or self._log_level)  # pyright: ignore[reportArgumentType]
-        if False and ray.is_initialized():
-            run_context: RuntimeContext = get_runtime_context()
-            if run_context.get_actor_name() is not None:  # we are remote
-                log_level = (
-                    config.get("log_level", config.get("cli_args", {}).get("log_level", self._log_level))
-                    if config
-                    else self._log_level
-                )
-                if log_level is not None:
-                    ...
 
         self._algorithm = None
         self._algorithm_overrides = algorithm_overrides
@@ -1569,6 +1559,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # Using self.config here would overwrite the restored config values, we only want to respect perturbed keys
             hparams=(state["config"] or {}) | (self._perturbed_config or {}),
         )
+        keys_to_process.remove("config")
         if type(new_algo_config) is not type(self.algorithm_config):
             _logger.warning(
                 "Restored config class %s differs from expected class %s", type(new_algo_config), type(self.config)

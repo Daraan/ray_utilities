@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import logging
 import os
 import pickle
@@ -15,7 +14,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from unittest import mock
 from unittest.mock import MagicMock, patch
-
 import numpy as np
 import pytest
 from ray import tune
@@ -34,7 +32,7 @@ from ray.tune.logger import (
     JsonLoggerCallback,
     TBXLoggerCallback,
 )
-from ray.tune.result import SHOULD_CHECKPOINT, TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
+from ray.tune.result import SHOULD_CHECKPOINT, TRAINING_ITERATION, TIME_TOTAL_S  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.schedulers.pb2 import PB2
 from ray.tune.schedulers.pbt import PopulationBasedTraining
 from ray.tune.schedulers.pbt import logger as ray_pbt_logger
@@ -92,7 +90,6 @@ if TYPE_CHECKING:
 
 
 try:
-    # Needed for PB2 init
     import GPy  # pyright: ignore[reportMissingImports] # noqa: F401
 except ImportError:
     sys.modules["GPy"] = MagicMock()
@@ -1519,6 +1516,7 @@ class MockPBTTrialState(MagicMock):
         last_training_iteration=1,
         current_env_steps=900,
         last_update_timestamp=None,
+        total_time_spent: float | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -1530,6 +1528,7 @@ class MockPBTTrialState(MagicMock):
         self.last_training_iteration = last_training_iteration
         self.current_env_steps = current_env_steps
         self.last_update_timestamp = last_update_timestamp
+        self.total_time_spent = total_time_spent if total_time_spent is not None else 0.0
 
 
 class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
@@ -1566,6 +1565,7 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
             trial.status = Trial.RUNNING
             trial.config = {"lr": 0.001}
 
+            # Set total_time_spent to be equal for all trials to avoid early exit in total_time_spent check
             state = MockPBTTrialState(
                 last_score=50 + i * 5,
                 last_checkpoint=None,
@@ -1575,6 +1575,7 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
                 last_training_iteration=1,
                 current_env_steps=900,
                 last_update_timestamp=current_time,
+                total_time_spent=1000.0,  # All trials have same total_time_spent
             )
 
             self.trials.append(trial)
@@ -1722,6 +1723,7 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
             self.scheduler._trial_state[trial].last_train_time = 1000
             # Set timestamps more than 300 seconds ago
             self.scheduler._trial_state[trial].last_update_timestamp = current_time - 1000
+            self.scheduler._trial_state[trial].total_time_spent = 1000.0
 
         slow_trial = self.trials[0]
         state = self.scheduler._trial_state[slow_trial]
@@ -1730,12 +1732,14 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
         state.last_score = 52  # Bad score, in bottom 33%
         # Slow trial timestamp should be more than 300 seconds behind the max
         state.last_update_timestamp = current_time - 400
+        # Set total_time_spent to be equal to others to avoid early exit
+        state.total_time_spent = 1000.0
 
         result = {
             "reward": 52,
             self.scheduler._time_attr: 700,
             TRAINING_ITERATION: 1,
-            "time_total_s": 700,  # Add required field for parent class
+            TIME_TOTAL_S: 1000.0,  # Match total_time_spent to avoid early exit
         }
 
         self.mock_controller.get_live_trials.return_value = self.trials
@@ -1761,6 +1765,7 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
         for trial in self.trials:
             self.scheduler._trial_state[trial].last_train_time = 1000
             self.scheduler._trial_state[trial].last_update_timestamp = current_time - 1000
+            self.scheduler._trial_state[trial].total_time_spent = 1000.0  # Ensure equal total_time_spent
 
         slow_trial_1 = self.trials[0]
         slow_trial_2 = self.trials[1]
@@ -1772,11 +1777,13 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
             state.last_perturbation_time = 0
             state.last_score = 52
             state.last_update_timestamp = current_time - 1400
+            state.total_time_spent = 1000.0  # Ensure equal total_time_spent
 
         result = {
             "reward": 52,
             self.scheduler._time_attr: 700,
             TRAINING_ITERATION: 1,
+            TIME_TOTAL_S: 1000.0,  # Match total_time_spent to avoid early exit
         }
 
         self.mock_controller.get_live_trials.return_value = self.trials
@@ -1806,6 +1813,7 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
         for trial in self.trials[1:]:
             self.scheduler._trial_state[trial].last_train_time = 1000
             self.scheduler._trial_state[trial].last_update_timestamp = current_time - 1000
+            self.scheduler._trial_state[trial].total_time_spent = 1000.0  # Ensure equal total_time_spent
 
         slow_trial = self.trials[0]
         slow_trial.status = Trial.PAUSED
@@ -1814,11 +1822,13 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
         state.last_perturbation_time = 0
         state.last_score = 52
         state.last_update_timestamp = current_time - 400
+        state.total_time_spent = 1000.0  # Ensure equal total_time_spent
 
         result = {
             "reward": 52,
             self.scheduler._time_attr: 700,
             TRAINING_ITERATION: 1,
+            TIME_TOTAL_S: 1000.0,  # Match total_time_spent to avoid early exit
         }
 
         self.mock_controller.get_live_trials.return_value = self.trials
@@ -1827,11 +1837,43 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
         # Multiple slow trials, so won't trigger perturbation
         self.scheduler._trial_state[self.trials[1]].last_train_time = 700
         self.scheduler._trial_state[self.trials[1]].last_update_timestamp = current_time - 400
+        self.scheduler._trial_state[self.trials[1]].total_time_spent = 1000.0  # Ensure equal total_time_spent
 
         decision = self.scheduler.on_trial_result(self.mock_controller, slow_trial, result)
 
         # Should return NOOP for already paused trial
         self.assertEqual(decision, self.scheduler.NOOP)
+
+    def test_slow_trial_total_time_spent_exit(self):
+        """Test that slow trial exits early due to total_time_spent comparison."""
+        # Setup: slow trial has much lower total_time_spent than others
+        current_time = time.time()
+        for trial in self.trials:
+            self.scheduler._trial_state[trial].last_train_time = 1000
+            self.scheduler._trial_state[trial].last_update_timestamp = current_time - 1000
+            self.scheduler._trial_state[trial].total_time_spent = 1000.0
+
+        slow_trial = self.trials[0]
+        state = self.scheduler._trial_state[slow_trial]
+        state.last_train_time = 500
+        state.last_perturbation_time = 0
+        state.last_score = 52
+        state.last_update_timestamp = current_time - 1400
+        state.total_time_spent = 100.0  # Much lower than others
+
+        result = {
+            "reward": 52,
+            self.scheduler._time_attr: 700,
+            TRAINING_ITERATION: 1,
+            TIME_TOTAL_S: 100.0,  # Much lower than others
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+        self.mock_controller.get_trials.return_value = self.trials
+
+        # Should exit early due to total_time_spent comparison (returns CONTINUE)
+        decision = self.scheduler.on_trial_result(self.mock_controller, slow_trial, result)
+        self.assertEqual(decision, self.scheduler.CONTINUE)
 
     def test_slow_trial_state_saved_correctly(self):
         """Test that slow trial state is saved at perturbation time."""
@@ -1923,7 +1965,3 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
 
         # Should continue because still in burn-in period
         self.assertEqual(decision, self.scheduler.CONTINUE)
-
-
-if __name__ == "__main__":
-    unittest.main()
