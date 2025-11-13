@@ -243,13 +243,23 @@ class ResetSeedEnvsCallback(SeedEnvsCallbackBase):
             first_observation[:, 0],
         )
         if metrics_logger:
-            metrics_logger.log_value(
-                (ENVIRONMENT_RESULTS, SEED, "initial_seed"),
-                [int(starting_seed[0])],  # assure int and not numpy int
-                clear_on_reduce=False,
-                reduce=None,
-                window=(env_context.num_workers or 1),
-            )
+            try:
+                metrics_logger.log_value(
+                    (ENVIRONMENT_RESULTS, SEED, "initial_seed"),
+                    [int(starting_seed[0])],  # assure int and not numpy int
+                    clear_on_reduce=False,
+                    reduce="item",
+                    window=(env_context.num_workers or 1),
+                )
+            except (TypeError, ValueError):
+                # Old interface
+                metrics_logger.log_value(
+                    (ENVIRONMENT_RESULTS, SEED, "initial_seed"),
+                    [int(starting_seed[0])],  # assure int and not numpy int
+                    clear_on_reduce=False,
+                    reduce=None,
+                    window=(env_context.num_workers or 1),
+                )
 
 
 class DirectRngSeedEnvsCallback(SeedEnvsCallbackBase):

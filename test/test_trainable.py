@@ -49,6 +49,13 @@ if TYPE_CHECKING:
 
     from ray_utilities.typing.trainable_return import TrainableReturnData
 
+import sys
+
+try:
+    sys.argv.remove("test/test_trainable.py")
+except ValueError:
+    pass
+
 
 class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints, num_cpus=4):
     def test_1_subclass_check(self):
@@ -951,3 +958,9 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     def check_dynamic_settings_on_reload(self):
         # check _get_global_step on reload
         ...
+
+
+if __name__ == "__main__":
+    import unittest
+
+    unittest.main()

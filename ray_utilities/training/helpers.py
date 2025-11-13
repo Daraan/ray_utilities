@@ -708,7 +708,7 @@ def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
 
     # Sync states, especially env_steps
 
-    metrics_state = algorithm.metrics.get_state()
+    metrics_state = {"stats": {}}  # algorithm.metrics.get_state()
     # State keys are "--" joined
     env_runner_metrics_state = {
         COMPONENT_METRICS_LOGGER: {

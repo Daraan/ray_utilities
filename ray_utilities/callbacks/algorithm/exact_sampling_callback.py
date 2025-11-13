@@ -23,7 +23,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 def _log_steps_to_learner(metrics: MetricsLogger, num_steps: int) -> None:
     """Log the number of steps that are actually passed to the learner."""
     metrics.log_value(NUM_ENV_STEPS_PASSED_TO_LEARNER, num_steps, reduce="sum", clear_on_reduce=True)
-    metrics.log_value(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, num_steps, reduce="sum")
+    metrics.log_value(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, num_steps, reduce="sum", clear_on_reduce=False)
 
 
 def _remove_or_trim_samples(samples: list[EpisodeType], total_samples: int, exact_timesteps: int) -> None:

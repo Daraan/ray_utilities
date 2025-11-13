@@ -172,10 +172,11 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         *,
         algorithm: Algorithm,
         metrics_logger: Optional[MetricsLogger] = None,
+        result: dict[str, Any],
         **kwargs,
     ) -> None:
         assert metrics_logger
-        self._set_step_counter_on_train_result(algorithm=algorithm, metrics_logger=metrics_logger)
+        self._set_step_counter_on_train_result(algorithm=algorithm, metrics_logger=metrics_logger, result=result)
         # self._planned_current_step likely safer way to get correct step, instead of using metrics_logger
         if self.every_n_steps_before and self._planned_current_step <= self.every_n_steps_before[1]:
             # Use default updater
