@@ -1464,6 +1464,7 @@ class TestHelpers(unittest.TestCase):
         *,
         ignore_env_runner_state: bool = True,
         ignore_timers: bool = False,
+        ignore_config_in_state: bool = True,
         msg: str = "",
     ):
         """
@@ -1475,6 +1476,8 @@ class TestHelpers(unittest.TestCase):
                 local env_runner (that is contained in get_state) is not in sync with the remote
                 env_runner that we care about. On restore the local env_runner is updated with
                 necessary states of the former remote env runners. Hence, they do not align.
+            ignore_config_in_state: Passing a new config allows to override some parts, env_seed, fork_from
+                Most of the time these are not relevant for state comparison and covered in other parts
             ignore_timers: If True, do not compare the timers in the state.
         """
         try:
@@ -1485,6 +1488,9 @@ class TestHelpers(unittest.TestCase):
             return
         state1 = state1.copy()
         state2 = state2.copy()
+        if ignore_config_in_state:
+            state1.pop("config", None)
+            state2.pop("config", None)
         self.compare_algorithm_states(
             state1.pop("algorithm", {}),
             state2.pop("algorithm", {}),

@@ -24,7 +24,7 @@ from ray.rllib.utils.metrics import (
 from typing_extensions import Sentinel, TypeAliasType
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
-from ray_utilities.config import seed_environments_for_config
+from ray_utilities.config import seed_environments_for_config, DefaultArgumentParser
 from ray_utilities.constants import ENVIRONMENT_RESULTS, RAY_VERSION, SEED, SEEDS
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, calculate_steps
 from ray_utilities.learners import mix_learners
@@ -43,7 +43,6 @@ if TYPE_CHECKING:
     from ray.rllib.env.multi_agent_env_runner import MultiAgentEnvRunner
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
 
-    from ray_utilities.config import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
     from ray_utilities.typing import (
         RewardUpdaters,
@@ -253,7 +252,7 @@ def _post_patch_config_with_param_space(
             args["minibatch_size"] = new_batch_size
             object.__setattr__(config, "minibatch_size", new_batch_size)
     # Change learner class if needed
-    if args["accumulate_gradients_every"] > 1 or args["dynamic_batch"]:
+    if args.get("accumulate_gradients_every", 0) > 1 or args.get("dynamic_batch", False):
         # import lazy as currently not used elsewhere
         from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
             PPOTorchLearnerWithGradientAccumulation,
@@ -278,7 +277,7 @@ def _post_patch_config_with_param_space(
                     )  # pyright: ignore[reportCallIssue]
                 )
     # Seeded environments - sequential seeds have to be set here, env_seed comes from Tuner
-    if args["env_seeding_strategy"] == "sequential":
+    if args.get("env_seeding_strategy", DefaultArgumentParser.env_seeding_strategy) == "sequential":
         # Warn if a seed is set but no env_seed is present
         if (env_seed is None or env_seed is _NOT_FOUND) and "cli_args" in args and args["cli_args"]["seed"] is not None:
             logger.warning(

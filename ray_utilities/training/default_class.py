@@ -156,6 +156,9 @@ class TrainableStateDict(TypedDict):
     trainable: StateDict
     """The state obtained by :meth:`ray.tune.Trainable.get_state`."""
 
+    config: dict[str, Any]
+    """The config of the Trainable during initialization and potential updates"""
+
     algorithm: NotRequired[StateDict]  # component; can be ignored
     """Algorithm state (optional since algorithm may handle its own checkpointing)."""
 
@@ -1121,7 +1124,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             )
             # Remove __perturbed__ from config so that a future checkpoint hparams does not see them as highest priority
             self._perturbed_config: Optional[dict[str, Any]] = self.config.pop(PERTURBED_HPARAMS)
-            self._setup.config = setup_config  # pyright: ignore[reportAttributeAccessIssue]
             # NOTE: in set_state the config might be recreated / changed depending on state
         else:
             perturbed = {}
@@ -1425,7 +1427,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             assert algorithm_config_state
             assert reward_updaters_state
             assert pbar_state
+        # Merge perturbation into config and do not pass it on.
+        saved_config = self.config.copy()
+        saved_config = saved_config | self.config.pop(PERTURBED_HPARAMS, {}) | (self._perturbed_config or {})
         state: TrainableStateDict = {
+            "config": saved_config,
             "trainable": trainable_state,
             "algorithm": algo_state,  # might be removed by save_to_path
             "algorithm_config": algorithm_config_state,
@@ -1556,11 +1562,12 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             new_algo_config = AlgorithmConfig.from_state(algorithm_state_dict)
         else:  # take setup from reset_config
             new_algo_config = self._setup.config
-        patch_config_with_param_space(
-            self.config.get("cli_args", self._args_during_setup) | (self._perturbed_config or {}),
+
+        _, new_algo_config = patch_config_with_param_space(
+            vars(state["setup"]["args"]) | (self._perturbed_config or {}),
             new_algo_config,
-            hparams=self.config | (self._perturbed_config or {}),
-            config_inplace=True,
+            # Using self.config here would overwrite the restored config values, we only want to respect perturbed keys
+            hparams=(state["config"] or {}) | (self._perturbed_config or {}),
         )
         if type(new_algo_config) is not type(self.algorithm_config):
             _logger.warning(

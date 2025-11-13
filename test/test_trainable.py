@@ -316,6 +316,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
             trainable_perturbed = setup.trainable_class(
                 {"train_batch_size_per_learner": 222, PERTURBED_HPARAMS: {"train_batch_size_per_learner": 222}}
             )
+            self.assertEqual(trainable_perturbed.algorithm_config.train_batch_size_per_learner, 222)
             ckpt = trainable.save_checkpoint(tmpdir)
             ckpt_perturbed = trainable_perturbed.save_checkpoint(tmpdir2)
             trainable_perturbed.stop()
@@ -339,7 +340,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
             self.assertEqual(trainable2.algorithm_config.train_batch_size_per_learner, 123)
             self.assertIsInstance(trainable2.algorithm_config.train_batch_size_per_learner, PerturbedInt)
             trainable2b = setup.trainable_class(
-                # NOTE: Normally should be the same but check that perturbed is used after load_checkpoint
+                # NOTE: New config has higher priority has perturbed in checkpoint - if it is not perturbed we do NOT want this
                 {"train_batch_size_per_learner": 123}
             )
             trainable2b.load_checkpoint(ckpt_perturbed)
@@ -348,7 +349,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
             trainable2c = setup.trainable_class(
                 # NOTE: Normally should be the same but check that perturbed is used after load_checkpoint
                 {
-                    "train_batch_size_per_learner": 333,
+                    "train_batch_size_per_learner": 333,  # <-- this could be different but we assert that it is the same
                     PERTURBED_HPARAMS: {"train_batch_size_per_learner": PerturbedInt(333)},
                 }
             )
