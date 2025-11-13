@@ -827,7 +827,7 @@ class TestHelpers(unittest.TestCase):
 
         if not train:
             return trainable, None
-        result1 = trainable.train()
+        result1: AutoExtendedLogMetricsDict = trainable.train()  # pyright: ignore[reportAssignmentType]
         self.assertEqual(result1[TRAINING_ITERATION], 1)
         self.assertEqual(result1["current_step"], 32)
         self.assertFalse(trainable._setup.args.no_exact_sampling)
@@ -883,7 +883,7 @@ class TestHelpers(unittest.TestCase):
             mock.patch.object(ray_utilities.callbacks.progress_bar, "update_pbar"),
             mock.patch.object(ray_utilities.training.default_class, "update_pbar"),
             mock.patch.object(ray_utilities.training.functional, "update_pbar"),
-            mock.patch.object(TrainableBase, "use_pbar", False),
+            mock.patch.object(TrainableBase, "use_pbar", new=False),
         ]
         for pbar_update in pbar_updates:
             pbar_update.start()
@@ -1806,7 +1806,7 @@ class TestHelpers(unittest.TestCase):
     def get_checkpoint_dirs(result: Result) -> tuple[pathlib.Path, list[str]]:
         """Returns checkpoint dir of the result and found saved checkpoints"""
         assert result.checkpoint is not None
-        checkpoint_dir, file = os.path.split(result.checkpoint.path)
+        checkpoint_dir, _file = os.path.split(result.checkpoint.path)
         return pathlib.Path(checkpoint_dir), [
             os.path.join(checkpoint_dir, f) for f in os.listdir(checkpoint_dir) if f.startswith("checkpoint_")
         ]

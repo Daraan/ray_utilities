@@ -33,7 +33,6 @@ from typing_extensions import Self
 from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradientAccumulation
 from ray_utilities.callbacks.algorithm.dynamic_buffer_callback import DynamicBufferUpdate
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import add_dynamic_eval_callback_if_missing
-from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.setup.experiment_base import (
     AlgorithmType_co,
     ConfigType_co,

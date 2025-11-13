@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
 
 from ray_utilities.constants import EPISODE_METRICS_KEYS
 

@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from ray_utilities.callbacks.algorithm.callback_mixins import BudgetMixin, StepCounterMixin
 from ray_utilities.callbacks.algorithm.dynamic_hyperparameter import DynamicHyperparameterCallback, UpdateFunction
-from ray_utilities.callbacks.trainable.trainable_callback import TrainableCallbackExtension
 from ray_utilities.dynamic_config.dynamic_buffer_update import get_dynamic_evaluation_intervals
 from ray_utilities.misc import AutoInt
 

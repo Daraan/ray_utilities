@@ -5,7 +5,6 @@ import logging
 import os
 import select
 import subprocess
-import sys
 import time
 from enum import IntEnum, auto
 from typing import IO, ClassVar, Optional, TypeAlias

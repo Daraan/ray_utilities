@@ -222,7 +222,7 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
                 patch("ray_utilities.callbacks.tuner.adv_wandb_callback.Path") as mock_path_class,
                 patch("ray_utilities.callbacks.tuner.adv_wandb_callback.subprocess.run") as mock_subprocess,
                 patch("ray_utilities.callbacks.tuner.adv_wandb_callback._logger") as _mock_logger,
-                patch("ray_utilities.callbacks.upload_helper.logger") as mock_logger_upload,
+                patch("ray_utilities.callbacks.upload_helper.logger") as _mock_logger_upload,
                 patch.object(ImportantLogger, "important_info") as important_logger,
             ):
                 # Mock Path.home() to return our temp directory
@@ -337,8 +337,6 @@ class TestLoggerIntegration(TestHelpers):
         self.no_pbar_updates()
 
         # use more iterations here for it to be more likely that the files are synced.
-        import wandb
-
         with (
             patch_args(
                 "--wandb", "offline+upload",
@@ -353,7 +351,7 @@ class TestLoggerIntegration(TestHelpers):
             #mock.patch("wandb.init"),
             mock.patch.object(ExperimentSetupBase, "_stop_monitor", return_value=None),
             mock.patch.object(ExperimentSetupBase, "verify_wandb_uploads"),
-            mock.patch.object(UploadHelperMixin, "_failure_aware_wait") as mock_aware_wait,
+            mock.patch.object(UploadHelperMixin, "_failure_aware_wait") as _mock_aware_wait,
             mock.patch("subprocess.run") as mock_run,  # upload on_trial_complete
             mock.patch("time.sleep"),
             mock.patch("select.select", side_effect= lambda a, b, c, timeout, **kwargs: (a, b, c)),

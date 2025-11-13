@@ -219,35 +219,34 @@ class WandBSessionCache:
                     self.session_file.unlink()
                 logger.info("Cleared all cached session data")
                 return True
-            else:
-                # Clear specific user's data
-                cache_key_prefix = self._get_cache_key(username, "")
+            # Clear specific user's data
+            cache_key_prefix = self._get_cache_key(username, "")
 
-                # Clear cookies
-                if self.cookies_file.exists():
-                    with open(self.cookies_file, "r") as f:
-                        cookies_data = json.load(f)
+            # Clear cookies
+            if self.cookies_file.exists():
+                with open(self.cookies_file, "r") as f:
+                    cookies_data = json.load(f)
 
-                    keys_to_remove = [k for k in cookies_data.keys() if k.startswith(cache_key_prefix)]
-                    for key in keys_to_remove:
-                        del cookies_data[key]
+                keys_to_remove = [k for k in cookies_data.keys() if k.startswith(cache_key_prefix)]
+                for key in keys_to_remove:
+                    del cookies_data[key]
 
-                    with open(self.cookies_file, "w") as f:
-                        json.dump(cookies_data, f, indent=2)
+                with open(self.cookies_file, "w") as f:
+                    json.dump(cookies_data, f, indent=2)
 
-                # Clear session data
-                if self.session_file.exists():
-                    with open(self.session_file, "r") as f:
-                        session_data = json.load(f)
+            # Clear session data
+            if self.session_file.exists():
+                with open(self.session_file, "r") as f:
+                    session_data = json.load(f)
 
-                    if cache_key_prefix in session_data:
-                        del session_data[cache_key_prefix]
+                if cache_key_prefix in session_data:
+                    del session_data[cache_key_prefix]
 
-                    with open(self.session_file, "w") as f:
-                        json.dump(session_data, f, indent=2)
+                with open(self.session_file, "w") as f:
+                    json.dump(session_data, f, indent=2)
 
-                logger.info("Cleared cached session data for %s", username)
-                return True
+            logger.info("Cleared cached session data for %s", username)
+            return True
 
         except Exception as e:
             logger.warning("Failed to clear cache: %s", e)

@@ -140,7 +140,7 @@ class WandbRunMonitor:
         if self.callback:
             try:
                 self.callback(status, data)
-            except Exception as e:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 logger.exception("Callback error:")
 
     def is_initialized(self) -> bool:
@@ -642,6 +642,7 @@ class WandbRunMonitor:
         version: Optional[str | int] = "latest",
         check_interval: float = 5.0,
         max_wait_time: float = 300.0,
+        *,
         monitor_artifact: bool = True,
     ) -> None:
         """
@@ -739,7 +740,7 @@ class WandbRunMonitor:
         # Stop monitoring first to prevent race conditions
         try:
             self.stop_monitoring(timeout=0.2)
-        except Exception as e:  # ruff: noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             logger.warning("Error stopping monitoring: %s", e)
         except KeyboardInterrupt:
             pass

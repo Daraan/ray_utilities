@@ -140,7 +140,7 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers):
             1,
         )
         module: DefaultPPOTorchRLModule = learner.module["default_policy"]  # type: ignore
-        state0 = module.get_state()
+        _state0 = module.get_state()
 
         counter = Counter()
         self.assertEqual(setup.args.total_steps, total_steps, f"steps sizes are {step_sizes}")

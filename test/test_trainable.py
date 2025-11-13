@@ -340,7 +340,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
             self.assertEqual(trainable2.algorithm_config.train_batch_size_per_learner, 123)
             self.assertIsInstance(trainable2.algorithm_config.train_batch_size_per_learner, PerturbedInt)
             trainable2b = setup.trainable_class(
-                # NOTE: New config has higher priority has perturbed in checkpoint - if it is not perturbed we do NOT want this
+                # NOTE: Normally should be the same but check that perturbed is used after load_checkpoint
                 {"train_batch_size_per_learner": 123}
             )
             trainable2b.load_checkpoint(ckpt_perturbed)
@@ -349,7 +349,7 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
             trainable2c = setup.trainable_class(
                 # NOTE: Normally should be the same but check that perturbed is used after load_checkpoint
                 {
-                    "train_batch_size_per_learner": 333,  # <-- this could be different but we assert that it is the same
+                    "train_batch_size_per_learner": 333,  # <-- this could be different but we assert it later
                     PERTURBED_HPARAMS: {"train_batch_size_per_learner": PerturbedInt(333)},
                 }
             )
@@ -778,6 +778,8 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                         # HACK: Only one might contain mean/max/min stats for env_runners--(module/agent)episode_return
                         # Should be fixed in 2.50
                         trainable_from_path.algorithm.metrics.reset()  # pyright: ignore[reportOptionalMemberAccess]
+                        assert trainable_from_path.algorithm.learner_group is not None
+                        assert trainable_from_path.algorithm.learner_group._learner is not None
                         trainable_from_path.algorithm.learner_group._learner.config._is_frozen = (
                             False  # HACK; why does this error appear now?
                         )
@@ -893,7 +895,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
 
         assert trainable1.algorithm.learner_group is not None
         lr_data = trainable1.algorithm.learner_group.foreach_learner(
-            lambda l, x=None: (l.config.lr, l.config.learner_config_dict)
+            lambda lrn, x=None: (lrn.config.lr, lrn.config.learner_config_dict)
         ).result_or_errors
         for data in lr_data:
             lr, learner_config = data.get()  # pyright: ignore[reportGeneralTypeIssues]

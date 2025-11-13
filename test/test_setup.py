@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Optional, cast
 
 import cloudpickle
-import pyarrow as pa
+import pyarrow.fs as pyfs
 import pytest
 import tree
 import typing_extensions as te
@@ -72,6 +72,7 @@ from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultI
 
 if TYPE_CHECKING:
     import numpy as np
+    import torch.optim
     from ray.rllib.algorithms.ppo.torch.default_ppo_torch_rl_module import DefaultPPOTorchRLModule
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
@@ -310,7 +311,11 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     "--use_exact_total_steps",
                     "--env_seeding_strategy", "same",
                     "--no_dynamic_eval_interval",
-                    *(("--train_batch_size_per_learner", "128") if param not in ("batch_size", "train_batch_size_per_learner") else ()),
+                    *(
+                        ("--train_batch_size_per_learner", "128")
+                        if param not in ("batch_size", "train_batch_size_per_learner")
+                        else ()
+                    ),
                     "--num_envs_per_env_runner", 1,
                     "--log_level", "IMPORTANT_INFO",
                 )  # ,
@@ -510,7 +515,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 )
                 # save state:
                 filename = Path(tmpdir) / "state.pkl"
-                filesystem, path = pa.fs.FileSystem.from_uri(tmpdir)  # pyright: ignore[reportAttributeAccessIssue]
+                filesystem, _path = pyfs.FileSystem.from_uri(tmpdir)
                 with filesystem.open_output_stream(filename.as_posix()) as f:
                     state = {"setup": setup_state}
                     cloudpickle.dump(state, f)
@@ -717,7 +722,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             num_envs = trainable.algorithm_config.num_envs_per_env_runner
             num_workers = setup.config.num_env_runners
 
-            def change_setting(env_runner, *args, **kwargs):
+            def change_setting(env_runner, *args, num_workers=num_workers, **kwargs):
                 """Necessary setting for this test"""
                 from ray.rllib.env.env_context import EnvContext  # noqa: PLC0415
 
@@ -735,7 +740,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 change_setting, local_env_runner=setup.config.num_env_runners == 0
             )
 
-            def check_np_random_seed(runner: SingleAgentEnvRunner | Any):
+            def check_np_random_seed(runner: SingleAgentEnvRunner | Any, num_envs=num_envs):
                 return runner.env.np_random_seed == (-1,) * num_envs
 
             def check_np_random_generator(runner: SingleAgentEnvRunner | Any):
@@ -816,7 +821,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             algo = setup.config.build_algo()
             learner = algo.learner_group._learner
             assert learner
-            optimizer = learner.get_optimizer()
+            optimizer: torch.optim.Optimizer | Any = learner.get_optimizer()
             self.assertAlmostEqual(optimizer.param_groups[0]["lr"], 0.111)
             self.assertEqual(learner.config.lr, [[0, 0.111], [64, 0.333]])
             # TODO: learners are likely updated with NUM_ENV_STEPS_SAMPLED which is not exact
@@ -1818,7 +1823,9 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
             num_envs_per_env_runner = 4
             with patch_args(
                 "--batch_size", make_divisible(ENV_STEPS_PER_ITERATION, num_envs_per_env_runner),
-                "--minibatch_size", (minibatch_size :=make_divisible(ENV_STEPS_PER_ITERATION // 2, num_envs_per_env_runner)),
+                "--minibatch_size", (
+                    minibatch_size :=make_divisible(ENV_STEPS_PER_ITERATION // 2, num_envs_per_env_runner)
+                ),
                 "--log_stats",  "most",  # increase log stats to assure necessary keys are present
                 # Stuck when num_envs_per_env_runner is too high. Unclear why.
                 "--num_envs_per_env_runner", num_envs_per_env_runner,
@@ -1832,7 +1839,7 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
                     config.training(
                         num_epochs=2,
                     )
-                    # These overrides are NOT enforced when restoring from checkpoint, as ambiguous with config_from_args
+                    # These overrides are NOT enforced when restoring from checkpoint, ambiguous with config_from_args
                     # config.evaluation(
                     #    evaluation_interval=2,
                     #    evaluation_duration_unit="timesteps",

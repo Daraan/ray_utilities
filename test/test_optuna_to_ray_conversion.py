@@ -43,7 +43,7 @@ class TestOptunaToRayConversion(unittest.TestCase):
     def test_float_distribution_log_with_step_not_allowed_by_optuna(self):
         """Test that Optuna doesn't allow log-scale float with step."""
         # Optuna itself doesn't allow this combination, so we verify that
-        with pytest.raises(ValueError, match="step.*not supported when.*log"):
+        with pytest.raises(ValueError, match=r"step.*not supported when.*log"):
             optuna.distributions.FloatDistribution(low=1e-5, high=1e-1, step=1e-6, log=True)
 
     def test_int_distribution_uniform(self):
@@ -120,6 +120,6 @@ class TestOptunaToRayConversion(unittest.TestCase):
         # Convert to Optuna (using Ray's built-in converter)
         optuna_space = OptunaSearch.convert_search_space(ray_space)
         # Convert back to Ray
-        for param_name, optuna_dist in optuna_space.items():
+        for optuna_dist in optuna_space.values():
             ray_domain = optuna_dist_to_ray_distribution(optuna_dist)
             assert ray_domain is not None

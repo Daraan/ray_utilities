@@ -362,7 +362,7 @@ if __name__ == "__main__":
                 try:
                     config = config_from_result_file(replay_path, is_fork=True, fork_step=parent_steps)
                 except ValueError:
-                    logger.exception(f"Could not find config for {replay_path}. .json incomplete?")
+                    logger.exception("Could not find config for %s. .json incomplete?", replay_path)
                     failures.append(replay_path)
                     continue
             else:

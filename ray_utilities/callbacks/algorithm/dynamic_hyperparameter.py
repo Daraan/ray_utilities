@@ -5,7 +5,6 @@ import logging
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol
 
-from ray.rllib.algorithms.callbacks import DefaultCallbacks
 from typing_extensions import Self
 
 from ray_utilities.callbacks.algorithm.callback_mixins import GetGlobalStepMixin

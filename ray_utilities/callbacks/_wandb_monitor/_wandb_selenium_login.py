@@ -271,7 +271,7 @@ class WandBSeleniumSession:
             except (subprocess.SubprocessError, ValueError, OSError) as e:
                 logger.debug("Failed to find driver PID via pgrep: %s", e)
 
-        except Exception as e:  # ruff: noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             logger.debug("Failed to capture driver PID: %s", e)
 
     def _force_kill_driver(self) -> bool:
@@ -349,7 +349,7 @@ class WandBSeleniumSession:
                     if elements:
                         logger.debug("Found logged-out indicator: %s", selector)
                         return False
-                except Exception:
+                except Exception:  # noqa: PERF203
                     continue
 
             # Look for the profile selector element that contains the expected team name
@@ -367,7 +367,7 @@ class WandBSeleniumSession:
                         if expected_team_name in element.text:
                             logger.debug("Found expected team name '%s' in profile indicator", expected_team_name)
                             return True
-                except Exception:
+                except Exception:  # noqa: PERF203
                     continue
 
             # Fallback: check page source for expected team name
@@ -426,7 +426,7 @@ class WandBSeleniumSession:
                     if elements:
                         logger.debug("Found 'Run details' button - run page loaded successfully")
                         return True
-                except Exception:
+                except Exception:  # noqa: PERF203
                     continue
 
             # Fallback: check page source for "Run details" text

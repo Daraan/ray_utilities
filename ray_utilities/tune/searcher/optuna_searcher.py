@@ -355,7 +355,8 @@ class OptunaSearchWithPruner(OptunaSearch, Stopper):
             if "train_batch_size_per_learner" not in suggestion:
                 ImportantLogger.important_warning(
                     _logger,
-                    "Sampling minibatch_size without knowing train_batch_size_per_learner. Constraint minibatch_size <= batch_size",
+                    "Sampling minibatch_size without knowing train_batch_size_per_learner. "
+                    "Constraint minibatch_size <= batch_size",
                 )
             elif suggestion["minibatch_size"] > suggestion["train_batch_size_per_learner"]:
                 return None  # skip for this step

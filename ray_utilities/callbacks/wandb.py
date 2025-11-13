@@ -253,12 +253,12 @@ class WandbUploaderMixin(UploadHelperMixin):
             return ExitCode.NO_PARENT_FOUND
 
         try:
-            found_before, artifact_is_new = self._check_for_artifact(parent_id)
+            _found_before, artifact_is_new = self._check_for_artifact(parent_id)
             visit_result = self._monitor_check_parent_trial(trial_id=trial_id, timeout=min(40, timeout * 0.3))
             if visit_result is None:
                 logger.warning("Monitor check returned None for trial %s, monitor may not be available", trial_id)
             time.sleep(2)
-            found_after, new_artifact_after = self._check_for_artifact(parent_id)
+            _found_after, new_artifact_after = self._check_for_artifact(parent_id)
 
             # Wait for artifact with reduced timeout to avoid blocking
             max_artifact_wait = min(timeout * 0.5, 60)
@@ -268,7 +268,7 @@ class WandbUploaderMixin(UploadHelperMixin):
             ):
                 time.sleep(5)
                 try:
-                    found_after, new_artifact_after = self._check_for_artifact(parent_id)
+                    _found_after, new_artifact_after = self._check_for_artifact(parent_id)
                 except Exception:
                     logger.exception("Error checking for artifact during retry wait")
                     break

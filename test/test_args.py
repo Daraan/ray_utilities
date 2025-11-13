@@ -180,7 +180,8 @@ class TestExtensionsAdded(SetupWithEnv, SetupLowRes, DisableLoggers):
                 self.assertTrue(is_algorithm_callback_added(config, DynamicGradientAccumulation))
                 self.assertTrue(
                     issubclass(config.learner_class, PPOTorchLearnerWithGradientAccumulation),
-                    "Expected learner_class to be a subclass of PPOTorchLearnerWithGradientAccumulation when --dynamic_batch is set.",
+                    "Expected learner_class to be a subclass of PPOTorchLearnerWithGradientAccumulation "
+                    "when --dynamic_batch is set.",
                 )
         trainable.stop()
 

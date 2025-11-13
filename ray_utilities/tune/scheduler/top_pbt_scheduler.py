@@ -1119,9 +1119,8 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             parent_step = None
             parent_trial = None
             return ""
-        else:
-            assert parent_fork_id is not None
-            parent_trial, parent_step = parent_data
+        assert parent_fork_id is not None
+        parent_trial, parent_step = parent_data
         parent_time = self._fork_time_data[trial, parent_data]["parent"][1]
         assert parent_time[0] == "current_step"
         fork_data: ForkFromData = {
@@ -1168,7 +1167,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
 
     @warn_if_slow
     def on_trial_result(self, tune_controller: TuneController, trial: Trial, result: dict) -> str:
-        # TODO: How does buffered training affect this, when we receive buffered results we could clear all results first
+        # TODO: Can buffered training affect this negatively?
         decision = super().on_trial_result(tune_controller, trial, result)
         if decision != self.CONTINUE:
             return decision
@@ -1207,15 +1206,17 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             )
         ) > len(tune_controller.get_live_trials()) * 0.05:
             return decision
-        # NOTE: In the quantiles we have the results of the finished trials and the results of the slow trials from the *last* perturbation interval
+        # NOTE: The states are from the paused ahead trials and the *last* perturbation interval from the still running
         lowest_scores = [state.last_score for state in self._trial_state.values() if state.last_score is not None]
         if len(lowest_scores) == 0:
             return decision
+
         # We assume quantiles are sorted
         if result[self._metric] > lowest_scores[min(3, int(len(lowest_scores) * 0.33)) - 1]:
             return decision
         # last trial is slow and in worst 33%. Pause trial and if last start perturbation
-        # When return of super() is CONTINUE we should not have had a perturbation this result - expect when the trial is slow but not in the lower_quantile
+        # When return of super() is CONTINUE we should not have had a perturbation this result.
+        # Expect when a good trial is slow, but then we do not end up here.
         perturbation_time = max(state.last_train_time for state in self._trial_state.values())
         # Save state without updating timestamp to avoid interfering with other slow trials' detection
         self._save_trial_state(state, perturbation_time, result, trial, update_timestamp=False)

@@ -128,7 +128,7 @@ class BaseModel(Model):
         return super()._set_to_dummy_weights(value_sequence)
 
 
-class FlaxRLModel(Generic[ModelType, ConfigType], BaseModel):
+class FlaxRLModel(BaseModel, Generic[ModelType, ConfigType]):
     def __call__(self, input_dict: Batch, *, parameters, **kwargs) -> jax.Array:
         return self._forward(input_dict, parameters=parameters, **kwargs)
 

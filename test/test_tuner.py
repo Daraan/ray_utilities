@@ -1016,10 +1016,6 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
             self.assertEqual(decision, expected_decision)
         return decision
 
-    def test_retuner_basics(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            scheduler, runner = self.setup_scheduler(tmpdir=tmpdir)
-
     def testPerturbsLowPerformingTrials(self):  # noqa: N802
         with tempfile.TemporaryDirectory() as tmpdir:
             pbt, runner = self.setup_scheduler(tmpdir=tmpdir)
@@ -1098,7 +1094,7 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
     def testCheckpointing(self):  # noqa: N802
         # taken from ray's testing suite
         with tempfile.TemporaryDirectory() as tmpdir:
-            pbt, runner = self.setup_scheduler(tmpdir=tmpdir)
+            pbt, _runner = self.setup_scheduler(tmpdir=tmpdir)
 
             class Experiment(tune.Trainable):
                 def step(self):
@@ -1663,7 +1659,7 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
     def test_slow_trial_not_in_bottom_5_percent_continues(self):
         """Test that trials not in the slowest 5% continue normally."""
         # Set up: 8 trials finished, 2 still active (not in bottom 5% of 10)
-        for i, trial in enumerate(self.trials[:-2]):
+        for trial in self.trials[:-2]:
             self.scheduler._trial_state[trial].last_train_time = 1000
 
         slow_trial = self.trials[-2]
