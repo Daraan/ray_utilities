@@ -581,7 +581,6 @@ def _set_env_runner_state(
     state_ref: ray.ObjectRef,
     config_ref: ray.ObjectRef,
 ):
-    return
     state: dict = ray.get(state_ref)
     if COMPONENT_METRICS_LOGGER not in state:
         raise KeyError(f"State dictionary missing required key '{COMPONENT_METRICS_LOGGER}'.")
@@ -698,7 +697,6 @@ def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
 
     See my PR: https://github.com/ray-project/ray/pull/54148
     """
-    return
     assert algorithm.learner_group is not None
     assert algorithm.metrics
     assert algorithm.config

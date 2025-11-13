@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import abc
 import logging
+import math
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol
 
-from ray.rllib.algorithms.callbacks import DefaultCallbacks
 from typing_extensions import Self
 
 from ray_utilities.callbacks.algorithm.callback_mixins import GetGlobalStepMixin
@@ -156,6 +156,7 @@ class DynamicHyperparameterCallback(GetGlobalStepMixin, TrainableCallbackExtensi
         """
         # NOTE: Likely no metrics_logger here.
         assert metrics_logger
-        gs = self._get_global_step(metrics_logger=metrics_logger)
+        gs = self._get_global_step(metrics_logger=metrics_logger, result=None)
+        assert not math.isnan(gs)
         self._updater(algorithm, metrics_logger, global_step=gs)
         super().on_checkpoint_loaded(algorithm=algorithm, metrics_logger=metrics_logger, **kwargs)

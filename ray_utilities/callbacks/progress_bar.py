@@ -246,7 +246,7 @@ def update_pbar(
             lines += [f"Disc Eval {key}: {value:>5.1f}" for key, value in discrete_eval_results.items()]
         if current_step is not None:
             current_step, step_unit = _unit_division(current_step)
-            step_count = f"Step {current_step:>3d}{step_unit}"
+            step_count = f"Step {current_step:>3.0f}{step_unit}"
             if total_steps is not None:
                 total_steps, total_step_unit = _unit_division(total_steps)
                 step_count += f"/{total_steps}{total_step_unit}"

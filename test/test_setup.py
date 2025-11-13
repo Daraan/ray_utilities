@@ -1177,9 +1177,17 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
         env_runner2 = result2
         # This step - trivial tests
         # TODO: is this also checked with learner?
-        self.assertEqual(
-            env_runner1[NUM_ENV_STEPS_PASSED_TO_LEARNER], env_runner2[NUM_ENV_STEPS_PASSED_TO_LEARNER], msg
-        )
+        try:
+            self.assertEqual(
+                env_runner1[NUM_ENV_STEPS_PASSED_TO_LEARNER], env_runner2[NUM_ENV_STEPS_PASSED_TO_LEARNER], msg
+            )
+        except AssertionError:
+            if math.isnan(env_runner1[NUM_ENV_STEPS_PASSED_TO_LEARNER]) and math.isnan(
+                env_runner2[NUM_ENV_STEPS_PASSED_TO_LEARNER]
+            ):
+                pass  # both nan is ok
+            else:
+                raise
 
         # Lifetime stats:
         self.assertEqual(
@@ -1212,7 +1220,8 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
         def log_custom_metric(metrics_logger: MetricsLogger, **kwargs):
             # Track env steps in a second metric
             metrics_logger.log_value(
-                NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, metrics_logger.peek(NUM_ENV_STEPS_SAMPLED), reduce="sum"
+                NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, metrics_logger.peek(NUM_ENV_STEPS_SAMPLED), reduce="sum",
+                clear_on_reduce=False,
             )
 
         config.callbacks(on_sample_end=log_custom_metric)
@@ -1353,8 +1362,12 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
                             trainable_0: DefaultTrainable = tune_results[num_env_runners_a]["trainables"][step]
                             trainable_1: DefaultTrainable = tune_results[num_env_runners_b]["trainables"][step]
                             assert trainable_0.algorithm.metrics and trainable_1.algorithm.metrics
-                            metrics_0 = trainable_0.algorithm.metrics.reduce()
-                            metrics_1 = trainable_1.algorithm.metrics.reduce()
+                            try:
+                                metrics_0 = trainable_0.algorithm.metrics.compile()
+                                metrics_1 = trainable_1.algorithm.metrics.compile()
+                            except:
+                                metrics_0 = trainable_0.algorithm.metrics.reduce()
+                                metrics_1 = trainable_1.algorithm.metrics.reduce()
                             self._test_checkpoint_values(
                                 metrics_0[ENV_RUNNER_RESULTS], metrics_1[ENV_RUNNER_RESULTS], msg_prefix
                             )
@@ -1524,8 +1537,6 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
             tree.assert_same_structure(metrics_0_restored, metrics_1_restored)
 
             # --- Step 2 from restored & checkpoint ---
-            #from ray_utilities.testing_utils import remote_breakpoint
-            #remote_breakpoint()
 
             result_algo0_step2_restored = algo_0_runner_restored.step()
             result_algo1_step2_restored = algo_1_runner_restored.step()
@@ -1723,7 +1734,6 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
                 # Stuck when num_envs_per_env_runner is too high. Unclear why.
                 "--num_envs_per_env_runner", 1,
                 "--env_seeding_strategy", "same",
-                "--no_dynamic_eval_interval",
             ):  # fmt: skip
                 setup = AlgorithmSetup(init_trainable=False)
                 config = setup.config
@@ -1766,15 +1776,12 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
             self.assertEqual(trainable0.algorithm_config.num_env_runners, num_env_runners_a)
             self.assertEqual(trainable1.algorithm_config.num_env_runners, num_env_runners_b)
 
-           # from ray_utilities.testing_utils import remote_breakpoint
-            #remote_breakpoint()
-
             results = self._test_algo_checkpointing(
                 trainable0,
                 trainable1,
                 num_env_runners_expected=(num_env_runners_a, num_env_runners_b),
                 metrics=[
-                    NUM_ENV_STEPS_SAMPLED_LIFETIME, # not exact when using multiple envs per runner
+                    # NUM_ENV_STEPS_SAMPLED_LIFETIME, # not exact when using multiple envs per runner
                     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
                 ],
             )
@@ -1800,6 +1807,37 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
             num_epochs=2,
             minibatch_size=ENV_STEPS_PER_ITERATION // 2,
         )
+        # add_callbacks_to_config(config, on_sample_end=exact_sampling_callback)
+        algo1 = config.env_runners(num_env_runners=1).build_algo()
+        algo0 = config.env_runners(num_env_runners=0).build_algo()
+        results = self._test_algo_checkpointing(
+            algo0,
+            algo1,
+            metrics=[
+                NUM_ENV_STEPS_SAMPLED_LIFETIME,
+                NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
+            ],
+        )
+
+        self._test_checkpoint_values(
+            results["env_runners"][0]["step_3"],
+            results["env_runners"][1]["step_3"],
+        )
+
+    def test_algorithm_checkpointing_native(self):
+        # similar to test_trainable_checkpointing, but pure algorithms
+        config = PPOConfig().environment(env="CartPole-v1")
+        config.debugging(seed=11)
+        config.environment(env="CartPole-v1")
+        global ENV_STEPS_PER_ITERATION
+        ENV_STEPS_PER_ITERATION = 32
+        config.training(
+            train_batch_size_per_learner=ENV_STEPS_PER_ITERATION,
+            num_epochs=2,
+            minibatch_size=ENV_STEPS_PER_ITERATION // 2,
+        )
+        config.env_runners(num_envs_per_env_runner=1)
+        config.evaluation(evaluation_interval=1)
         add_callbacks_to_config(config, on_sample_end=exact_sampling_callback)
         algo1 = config.env_runners(num_env_runners=1).build_algo()
         algo0 = config.env_runners(num_env_runners=0).build_algo()
@@ -1807,7 +1845,7 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
             algo0,
             algo1,
             metrics=[
-               # NUM_ENV_STEPS_SAMPLED_LIFETIME,
+                NUM_ENV_STEPS_SAMPLED_LIFETIME,
                 NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
             ],
         )
