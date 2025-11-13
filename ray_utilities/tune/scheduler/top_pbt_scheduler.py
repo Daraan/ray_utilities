@@ -46,7 +46,7 @@ import tree
 from ray.train._internal.session import _FutureTrainingResult, _TrainingResult
 from ray.tune.execution.tune_controller import TuneController
 from ray.tune.experiment import Trial
-from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
+from ray.tune.result import TRAINING_ITERATION, TIME_TOTAL_S  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.schedulers.pbt import PopulationBasedTraining, _fill_config
 from typing_extensions import Sentinel
 
@@ -100,6 +100,8 @@ if TYPE_CHECKING:
             """The amount of (exact) env steps sampled"""
 
             self.last_update_timestamp: float = get_time()
+
+            self.total_time_spent: float = 0.0
 
 
 def _grid_search_sample_function(grid_search_space: Iterable[_T], *, repeat=True) -> Callable[[], _T]:
@@ -1084,6 +1086,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             state.current_env_steps = None  # pyright: ignore[reportAttributeAccessIssue]
         if update_timestamp:
             state.last_update_timestamp = get_time()  # pyright: ignore[reportAttributeAccessIssue]
+        state.total_time_spent = result.get(TIME_TOTAL_S, 0.0)  # pyright: ignore[reportAttributeAccessIssue]
         return score
 
     def reset_exploitations(self):
@@ -1178,10 +1181,15 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         state = self._trial_state[trial]
         time_since_perturb = time_of_slow_interval - state.last_perturbation_time
         # if it is too early or too late, do nothing
-        # TODO: If there is no big temporal difference we should also wait, some trials are started later and are behind just for that reason
         if (
             time_since_perturb < 0.66 * self._perturbation_interval
             or time_since_perturb > 0.95 * self._perturbation_interval
+        ):
+            return decision
+        # If this trial was just started late and is not slow by itself continue
+        other_total_times = [self._trial_state[t].total_time_spent for t in self._trial_state if t is not trial]
+        if other_total_times and (
+            result.get(TIME_TOTAL_S, 0) <= (max_other := max(other_total_times)) - (min(max_other * 0.05, 180))
         ):
             return decision
         # If we are less than 5 min behind other trials (excluding current), ignore
