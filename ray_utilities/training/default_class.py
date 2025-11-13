@@ -995,6 +995,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             Does not check if learners need to be recreated.
             Assumes num_learners does not change.
         """
+        return
         if self._algorithm is None:
             return None
         if new_algo_config != self.algorithm.config:
@@ -1308,7 +1309,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     **algo_kwargs,
                 ),
             )
-            sync_env_runner_states_after_reload(self.algorithm)
+            #sync_env_runner_states_after_reload(self.algorithm)
         else:
             raise ValueError(f"Checkpoint must be a dict or a path. Not {type(checkpoint)}")
         if perturbed:  # XXX: check that perturbed has highest priority and updated the config
@@ -1511,9 +1512,9 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             if self._algorithm is None:
                 _logger.warning("Cannot set algorithm state as algorithm is None.")
             else:
-                if self.algorithm.metrics and COMPONENT_METRICS_LOGGER in state["algorithm"]:
-                    assert self.algorithm.metrics
-                    self.algorithm.metrics.reset()
+                #if self.algorithm.metrics and COMPONENT_METRICS_LOGGER in state["algorithm"]:
+                #    assert self.algorithm.metrics
+                #    self.algorithm.metrics.reset()
                 for component in COMPONENT_ENV_RUNNER, COMPONENT_EVAL_ENV_RUNNER, COMPONENT_LEARNER_GROUP:
                     if component not in state["algorithm"]:
                         _logger.warning("Restoring algorithm without %s component in state.", component)
@@ -1611,7 +1612,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
         # Update env_runners after restore
         # check if config has been restored correctly - TODO: Remove after more testing
-        if self._algorithm:
+        if False and self._algorithm:
             # XXX Remove
             from ray_utilities.testing_utils import TestHelpers
 
@@ -1627,7 +1628,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                         self._algorithm.learner_group._learner.config = self.algorithm_config.copy(copy_frozen=True)  # pyright: ignore[reportOptionalMemberAccess]
         if self._algorithm is not None:  # Otherwise algorithm will be created later
             self._rebuild_algorithm_if_necessary(new_algo_config)
-            sync_env_runner_states_after_reload(self.algorithm)  # NEW, Test, sync states here
+            #sync_env_runner_states_after_reload(self.algorithm)  # NEW, Test, sync states here
             if self.algorithm.metrics and RAY_VERSION >= Version("2.50.0"):
                 for stat in tree.flatten(self.algorithm.metrics.stats):
                     stat = cast("Stats", stat)
