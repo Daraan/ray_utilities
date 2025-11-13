@@ -10,6 +10,7 @@ import traceback
 from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
+from queue import Queue
 from typing import TYPE_CHECKING, Any, ClassVar, List, Optional, cast
 
 import ray
@@ -403,9 +404,6 @@ class AdvWandbLoggerCallback(
             return
         if trial in self._local_threads:
             return
-
-        import threading
-        from queue import Queue
 
         self._trial_queues[trial] = Queue()
         assert issubclass(self._logger_actor_cls, _WandbLoggingActorWithArtifactSupport), (

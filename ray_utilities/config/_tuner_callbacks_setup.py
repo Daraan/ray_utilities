@@ -12,6 +12,7 @@ from typing_extensions import TypeVar
 
 from ray_utilities.callbacks.tuner import AdvCometLoggerCallback, create_tuner_callbacks
 from ray_utilities.callbacks.tuner._log_result_grouping import exclude_results
+from ray_utilities.callbacks.tuner.add_experiment_key import AddExperimentKeyCallback
 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 
 try:
@@ -282,4 +283,5 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             logger.info("Created comet logger" if self._setup.args.comet else "Created comet logger - for testing")
         else:
             logger.info("Not logging to Comet")
+        callbacks.insert(0, AddExperimentKeyCallback())
         return callbacks

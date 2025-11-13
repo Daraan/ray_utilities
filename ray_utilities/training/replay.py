@@ -81,7 +81,15 @@ class ReplayTrainable(DefaultTrainable["DefaultArgumentParser", Any, Any]):
                     break
         # self._first_result = next(self._replay_step())
         self._start_iteration = start_iteration or 0
+        if config.get("cli_args", {}).get("buffer_length") is not None:
+            config["cli_args"]["buffer_length"] = 1  # no buffered training
         super().__init__(config, algorithm_overrides=algorithm_overrides, model_config=model_config, **kwargs)
+        if not hasattr(self, "_total_steps"):
+            # When replaying a fork. Checkpoint & algorithm is not created
+            self._total_steps = {
+                "iterations": "auto",
+                "total_steps": config.get("cli_args", {}).get("total_steps", 123456),
+            }
         self._setup.args.comment = self._comment or None
         from ray.tune.experiment.trial import Trial
 
@@ -268,8 +276,9 @@ if __name__ == "__main__":
                 result = json.loads(line)
                 if "current_step" not in result:
                     raise ValueError("Result does not contain current_step.")
-                if result["current_step"] < fork_step:
+                if result["current_step"] <= fork_step:
                     continue
+                # first step after fork step is the config we want to clone
                 config = result["config"]
                 if FORK_FROM in config:
                     # Check if fork_step matches
@@ -303,6 +312,7 @@ if __name__ == "__main__":
         group: Optional[str] = None
         new_id: Optional[str | Literal[True]] = None
         ignore_old_wandb_paths: bool = False
+        no_upload: bool = False
 
     parser = argparse.ArgumentParser()
     parser.add_argument("replay_file", type=str)
@@ -313,6 +323,7 @@ if __name__ == "__main__":
     parser.add_argument("--group", type=str, default=None)
     parser.add_argument("--new_id", nargs="?", const=True, type=str, default=None)
     parser.add_argument("--ignore-old-wandb-paths", action="store_true", default=False)
+    parser.add_argument("--no-upload", action="store_true", default=False)
     args, extra = parser.parse_known_args()
     args = cast("Parser", args)
     _API = wandb_api()
@@ -358,6 +369,8 @@ if __name__ == "__main__":
                 )[-1]
                 import base62
 
+                trial_id_from_name = replay_path.stem.split("-")[-1]
+
                 parent_steps = base62.decode(parent_steps)
                 try:
                     config = config_from_result_file(replay_path, is_fork=True, fork_step=parent_steps)
@@ -365,6 +378,12 @@ if __name__ == "__main__":
                     logger.exception("Could not find config for %s. .json incomplete?", replay_path)
                     failures.append(replay_path)
                     continue
+                if trial_id_from_name != config[FORK_FROM]["fork_id_this_trial"]:
+                    logger.error(
+                        f"Trial ID from replay file name {trial_id_from_name} does not match "  # noqa: G004
+                        f"fork_id_this_trial {config[FORK_FROM]['fork_id_this_trial']} in config. Wrong step selected?"
+                    )
+                    raise ValueError("Mismatch in trial ID from name and config.")
             else:
                 config = first_result["config"]
             if args.ignore_old_wandb_paths:
@@ -455,8 +474,8 @@ if __name__ == "__main__":
         if ExperimentKey.FORK_SEPARATOR in replay_path.name:
             # need to determine if we fork existing parent or also cloned parent
             fork_data = cast("ForkFromData", config[FORK_FROM])
-            if args.new_id and args.new_id is not True and args.new_id.startswith("clone") and args.experiment:
-                # need to update fork_from to new cloned
+            if args.experiment and args.new_id and args.new_id is not True and args.new_id.startswith("clone"):
+                # Cloning whole experiment, need to adjust parent fork id to cloned parent
                 fork_data["parent_fork_id"] = fork_data["parent_fork_id"] + "_" + args.new_id
             fork_data["fork_id_this_trial"] = trial_id
             # define ID for this trial. NOTE: Might not work with comet as too long.
@@ -473,10 +492,11 @@ if __name__ == "__main__":
             trainable_name=args.trainable_name,
             start_iteration=args.start,
             # NOTE: If we upload at end this blocks, but no upload block below
-            upload_mode="offline+upload@end" if not args.ignore_old_wandb_paths else "offline",
+            upload_mode="offline+upload@end" if not (args.ignore_old_wandb_paths or args.no_upload) else "offline",
             wandb_run=run,
             trial_name_creator=(lambda _trial, run=run: run.name) if run is not None else trial_name_creator,
         )
+        assert hasattr(trainable, "_total_steps")
         while True:
             result = trainable.train()
             if not result:
@@ -486,7 +506,7 @@ if __name__ == "__main__":
         # for result in trainable._replay_step():
         #    trainable.wandb_run.log(result)
         # trainable.wandb_run.finish()
-    if args.ignore_old_wandb_paths:
+    if args.ignore_old_wandb_paths and not args.no_upload:
         import base62
 
         # Depending in the situation we do not want to re-upload the old wandb_paths.

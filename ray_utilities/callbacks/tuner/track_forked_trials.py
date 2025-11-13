@@ -120,11 +120,12 @@ class TrackForkedTrialsMixin(LoggerCallback):
         if fork_data is not None:
             if (fork_id := fork_data.get("fork_id_this_trial")) is None:
                 fork_id = self.make_forked_trial_id(trial, fork_data)
+                fork_data["fork_id_this_trial"] = fork_id
         else:
             # assume we load for example from a checkpoint and the parent is currently not running
             # hence the id of the trial does not conflict with the parent
             fork_id = trial.trial_id
-        # from set_state we mgiht have string in the dict
+        # from set_state we might have string in the dict
         if trial.trial_id in self._current_fork_ids:
             self._current_fork_ids[trial] = self._current_fork_ids.pop(trial.trial_id)
         if fork_id in self._current_fork_ids:

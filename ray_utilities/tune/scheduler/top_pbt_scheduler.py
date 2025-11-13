@@ -1012,8 +1012,14 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             fork_data["fork_id_this_trial"] = forked_trial_id
             if (current_env_steps := self._trial_state[trial_to_clone].current_env_steps) is not None:
                 fork_data["parent_env_steps"] = current_env_steps
+            # XXX: Does this reflect the correct parent fork id?
+            # trial to clone is is in upper_quantile, meaning self.current_trial_keys is not updated
+            # for the parent, as it will continue this is correct
+            # Q: Is the parent running with this id in the logger?
             fork_data["parent_fork_id"] = self.current_trial_keys[trial_to_clone]
             trial.config[FORK_FROM] = fork_data
+            trial.config["experiment_key"] = forked_trial_id
+            trial.config.setdefault("original_experiment_key", trial.config["experiment_key"])
             trial.invalidate_json_state()
             # Update variables tracking the fork ids
             self._fork_ids[trial, (trial_to_clone, parent_iteration)] = forked_trial_id

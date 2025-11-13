@@ -1152,12 +1152,21 @@ def verify_wandb_runs(
         elif not single_experiment and verbose > 2:
             logger.info("🟢 Number of offline runs to online runs match")
         elif single_experiment and len(offline_results) != 1:
-            logger.error(
-                "🔴 Found %d offline results for single experiment %s: %s",
-                len(offline_results),
-                single_experiment,
-                offline_results,
-            )
+            if ExperimentKey.FORK_SEPARATOR in run.id:  # pyright: ignore[reportPossiblyUnboundVariable]
+                offline_results = [
+                    path
+                    for path in offline_results
+                    if run.id in path.stem  # pyright: ignore[reportPossiblyUnboundVariable]
+                ]
+            else:
+                offline_results = [path for path in offline_results if path.name == "result.json"]
+            if len(offline_results) != 1:
+                logger.error(
+                    "🔴 Found %d offline results for single experiment %s: %s",
+                    len(offline_results),
+                    single_experiment,
+                    offline_results,
+                )
         if single_experiment:
             offline_run_ids = {run.id}  # pyright: ignore[reportPossiblyUnboundVariable]
         else:
@@ -1392,7 +1401,9 @@ def verify_wandb_run_history(
         if entity is None:
             entity = api.default_entity
         run = cast("Run", api.run(f"{entity}/{project}/{run_id}"))
-    online_history = cast("pd.DataFrame", run.history(pandas=True))
+    online_history = cast(
+        "pd.DataFrame", run.history(samples=2000, keys=["current_step", "training_iteration"], pandas=True)
+    )
     failures: list[_FailureTuple] = []
     if len(online_history) == 0:
         # data incomplete
@@ -1405,7 +1416,7 @@ def verify_wandb_run_history(
         failures.append(_FailureTuple("No online history found", last_iteration, run.lastHistoryStep))
         # TODO: Could clean sync marker, could check local dir in /tmp
         return failures
-    if len(online_history) != len(offline_data):
+    if len(online_history) != len(offline_data) and len(online_history) < 2000:
         # if it is a forked run skip until fork_point
         if FORK_FROM in run.config:
             fork_point = run.config[FORK_FROM]["parent_training_iteration"]
