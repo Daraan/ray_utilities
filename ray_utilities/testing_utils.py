@@ -2425,3 +2425,7 @@ class MockPopenClass(mock.MagicMock, metaclass=MockPopenClassMeta):
             return r
 
         return wrapper
+
+
+class XFailException(Exception):  # noqa: N818
+    """Raise an expected exception to be used with pytest.mark.xfail(raises=XFailException)"""
