@@ -113,7 +113,7 @@ class SyncConfigFilesCallback(Callback):
 
                 _logger.warning(
                     "Failed to sync config file\n%s\nfor trial %s for relative path\n%shostname=%s, ip=%s",
-                    file.resolve(),
+                    file.absolute(),
                     trial.trial_id,
                     Path.cwd(),
                     socket.gethostname(),

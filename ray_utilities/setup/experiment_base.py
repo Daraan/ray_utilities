@@ -1322,7 +1322,7 @@ class ExperimentSetupBase(
         if os.environ.get("CI") or (str(self.storage_path).startswith("s3://") and self.args.test):
             # CI is env variable used by GitHub actions
             # Do not use remote when we are testing
-            self.storage_path = Path("./outputs/experiments/").resolve()
+            self.storage_path = Path("./outputs/experiments/shared/").resolve()
         tuner_setup = self.tuner_setup_class(
             setup=self,
             eval_metric=self.args.metric,

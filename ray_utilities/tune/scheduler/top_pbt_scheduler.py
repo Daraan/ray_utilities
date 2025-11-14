@@ -1188,7 +1188,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         time_since_perturb = time_of_slow_interval - state.last_perturbation_time
         # if it is too early or too late, do nothing
         if (
-            time_since_perturb < 0.66 * self._perturbation_interval
+            time_since_perturb < 0.50 * self._perturbation_interval
             or time_since_perturb > 0.95 * self._perturbation_interval
         ):
             return decision

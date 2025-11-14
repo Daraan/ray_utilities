@@ -183,7 +183,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         """
         if str(self._setup.storage_path).startswith("s3://"):
             return str(self._setup.storage_path)
-        return str(Path(self._setup.storage_path).resolve())
+        return str(Path(self._setup.storage_path).absolute())
 
     def create_stoppers(self) -> list[Stopper]:
         """Create stopping criteria for hyperparameter optimization trials.
@@ -578,9 +578,15 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         assert FORK_FROM not in param_space, (
             f"{FORK_FROM} is not expected to be in the param_space that is passed to the Tuner by default."
         )
+        run_config = self.create_run_config(self.create_callbacks(adv_loggers=adv_loggers))
+        logger.info(
+            "Creating new Tuner with experiment name: %s at storage path: %s",
+            run_config.name,
+            run_config.storage_path,
+        )
         return tune.Tuner(
             trainable=trainable,  # Updated to use the modified trainable with resource requirements
             param_space=param_space,
             tune_config=tune_config,
-            run_config=self.create_run_config(self.create_callbacks(adv_loggers=adv_loggers)),
+            run_config=run_config,
         )
