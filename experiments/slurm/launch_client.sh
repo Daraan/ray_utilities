@@ -290,7 +290,7 @@ else
 fi
 
 # Add script and arguments
-SBATCH_CMD+=("_launch_client.sh")
+SBATCH_CMD+=("experiments/slurm/_launch_client.sh")
 if [ -n "${PYTHON_FILE}" ]; then
     SBATCH_CMD+=("${PYTHON_FILE}" "${PYTHON_ARGS[@]}")
 fi
