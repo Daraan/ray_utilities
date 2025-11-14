@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 from ray.tune import Callback
 
@@ -48,7 +48,41 @@ A copy of :obj:`DEFAULT_TUNER_CALLBACKS_RENDER`.
 """
 
 
-def create_tuner_callbacks(*, adv_loggers: bool) -> list["Callback"]:
+def create_tuner_callbacks(
+    *, adv_loggers: bool, offline_loggers: Optional[bool | list[str | Any]] = None, json=True, tbx=True, csv=True
+) -> list["Callback"]:
+    callbacks = []
+    if offline_loggers is not None:
+        if isinstance(offline_loggers, bool):
+            json = json and offline_loggers
+            tbx = tbx and offline_loggers
+            csv = csv and offline_loggers
+        elif isinstance(offline_loggers, list):
+            # "all" should be converted to True by parser
+            json = json and ("json" in offline_loggers or "all" in offline_loggers)
+            tbx = tbx and (
+                "tensorboard" in offline_loggers
+                or "tb" in offline_loggers
+                or "tbx" in offline_loggers
+                or "all" in offline_loggers
+            )
+            csv = csv and ("csv" in offline_loggers or "all" in offline_loggers)
     if adv_loggers:
-        return [cb() for cb in DEFAULT_ADV_TUNER_CALLBACKS]
-    return [cb() for cb in DEFAULT_TUNER_CALLBACKS_NO_RENDER]
+        for cb in DEFAULT_ADV_TUNER_CALLBACKS:
+            if (
+                (cb is AdvJsonLoggerCallback and not json)
+                or (cb is AdvTBXLoggerCallback and not tbx)
+                or (cb is AdvCSVLoggerCallback and not csv)
+            ):
+                continue
+            callbacks.append(cb())
+        return callbacks
+    for cb in DEFAULT_TUNER_CALLBACKS_NO_RENDER:
+        if (
+            (cb is AdvJsonLoggerCallback and not json)
+            or (cb is AdvTBXLoggerCallback and not tbx)
+            or (cb is AdvCSVLoggerCallback and not csv)
+        ):
+            continue
+        callbacks.append(cb())
+    return callbacks

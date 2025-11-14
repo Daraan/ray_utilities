@@ -13,7 +13,9 @@ import ray
 from packaging.version import Version
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
-from ray.rllib.core import COMPONENT_LEARNER, COMPONENT_METRICS_LOGGER, COMPONENT_RL_MODULE
+from ray.rllib.callbacks.callbacks import RLlibCallback
+from ray.rllib.core import COMPONENT_LEARNER, COMPONENT_METRICS_LOGGER, COMPONENT_RL_MODULE, DEFAULT_MODULE_ID
+from ray.rllib.env import INPUT_ENV_SPACES
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
     EVALUATION_RESULTS,
@@ -22,10 +24,12 @@ from ray.rllib.utils.metrics import (
 from typing_extensions import Sentinel, TypeAliasType
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
-from ray_utilities.config import seed_environments_for_config
+from ray_utilities.config import seed_environments_for_config, DefaultArgumentParser
 from ray_utilities.constants import ENVIRONMENT_RESULTS, RAY_VERSION, SEED, SEEDS
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, calculate_steps
+from ray_utilities.learners import mix_learners
 from ray_utilities.misc import AutoInt
+from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.warn import (
     warn_about_larger_minibatch_size,
     warn_if_batch_size_not_divisible,
@@ -34,13 +38,11 @@ from ray_utilities.warn import (
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
-    from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
     from ray.rllib.env.env_runner import EnvRunner
     from ray.rllib.env.multi_agent_env_runner import MultiAgentEnvRunner
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
 
-    from ray_utilities.config import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
     from ray_utilities.typing import (
         RewardUpdaters,
@@ -67,20 +69,28 @@ _NOT_FOUND = Sentinel("_NOT_FOUND")
 
 
 @overload
-def episode_iterator(args: dict[str, Any], hparams: Any, *, use_pbar: Literal[False]) -> range: ...
+def episode_iterator(
+    args: dict[str, Any], hparams: Any, *, use_pbar: Literal[False], flush_interval: Optional[float] = 3.5
+) -> range: ...
 
 
 @overload
-def episode_iterator(args: dict[str, Any], hparams: dict[Any, Any], *, use_pbar: Literal[True]) -> tqdm_ray.tqdm: ...
+def episode_iterator(
+    args: dict[str, Any], hparams: dict[Any, Any], *, use_pbar: Literal[True], flush_interval: Optional[float] = 3.5
+) -> tqdm_ray.tqdm: ...
 
 
-def episode_iterator(args: dict[str, Any], hparams: dict[str, Any], *, use_pbar: bool = True) -> tqdm_ray.tqdm | range:
+def episode_iterator(
+    args: dict[str, Any], hparams: dict[str, Any], *, use_pbar: bool = True, flush_interval: Optional[float] = 3.5
+) -> tqdm_ray.tqdm | range:
     """Creates an iterator for `args["iterations"]`
 
     Will create a `tqdm` if `use_pbar` is True, otherwise returns a range object.
     """
     if use_pbar:
-        return tqdm_ray.tqdm(range(args["iterations"]), position=hparams.get("process_number", None))
+        return tqdm_ray.tqdm(
+            range(args["iterations"]), position=hparams.get("process_number", None), flush_interval_s=flush_interval
+        )
     return range(args["iterations"])
 
 
@@ -104,7 +114,52 @@ def patch_model_config(config: AlgorithmConfig, model_config: dict[str, Any] | D
             config._rl_module_spec.model_config = dataclasses.asdict(config._rl_module_spec.model_config) | model_config
 
 
-def _patch_with_param_space(
+_learner_config_dict_update_keys = {
+    "dynamic_buffer": "dynamic_buffer",
+    "dynamic_batch": "dynamic_batch",
+    "total_steps": "total_steps",
+    "remove_masked_samples": ("not", "keep_masked_samples"),
+    "min_dynamic_buffer_size": "min_step_size",
+    "max_dynamic_buffer_size": "max_step_size",
+    "accumulate_gradients_every": "accumulate_gradients_every",
+}
+
+
+def _patch_learner_config_with_param_space(
+    args: dict[str, Any],
+    config: AlgorithmConfig,
+    *,
+    hparams: dict[str, Any],
+    config_inplace: bool = False,
+):
+    current_config_dict = config.learner_config_dict.copy() or {}
+    checked_keys = set()
+    for dest_key, source_key in _learner_config_dict_update_keys.items():
+        checked_keys.add(source_key if isinstance(source_key, str) else source_key[1])
+        if isinstance(source_key, tuple):
+            # special handling for negation
+            if source_key[0] == "not":
+                value = hparams.get(source_key[1], _NOT_FOUND)
+                if value is not _NOT_FOUND:
+                    value = not value
+            else:
+                raise ValueError(f"Unknown special handling for learner_config_dict key {source_key}")
+        else:
+            value = hparams.get(source_key, _NOT_FOUND)
+        if value is not _NOT_FOUND:
+            current_config_dict[dest_key] = value
+    if config_inplace:
+        object.__setattr__(config, "learner_config_dict", current_config_dict)
+    if current_config_dict:
+        args["__overwritten_keys__"]["learner_config_dict"] = current_config_dict
+    matching_keys_left = set(current_config_dict.keys()).intersection(hparams.keys() - checked_keys)
+    if matching_keys_left:
+        ImportantLogger.important_info(
+            logger, "Found matching keys in hparams not applied to learner_config_dict: %s", matching_keys_left
+        )
+
+
+def _patch_config_with_param_space(
     args: dict[str, Any],
     config: _AlgorithmConfigT,
     *,
@@ -115,10 +170,16 @@ def _patch_with_param_space(
     args["__overwritten_keys__"] = {}
     if "model_config" in hparams:
         patch_model_config(config, hparams["model_config"])
-    if not same_keys:
-        logger.debug("No keys to patch in args with hparams: %s", hparams)
+    _patch_learner_config_with_param_space(config=config, args=args, hparams=hparams, config_inplace=config_inplace)
+    if not same_keys and (not args["__overwritten_keys__"] or config_inplace):
         return args, config
     msg_dict = {k: f"{args[k]} -> {hparams[k]}" for k in same_keys}
+
+    # Check if minibatch_scale is set (from args or hparams)
+    # NOTE: Cli args priority is higher here. # XXX Why? # CRITICAL This could be wrong when we tune minibatch_scale. Test
+    minibatch_scale = hparams.get("cli_args", {}).get("minibatch_scale", args.get("minibatch_scale", None))
+
+    # Adjust minibatch_size if train_batch_size_per_learner changes
     if (
         "train_batch_size_per_learner" in same_keys
         and config.minibatch_size is not None
@@ -134,19 +195,132 @@ def _patch_with_param_space(
             object.__setattr__(config, "minibatch_size", hparams["train_batch_size_per_learner"])
         args["__overwritten_keys__"]["minibatch_size"] = hparams["train_batch_size_per_learner"]
 
+    # Apply minibatch_scale logic if set
+    elif minibatch_scale is not None and "train_batch_size_per_learner" in same_keys:
+        new_batch_size = int(hparams["train_batch_size_per_learner"] * minibatch_scale)
+        if config.minibatch_size != new_batch_size:
+            msg_dict["minibatch_size"] = (
+                f"{config.minibatch_size} -> {new_batch_size} (minibatch_scale={minibatch_scale})"
+            )
+            if config_inplace:
+                object.__setattr__(config, "minibatch_size", new_batch_size)
+            args["__overwritten_keys__"]["minibatch_size"] = new_batch_size
+
     logger.info("Patching args with hparams: %s", msg_dict)
+
     for key in same_keys:
         args[key] = hparams[key]
-        if config_inplace:
+        if config_inplace and hasattr(config, key):
             object.__setattr__(config, key, hparams[key])
         args["__overwritten_keys__"][key] = hparams[key]
-    if not config_inplace:
+    if not args["__overwritten_keys__"]:
+        logger.debug("No keys to patch in args with hparams: %s", hparams)
+    elif not config_inplace:
         is_frozen = config._is_frozen
         config = cast("_AlgorithmConfigT", config.copy(copy_frozen=False))
+        # NOTE: This might set attributes that to no belong to the config
         config.update_from_dict(args["__overwritten_keys__"])
         if is_frozen:
             config.freeze()
     assert config.minibatch_size or 0 <= config.train_batch_size_per_learner
+    return args, config
+
+
+def _post_patch_config_with_param_space(
+    args: dict[str, Any], config: AlgorithmConfig, env_seed: int | Sequence[int] | _NOT_FOUND | None
+) -> None:
+    """
+    In-place post processing after patching config with param space.
+
+    Should update important attributes based on the updated args
+    """
+    minibatch_scale = args.get("minibatch_scale", args.get("cli_args", {}).get("minibatch_scale", None))
+    if minibatch_scale is not None:
+        new_batch_size = int(config.train_batch_size_per_learner * minibatch_scale)
+        if config.minibatch_size != new_batch_size:
+            warn_about_larger_minibatch_size(
+                minibatch_size=new_batch_size,
+                train_batch_size_per_learner=config.train_batch_size_per_learner,
+                note_adjustment=True,
+            )
+            logger.info(
+                "Adjusting minibatch_size %d -> %d based on minibatch_scale %f",
+                config.minibatch_size,
+                new_batch_size,
+                minibatch_scale,
+            )
+            args["minibatch_size"] = new_batch_size
+            object.__setattr__(config, "minibatch_size", new_batch_size)
+    # Change learner class if needed
+    if args.get("accumulate_gradients_every", 0) > 1 or args.get("dynamic_batch", False):
+        # import lazy as currently not used elsewhere
+        from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
+            PPOTorchLearnerWithGradientAccumulation,
+        )
+
+        learner_class = PPOTorchLearnerWithGradientAccumulation
+        if not issubclass(config.learner_class, learner_class):
+            # need to account for mixer classes - take bases expect last
+            # TODO: This is not 100% save better add correct learner class if accumulate_gradients is a tune parameter in Setup
+            logger.info("Changing learner class to %s", learner_class)
+            try:
+                config.learners(
+                    learner_class=mix_learners(  # pyright: ignore[reportCallIssue]
+                        [*config.learner_class.__bases__[:1], learner_class]
+                    )
+                )
+            except TypeError:
+                # Deprecated keyword
+                config.training(
+                    learner_class=mix_learners(  # pyright: ignore[reportCallIssue]
+                        [*config.learner_class.__bases__[:1], learner_class]
+                    )  # pyright: ignore[reportCallIssue]
+                )
+    # Seeded environments - sequential seeds have to be set here, env_seed comes from Tuner
+    if args.get("env_seeding_strategy", DefaultArgumentParser.env_seeding_strategy) == "sequential":
+        # Warn if a seed is set but no env_seed is present
+        if (env_seed is None or env_seed is _NOT_FOUND) and "cli_args" in args and args["cli_args"]["seed"] is not None:
+            logger.warning(
+                "cli_args has a seed(%d) set but env_seed is None, sequential seeding will not work. "
+                "Assure that env_seed is passed as a parameter when creating the Trainable, "
+                "e.g. sample env_seed by tune. Falling back to cli_args seed and env_seeding_strategy='same'.",
+                args["cli_args"]["seed"],
+            )
+            env_seed = args["cli_args"]["seed"]
+        elif env_seed is _NOT_FOUND:
+            env_seed = None
+        assert env_seed is not _NOT_FOUND
+        seed_environments_for_config(config, env_seed)
+    elif args["env_seeding_strategy"] == "same":
+        # prefer seed coming from tuner
+        seed_environments_for_config(config, env_seed if env_seed is not _NOT_FOUND else args["seed"])
+    elif args["env_seeding_strategy"] == "constant":  # use default seed of class
+        seed_environments_for_config(config, SeedEnvsCallback.env_seed)
+    else:  # random
+        seed_environments_for_config(config, None)
+
+    # endregion seeding
+
+
+def patch_config_with_param_space(
+    args: dict[str, Any],
+    config: _AlgorithmConfigT,
+    *,
+    hparams: dict[str, Any],
+    config_inplace: bool = False,
+) -> tuple[dict[str, Any], _AlgorithmConfigT]:
+    """Patch args and config with hyperparameters from param space.
+
+    Args:
+        args: Arguments dictionary to patch.
+        config: AlgorithmConfig to patch.
+        hparams: Hyperparameters from param space.
+        config_inplace: Whether to modify the config in place. Defaults to False.
+    Returns:
+        Tuple of patched args and config.
+    """
+    args, config = _patch_config_with_param_space(args, config, hparams=hparams, config_inplace=config_inplace)
+    _post_patch_config_with_param_space(args, config, env_seed=hparams.get("env_seed", _NOT_FOUND))
     return args, config
 
 
@@ -188,40 +362,7 @@ def get_args_and_config(
         raise ValueError("Either setup or setup_class must be provided.")
     if model_config is not None:
         patch_model_config(config, model_config)
-    args, config = _patch_with_param_space(args, config, hparams=hparams)
-    # endregion
-
-    # region seeding
-
-    env_seed: int | Sequence[int] | None = hparams.get("env_seed", _NOT_FOUND)
-    # Seeded environments - sequential seeds have to be set here, env_seed comes from Tuner
-    if args["env_seeding_strategy"] == "sequential":
-        # Warn if a seed is set but no env_seed is present
-        if (
-            (env_seed is None or env_seed is _NOT_FOUND)
-            and "cli_args" in hparams
-            and hparams["cli_args"]["seed"] is not None
-        ):
-            logger.warning(
-                "cli_args has a seed(%d) set but env_seed is None, sequential seeding will not work. "
-                "Assure that env_seed is passed as a parameter when creating the Trainable, "
-                "e.g. sample env_seed by tune. Falling back to cli_args seed and env_seeding_strategy='same'.",
-                hparams["cli_args"]["seed"],
-            )
-            env_seed = hparams["cli_args"]["seed"]
-        elif env_seed is _NOT_FOUND:
-            env_seed = None
-        assert env_seed is not _NOT_FOUND
-        seed_environments_for_config(config, env_seed)
-    elif args["env_seeding_strategy"] == "same":
-        # prefer seed coming from tuner
-        seed_environments_for_config(config, env_seed if env_seed is not _NOT_FOUND else args["seed"])
-    elif args["env_seeding_strategy"] == "constant":  # use default seed of class
-        seed_environments_for_config(config, SeedEnvsCallback.env_seed)
-    else:  # random
-        seed_environments_for_config(config, None)
-
-    # endregion seeding
+    args, config = patch_config_with_param_space(args, config, hparams=hparams)
 
     return args, config
 
@@ -310,9 +451,24 @@ def setup_trainable(
         setup_class=setup_class,
         model_config=model_config,
     )
+
+    # Apply minibatch_scale setting if set in args
+    minibatch_scale: float | None = args.get("minibatch_scale", None)
+    if minibatch_scale is not None:
+        scaled_minibatch = int(config.train_batch_size_per_learner * minibatch_scale)
+        if config.minibatch_size != scaled_minibatch:
+            config = config.copy(copy_frozen=False)
+            config.minibatch_size = scaled_minibatch
+            config.freeze()
+
     if config_overrides:
         if isinstance(config_overrides, AlgorithmConfig):
             config_overrides = config_overrides.to_dict()
+
+        # Check if minibatch_scale is set and adjust minibatch_size accordingly
+        if minibatch_scale is not None and "train_batch_size_per_learner" in config_overrides:
+            config_overrides["minibatch_size"] = int(config_overrides["train_batch_size_per_learner"] * minibatch_scale)
+
         if "train_batch_size_per_learner" in config_overrides or "minibatch_size" in config_overrides:
             batch_size = config_overrides.get("train_batch_size_per_learner", config.train_batch_size_per_learner)
             minibatch_size = config_overrides.get("minibatch_size", config.minibatch_size)
@@ -366,7 +522,10 @@ def setup_trainable(
         elif checkpoint_loader := (
             setup or setup_class
         ):  # TODO: possibly do not load algorithm and let Trainable handle it (should be an option)
-            algo = checkpoint_loader.algorithm_from_checkpoint(args["from_checkpoint"], config=config)
+            algo = checkpoint_loader.algorithm_from_checkpoint(
+                args["from_checkpoint"],
+                config=config,  # pyright: ignore[reportArgumentType]
+            )
             sync_env_runner_states_after_reload(algo)
             if config.algo_class is not None and not isinstance(algo, config.algo_class):
                 logger.warning(
@@ -431,7 +590,8 @@ def _set_env_runner_state(
     if hasattr(env_runner, "num_envs"):
         if 0 != env_runner.num_envs != env_runner.config.num_envs_per_env_runner:  # pyright: ignore[reportAttributeAccessIssue]
             # local env runner can have zero envs when we are remote
-            logger.error(
+            ImportantLogger.important_warning(
+                logger,
                 "EnvRunner has %d envs, but config.num_envs_per_env_runner is %d. Recreating envs.",
                 env_runner.num_envs,  # pyright: ignore[reportAttributeAccessIssue]
                 env_runner.config.num_envs_per_env_runner,
@@ -667,3 +827,115 @@ def get_evaluation_results(
     if ENV_RUNNER_RESULTS in eval_results:
         return eval_results[ENV_RUNNER_RESULTS]
     return eval_results
+
+
+def rebuild_learner_group(algorithm: Algorithm) -> None:
+    """
+    Rebuilds the learner group of the given algorithm.
+
+    This can be useful when the learner group needs to be rebuilt, e.g. after changing
+    the config or the RL module.
+
+    Assumes that the current env_runner_group returns the correct spaces.
+
+    Args:
+        algorithm: The algorithm to rebuild the learner group for.
+    """
+    assert algorithm.config
+    spaces = {
+        INPUT_ENV_SPACES: (
+            algorithm.config.observation_space,
+            algorithm.config.action_space,
+        )
+    }
+    # env_runner_groups might be in an old state if spaces change due to config changes
+    if algorithm.env_runner_group:
+        spaces.update(algorithm.env_runner_group.get_spaces())
+    elif algorithm.eval_env_runner_group:
+        spaces.update(algorithm.eval_env_runner_group.get_spaces())
+    else:
+        spaces.update(
+            {
+                DEFAULT_MODULE_ID: (
+                    algorithm.config.observation_space,
+                    algorithm.config.action_space,
+                ),
+            }
+        )
+
+    assert algorithm.config is not None
+    module_spec = algorithm.config.get_multi_rl_module_spec(
+        spaces=spaces,  # pyright: ignore[reportArgumentType]
+        inference_only=False,
+    )
+    algorithm.learner_group = algorithm.config.build_learner_group(rl_module_spec=module_spec)
+
+    # Check if there are modules to load from the `module_spec`.
+    rl_module_ckpt_dirs = {}
+    multi_rl_module_ckpt_dir = module_spec.load_state_path
+    modules_to_load = module_spec.modules_to_load
+    module_specs = module_spec.rl_module_specs
+    if not isinstance(module_specs, dict):
+        # Very unlikely. Would rise AttributeError on ray if this actually were a dict.
+        module_specs = {DEFAULT_MODULE_ID: module_specs}
+    for module_id, sub_module_spec in module_specs.items():
+        if sub_module_spec.load_state_path:
+            rl_module_ckpt_dirs[module_id] = sub_module_spec.load_state_path
+    if multi_rl_module_ckpt_dir or rl_module_ckpt_dirs:
+        algorithm.learner_group.load_module_state(
+            multi_rl_module_ckpt_dir=multi_rl_module_ckpt_dir,
+            modules_to_load=modules_to_load,
+            rl_module_ckpt_dirs=rl_module_ckpt_dirs,
+        )
+
+
+def get_algorithm_callback_states(algorithm: Algorithm) -> dict[str, dict[str, Any]]:
+    """
+    Returns the states of all algorithm callbacks as a dictionary.
+
+    Args:
+        algorithm: The algorithm to get the callback states from.
+    Returns:
+        A dictionary mapping callback names to their state dictionaries.
+    """
+    if not algorithm.callbacks:
+        return {}
+    algorithm_callback_states = {}
+    # case single class
+    if isinstance(algorithm.callbacks, RLlibCallback) and hasattr(algorithm.callbacks, "get_state"):
+        algorithm_callback_states[type(algorithm.callbacks).__name__] = algorithm.callbacks.get_state()  # pyright: ignore[reportAttributeAccessIssue]
+    elif isinstance(algorithm.callbacks, (list, tuple)):
+        for callback in algorithm.callbacks:
+            if hasattr(callback, "get_state"):
+                algorithm_callback_states[type(callback).__name__] = callback.get_state()  # pyright: ignore[reportAttributeAccessIssue]
+    return algorithm_callback_states
+
+
+def set_algorithm_callback_states(algorithm: Algorithm, callback_states: dict[str, dict[str, Any]]) -> None:
+    """
+    Sets the states of all algorithm callbacks from the given state dictionary.
+
+    Args:
+        algorithm: The algorithm to set the callback states for.
+        callback_states: A dictionary mapping callback names to their state dictionaries.
+    """
+    if not algorithm.callbacks:
+        return
+    # case single class
+    names = set(callback_states.keys())
+    if isinstance(algorithm.callbacks, RLlibCallback) and hasattr(algorithm.callbacks, "set_state"):
+        callback_name = type(algorithm.callbacks).__name__
+        if callback_name in callback_states:
+            algorithm.callbacks.set_state(callback_states[callback_name])  # pyright: ignore[reportAttributeAccessIssue]
+            names.discard(callback_name)
+    elif isinstance(algorithm.callbacks, (list, tuple)):
+        for callback in algorithm.callbacks:
+            callback_name = type(callback).__name__
+            if callback_name in callback_states and hasattr(callback, "set_state"):
+                callback.set_state(callback_states[callback_name])  # pyright: ignore[reportAttributeAccessIssue]
+                names.discard(callback_name)
+    if names:
+        logger.warning(
+            "Could not set states for callbacks with names: %s. They are not present in the algorithm callbacks.",
+            names,
+        )

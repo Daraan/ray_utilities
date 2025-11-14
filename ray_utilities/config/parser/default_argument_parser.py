@@ -14,14 +14,16 @@ from __future__ import annotations
 import argparse
 import logging
 import math
+import os
 import shlex
 import sys
 from ast import literal_eval
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Generic, Optional
+from typing import TYPE_CHECKING, Any, Generic, Optional, Sequence, cast
 
 from typing_extensions import Self, TypeIs, TypeVar
 
+from ray_utilities.config.parser.subcommand import SubcommandMixin
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 
 try:
@@ -37,7 +39,7 @@ from typing_extensions import Annotated, Literal, Sentinel, get_args, get_origin
 from ray_utilities.config.parser.pbt_scheduler_parser import PopulationBasedTrainingParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, split_timestep_budget
 from ray_utilities.misc import AutoInt
-from ray_utilities.nice_logger import set_project_log_level
+from ray_utilities.nice_logger import ImportantLogger, set_project_log_level
 from ray_utilities.warn import (
     warn_about_larger_minibatch_size,
     warn_if_batch_size_not_divisible,
@@ -46,6 +48,7 @@ from ray_utilities.warn import (
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +128,14 @@ See Also:
     :class:`PatchArgsMixin`
 """
 
+RestoreOverride = Annotated[_T, "RestoreOverride"]
+"""
+When using --restore_path this value will override the restored value.
+
+May not be used with :data:`NeverRestore` or :data:`AlwaysRestore`, when used the current_value (if it exists)
+will always be used regardless of the restored or default value.
+"""
+
 
 class SupportsMetaAnnotations(Tap):
     """Mixin class for argument parsers that support meta annotations for checkpoint handling.
@@ -164,10 +175,11 @@ class SupportsMetaAnnotations(Tap):
         )
         # get literals dynamically to be future proof
         always_restore: Literal["AlwaysRestore"] = get_args(AlwaysRestore)[-1]
+        never_restore: Literal["NeverRestore"] = get_args(NeverRestore)[-1]
+
         self._always_restore: set[str] = {
             k for k, v in complete_annotations.items() if get_origin(v) is Annotated and always_restore in get_args(v)
         }
-        never_restore: Literal["NeverRestore"] = get_args(NeverRestore)[-1]
         self._never_restore: set[str] = {
             k for k, v in complete_annotations.items() if get_origin(v) is Annotated and never_restore in get_args(v)
         }
@@ -184,6 +196,32 @@ class SupportsMetaAnnotations(Tap):
             k for k, v in complete_annotations.items() if get_origin(v) is Annotated and non_a_hp in get_args(v)
         }
         # Accepts bool as string is not handled by this class (needs class level)
+
+        restore_override_str: Literal["RestoreOverride"] = get_args(RestoreOverride)[-1]
+        self._restore_override_args: set[str] = {
+            k
+            for k, v in complete_annotations.items()
+            if get_origin(v) is Annotated and restore_override_str in get_args(v)
+        }
+        restore_conflicts_with_never = self._restore_override_args & self._never_restore
+        restore_conflicts_with_always = self._restore_override_args & self._always_restore
+        if restore_conflicts_with_never:
+            raise ValueError(
+                f"Arguments {restore_conflicts_with_never} cannot be annotated with both NeverRestore and RestoreOverride."
+            )
+        if restore_conflicts_with_always:
+            raise ValueError(
+                f"Arguments {restore_conflicts_with_always} cannot be annotated with both AlwaysRestore and RestoreOverride."
+            )
+
+    def get_restore_overrides(self) -> dict[str, Any]:
+        """Get a dictionary of argument names and their current values for restoration overrides.
+
+        Returns:
+            Dictionary mapping argument names marked with :data:`RestoreOverride`
+            to their current values in the parser instance.
+        """
+        return {name: getattr(self, name) for name in self._restore_override_args}
 
     def get_to_restore_values(self) -> set[str]:
         """Get the set of argument names that should always be restored from checkpoints.
@@ -211,6 +249,7 @@ class SupportsMetaAnnotations(Tap):
         1. If annotated with :data:`NeverRestore`: Returns the class default value
         2. If annotated with :data:`AlwaysRestore`: Returns the restored value
         3. Otherwise: Uses standard restoration logic
+        Note: RestoreOverride is handled separately when a Setup is initialized with restore_path.
 
         Args:
             name: The name of the argument to restore.
@@ -228,6 +267,8 @@ class SupportsMetaAnnotations(Tap):
             >>> # Returns "/tmp/new" regardless of restored_value
         """
         current_value = getattr(self, name, NO_VALUE)
+        if name in self._restore_override_args and current_value is not NO_VALUE:
+            return current_value
         current_value_is_default = current_value == getattr(type(self), name, None)
         if name in self._always_restore:
             if current_value is not NO_VALUE and current_value != restored_value:  # pyright: ignore[reportOperatorIssue]
@@ -285,7 +326,7 @@ class PatchArgsMixin(Tap):
 
     @classmethod
     @contextmanager
-    def patch_args(cls, *args: str | Any, config_files: Optional[Iterable[str]] = None):
+    def patch_args(cls, *args: str | Any, config_files: Optional[Sequence[str]] = None):
         """Context manager to temporarily merge additional arguments with sys.argv.
 
         Arguments present in the original :data:`sys.argv` will take higher priority
@@ -319,20 +360,26 @@ class PatchArgsMixin(Tap):
                 subparser_dests.add(action.dest)
             action.default = NO_VALUE
         if patch_parser._subparsers:
-            for subparser in patch_parser._subparsers.choices.values():
+            for subparser in cast(
+                "argparse._SubParsersAction[argparse.ArgumentParser]", patch_parser._subparsers
+            ).choices.values():
                 for action in subparser._actions:
                     action.default = NO_VALUE
         for action in parser_argv._actions:
             action.default = NO_VALUE
         if parser_argv._subparsers:
-            for subparser in parser_argv._subparsers.choices.values():
+            for subparser in cast(
+                "argparse._SubParsersAction[argparse.ArgumentParser]", parser_argv._subparsers
+            ).choices.values():
                 for action in subparser._actions:
                     action.default = NO_VALUE
 
         # Parse original CLI args (excluding script name)
         argv_ns, orig_unknown = parser_argv.parse_known_args(original_argv[1:])
-        if orig_unknown:
-            logger.warning("Passed unknown args for this parser via sys.argv: %s", orig_unknown, stacklevel=3)
+        if [unknown for unknown in orig_unknown if not unknown.startswith("--tag:")]:
+            ImportantLogger.important_warning(
+                logger, "Passed unknown args for this parser via sys.argv: %s", orig_unknown, stacklevel=3
+            )
 
         # Parse patch args
         config_args = [
@@ -342,7 +389,7 @@ class PatchArgsMixin(Tap):
         ]
 
         patch_ns, patch_unknown = patch_parser.parse_known_args(config_args + list(map(str, args)))
-        if patch_unknown:
+        if [unknown for unknown in patch_unknown if not unknown.startswith("--tag:")]:
             logger.warning("Patching with unknown args: %s", patch_unknown, stacklevel=3)
 
         # Remove NO_VALUE entries to keep those that were actually passed:
@@ -395,6 +442,7 @@ class PatchArgsMixin(Tap):
         complete_annotations,
         merged_args,
     ):
+        """Constructs argument list recursively for nested subparsers."""
         option = None
         args_option: str | None = None
         dd_option: str | None = None
@@ -422,6 +470,7 @@ class PatchArgsMixin(Tap):
             else:
                 # cannot pass bool as str
                 # possible has some type conversion we cannot guess
+                assert option is not None
                 ok = (
                     option.lstrip("-") in complete_annotations
                     and get_origin(complete_annotations[option.lstrip("-")]) is Annotated
@@ -455,9 +504,13 @@ class PatchArgsMixin(Tap):
             if isinstance(value, str):
                 new_args.extend([option, value])
             else:
-                new_args.extend([option] + (value if value is not None else []))
+                new_args.extend([option, *(value if value is not None else [])])
         elif action.nargs == argparse.PARSER:
             new_args.append(value)
+            if action.choices is None:
+                logger.warning("No choices found for subparser action '%s'", option)
+                return
+            action = cast("argparse._SubParsersAction[argparse.ArgumentParser]", action)
             for sub_action in action.choices[value]._actions:
                 sub_value = merged_args.get(sub_action.dest)
                 if sub_value is None:
@@ -479,15 +532,12 @@ class PatchArgsMixin(Tap):
 Subparsers = TypeVar("Subparsers", bound=argparse.ArgumentParser | None, default=Any | None)
 
 
-class SubcommandHandlerBase(
-    Generic[Subparsers],
-    Tap,
-):
-    _command_str = None
+class SubcommandHandlerBase(Tap, Generic[Subparsers]):
+    _command_str = ""
     __command = None
 
     @property
-    def command_str(self) -> str | None:
+    def command_str(self) -> str | Literal[""]:
         return self._command_str
 
     @property
@@ -510,9 +560,17 @@ class SubcommandHandlerBase(
     def process_args(self) -> None:
         super().process_args()
         self._process_subparsers()
+        self.post_subparser_process()
+
+    def post_subparser_process(self) -> None:
+        """Hook that is called after subparser processing.
+
+        Can be overridden by subclasses to perform additional processing
+        after the subparser has been set up.
+        """
 
     def _process_subparsers(self):
-        if self.command_str is None:
+        if not self.command_str:
             return
         assert isinstance(self._subparsers, argparse._SubParsersAction)
         # subparser is not parsed
@@ -526,11 +584,12 @@ class SubcommandHandlerBase(
     def create_delegator(self, subparser: _ParserT) -> _ParserT:
         DelegatorCommand = type(
             subparser.__class__.__name__ + "Delegator",
-            (subparser.__class__,),
+            (subparser.__class__, SubcommandMixin),
             {
                 "_parsed": True,
                 "help": getattr(subparser, "help", None),
                 "description": getattr(subparser, "description", self.__doc__),
+                "_SubcommandMixin__parent": self,
             },
         )
         for action in subparser._actions:
@@ -608,6 +667,22 @@ class _DefaultSetupArgumentParser(_GoalParser, Tap):
 
     from_checkpoint: NeverRestore[Optional[str]] = None
 
+    restore_path: NotAModelParameter[NeverRestore[Optional[str]]] = None
+    """
+    Path to a previous Ray Tune experiment to restore from.
+
+    When set, uses :meth:`tune.Tuner.restore` to continue a previously interrupted
+    or paused experiment. The path should point to the experiment directory
+    (e.g., ``~/ray_results/experiment_name``).
+
+    Note:
+        This is different from ``from_checkpoint`` which restores a single trial.
+        This restores the entire Tune experiment including all trials and search state.
+    """
+
+    restore_errored: NotAModelParameter[RestoreOverride[Literal["restart", "resume", False]]] = "resume"
+    """When restore_path is used controls the behavior of Tuner.restore resume_errored and restart_errored."""
+
     def configure(self) -> None:
         # Short hand args
         super().configure()
@@ -673,12 +748,28 @@ def _parse_lr(value: str) -> float | list[tuple[int, float]]:
             return result
 
 
+def _literal_tuple_or_none(value: str) -> tuple[int, int] | None:
+    if value.lower() == "none":
+        return None
+    try:
+        result = literal_eval(value)
+        if isinstance(result, (tuple, list)) and len(result) == 2 and all(isinstance(x, int) for x in result):
+            return tuple(result)
+        raise argparse.ArgumentTypeError(f"Invalid format: Expected a tuple of two integers or 'None', got: {value}")
+    except (ValueError, SyntaxError) as e:
+        raise argparse.ArgumentTypeError(f"Invalid format: Could not parse '{value}'") from e
+
+
 class RLlibArgumentParser(_EnvRunnerParser):
     """Attributes of this class have to be attributes of the AlgorithmConfig."""
 
     train_batch_size_per_learner: int = 2048  # batch size that ray samples
     minibatch_size: int = 128
     """Minibatch size used for backpropagation/optimization"""
+
+    minibatch_scale: float | None = None
+    """If set, minibatch_size will be scaled as: minibatch_size = int(train_batch_size_per_learner * minibatch_scale).
+    Must be in range (0, 1]. A value of 1.0 sets minibatch_size equal to train_batch_size_per_learner."""
 
     lr: float | list[tuple[int, float]] = 1e-4
 
@@ -697,6 +788,14 @@ class RLlibArgumentParser(_EnvRunnerParser):
         )
 
     def process_args(self):
+        # Apply minibatch_scale setting
+        if self.minibatch_scale is not None:
+            if self.minibatch_scale > 1.0:
+                raise ValueError(f"minibatch_scale must be <= 1.0, got {self.minibatch_scale}")
+            if self.minibatch_scale <= 0.0:
+                raise ValueError(f"minibatch_scale must be > 0.0, got {self.minibatch_scale}")
+            self.minibatch_size = int(self.train_batch_size_per_learner * self.minibatch_scale)
+
         # Emit warnings:
         warn_if_batch_size_not_divisible(
             batch_size=self.train_batch_size_per_learner, num_envs_per_env_runner=self.num_envs_per_env_runner
@@ -715,7 +814,7 @@ class RLlibArgumentParser(_EnvRunnerParser):
 
 
 class DefaultResourceArgParser(Tap):
-    num_jobs: NotAModelParameter[NeverRestore[int]] = 5
+    num_jobs: NotAModelParameter[NeverRestore[int]] = 0
     """
     Trials to run in parallel
 
@@ -731,7 +830,25 @@ class DefaultResourceArgParser(Tap):
     If None, same as num_jobs
     """
 
+    num_cpus: NotAModelParameter[NeverRestore[int | None]] = None
+    """Amount of cpus cores to allocate per worker.
+
+    Note, this is only a parser option and has to be implemented in the
+    resource allocation logic.
+    """
+
+    ray_address: NotAModelParameter[NeverRestore[str | None]] = "auto"
+
+    object_store_memory: NotAModelParameter[NeverRestore[int | None]] = None
+    """Amount of object store memory to allocate per worker in bytes."""
+
     gpu: NeverRestore[bool] = False
+
+    # num_cpus_per_learner: NeverRestore[int | Literal["auto"]] = "auto"
+    # """auto: 1 if num_gpus_per_learner == 0 else 0"""
+
+    num_learners: NeverRestore[int] = 0
+    """Number of learner workers"""
 
     parallel: NeverRestore[bool] = False
     """Use multiple CPUs per worker"""
@@ -740,6 +857,34 @@ class DefaultResourceArgParser(Tap):
     """
     Do not run multiple models in parallel, i.e. the Tuner will execute one job only.
     This is similar to num_jobs=1, but one might skip the Tuner setup.
+    """
+
+    hostname_selector: NotAModelParameter[RestoreOverride[Optional[str]]] = None
+    """
+    Scheduling selector for Ray cluster nodes based on hostname labels.
+
+    Note:
+        clusters must have been started with the --labels "hostname=<value>" option
+
+    | Operator | Description | Example syntax |
+    | --- | --- | --- |
+    | Equals | Label matches exactly one value. | `"{"hostname": “<value>”}"`
+    | Not equal | Label matches anything by one value. | `"{"hostname": “<!value>”}"`
+    | In | Label matches one of the provided values. | `"{"hostname": “<in(val1,val2)>”}"`
+    | Not in | Label matches none of the provided values. | `"{"hostname": “!<in(val1,val2)>”}"`
+    """
+
+    node_id_selector: NotAModelParameter[RestoreOverride[Optional[str]]] = None
+    """
+    Scheduling selector for Ray cluster nodes based on its ray.io/node-id labels.
+    This label is added by default to all nodes
+
+    | Operator | Description | Example syntax |
+    | --- | --- | --- |
+    | Equals | Label matches exactly one value. | `"{ray.io/node-id”: “<value>”}"`
+    | Not equal | Label matches anything by one value. | `"{ray.io/node-id”: “<!value>”}"`
+    | In | Label matches one of the provided values. | `"{ray.io/node-id”: “<in(val1,val2)>”}"`
+    | Not in | Label matches none of the provided values. | `"{ray.io/node-id”: “!<in(val1,val2)>”}"`
     """
 
     def process_args(self) -> None:
@@ -806,15 +951,17 @@ class DefaultEnvironmentArgParser(Tap):
         )
 
 
-OnlineLoggingOption = Literal["offline", "offline+upload", "online", "off", False]
-"""off -> NO LOGGING; offline -> offline logging but no upload"""
+OnlineLoggingOption = Literal["offline", "offline+upload", "offline+upload@end", "online", "off", False]
+"""off -> NO LOGGING; offline -> offline logging but no upload; offline+upload@end -> upload only at experiment end"""
 
 LogStatsChoices = Literal["minimal", "more", "timers", "learners", "timers+learners", "most", "all"]
 LOG_STATS = "log_stats"
 
 
 class DefaultLoggingArgParser(Tap):
-    log_level: NeverRestore[Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]] = "INFO"
+    log_level: NeverRestore[
+        Literal["DEBUG", "INFO", "IMPORTANT_INFO", "WARNING", "IMPORTANT_WARNING", "ERROR", "CRITICAL"]
+    ] = "INFO"
     wandb: NeverRestore[NotAModelParameter[AcceptsBoolAsString[OnlineLoggingOption]]] = False
     comet: NeverRestore[NotAModelParameter[AcceptsBoolAsString[OnlineLoggingOption]]] = False
     comment: Optional[str] = None
@@ -838,6 +985,28 @@ class DefaultLoggingArgParser(Tap):
 
     _change_log_level = True
     """Whether to apply :func:`set_project_log_level` in :meth:`process_args`."""
+
+    offline_loggers: list[Literal["csv", "tensorboard", "tb", "tbx", "json", "all", "1", "0"]] | bool | None = None
+    """
+    Which offline loggers to enable when using offline logging.
+
+    A value of "all", "1" will be cast to True, "0" to False.
+
+    Note:
+        Its recommended to always have the json logger active when using wandb or comet for the verification
+        of the uploads.
+        ``TUNE_DISABLE_AUTO_CALLBACK_LOGGERS`` environment variable has to be set for tune to not add
+        csv, json, and tensorboard loggers automatically.
+
+        When not at least three values, ``all``, or ``1`` is used
+        the flag ``TUNE_DISABLE_AUTO_CALLBACK_LOGGERS`` will be set.
+
+        None behavior (default):
+            - if comet or wandb is used -> set to ["json"]
+            - if neither comet or wandb is used#
+              - test mode: set to 0
+              - normal mode: set to ["csv", "tensorboard", "json"]
+    """
 
     @classmethod
     def _get_safe_str_patches(cls):
@@ -868,6 +1037,19 @@ class DefaultLoggingArgParser(Tap):
             return "online"
         return value
 
+    @staticmethod
+    def __parse_offline_loggers(value: str) -> Literal["csv", "tensorboard", "tb", "tbx", "json"] | bool:
+        if value in {"0", "False", "off"}:  # off -> no logging
+            return False
+        if value in {"1", "True", "on", "all"}:
+            return True
+        if value not in {"csv", "tensorboard", "tb", "tbx", "json"}:
+            raise argparse.ArgumentTypeError(
+                f"Invalid offline logger: {value}. "
+                f"Expected one of 'csv', 'tensorboard', 'tb', 'tbx', 'json', 'all', '1', '0'."
+            )
+        return value  # pyright: ignore[reportReturnType]
+
     def configure(self) -> None:
         super().configure()
         self.add_argument("--log_level")
@@ -894,6 +1076,9 @@ class DefaultLoggingArgParser(Tap):
         self.add_argument(
             "--" + LOG_STATS, nargs="?", const="more", default="minimal", choices=get_args(LogStatsChoices)
         )
+        self.add_argument("--offline_loggers", nargs="+", default=None, type=self.__parse_offline_loggers)
+
+    # region tags
 
     def _add_extra_tags(self):
         if self.extra_args:
@@ -940,12 +1125,62 @@ class DefaultLoggingArgParser(Tap):
             tags = list(tag_map.values())
         return tags
 
+    # endregion
+
     def process_args(self) -> None:
         self._add_extra_tags()
         self.tags = self.organize_subtags(self.tags)
         super().process_args()
         if self._change_log_level:
             set_project_log_level(logging.getLogger("ray_utilities"), self.log_level)
+            # If we set this before ray.init it will work automatically for all remote
+            os.environ["RAY_UTILITIES_LOG_LEVEL"] = self.log_level
+        if self.offline_loggers is None:
+            if self.comet or self.wandb:
+                self.offline_loggers = ["json"]
+            elif getattr(self, "test", False):
+                self.offline_loggers = ["json"]
+            else:
+                self.offline_loggers = True
+        # We should have a list otherwise; but default could be overwritten with a bool
+        elif isinstance(self.offline_loggers, list):
+            any_false_offline_loggers = False in self.offline_loggers
+            any_true_offline_loggers = True in self.offline_loggers
+            if any_false_offline_loggers and any_true_offline_loggers:
+                raise argparse.ArgumentError(
+                    next(a for a in self._actions if a.dest == "offline_loggers"),
+                    f"Cannot mix False and True in offline_loggers {self.offline_loggers}",
+                )
+            if (any_false_offline_loggers or any_true_offline_loggers) and len(self.offline_loggers) > 1:
+                raise argparse.ArgumentError(
+                    next(a for a in self._actions if a.dest == "offline_loggers"),
+                    f"Cannot mix boolean and string values in offline_loggers {self.offline_loggers}",
+                )
+            if any_false_offline_loggers:
+                self.offline_loggers = False
+            elif any_true_offline_loggers:
+                self.offline_loggers = True
+        if self.offline_loggers is False or (
+            self.offline_loggers is not True and len(cast("list", self.offline_loggers)) < 3
+        ):
+            # "all", "1" already converted to True
+            # NOTE: if ray is initialized before this it will not work!
+            import ray  # noqa: PLC0415
+
+            if not ray.is_initialized():
+                ImportantLogger.important_info(
+                    logger,
+                    "Requested < 3 offline loggers: %s. "
+                    "Setting TUNE_DISABLE_AUTO_CALLBACK_LOGGERS='1' "
+                    "to disable automatic addition of csv, json, and tensorboard loggers.",
+                )
+            else:
+                pass
+                # TODO: Do not print when called on remote
+                # logger.warning(
+                #    "Ray is already initialized. Setting TUNE_DISABLE_AUTO_CALLBACK_LOGGERS may not have an effect."
+                # )
+            os.environ["TUNE_DISABLE_AUTO_CALLBACK_LOGGERS"] = "1"
 
 
 class DefaultExtraArgs(Tap):
@@ -957,21 +1192,37 @@ class DefaultExtraArgs(Tap):
 
 
 class CheckpointConfigArgumentParser(Tap):
-    checkpoint_frequency: NotAModelParameter[int | None] = 50_000
+    checkpoint_frequency: int | None = 65_536  # 8192*8
     """
     Frequency of checkpoints in steps (or iterations, see checkpoint_frequency_unit)
     0 or None for no checkpointing
     """
 
-    checkpoint_frequency_unit: NotAModelParameter[Literal["steps", "iterations"]] = "steps"
+    checkpoint_frequency_unit: Literal["steps", "iterations"] = "steps"
     """Unit for checkpoint_frequency, either after # steps or iterations"""
 
     num_to_keep: NotAModelParameter[int | None] = None
     """The number of checkpoints to keep. None to keep all checkpoints."""
 
+    buffer_length: Optional[int | Literal["auto", "save"]] = None
+    """
+    If an integer of save sets TUNE_RESULT_BUFFER_LENGTH to the min of the given value and checkpoint_frequency
+
+    If auto, then each trainable will call itself with train_buffered with an appropriate value.
+    """
+
+    def configure(self) -> None:
+        super().configure()
+        self.add_argument(
+            "--buffer_length", default=None, type=lambda x: int(x) if x not in ("auto", "save", None) else x
+        )
+
     def process_args(self) -> None:
         if self.num_to_keep is not None and self.num_to_keep <= 0:
             raise ValueError(f"num_to_keep must be a positive integer or None. Not {self.num_to_keep}.")
+        # Handle buffer_length auto in DefaultArgumentParser on in Trainable
+        if isinstance(self.buffer_length, (int, float)) and self.buffer_length <= 0:
+            raise ValueError(f"buffer_length must be a positive integer, 'auto', or None. Not {self.buffer_length}.")
         return super().process_args()
 
 
@@ -983,8 +1234,8 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
     """Use dynamic batch, scales batch size via gradient accumulation"""
 
     iterations: NeverRestore[int | AutoInt | Literal["auto"]] = "auto"
-    total_steps: int = 1_000_000
-    min_step_size: int = 32
+    total_steps: int = 1_179_648  # 2**20 + 2**17
+    min_step_size: int = 64
     """min_dynamic_buffer_size"""
     max_step_size: int = 8192
     """max_dynamic_buffer_size"""
@@ -1022,6 +1273,25 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
     no_dynamic_eval_interval: AlwaysRestore[bool] = False
     """
     Does not add the :class:`.DynamicEvalInterval` callback that is added per default
+
+    Dynamic evaluation adjust the evaluation interval depending on the current batch size,
+    otherwise it is every 16 iterations independent of the batch size.
+
+    See also:
+        :attr:`evaluate_every_n_steps_before_step` to evaluate more often at the beginning.
+    """
+
+    evaluate_every_n_steps_before_step: AlwaysRestore[tuple[int, int] | None] = (512, 32784)  # 8196 * 4
+    """
+    The default evaluation interval is every 16 iterations if :attr:`no_dynamic_eval_interval` is used.
+
+    With dynamic evaluation intervals it scales depending on the current batch size.
+
+    The command line argument has to be a string that can be literally evaluated to a tuple of two integers
+    or that is falsy to disable this feature.
+
+    Note:
+        Only supported when :attr:`no_dynamic_eval_interval` is not set.
     """
 
     def process_args(self) -> None:
@@ -1053,6 +1323,7 @@ class OptionalExtensionsArgs(RLlibArgumentParser):
     def configure(self) -> None:
         super().configure()
         self.add_argument("--iterations", "-it", default="auto", type=_auto_int_transform)
+        self.add_argument("--evaluate_every_n_steps_before_step", type=_literal_tuple_or_none)
 
 
 class ScalingPBTSubparser(OptionalExtensionsArgs, SubcommandHandlerBase[PopulationBasedTrainingParser | Subparsers]):
@@ -1077,10 +1348,24 @@ class ScalingPBTSubparser(OptionalExtensionsArgs, SubcommandHandlerBase[Populati
                         "When passing perturbation_interval as fraction (float in [0,1]), "
                         f"the iterations argument must be numerical, not {self.iterations}"
                     )
+                # Should be divisible by min_step_size and max_step_size (actually all)
                 relative_interval = math.ceil(self.perturbation_interval * self.total_steps)
+                # Find the closest integer to relative_interval that is divisible by both min_step_size and max_step_size
+                min_step = getattr(self, "min_step_size", 1)
+                max_step = getattr(self, "max_step_size", 1)
+
+                def lcm(a: int, b: int) -> int:
+                    return abs(a * b) // math.gcd(a, b) if a and b else 0
+
+                step_lcm = lcm(min_step, max_step)
+                if step_lcm > 0:
+                    # Round relative_interval to the nearest multiple of step_lcm
+                    relative_interval = int(round(relative_interval / step_lcm) * step_lcm)
+                if relative_interval <= 0:
+                    relative_interval = step_lcm
                 logger.info(
                     "Interpreting perturbation_interval=%s as fraction of total steps: "
-                    "Setting perturbation_interval=%s",
+                    "Setting perturbation_interval=%s (rounded to be divisible by min/max_step_size).",
                     self.perturbation_interval,
                     relative_interval,
                 )
@@ -1108,21 +1393,53 @@ class ScalingPBTSubparser(OptionalExtensionsArgs, SubcommandHandlerBase[Populati
 
 def _parse_tune_choices(
     value: str | Literal[False],
-) -> Literal["batch_size", "rollout_size", "all", False]:
-    return value  # type: ignore[return-value]
+) -> str | Literal[False]:
+    if value is False or value.lower() in ("false", "0", "none"):
+        return False
+    return value
 
 
 class OptunaArgumentParser(_GoalParser, Tap):
     optimize_config: NotAModelParameter[NeverRestore[bool]] = (
         False  # legacy argument name; possible replace with --tune later
     )
-    tune: NeverRestore[list[Literal["batch_size", "rollout_size", "all"]] | Literal[False]] = False
+    # FIXME: Change to use keys from create_tune_parameters.
+    # NOTE: Need to be defined in add_argument below as well
+    tune: NeverRestore[
+        list[
+            Literal[
+                "batch_size",
+                "minibatch_size",
+                "minibatch_scale",
+                "num_envs_per_env_runner",
+                "accumulate_gradients_every",
+                "all",
+            ]
+        ]
+        | Literal[False]
+    ] = False
     """List of dynamic parameters to be tuned"""
+
+    pruner_min_trials: NotAModelParameter[NeverRestore[int]] = 3
+    """When optimizing with Optuna, minimum number of trials before pruning is started."""
+    pruner_warmup_steps: NotAModelParameter[NeverRestore[int]] = 40
+    """When optimizing with Optuna, number of steps to wait before pruning is started."""
 
     def configure(self) -> None:
         super().configure()
         self.add_argument(
-            "--tune", nargs="+", default=False, choices=["batch_size", "rollout_size", "all"], type=_parse_tune_choices
+            "--tune",
+            nargs="+",
+            default=False,
+            choices=[
+                "batch_size",
+                "minibatch_size",
+                "minibatch_scale",
+                "num_envs_per_env_runner",
+                "accumulate_gradients_every",
+                "all",
+            ],
+            type=_parse_tune_choices,
         )
 
     def process_args(self) -> None:
@@ -1194,3 +1511,49 @@ class DefaultArgumentParser(
             logger.debug("Shell completion enabled with argcomplete")
         else:
             logger.warning("argcomplete not available. Install with 'pip install argcomplete' for shell completion.")
+
+    def suggest_buffer_length(self) -> Optional[int | Literal["auto"]]:
+        budget = split_timestep_budget(
+            total_steps=self.total_steps,
+            min_size=self.min_step_size,
+            max_size=self.max_step_size,
+            assure_even=not self.use_exact_total_steps,
+        )
+        if self.buffer_length == "save":
+            max_buffer_suggestion = min(budget["iterations_per_step_size"])
+            if self.checkpoint_frequency is not None and self.checkpoint_frequency > 0:
+                max_buffer_suggestion = min(max_buffer_suggestion, self.checkpoint_frequency)
+            if self._is_pbt_used(self.command):
+                # Pass buffer results to subparser
+                if self.command.time_attr == "training_iteration":
+                    max_buffer_suggestion = min(max_buffer_suggestion, int(self.command.perturbation_interval))
+            self.buffer_length = max_buffer_suggestion
+            logger.info("Set 'save' buffer_length to %s", self.buffer_length)
+        if isinstance(self.buffer_length, int):
+            if self.buffer_length > min(budget["iterations_per_step_size"]):
+                ImportantLogger.important_warning(
+                    logger,
+                    f"Requested buffer_length {self.buffer_length} is larger than "
+                    f"the maximum save value of {min(budget['iterations_per_step_size'])}.",
+                )
+            if self.checkpoint_frequency is not None and self.checkpoint_frequency > 0:
+                if self.buffer_length > self.checkpoint_frequency:
+                    ImportantLogger.important_warning(
+                        logger,
+                        f"Requested buffer_length {self.buffer_length} is larger than "
+                        f"the checkpoint_frequency of {self.checkpoint_frequency}. Setting to checkpoint_frequency, "
+                        "otherwise values will be dropped.",
+                    )
+                    self.buffer_length = self.checkpoint_frequency
+        return self.buffer_length
+
+    def post_subparser_process(self) -> None:
+        super().post_subparser_process()
+        if self.buffer_length not in (None, "auto"):  # An "auto" value we will handle by the trainable
+            self.buffer_length = self.suggest_buffer_length()
+            ImportantLogger.important_info(
+                logger,
+                f"Setting TUNE_RESULT_BUFFER_LENGTH to {self.buffer_length}. "
+                "Make sure perturbation interval and checkpoint frequency are divisible by it.",
+            )
+            os.environ["TUNE_RESULT_BUFFER_LENGTH"] = str(self.buffer_length)

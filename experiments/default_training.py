@@ -3,9 +3,8 @@ import os
 
 # Enable shell completion for this file
 import default_arguments.PYTHON_ARGCOMPLETE_OK
-import ray
-
-from ray_utilities import run_tune, runtime_env
+from experiments.ray_init_helper import init_ray_with_setup
+from ray_utilities import get_runtime_env, run_tune
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
 from ray_utilities.setup import PPOSetup
@@ -22,23 +21,35 @@ os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
 os.environ.setdefault("RAY_DEDUP_LOGS_ALLOW_REGEX", "COMET|wandb")
 
 if __name__ == "__main__":
-    ray.init(object_store_memory=4 * 1024**3, runtime_env=runtime_env)  # 4 GB
     PPOMLPSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
     PPOMLPSetup.group_name = "default-training"  # pyright: ignore
+
+    from experiments.create_tune_parameters import (
+        default_distributions,
+        load_distributions_from_json,
+        write_distributions_to_json,
+    )
+
+    HYPERPARAMETERS = load_distributions_from_json(write_distributions_to_json(default_distributions))
+
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
         "-a", DefaultArgumentParser.agent_type,
         # Meta / less influential arguments for the experiment.
         # Assure constant total_steps across experiments.
-        "--max_step_size", max(MAX_DYNAMIC_BATCH_SIZE, *PPOSetup.batch_size_sample_space["grid_search"]), # pyright: ignore
+        "--num_samples", 3,
+        # Note we do not tune in this file but want to align it with the others
+        "--max_step_size", max(MAX_DYNAMIC_BATCH_SIZE, *HYPERPARAMETERS["batch_size"]["grid_search"]), # pyright: ignore
         "--tags", "static", "default",  # per default includes "<env_type>", "<agent_type>",
         # constant
         "--seed", "42",
         "--wandb", "offline+upload",
         "--comet", "online",
         "--comment", "Default training run",
-        "--log_stats", "most",
     ):  # fmt: skip
         # Replace with your own setup class
-        setup: PPOSetup[DefaultArgumentParser] = PPOMLPSetup(config_files=["experiments/models/mlp/default.cfg"])
-        results = run_tune(setup)
+        setup: PPOSetup[DefaultArgumentParser] = PPOMLPSetup(
+            config_files=["experiments/default.cfg", "experiments/models/mlp/default.cfg"]
+        )
+        with init_ray_with_setup(setup, runtime_env=get_runtime_env()):
+            results = run_tune(setup)

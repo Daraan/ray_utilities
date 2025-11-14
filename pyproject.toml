@@ -5,13 +5,13 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "ray_utilities"
-version = "0.7.0"
+version = "1.0.0"
 readme = "README.md"
 description = "Utilities for Ray RLlib and related workflows. Includes experiment setup, callbacks, and JAX model utilities."
 license = { file = "LICENSE" }
 requires-python = ">=3.9"
 authors = [
-  { name = "Daniel Sperber", email = "daniel.sperber@gmail.com" }
+  { name = "Daniel Sperber", email = "github.ray_utilities.blurry@9ox.net" }
 ]
   classifiers = [
     "Programming Language :: Python :: 3",
@@ -23,12 +23,14 @@ authors = [
   ]
 dependencies = [
   "ray[tune,rllib] < 2.50.0",
+  "click!=8.3.0",
   "typed-argument-parser",
   "tqdm",
   "colorlog",
   "opencv-python",
   "python-dotenv",
   "frozenlist",
+  "frozendict",
   "torch",  # maybe optional
   "comet_ml",  # remove later -> optional
   "wandb",  # remove later -> optional
@@ -144,6 +146,7 @@ ignore = [
 
   "PLR2004",  # Magic Values
   "NPY002",  # Use random generator
+  "PYI051",  # str | Literal in type hint
 ]
 exclude = [
     ".git",
@@ -197,18 +200,32 @@ ignorelist = ["copyright"]
 split_on_trailing_comma = true
 include_trailing_comma = true
 profile = "black"
-known_third_party = ["default_arguments"] # This is a a lie, default_arguments should be at the top as it applies mocking
+known_third_party = [
+  "default_arguments",  # This is a a lie, default_arguments should be at the top as it applies mocking
+  "wandb",
+]
 line_length = 120
 
 [tool.pyright]
 reportDeprecated = "warning"
 reportUnnecessaryComparison = "warning"
 reportUnnecessaryCast = "warning"
+defineConstant = {IS_PYDANTIC_V2 = true}
+exclude = [
+  "**/node_modules",
+  "**/__pycache__",
+  "build",
+  "dist",
+  ".venv",
+  "**/outputs/**",
+  ".git/*",
+  ".vscode/*"
+]
 
 [tool.pytest.ini_options]
 console_output_style = "count"
 timeout = 240
-session_timeout = 900
+session_timeout = 1200
 markers = [
    "tuner",
    "basic: Mark tests that should be tested first - if they fail others likely fail",

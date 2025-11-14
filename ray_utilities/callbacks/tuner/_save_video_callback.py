@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from ray.tune.logger import LoggerCallback
 
+from ray_utilities.misc import warn_if_slow
 from ray_utilities.postprocessing import save_videos
 
 # ruff: noqa: ARG002
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
 
 
 class SaveVideoFirstCallback(LoggerCallback):
+    @warn_if_slow
     def on_trial_result(
         self,
         iteration: int,

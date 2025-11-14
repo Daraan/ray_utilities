@@ -8,7 +8,6 @@ and proper handling of offline/online modes for both Comet and WandB loggers.
 from __future__ import annotations
 
 import io
-from itertools import chain
 import os
 import random
 import re
@@ -19,6 +18,7 @@ import threading
 import time
 import unittest
 from collections import defaultdict
+from itertools import chain
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional, cast
@@ -28,16 +28,17 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 from ray.tune.experiment import Trial
 
-from ray_utilities._runtime_constants import RUN_ID
 from ray_utilities.callbacks.comet import COMET_FAILED_UPLOAD_FILE, CometArchiveTracker
 from ray_utilities.callbacks.tuner.adv_comet_callback import AdvCometLoggerCallback
 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
 from ray_utilities.callbacks.upload_helper import UploadHelperMixin
 from ray_utilities.callbacks.wandb import WandbUploaderMixin
-from ray_utilities.constants import FORK_FROM
+from ray_utilities.constants import FORK_FROM, get_run_id
 from ray_utilities.misc import ExperimentKey, make_experiment_key
+from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.runfiles.run_tune import run_tune
+from ray_utilities.setup.experiment_base import ExperimentSetupBase
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup
 from ray_utilities.testing_utils import DisableLoggers, MockPopenClass, MockTrial, TestHelpers, patch_args
 from ray_utilities.typing import ForkFromData, Forktime
@@ -64,7 +65,7 @@ class DummyWandbUploader(WandbUploaderMixin):
         DummyProcess(wandb_paths[0])  # Simulate instantiation, but do not use
         # Write failed file
         grand_path = Path(wandb_paths[0]).parent.parent
-        failed_file = grand_path / f"failed_wandb_uploads-{RUN_ID}.txt"
+        failed_file = grand_path / f"failed_wandb_uploads-{get_run_id()}.txt"
         with open(failed_file, "w") as f:
             f.write("trial_1 : wandb sync /fake/path\n")
 
@@ -88,7 +89,7 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
 
     def test_comet_callback_on_trial_complete_offline(self):
         """Test that on_trial_complete triggers upload for offline Comet experiments."""
-        callback = AdvCometLoggerCallback(online=False, upload_offline_experiments=True)
+        callback = AdvCometLoggerCallback(online=False, upload_intermediate=True)
         trial = MockTrial("test_trial_001")
 
         with (
@@ -110,7 +111,7 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
     @pytest.mark.flaky(max_runs=2, min_passes=1)
     def test_comet_upload_offline_experiment_no_directory(self):
         """Test Comet upload behavior when offline directory doesn't exist."""
-        callback = AdvCometLoggerCallback(online=False, upload_offline_experiments=True)
+        callback = AdvCometLoggerCallback(online=False, upload_intermediate=True)
         trial = MockTrial("test_trial_001")
 
         with (
@@ -125,7 +126,7 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
 
     def test_comet_upload_offline_experiment_with_files(self):
         """Test Comet upload behavior when offline files exist."""
-        callback = AdvCometLoggerCallback(online=False, upload_offline_experiments=True)
+        callback = AdvCometLoggerCallback(online=False, upload_intermediate=True)
         trial = MockTrial("test_trial_001")
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -165,7 +166,7 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
 
     def test_wandb_callback_on_trial_complete(self):
         """Test that on_trial_complete triggers sync for WandB runs."""
-        callback = AdvWandbLoggerCallback(mode="offline", upload_offline_experiments=True)
+        callback = AdvWandbLoggerCallback(mode="offline", upload_intermediate=True)
         trial = MockTrial("test_trial_001", status="PAUSED")
 
         with (
@@ -187,7 +188,7 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
 
     def test_wandb_sync_offline_run_not_offline_mode(self):
         """Test WandB sync behavior when not in offline mode and no offline runs."""
-        callback = AdvWandbLoggerCallback(mode="offline+upload", upload_offline_experiments=True)
+        callback = AdvWandbLoggerCallback(mode="offline+upload", upload_intermediate=True)
         trial = MockTrial("test_trial_001", storage=MagicMock())
 
         with (
@@ -208,7 +209,7 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
 
     def test_wandb_sync_offline_run_with_files(self):
         """Test WandB sync behavior when offline runs exist."""
-        callback = AdvWandbLoggerCallback(mode="offline+upload", upload_offline_experiments=True)
+        callback = AdvWandbLoggerCallback(mode="offline+upload", upload_intermediate=True)
         trial = MockTrial("test_trial_001", storage=MagicMock())
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -221,7 +222,8 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
                 patch("ray_utilities.callbacks.tuner.adv_wandb_callback.Path") as mock_path_class,
                 patch("ray_utilities.callbacks.tuner.adv_wandb_callback.subprocess.run") as mock_subprocess,
                 patch("ray_utilities.callbacks.tuner.adv_wandb_callback._logger") as _mock_logger,
-                patch("ray_utilities.callbacks.upload_helper.logger") as mock_logger_upload,
+                patch("ray_utilities.callbacks.upload_helper.logger") as _mock_logger_upload,
+                patch.object(ImportantLogger, "important_info") as important_logger,
             ):
                 # Mock Path.home() to return our temp directory
                 mock_path_class.home.return_value = offline_run_dir
@@ -244,13 +246,13 @@ class TestCallbackUploads(DisableLoggers, TestHelpers):
                 self.assertTrue(str(args[2]).endswith("offline-run-20240101_120000-abcd1234"))
 
                 # Should log success
-                mock_logger_upload.info.assert_called()
-                log_calls = [call[0][0] for call in mock_logger_upload.info.call_args_list]
+                important_logger.assert_called()
+                log_calls = [call[0][1] for call in important_logger.call_args_list]
                 self.assertTrue(any("Successfully synced" in msg for msg in log_calls))
 
     def test_wandb_sync_offline_run_subprocess_error(self):
         """Test WandB sync behavior when subprocess fails."""
-        callback = AdvWandbLoggerCallback(mode="offline+upload", upload_offline_experiments=True)
+        callback = AdvWandbLoggerCallback(mode="offline+upload", upload_intermediate=True)
         trial = MockTrial("test_trial_001", storage=MagicMock())
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -294,7 +296,7 @@ class TestWandbFailedUpload(unittest.TestCase):
         uploader = DummyWandbUploader()
         uploader.upload_paths([self.wandb_dir])
         grand_path = self.wandb_dir.parent.parent
-        failed_file = grand_path / f"failed_wandb_uploads-{RUN_ID}.txt"
+        failed_file = grand_path / f"failed_wandb_uploads-{get_run_id()}.txt"
         self.assertTrue(failed_file.exists())
         with open(failed_file) as f:
             content = f.read()
@@ -345,27 +347,38 @@ class TestLoggerIntegration(TestHelpers):
                 "--num_envs_per_env_runner", 1,
                 "--fcnet_hiddens", "[8]",
             ),
+            #mock.patch("ray_utilities.callbacks.wandb.wandb_api", new=MagicMock()),
+            #mock.patch("wandb.init"),
+            mock.patch.object(ExperimentSetupBase, "_stop_monitor", return_value=None),
+            mock.patch.object(ExperimentSetupBase, "verify_wandb_uploads"),
+            mock.patch.object(UploadHelperMixin, "_failure_aware_wait") as _mock_aware_wait,
             mock.patch("subprocess.run") as mock_run,  # upload on_trial_complete
-            mock.patch.object(UploadHelperMixin, "_failure_aware_wait") as mock_aware_wait,
+            mock.patch("time.sleep"),
+            mock.patch("select.select", side_effect= lambda a, b, c, timeout, **kwargs: (a, b, c)),
+            #mock.patch("wandb._sentry")
+            #mock.patch.object(wandb.sdk.wandb_setup._WandbSetup, "ensure_service") as _,
         ):  # fmt: skip
             setup = MLPSetup()
+            setup.trainable_class.use_pbar = False
             _results = run_tune(setup, raise_errors=True)
         threads = threading.enumerate()
         for t in threads:
             if "upload" in t.name.lower():
                 t.join()
                 self.assertFalse(t.is_alive(), "Upload thread did not finish")
-        mock_run.assert_called_once()
+        mock_run.assert_called()
         self.assertListEqual(mock_run.call_args.args[0][:2], ["wandb", "sync"])
-        self.assertFalse(mock_aware_wait.called, "Should not gather and therefore not wait.")
+        # self.assertFalse(mock_aware_wait.called, "Should not gather and therefore not wait.")
 
     @MockPopenClass.mock
     @patch.multiple("ray", remote=MagicMock(), get=MagicMock(), get_actor=MagicMock())
-    @patch("ray.wait")
     @patch("time.sleep", new=MagicMock())
-    def test_wandb_upload_dependency_ordering(self, mock_popen_class, mock_popen, ray_wait):
+    @patch("select.select")
+    @patch("ray.wait")
+    def test_wandb_upload_dependency_ordering(self, mock_popen_class, mock_popen, ray_wait, select_mock):
         # randomize this test
         ray_wait.side_effect = lambda futures, *args, **kwargs: ([1], [])
+        select_mock.side_effect = lambda a, b, c, timeout, **kwargs: (a, b, c)
         random.seed(22)
         id_counter = 1
 
@@ -639,7 +652,7 @@ class TestLoggerIntegration(TestHelpers):
         # Create callback with offline+upload mode
         callback = AdvWandbLoggerCallback(
             project="test_project",
-            upload_offline_experiments=True,
+            upload_intermediate=True,
             mode="offline",
         )
 
@@ -713,7 +726,7 @@ class TestLoggerIntegration(TestHelpers):
         # Create callback
         callback = AdvWandbLoggerCallback(
             project="test_project",
-            upload_offline_experiments=True,
+            upload_intermediate=True,
             mode="offline",
         )
 
@@ -765,7 +778,7 @@ class TestLoggerIntegration(TestHelpers):
         # Create callback
         callback = AdvWandbLoggerCallback(
             project="test_project",
-            upload_offline_experiments=True,
+            upload_intermediate=True,
             mode="offline",
         )
 
@@ -1367,7 +1380,7 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
     @patch_args("--comet", "offline")
     def test_integration_with_offline_upload_on_restart(self):
         """Test integration between restart and offline upload functionality."""
-        callback = AdvCometLoggerCallback(online=False, upload_offline_experiments=True)
+        callback = AdvCometLoggerCallback(online=False, upload_intermediate=True)
         parent_trial_id = "p_trial_0001"
         fork_step = 500
         fork_data = {

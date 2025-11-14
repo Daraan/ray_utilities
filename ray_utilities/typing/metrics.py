@@ -121,6 +121,25 @@ class _LogMetricsBase(TypedDict):
     batch_size: NotRequired[int]
     """Current train_batch_size_per_learner. Should be logged in experiments were it can change."""
 
+    minibatch_size: NotRequired[int]
+    """Current minibatch_size_per_learner. Should be logged in experiments were it can change."""
+
+    minibatch_scale: NotRequired[float]
+    """Current minibatch_scale. Should be logged in experiments were it can change."""
+
+    accumulate_gradients_every: NotRequired[int]
+    """
+    Current accumulate_gradients_every. Should be logged in experiments were it can change.
+
+    Included only when > 1
+    """
+
+    num_environments: NotRequired[int]
+    """Number of parallel environments used during sampling. Product of num_envs_per_env_runner * num_env_runners."""
+
+    effective_train_batch_size: NotRequired[int]
+    """Effective batch size during SGD training. This is minibatch_size * accumulate_gradients_every."""
+
     num_training_step_calls_per_iteration: NotRequired[int]
     """How training_steps was called between two train.report() calls."""
 

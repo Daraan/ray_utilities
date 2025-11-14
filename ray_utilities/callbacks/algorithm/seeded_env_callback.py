@@ -41,10 +41,12 @@ def _is_async(env: gym.Env | Any) -> TypeIs[gym.vector.AsyncVectorEnv | gym.vect
 
 
 logger = logging.getLogger(__name__)
+_NestedIntSequence = tuple["int | _NestedIntSequence", ...]
+EnvSeedType = int | None | _NestedIntSequence
 
 
 class _SeededEnvCallbackMeta(_CallbackMeta):  # pyright: ignore[reportGeneralTypeIssues]  # base is union type
-    env_seed: ClassVar[int | None | Sequence[int]] = 0
+    env_seed: ClassVar[EnvSeedType] = 0
 
     def __eq__(cls, value):  # pyright: ignore[reportSelfClsParameterName]
         if not isclass(value):
@@ -59,6 +61,8 @@ class _SeededEnvCallbackMeta(_CallbackMeta):  # pyright: ignore[reportGeneralTyp
         return False
 
     def __hash__(cls):  # pyright: ignore[reportSelfClsParameterName]
+        if isinstance(cls.env_seed, Sequence):
+            return hash(RLlibCallback) + hash(tuple(cls.env_seed)) + hash(cls.__name__)
         return hash(RLlibCallback) + hash(cls.env_seed) + hash(cls.__name__)
 
     def __repr__(cls):  # pyright: ignore[reportSelfClsParameterName]
@@ -223,8 +227,8 @@ class ResetSeedEnvsCallback(SeedEnvsCallbackBase):
         worker_index, suffix = self._get_worker_info(env_context)
 
         starting_seed = seed_sequence.generate_state(1)
-        first_observation, info = env.reset(seed=int(starting_seed[0]))
-        logger.info(
+        first_observation, _info = env.reset(seed=int(starting_seed[0]))
+        logger.debug(
             "Seeding %s envs with seed=%s - "
             "created from env_seed=%s, worker_index %s/%s, evaluation=%s, vector_index=%s.%s. "
             "First observation (each env):\n%s",

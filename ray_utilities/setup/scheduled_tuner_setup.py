@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import logging
+import os
 from abc import abstractmethod
 from typing import TYPE_CHECKING
 
-from ray.tune.stopper import CombinedStopper, MaximumIterationStopper
+from ray.tune.search.searcher import Searcher
+from ray.tune.stopper import CombinedStopper, MaximumIterationStopper, Stopper
 
 from ray_utilities.callbacks.tuner.sync_config_files_callback import SyncConfigFilesCallback
-from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner
+from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 from ray_utilities.setup.tuner_setup import SetupType_co, TunerSetup
 from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
+from ray_utilities.tune.searcher.constrained_minibatch_search import constrained_minibatch_search
+from ray_utilities.tune.searcher.optuna_searcher import OptunaSearchWithPruner
 
 if TYPE_CHECKING:
     from ray import tune
@@ -37,8 +41,16 @@ class ScheduledTunerSetup(TunerSetup[SetupType_co]):
 
     def create_tune_config(self) -> tune.TuneConfig:
         tune_config = super().create_tune_config()
+        if tune_config.scheduler is not None:
+            ImportantLogger.important_info(
+                logger,
+                "Overwriting existing scheduler %s for PBT with %s",
+                tune_config.scheduler,
+                self.create_scheduler(),
+            )
         tune_config.scheduler = self.create_scheduler()
-        if tune_config.search_alg is not None:
+        # Searcher are turned into SearchGenerators which are not OK, SearchAlgorithms are OK
+        if isinstance(tune_config.search_alg, Searcher):
             logger.info(
                 "Unsetting search algorithm %s to not conflict with the scheduler %s",
                 tune_config.search_alg,
@@ -80,6 +92,7 @@ class ScheduledTunerSetup(TunerSetup[SetupType_co]):
 class ReTunerSetup(ScheduledTunerSetup[SetupType_co]):
     def create_scheduler(self) -> schedulers.TrialScheduler:
         assert self._setup.args.command is not None
+        logger.warning("Creating ReTuneScheduler with hardcoded hyperparam_mutations.")
         return ReTuneScheduler(
             perturbation_interval=self._setup.args.command.perturbation_interval,
             resample_probability=self._setup.args.command.resample_probability,
@@ -93,11 +106,7 @@ class ReTunerSetup(ScheduledTunerSetup[SetupType_co]):
 
 
 class PPOMLPWithReTuneSetup(PPOMLPSetup["MLPArgumentParser[PopulationBasedTrainingParser]"]):
-    def create_tuner(self) -> tune.Tuner:
-        assert self.args.command is not None
-        return ReTunerSetup(
-            setup=self, eval_metric=self.args.command.metric, eval_metric_order=self.args.command.mode
-        ).create_tuner()
+    _tuner_setup_cls = ReTunerSetup
 
 
 # endregion
@@ -106,6 +115,9 @@ class PPOMLPWithReTuneSetup(PPOMLPSetup["MLPArgumentParser[PopulationBasedTraini
 
 
 class PBTTunerSetup(ScheduledTunerSetup["PPOMLPWithPBTSetup"]):
+    def create_searcher(self, stoppers: list[Stopper]):  # noqa: ARG002
+        return constrained_minibatch_search(self._setup)
+
     def create_scheduler(self) -> schedulers.TrialScheduler:
         assert self._setup.args.command is not None
         return self._setup.args.command.to_scheduler()
@@ -117,13 +129,21 @@ class PBTTunerSetup(ScheduledTunerSetup["PPOMLPWithPBTSetup"]):
 
 
 class PPOMLPWithPBTSetup(PPOMLPSetup["MLPArgumentParser[PopulationBasedTrainingParser]"]):
-    def create_tuner(self) -> tune.Tuner:
+    _tuner_setup_cls = PBTTunerSetup
+
+    def _tuner_add_iteration_stopper(self):
+        """PBT handles stopping"""
+        return False
+
+    def create_tuner(self, *, adv_loggers: bool | None = None) -> tune.Tuner:
         if self.args.command_str != "pbt":
             raise RuntimeError(f"PPOMLPWithPBTSetup requires 'pbt' command, got '{self.args.command_str}'")
+        # Save trial state every 15 minutes as PBT can be long running, can take ~1 min to save
+        if os.environ.get("RAY_UTILITIES_NO_PBT_CHECKPOINT_CHANGE") != "1":
+            os.environ["TUNE_GLOBAL_CHECKPOINT_S"] = str(60 * 15)
         assert self.args.command is not None
-        return PBTTunerSetup(
-            setup=self, eval_metric=self.args.command.metric, eval_metric_order=self.args.command.mode
-        ).create_tuner(adv_loggers=True)
+        # NOTE: Uses args.metrics/mode not the args.command.metric/mode
+        return super().create_tuner(adv_loggers=True if adv_loggers is None else adv_loggers)
 
 
 # endregion

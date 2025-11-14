@@ -26,7 +26,7 @@ from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSam
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup
 from ray_utilities.testing_utils import DisableLoggers, SetupLowRes, SetupWithEnv, mock_trainable_algorithm, patch_args
-from ray_utilities.training.helpers import is_algorithm_callback_added
+from ray_utilities.training.helpers import is_algorithm_callback_added, make_divisible
 
 if TYPE_CHECKING:
     from ray_utilities.config.parser.pbt_scheduler_parser import PopulationBasedTrainingParser
@@ -180,7 +180,8 @@ class TestExtensionsAdded(SetupWithEnv, SetupLowRes, DisableLoggers):
                 self.assertTrue(is_algorithm_callback_added(config, DynamicGradientAccumulation))
                 self.assertTrue(
                     issubclass(config.learner_class, PPOTorchLearnerWithGradientAccumulation),
-                    "Expected learner_class to be a subclass of PPOTorchLearnerWithGradientAccumulation when --dynamic_batch is set.",
+                    "Expected learner_class to be a subclass of PPOTorchLearnerWithGradientAccumulation "
+                    "when --dynamic_batch is set.",
                 )
         trainable.stop()
 
@@ -249,6 +250,39 @@ class TestProcessing(unittest.TestCase):
             ),
             "Expected a warning when minibatch_size is greater than train_batch_size_per_learner",
         )
+
+    @patch_args("--minibatch_scale", "1.0", "--batch_size", "256", "--minibatch_size", "64")
+    def test_minibatch_scale_full(self):
+        """Test that minibatch_scale=1.0 sets minibatch_size equal to train_batch_size_per_learner"""
+        setup = AlgorithmSetup(init_trainable=False)
+        # The scale should override the explicit minibatch_size argument
+        self.assertEqual(setup.args.minibatch_size, 256)
+        self.assertEqual(setup.args.train_batch_size_per_learner, 256)
+        self.assertEqual(setup.config.minibatch_size, 256)
+        self.assertEqual(setup.config.train_batch_size_per_learner, 256)
+        self.assertEqual(setup.args.minibatch_scale, 1.0)
+
+    @patch_args("--minibatch_scale", "0.5", "--batch_size", "512", "--minibatch_size", "128")
+    def test_minibatch_scale_half(self):
+        """Test that minibatch_scale=0.5 scales minibatch_size to half of train_batch_size_per_learner"""
+        setup = AlgorithmSetup(init_trainable=False)
+        # The scale should override the explicit minibatch_size argument
+        self.assertEqual(setup.args.minibatch_size, 256)  # 512 * 0.5 = 256
+        self.assertEqual(setup.args.train_batch_size_per_learner, 512)
+        self.assertEqual(setup.config.minibatch_size, 256)
+        self.assertEqual(setup.config.train_batch_size_per_learner, 512)
+        self.assertEqual(setup.args.minibatch_scale, 0.5)
+
+    @patch_args("--batch_size", "512", "--minibatch_size", "128")
+    def test_minibatch_scale_disabled(self):
+        """Test that without minibatch_scale, minibatch_size stays independent"""
+        setup = AlgorithmSetup(init_trainable=False)
+        # Without the scale, minibatch_size should remain as set
+        self.assertEqual(setup.args.minibatch_size, 128)
+        self.assertEqual(setup.args.train_batch_size_per_learner, 512)
+        self.assertEqual(setup.config.minibatch_size, 128)
+        self.assertEqual(setup.config.train_batch_size_per_learner, 512)
+        self.assertIsNone(setup.args.minibatch_scale)
 
     def test_log_stats(self):
         for choice in get_args(LogStatsChoices):
@@ -424,7 +458,8 @@ class TestProcessing(unittest.TestCase):
                 "--tune", "batch_size",
                 # Meta / less influential arguments for the experiment.
                 "--num_samples", 16,
-                "--max_step_size", 16_000,
+                "--min_step_size", 64,
+                "--max_step_size", 8192 * 2,
                 "--tags", "tune-batch_size", "mlp",
                 "--comment", "Default training run. Tune batch size",
                 "--env_seeding_strategy", "same",
@@ -440,7 +475,7 @@ class TestProcessing(unittest.TestCase):
             ):  # fmt: skip
                 args = AlgorithmSetup().args
                 self.assertListEqual(args.tune, ["batch_size"], f"is {args.tune}")  # pyright: ignore[reportArgumentType]
-                self.assertEqual(args.max_step_size, 16_000)
+                self.assertEqual(args.max_step_size, 8192 * 2)
                 self.assertEqual(args.tags, ["tune-batch_size", "mlp"])
                 self.assertEqual(args.comment, "Default training run. Tune batch size")
                 self.assertEqual(args.env_seeding_strategy, "same")
@@ -452,7 +487,11 @@ class TestProcessing(unittest.TestCase):
                 self.assertEqual(args.num_samples, 4)
                 self.assertEqual(args.comet, "online")
                 self.assertIs(args.no_exact_sampling, True)
-                self.assertEqual(args.command.perturbation_interval, 0.5 * args.total_steps)  # pyright: ignore[reportOptionalMemberAccess]
+                expected_perturbation_interval = int(args.total_steps * 0.5)
+                if expected_perturbation_interval % (8192 * 2) != 0:
+                    # make divisible (round down)
+                    expected_perturbation_interval = make_divisible(expected_perturbation_interval, 8192 * 2) - 8192 * 2
+                self.assertEqual(args.command.perturbation_interval, expected_perturbation_interval)  # pyright: ignore[reportOptionalMemberAccess]
             args = AlgorithmSetup().args
             self.assertIs(args.use_exact_total_steps, False)
             self.assertIs(args.wandb, False)

@@ -85,7 +85,7 @@ ruff check path/to/file.py --select E,F,W,B,PERF,SIM --ignore E501,SIM108
 ### Mandatory Rules
 
 **Logging (Strictly Enforced):**
-- No print() statements: Always use logger. Print statements don't respect log levels and aren't captured properly in distributed Ray workers.
+- No print() statements: Always use logger when using python. Print statements don't respect log levels and aren't captured properly in distributed Ray workers.
 
 ```python
 logger = logging.getLogger(__name__)
@@ -114,6 +114,7 @@ except ImportError:
 - Keep public APIs stable; update tests and pyproject.toml extras if changed
 - Use type annotations for all public functions and methods
 - Prefer `pathlib.Path` over `os.path` for new code
+- do not remove explaining comments unless they are incorrect or obsolete, also never remove comments starting with with (noqa, pyright, pragma, fmt, ruff, isort), expect when they are incorrect, obsolete or may shadow problematic code.
 
 ### Testing Workflow
 
@@ -136,6 +137,8 @@ class MyTest(DisableLoggers, InitRay, TestHelper, num_cpus=4):
 ```
 
 ### Entry Point Pattern
+
+When opening a shell or terminal always use `../env/bin/activate` first to activate the virtual environment.
 
 ```python
 # experiments/default_training.py pattern

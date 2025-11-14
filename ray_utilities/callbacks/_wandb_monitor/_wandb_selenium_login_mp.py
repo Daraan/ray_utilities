@@ -64,12 +64,13 @@ class SeleniumResponse:
 def _selenium_worker_process(
     credentials: WandBCredentials,
     browser: str,
-    headless: bool,
     timeout: int,
-    use_cache: bool,
     cache_dir: Optional[str],
     command_queue: multiprocessing.Queue,
     status_queue: multiprocessing.Queue,
+    *,
+    use_cache: bool,
+    headless: bool,
 ) -> None:
     """
     Worker process that handles all Selenium operations.
@@ -167,7 +168,7 @@ def _selenium_worker_process(
                     if elements:
                         worker_logger.debug("Found logged-out indicator: %s", selector)
                         return False
-                except Exception:
+                except Exception:  # noqa: PERF203
                     continue
 
             # Look for the profile selector element that contains the expected team name
@@ -187,7 +188,7 @@ def _selenium_worker_process(
                                 "Found expected team name '%s' in profile indicator", expected_team_name
                             )
                             return True
-                except Exception:
+                except Exception:  # noqa: PERF203
                     continue
 
             # Fallback: check page source for expected team name
@@ -238,7 +239,7 @@ def _selenium_worker_process(
                     if elements:
                         worker_logger.debug("Found 'Run details' button - run page loaded successfully")
                         return True
-                except Exception:
+                except Exception:  # noqa: BLE001, PERF203
                     continue
 
             # Fallback: check page source for "Run details" text
@@ -411,12 +412,11 @@ def _selenium_worker_process(
                     notify_status("login_success")
                     save_current_cookies()
                     return True
-                else:
-                    expected_team_name = os.getenv("WANDB_VIEWER_TEAM_NAME", "DaraanWandB")
-                    worker_logger.warning(
-                        "Detected login state but %s profile not found - proceeding with manual login",
-                        expected_team_name,
-                    )
+                expected_team_name = os.getenv("WANDB_VIEWER_TEAM_NAME", "DaraanWandB")
+                worker_logger.warning(
+                    "Detected login state but %s profile not found - proceeding with manual login",
+                    expected_team_name,
+                )
 
             # Look for email field
             email_selectors = [
@@ -710,7 +710,7 @@ def _selenium_worker_process(
                         url = command.data.get("url") if command.data else None
                         if not url:
                             msg = "No URL provided for visit_page command"
-                            raise ValueError(msg)
+                            raise ValueError(msg)  # noqa: TRY301
                         success = visit_page(url)
                         if command.request_id:
                             notify_status("response_visit_page", {"request_id": command.request_id, "success": success})
@@ -821,7 +821,7 @@ class WandBSeleniumSession:
         if self.callback:
             try:
                 self.callback(status, data)
-            except Exception as e:  # ruff: noqa: BLE001
+            except Exception as e:  # noqa: BLE001
                 logger.warning("Callback error: %s", e)
 
     def _send_command(
@@ -844,6 +844,7 @@ class WandBSeleniumSession:
             # Wait for response with the matching request_id in status updates
             start_time = time.time()
             timeout_duration = self.timeout + 10
+            assert self.status_queue
 
             while time.time() - start_time < timeout_duration:
                 try:
@@ -856,14 +857,13 @@ class WandBSeleniumSession:
                                 return SeleniumResponse(
                                     success=data.get("success", False), data=data.get("data"), error=data.get("error")
                                 )
-                            else:
-                                # Regular status update, forward to callback
-                                self._notify(status, data)
-                        except queue.Empty:
+                            # Regular status update, forward to callback
+                            self._notify(status, data)
+                        except queue.Empty:  # noqa: PERF203
                             break
 
                     time.sleep(0.1)  # Small sleep to avoid busy waiting
-                except Exception as e:  # ruff: noqa: BLE001
+                except Exception as e:  # noqa: BLE001
                     logger.warning("Error while waiting for response: %s", e)
                     break
 
@@ -877,15 +877,15 @@ class WandBSeleniumSession:
         if not self.status_queue:
             return
 
-        while True:
-            try:
+        try:
+            while True:
                 status, data = self.status_queue.get_nowait()
                 self._notify(status, data)
-            except queue.Empty:
-                break
-            except Exception as e:  # ruff: noqa: BLE001
-                logger.warning("Error processing status update: %s", e)
-                break
+        except queue.Empty:
+            return
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Error processing status update: %s", e)
+            return
 
     @deprecated("Dummy method for thread API compatibility.")
     def _setup_driver(self) -> webdriver.Remote | object:
@@ -898,9 +898,8 @@ class WandBSeleniumSession:
             self._notify("driver_initialized")
             # Return a dummy object for API compatibility
             return type("DummyDriver", (), {})()
-        else:
-            error_msg = response.error if response else "Unknown error"
-            raise RuntimeError(f"Failed to setup driver: {error_msg}")
+        error_msg = response.error if response else "Unknown error"
+        raise RuntimeError(f"Failed to setup driver: {error_msg}")
 
     def _start_process(self) -> None:
         """Start the worker process."""
@@ -930,13 +929,12 @@ class WandBSeleniumSession:
             args=(
                 self.credentials,
                 self.browser,
-                self.headless,
                 self.timeout,
-                self.use_cache,
                 cache_dir_str,
                 self.command_queue,
                 self.status_queue,
             ),
+            kwargs={"headless": self.headless, "use_cache": self.use_cache},
             name="wandb-selenium-worker",
             daemon=True,
         )
@@ -1049,7 +1047,7 @@ class WandBSeleniumSession:
         if self.command_queue:
             try:
                 self._send_command("stop", wait_for_response=False)
-            except Exception as e:  # ruff: noqa: BLE001
+            except Exception as e:  # noqa: BLE001
                 logger.warning("Error sending stop command: %s", e)
 
         if self.process:
@@ -1099,7 +1097,7 @@ class WandBSeleniumSession:
         if self.command_queue:
             try:
                 self._send_command("cleanup", wait_for_response=False)
-            except Exception as e:  # ruff: noqa: BLE001
+            except Exception as e:  # noqa: BLE001
                 logger.warning("Error sending cleanup command: %s", e)
 
         self.stop()
@@ -1110,7 +1108,7 @@ class WandBSeleniumSession:
                 # Clear any remaining items
                 while not self.command_queue.empty():
                     self.command_queue.get_nowait()
-            except Exception:  # ruff: noqa: BLE001
+            except Exception:  # noqa: BLE001
                 pass
             self.command_queue = None
 
@@ -1118,7 +1116,7 @@ class WandBSeleniumSession:
             try:  # noqa: SIM105
                 # Process any remaining status updates
                 self._process_status_updates()
-            except Exception:  # ruff: noqa: BLE001
+            except Exception:  # noqa: BLE001
                 pass
             self.status_queue = None
 
@@ -1189,7 +1187,7 @@ def example_usage():
 
     try:
         # Start in process
-        process = session.run_threaded()
+        _process = session.run_threaded()
 
         # Do other work while login happens in background
         print("Doing other work while login happens...")

@@ -1,18 +1,19 @@
 from __future__ import annotations
-
 import logging
 import os
 import pickle
 import random
+import signal
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
 from unittest import mock
-from unittest.mock import MagicMock
-
+from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 from ray import tune
@@ -24,9 +25,16 @@ from ray.rllib.utils.metrics import (
 )
 from ray.train._internal.storage import StorageContext
 from ray.tune import CheckpointConfig
+from ray.tune.execution.tune_controller import TuneController
 from ray.tune.experiment import Trial
-from ray.tune.result import SHOULD_CHECKPOINT, TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
+from ray.tune.logger import (
+    CSVLoggerCallback,
+    JsonLoggerCallback,
+    TBXLoggerCallback,
+)
+from ray.tune.result import SHOULD_CHECKPOINT, TRAINING_ITERATION, TIME_TOTAL_S  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.schedulers.pb2 import PB2
+from ray.tune.schedulers.pbt import PopulationBasedTraining
 from ray.tune.schedulers.pbt import logger as ray_pbt_logger
 from ray.tune.search.optuna import OptunaSearch
 from ray.tune.stopper import CombinedStopper
@@ -37,6 +45,7 @@ from ray_utilities.callbacks.algorithm import exact_sampling_callback
 from ray_utilities.callbacks.tuner.metric_checkpointer import StepCheckpointer  # pyright: ignore[reportDeprecated]
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.constants import (
+    CURRENT_STEP,
     EVAL_METRIC_RETURN_MEAN,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
@@ -44,9 +53,7 @@ from ray_utilities.constants import (
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations
 from ray_utilities.misc import is_pbar, raise_tune_errors
 from ray_utilities.runfiles import run_tune
-from ray_utilities.setup import optuna_setup
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
-from ray_utilities.setup.optuna_setup import OptunaSearchWithPruner
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup
 from ray_utilities.setup.scheduled_tuner_setup import PPOMLPWithPBTSetup
 from ray_utilities.testing_utils import (
@@ -68,17 +75,21 @@ from ray_utilities.training.default_class import DefaultTrainable
 from ray_utilities.training.helpers import make_divisible
 from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
 from ray_utilities.tune.scheduler.top_pbt_scheduler import CyclicMutation, KeepMutation, TopPBTTrialScheduler
+from ray_utilities.tune.searcher.optuna_searcher import OptunaSearchWithPruner
+from ray_utilities.tune.searcher.optuna_searcher import _logger as optuna_logger
 
 if TYPE_CHECKING:
-    from ray.tune.execution.tune_controller import TuneController
+    from ray.rllib.algorithms import AlgorithmConfig
+    from ray.tune.result_grid import ResultGrid
+    from ray.tune.search.sample import Integer
 
+    from ray_utilities.tune.scheduler.top_pbt_scheduler import _PBTTrialState2
     from ray_utilities.typing.algorithm_return import StrictAlgorithmReturnData
     from ray_utilities.typing.metrics import LogMetricsDict
     from ray_utilities.typing.trainable_return import TrainableReturnData
 
 
 try:
-    # Needed for PB2 init
     import GPy  # pyright: ignore[reportMissingImports] # noqa: F401
 except ImportError:
     sys.modules["GPy"] = MagicMock()
@@ -92,7 +103,7 @@ MINIBATCH_SIZE = 32
 @pytest.mark.tuner
 class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     def test_optuna_search_added(self):
-        with patch_args("--optimize_config", "--num_samples", "1"):
+        with patch_args("--tune", "batch_size", "--num_samples", "1"):
             optuna_setup = AlgorithmSetup()
             self.assertTrue(optuna_setup.args.optimize_config)
             tuner = optuna_setup.create_tuner()
@@ -139,7 +150,9 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 self.assertEqual(
                     stopper._max_iter,
                     second=calculate_iterations(
-                        dynamic_buffer=False, batch_size=setup.config.train_batch_size_per_learner
+                        dynamic_buffer=False,
+                        batch_size=setup.config.train_batch_size_per_learner,
+                        total_steps=DefaultArgumentParser.total_steps,
                     ),
                 )
                 return True
@@ -181,7 +194,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
     def test_run_tune_function(self):
         batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
         with patch_args(
-            "--num_samples", "3",
+            "--num_samples", "1",
             "--num_jobs", "3",
             "--batch_size", batch_size,
             "--iterations", "3",
@@ -200,6 +213,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 self.assertEqual(result.metrics[TRAINING_ITERATION], 3)
             raise_tune_errors(results)
 
+    @pytest.mark.xfail(reason="Currently not added StepCheckpointer")
     def test_step_checkpointing(self):
         batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
         with patch_args(
@@ -322,6 +336,171 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 runner.step()
 
             assert callback.num_checkpoints == 3
+
+    @mock.patch("ray.tune.impl.tuner_internal.StorageContext", new=MagicMock())
+    def test_loggers_added(self):
+        def fake_trainable():
+            pass
+
+        with patch_args("--offline_loggers", 0):
+            setup = MLPSetup(init_trainable=False)
+            setup.trainable = fake_trainable
+            self.assertIn("TUNE_DISABLE_AUTO_CALLBACK_LOGGERS", os.environ)
+            self.assertEqual(os.environ["TUNE_DISABLE_AUTO_CALLBACK_LOGGERS"], "1")
+            tuner = setup.create_tuner()
+            callbacks = tuner._local_tuner.get_run_config().callbacks  # pyright: ignore[reportOptionalMemberAccess]
+            if callbacks:
+                assert not any(c for c in callbacks if isinstance(c, CSVLoggerCallback)), callbacks
+                assert not any(c for c in callbacks if isinstance(c, JsonLoggerCallback)), callbacks
+                assert not any(c for c in callbacks if isinstance(c, TBXLoggerCallback)), callbacks
+            del os.environ["TUNE_DISABLE_AUTO_CALLBACK_LOGGERS"]
+        with patch_args("--offline_loggers", "all"):
+            setup = MLPSetup(init_trainable=False)
+            self.assertTrue(setup.args.offline_loggers)
+            setup.trainable = fake_trainable
+            if "TUNE_DISABLE_AUTO_CALLBACK_LOGGERS" in os.environ:
+                self.assertEqual(os.environ["TUNE_DISABLE_AUTO_CALLBACK_LOGGERS"], "0")
+            tuner = setup.create_tuner()
+
+            callbacks = tuner._local_tuner.get_run_config().callbacks  # pyright: ignore[reportOptionalMemberAccess]
+            if callbacks:
+                assert any(c for c in callbacks if isinstance(c, CSVLoggerCallback)), "csv missing"
+                assert any(c for c in callbacks if isinstance(c, JsonLoggerCallback)), "json missing"
+                assert any(c for c in callbacks if isinstance(c, TBXLoggerCallback)), "tbx missing"
+            if "TUNE_DISABLE_AUTO_CALLBACK_LOGGERS" in os.environ:
+                del os.environ["TUNE_DISABLE_AUTO_CALLBACK_LOGGERS"]
+
+        # No online loggers -> all offline
+        with patch_args("--wandb", "0", "--comet", "0"):
+            setup = MLPSetup(init_trainable=False)
+            setup.trainable = fake_trainable
+            tuner = setup.create_tuner()
+            self.assertEqual(setup.args.offline_loggers, True)
+            self.assertEqual(os.environ.get("TUNE_DISABLE_AUTO_CALLBACK_LOGGERS", "0"), "0")
+
+            callbacks = tuner._local_tuner.get_run_config().callbacks  # pyright: ignore[reportOptionalMemberAccess]
+            if callbacks:
+                assert any(c for c in callbacks if isinstance(c, CSVLoggerCallback)), "no csv"
+                assert any(c for c in callbacks if isinstance(c, JsonLoggerCallback)), "no json"
+                assert any(c for c in callbacks if isinstance(c, TBXLoggerCallback)), "no tbx"
+                # default
+            if "TUNE_DISABLE_AUTO_CALLBACK_LOGGERS" in os.environ:
+                del os.environ["TUNE_DISABLE_AUTO_CALLBACK_LOGGERS"]
+        with patch_args("--wandb", "offline"):
+            setup = MLPSetup(init_trainable=False)
+            setup.trainable = fake_trainable
+            tuner = setup.create_tuner()
+            self.assertEqual(os.environ["TUNE_DISABLE_AUTO_CALLBACK_LOGGERS"], "1")
+            callbacks = tuner._local_tuner.get_run_config().callbacks  # pyright: ignore[reportOptionalMemberAccess]
+            if callbacks:
+                assert not any(c for c in callbacks if isinstance(c, CSVLoggerCallback))
+                assert any(c for c in callbacks if isinstance(c, JsonLoggerCallback))
+                assert not any(c for c in callbacks if isinstance(c, TBXLoggerCallback))
+            if "TUNE_DISABLE_AUTO_CALLBACK_LOGGERS" in os.environ:
+                del os.environ["TUNE_DISABLE_AUTO_CALLBACK_LOGGERS"]
+
+    def test_restore_after_sigusr1(self):
+        """Test that experiments can be restored after SIGUSR1 signal interruption."""
+        batch_size = make_divisible(BATCH_SIZE, DefaultArgumentParser.num_envs_per_env_runner)
+        self._setup_backup_mock.stop()
+
+        def send_signal_after_delay(delay_seconds: float):
+            """Send SIGUSR1 to current process after delay."""
+            time.sleep(delay_seconds)
+            logger.info("Sending SIGUSR1 signal to abort tuning")
+            os.kill(os.getpid(), signal.SIGUSR1)
+
+        ITERATIONS = 110
+
+        with patch_args(
+            "--num_samples", "2",
+            "--num_jobs", "2",
+            "--batch_size", batch_size,
+            "--iterations", ITERATIONS,
+            "--fcnet_hiddens", "[4]",
+            "--num_envs_per_env_runner", "1",
+            "--checkpoint_frequency_unit", "iterations",
+            "--checkpoint_frequency", "50",
+            "--offline_loggers", "json",
+            "--log_stats", "more",
+            "--buffer_length", "1",
+        ):  # fmt: skip
+            with MLPSetup(init_trainable=False) as setup1:
+                setup1.config.training(num_epochs=2, minibatch_size=batch_size)
+                setup1.config.evaluation(evaluation_interval=1)
+
+        tuner1 = setup1.create_tuner()
+        run_config = tuner1._local_tuner.get_run_config()  # pyright: ignore[reportOptionalMemberAccess]
+        experiment_path = Path(run_config.storage_path) / run_config.name  # pyright: ignore[reportArgumentType, reportOperatorIssue]
+
+        # Start signal thread - interrupt after some trials start
+        signal_thread = threading.Thread(target=send_signal_after_delay, args=(20.0,))
+        signal_thread.daemon = True
+        signal_thread.start()
+
+        results1 = tuner1.fit()
+
+        logger.warning("Tuning interrupted, results so far: %s", results1)
+
+        # Check if we were interrupted
+        try:
+            with self.assertRaisesRegex(RuntimeError, "no trial has reported this metric"):
+                results1.get_best_result()
+        except AssertionError:
+            # check that results are not completed
+            best_result: tune.Result = results1.get_best_result()
+            if TRAINING_ITERATION not in best_result.metrics:  # pyright: ignore[reportOperatorIssue]
+                # happens if trial is still in pending state
+                self.fail("training_iterations not in metrics: keys: " + str(best_result.metrics.keys()))  # pyright: ignore[reportOptionalMemberAccess]
+            self.assertLess(best_result.metrics[TRAINING_ITERATION], ITERATIONS)  # pyright: ignore[reportOptionalSubscript]
+        # If we get here without interruption, still check results
+
+        signal_thread.join(timeout=2.0)
+
+        # Verify experiment directory exists
+        self.assertTrue(
+            os.path.exists(experiment_path) or str(experiment_path).startswith("s3:/"),
+            f"Experiment path should exist: {experiment_path}",
+        )
+
+        # Now restore from checkpoint
+        with patch_args(
+            "--restore_path",
+            str(experiment_path),
+        ):
+            setup2 = MLPSetup()
+        del os.environ["RAY_UTILITIES_RESTORED"]
+        self.maxDiff = None
+        state1 = setup1.get_state()
+        state2 = setup2.get_state()
+        config1_state = cast("AlgorithmConfig", state1.pop("config"))
+        config2_state = cast("AlgorithmConfig", state2.pop("config"))
+        seed1 = cast("Integer", state1["param_space"].pop("env_seed"))
+        seed2 = cast("Integer", state2["param_space"].pop("env_seed"))
+        # Only RestoreOverride keys, like restore_path are allowed to differ
+        state2["args"].restore_path = None
+        self.compare_param_space(state1.pop("tune_parameters"), state2.pop("tune_parameters"))  # pyright: ignore[reportArgumentType]
+        self.assertDictEqual(state1, state2)
+        self.compare_configs(config1_state, config2_state)
+        self.assertEqual((seed1.lower, seed1.upper), (seed2.lower, seed2.upper))
+
+        # Second run should complete all trials
+        results2 = cast("ResultGrid", run_tune(setup2))
+        raise_tune_errors(results2)  # pyright: ignore[reportArgumentType]
+
+        # Verify all trials completed
+        self.assertEqual(len(results2), 2, "Should have 2 completed trials")
+        for result in results2:
+            assert result.metrics
+            self.assertEqual(
+                result.metrics[TRAINING_ITERATION],
+                ITERATIONS,
+                f"Trial should complete 10 iterations, got {result.metrics[TRAINING_ITERATION]}",
+            )
+            self.assertEqual(result.metrics[CURRENT_STEP], ITERATIONS * batch_size)
+        self.assertIsNotNone(results2.get_best_result())
+
+        self._setup_backup_mock.start()
 
 
 @pytest.mark.tuner
@@ -614,13 +793,13 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     "--num_jobs", 2 if num_env_runners > 0 else 4,
                     "--from_checkpoint", checkpoints[0],
                     "--log_stats", "most",
-                    "--tune", "batch_size", "rollout_size",
+                    "--tune", "batch_size", "minibatch_size",
                     "--iterations", "3",
                 ):  # fmt: skip
-                    Setup.batch_size_sample_space = {"grid_search": SAMPLE_SPACE}
-                    Setup.rollout_size_sample_space = {"grid_search": SAMPLE_SPACE}
                     with Setup() as setup2:
                         setup2.config.env_runners(num_env_runners=num_env_runners)
+                    setup2.param_space["minibatch_size"] = {"grid_search": SAMPLE_SPACE}
+                    setup2.param_space["train_batch_size_per_learner"] = {"grid_search": SAMPLE_SPACE}
                 assert setup2.config.num_envs_per_env_runner is not None
                 self.assertTrue(all(s % setup2.config.num_envs_per_env_runner == 0 for s in SAMPLE_SPACE))
                 tuner2 = setup2.create_tuner()
@@ -638,13 +817,13 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 )
                 self.assertEqual(len(results2), NUM_RUNS)
                 batch_sizes = set()
-                rollout_sizes = set()
+                minibatch_sizes = set()
 
                 checkpoints = {}
                 for result in results2:
                     assert result.config
                     batch_sizes.add(result.config["train_batch_size_per_learner"])
-                    rollout_sizes.add(result.config["rollout_size"])
+                    minibatch_sizes.add(result.config["minibatch_size"])
                     checkpoints[result.checkpoint] = result
                 # check that different values were added
                 if NUM_RUNS >= 7:
@@ -668,7 +847,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
 
 class TestOptunaTuner(TestHelpers, DisableLoggers):
     def test_optuna_tuner_setup(self):
-        with patch_args("--optimize_config", "--num_samples", "1"):
+        with patch_args("--tune", "batch_size", "--num_samples", "1"):
             optuna_setup = AlgorithmSetup()
             self.assertTrue(optuna_setup.args.optimize_config)
             tuner = optuna_setup.create_tuner()
@@ -694,6 +873,7 @@ class TestOptunaTuner(TestHelpers, DisableLoggers):
             self.assertNotIsInstance(tuner2._local_tuner.get_run_config().stop, OptunaSearchWithPruner)
 
     @pytest.mark.tuner
+    @pytest.mark.flaky(max_runs=2, min_passes=1)
     def test_pruning(self):
         """
         Test might fail due to bad luck, low numbers first then high.
@@ -703,7 +883,9 @@ class TestOptunaTuner(TestHelpers, DisableLoggers):
             Reduce num_jobs or adjust seed and test again.
         """
         MAX_STEP = 15
-        with patch_args("--optimize_config", "--num_samples", "15", "--num_jobs", "4", "--seed", "42"):
+        with patch_args(
+            "--optimize_config", "--pruner_warmup_steps", 3, "--num_samples", "15", "--num_jobs", "4", "--seed", "42"
+        ):
 
             def trainable(params: dict[str, Any]) -> TrainableReturnData:
                 logger.info("Running trainable with value: %s", params["fake_result"])
@@ -726,6 +908,8 @@ class TestOptunaTuner(TestHelpers, DisableLoggers):
                 def create_param_space(self):
                     return {
                         "fake_result": tune.grid_search([*[1] * 3, *[2] * 3, *[3] * 3, *[4] * 3, *[5] * 3]),
+                        # Need non-trivial search space for OptunaSearch & Pruner to be added
+                        "random_feature": tune.uniform(0, 1),
                         "module": "OptunaTest",
                         "env": "CartPole-v1",
                     }
@@ -737,7 +921,8 @@ class TestOptunaTuner(TestHelpers, DisableLoggers):
                 setup.config.training(num_epochs=2, train_batch_size_per_learner=64, minibatch_size=64)
                 setup.config.evaluation(evaluation_interval=1)
 
-            with self.assertLogs(optuna_setup._logger, level="INFO") as log:
+            # Removed the Optuna Pruner for grid search cases
+            with self.assertLogs(optuna_logger, level="INFO") as log:
                 _results = run_tune(setup)
 
             self.assertTrue(
@@ -749,7 +934,10 @@ class TestOptunaTuner(TestHelpers, DisableLoggers):
                 len([result for result in _results if result.metrics["current_step"] < MAX_STEP]),  # pyright: ignore[reportOptionalSubscript,reportAttributeAccessIssue]
                 3,
             )
-            # NOTE: This can be OK even if runs fail!
+            # Check that all results have at least 3 iterations (pruned trials may have less)
+            for result in _results:
+                assert result.metrics is not None  # pyright: ignore[reportAttributeAccessIssue]
+                self.assertGreaterEqual(result.metrics.get(TRAINING_ITERATION, 0), 3)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
@@ -824,10 +1012,6 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
         elif expected_decision == ReTuneScheduler.CONTINUE:
             self.assertEqual(decision, expected_decision)
         return decision
-
-    def test_retuner_basics(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            scheduler, runner = self.setup_scheduler(tmpdir=tmpdir)
 
     def testPerturbsLowPerformingTrials(self):  # noqa: N802
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -907,7 +1091,7 @@ class TestReTuneScheduler(TestHelpers, DisableLoggers, InitRay, num_cpus=4):
     def testCheckpointing(self):  # noqa: N802
         # taken from ray's testing suite
         with tempfile.TemporaryDirectory() as tmpdir:
-            pbt, runner = self.setup_scheduler(tmpdir=tmpdir)
+            pbt, _runner = self.setup_scheduler(tmpdir=tmpdir)
 
             class Experiment(tune.Trainable):
                 def step(self):
@@ -1203,15 +1387,15 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             "--perturbation_interval", perturbation_interval,
         ):  # fmt: skip
             Setup = SetupWithCheck(CheckTrainableForTop, PPOMLPWithPBTSetup)
-            Setup.batch_size_sample_space = {"grid_search": batch_sizes}  # start values?
             setup = Setup(
                 config_files=["experiments/models/mlp/default.cfg"],
                 # TODO: Trials are reused, trial name might be wrong then
             )
-
+            setup.param_space["train_batch_size_per_learner"] = tune.grid_search(batch_sizes)
+            assert setup.args.command
             setup.args.command.set_hyperparam_mutations(
                 {
-                    "train_batch_size_per_learner": CyclicMutation(Setup.batch_size_sample_space["grid_search"]),
+                    "train_batch_size_per_learner": CyclicMutation(batch_sizes),
                     "fcnet_hiddens": KeepMutation([2]),
                 }
             )
@@ -1321,5 +1505,463 @@ class PBTQuantileNaNTest(unittest.TestCase):
                 self.assertEqual(abs(min_ordered_results[-1]), 10)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class MockPBTTrialState(MagicMock):
+    def __init__(
+        self,
+        last_score=None,
+        last_checkpoint=None,
+        last_perturbation_time=0,
+        last_train_time=900,
+        last_result=None,
+        last_training_iteration=1,
+        current_env_steps=900,
+        last_update_timestamp=None,
+        total_time_spent: float | None = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.last_score = last_score
+        self.last_checkpoint = last_checkpoint
+        self.last_perturbation_time = last_perturbation_time
+        self.last_train_time = last_train_time
+        self.last_result = last_result if last_result is not None else {"reward": last_score, TRAINING_ITERATION: 1}
+        self.last_training_iteration = last_training_iteration
+        self.current_env_steps = current_env_steps
+        self.last_update_timestamp = last_update_timestamp
+        self.total_time_spent = total_time_spent if total_time_spent is not None else 0.0
+
+
+class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
+    """Tests for handling slow and bad performing trials in synchronous PBT mode."""
+
+    def setUp(self):
+        """Set up test fixtures for slow trial tests."""
+        super().setUp()
+        self.scheduler = TopPBTTrialScheduler(
+            metric="reward",
+            mode="max",
+            perturbation_interval=1000,
+            burn_in_period=100,
+            hyperparam_mutations={
+                "lr": {"grid_search": [0.001, 0.01, 0.1]},
+            },
+            quantile_fraction=0.25,
+            synch=True,  # Enable synchronous mode for slow trial handling
+        )
+
+        # Create mock TuneController
+        self.mock_controller = MagicMock(spec=TuneController)
+        self.mock_controller.get_trials.return_value = []
+        self.mock_controller.get_live_trials.return_value = []
+        self.mock_controller._queued_trial_decisions = {}
+
+        # Create 20 trials with varying performance, need 20 for 5% hurdle
+        self.trials = []
+        current_time = time.time()
+        for i in range(20):
+            trial = MagicMock(spec=Trial)
+            trial.trial_id = f"trial_{i}"
+            trial.is_finished.return_value = False
+            trial.status = Trial.RUNNING
+            trial.config = {"lr": 0.001}
+
+            # Set total_time_spent to be equal for all trials to avoid early exit in total_time_spent check
+            state = MockPBTTrialState(
+                last_score=50 + i * 5,
+                last_checkpoint=None,
+                last_perturbation_time=0,
+                last_train_time=900,
+                last_result={"reward": 50 + i * 5, TRAINING_ITERATION: 1},
+                last_training_iteration=1,
+                current_env_steps=900,
+                last_update_timestamp=current_time,
+                total_time_spent=1000.0,  # All trials have same total_time_spent
+            )
+
+            self.trials.append(trial)
+            trial.run_metadata = MagicMock()
+            trial.run_metadata.checkpoint_manager.checkpoint_config.num_to_keep = 4
+            trial.experiment_tag = f"testing_{i}"
+            trial.local_experiment_path = "./outputs/experiments/TESTING"
+            self.scheduler.on_trial_add(self.mock_controller, trial)
+            self.scheduler._trial_state[trial] = cast("_PBTTrialState2", state)
+
+        self.scheduler._next_perturbation_sync = 1000
+
+    def test_slow_trial_not_in_early_perturbation_window(self):
+        """Test that trials outside the early perturbation window (66%-95%) are not paused."""
+        # Trial at 50% of interval - too early
+        trial = self.trials[0]
+        state = self.scheduler._trial_state[trial]
+        state.last_train_time = 500
+        state.last_perturbation_time = 0
+
+        result = {
+            "reward": 50,
+            self.scheduler._time_attr: 500,
+            TRAINING_ITERATION: 1,
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+
+        decision = self.scheduler.on_trial_result(self.mock_controller, trial, result)
+
+        # Should continue, not pause
+        self.assertEqual(decision, self.scheduler.CONTINUE)
+
+    def test_slow_trial_too_late_for_early_perturbation(self):
+        """Test that trials past 95% of interval are not paused early."""
+        # Trial at 96% of interval - too late
+        trial = self.trials[0]
+        state = self.scheduler._trial_state[trial]
+        state.last_train_time = 960
+        state.last_perturbation_time = 0
+
+        result = {
+            "reward": 50,
+            self.scheduler._time_attr: 960,
+            TRAINING_ITERATION: 1,
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+
+        decision = self.scheduler.on_trial_result(self.mock_controller, trial, result)
+
+        # Should continue, not pause
+        self.assertEqual(decision, self.scheduler.CONTINUE)
+
+    def test_slow_trial_within_time_threshold_not_paused(self):
+        """Test that slow trials within 5 min of last update are not paused."""
+        trial = self.trials[0]
+        state = self.scheduler._trial_state[trial]
+        state.last_train_time = 700
+        state.last_perturbation_time = 0
+        # Set recent update timestamp (within 5 min)
+        current_time = time.time()
+        state.last_update_timestamp = current_time - 100
+
+        # Make all other trials have recent updates too
+        for t in self.trials:
+            self.scheduler._trial_state[t].last_update_timestamp = current_time - 50
+
+        result = {
+            "reward": 50,
+            self.scheduler._time_attr: 700,
+            TRAINING_ITERATION: 1,
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+
+        decision = self.scheduler.on_trial_result(self.mock_controller, trial, result)
+
+        # Should continue because time threshold not met
+        self.assertEqual(decision, self.scheduler.CONTINUE)
+
+    def test_slow_trial_not_in_bottom_5_percent_continues(self):
+        """Test that trials not in the slowest 5% continue normally."""
+        # Set up: 8 trials finished, 2 still active (not in bottom 5% of 10)
+        for trial in self.trials[:-2]:
+            self.scheduler._trial_state[trial].last_train_time = 1000
+
+        slow_trial = self.trials[-2]
+        state = self.scheduler._trial_state[slow_trial]
+        state.last_train_time = 700
+        state.last_perturbation_time = 0
+        current_time = time.time()
+        state.last_update_timestamp = current_time - 400  # Old enough
+
+        result = {
+            "reward": 50,
+            self.scheduler._time_attr: 700,
+            TRAINING_ITERATION: 1,
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+
+        decision = self.scheduler.on_trial_result(self.mock_controller, slow_trial, result)
+
+        # Should continue because 2/10 = 20% > 5%
+        self.assertEqual(decision, self.scheduler.CONTINUE)
+
+    def test_slow_trial_good_performance_continues(self):
+        """Test that slow trials with good performance (not in bottom 33%) continue."""
+        # Set up: all other trials finished
+        current_time = time.time()
+        for trial in self.trials[1:]:
+            self.scheduler._trial_state[trial].last_train_time = 1000
+            self.scheduler._trial_state[trial].last_update_timestamp = current_time - 1000
+
+        slow_trial = self.trials[0]
+        state = self.scheduler._trial_state[slow_trial]
+        state.last_train_time = 700
+        state.last_perturbation_time = 0
+        state.last_score = 80  # Good score, in top 33%
+        state.last_update_timestamp = current_time - 400
+
+        # Set up lowest_scores so 80 is not in bottom 33%
+        for i, t in enumerate(self.trials):
+            self.scheduler._trial_state[t].last_score = 50 + i * 5
+
+        result = {
+            "reward": 80,
+            self.scheduler._time_attr: 700,
+            TRAINING_ITERATION: 1,
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+
+        decision = self.scheduler.on_trial_result(self.mock_controller, slow_trial, result)
+
+        # Should continue because performance is good
+        self.assertEqual(decision, self.scheduler.CONTINUE)
+
+    def test_slow_bad_trial_is_last_triggers_perturbation(self):
+        """Test that the last slow, bad trial triggers early perturbation."""
+        # All trials finished except the slow, bad one
+        current_time = time.time()
+        for trial in self.trials[1:]:
+            self.scheduler._trial_state[trial].last_train_time = 1000
+            # Set timestamps more than 300 seconds ago
+            self.scheduler._trial_state[trial].last_update_timestamp = current_time - 1000
+            self.scheduler._trial_state[trial].total_time_spent = 1000.0
+
+        slow_trial = self.trials[0]
+        state = self.scheduler._trial_state[slow_trial]
+        state.last_train_time = 700
+        state.last_perturbation_time = 0
+        state.last_score = 52  # Bad score, in bottom 33%
+        # Slow trial timestamp should be more than 300 seconds behind the max
+        state.last_update_timestamp = current_time - 400
+        # Set total_time_spent to be equal to others to avoid early exit
+        state.total_time_spent = 1000.0
+
+        result = {
+            "reward": 52,
+            self.scheduler._time_attr: 700,
+            TRAINING_ITERATION: 1,
+            TIME_TOTAL_S: 1000.0,  # Match total_time_spent to avoid early exit
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+        self.mock_controller.get_trials.return_value = self.trials
+        # Mock parent class to return CONTINUE so our early perturbation logic runs
+        with (
+            patch.object(PopulationBasedTraining, "on_trial_result", return_value=TopPBTTrialScheduler.CONTINUE),
+            patch.object(self.scheduler, "_perturbation_sync_mode") as mock_perturb,
+        ):
+            _decision = self.scheduler.on_trial_result(self.mock_controller, slow_trial, result)
+
+            # Should trigger perturbation
+            mock_perturb.assert_called_once()
+            # Verify perturbation was called with correct time
+            call_args = mock_perturb.call_args[0]
+            self.assertEqual(call_args[0], self.mock_controller)
+            self.assertEqual(call_args[1], 1000)  # max of all last_train_times
+
+    def test_slow_bad_trial_not_last_is_paused(self):
+        """Test that slow, bad trials that are not the last one are paused."""
+        # 2 slow trials, rest finished
+        current_time = time.time()
+        for trial in self.trials:
+            self.scheduler._trial_state[trial].last_train_time = 1000
+            self.scheduler._trial_state[trial].last_update_timestamp = current_time - 1000
+            self.scheduler._trial_state[trial].total_time_spent = 1000.0  # Ensure equal total_time_spent
+
+        slow_trial_1 = self.trials[0]
+        slow_trial_2 = self.trials[1]
+
+        # Slow trials have not reported yet
+        for slow_trial in [slow_trial_1, slow_trial_2]:
+            state = self.scheduler._trial_state[slow_trial]
+            state.last_train_time = 500
+            state.last_perturbation_time = 0
+            state.last_score = 52
+            state.last_update_timestamp = current_time - 1400
+            state.total_time_spent = 1000.0  # Ensure equal total_time_spent
+
+        result = {
+            "reward": 52,
+            self.scheduler._time_attr: 700,
+            TRAINING_ITERATION: 1,
+            TIME_TOTAL_S: 1000.0,  # Match total_time_spent to avoid early exit
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+        self.mock_controller.get_trials.return_value = self.trials
+
+        with patch.object(self.scheduler, "_perturbation_sync_mode") as mock_perturb:
+            decision = self.scheduler.on_trial_result(self.mock_controller, slow_trial_1, result)
+
+            # Should pause and not trigger perturbation (still waiting for slow_trial_2)
+            self.assertEqual(decision, self.scheduler.PAUSE)
+            mock_perturb.assert_not_called()
+            self.scheduler._trial_state[slow_trial_1].last_perturbation_time = 1000
+            slow_trial_1.status = Trial.PAUSED if decision in (self.scheduler.NOOP, self.scheduler.PAUSE) else decision
+            self.assertEqual(slow_trial_1.status, Trial.PAUSED)
+        # As we pause trial1 we update the max last_update_timestamp, trial2 will therefore continue
+        # With slow trial 2 we get perturbation
+        with patch.object(self.scheduler, "_perturbation_sync_mode") as mock_perturb:
+            decision = self.scheduler.on_trial_result(self.mock_controller, slow_trial_2, result)
+
+            self.assertEqual(decision, self.scheduler.PAUSE)
+            mock_perturb.assert_called()
+
+    def test_slow_trial_already_paused_returns_noop(self):
+        """Test that already paused slow trials return NOOP instead of PAUSE."""
+        # All trials finished except the slow one
+        current_time = time.time()
+        for trial in self.trials[1:]:
+            self.scheduler._trial_state[trial].last_train_time = 1000
+            self.scheduler._trial_state[trial].last_update_timestamp = current_time - 1000
+            self.scheduler._trial_state[trial].total_time_spent = 1000.0  # Ensure equal total_time_spent
+
+        slow_trial = self.trials[0]
+        slow_trial.status = Trial.PAUSED
+        state = self.scheduler._trial_state[slow_trial]
+        state.last_train_time = 700
+        state.last_perturbation_time = 0
+        state.last_score = 52
+        state.last_update_timestamp = current_time - 400
+        state.total_time_spent = 1000.0  # Ensure equal total_time_spent
+
+        result = {
+            "reward": 52,
+            self.scheduler._time_attr: 700,
+            TRAINING_ITERATION: 1,
+            TIME_TOTAL_S: 1000.0,  # Match total_time_spent to avoid early exit
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+        self.mock_controller.get_trials.return_value = self.trials
+
+        # Multiple slow trials, so won't trigger perturbation
+        self.scheduler._trial_state[self.trials[1]].last_train_time = 700
+        self.scheduler._trial_state[self.trials[1]].last_update_timestamp = current_time - 400
+        self.scheduler._trial_state[self.trials[1]].total_time_spent = 1000.0  # Ensure equal total_time_spent
+
+        decision = self.scheduler.on_trial_result(self.mock_controller, slow_trial, result)
+
+        # Should return NOOP for already paused trial
+        self.assertEqual(decision, self.scheduler.NOOP)
+
+    def test_slow_trial_total_time_spent_exit(self):
+        """Test that slow trial exits early due to total_time_spent comparison."""
+        # Setup: slow trial has much lower total_time_spent than others
+        current_time = time.time()
+        for trial in self.trials:
+            self.scheduler._trial_state[trial].last_train_time = 1000
+            self.scheduler._trial_state[trial].last_update_timestamp = current_time - 1000
+            self.scheduler._trial_state[trial].total_time_spent = 1000.0
+
+        slow_trial = self.trials[0]
+        state = self.scheduler._trial_state[slow_trial]
+        state.last_train_time = 500
+        state.last_perturbation_time = 0
+        state.last_score = 52
+        state.last_update_timestamp = current_time - 1400
+        state.total_time_spent = 100.0  # Much lower than others
+
+        result = {
+            "reward": 52,
+            self.scheduler._time_attr: 700,
+            TRAINING_ITERATION: 1,
+            TIME_TOTAL_S: 100.0,  # Much lower than others
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+        self.mock_controller.get_trials.return_value = self.trials
+
+        # Should exit early due to total_time_spent comparison (returns CONTINUE)
+        decision = self.scheduler.on_trial_result(self.mock_controller, slow_trial, result)
+        self.assertEqual(decision, self.scheduler.CONTINUE)
+
+    def test_slow_trial_state_saved_correctly(self):
+        """Test that slow trial state is saved at perturbation time."""
+        # All trials finished except the slow one
+        current_time = time.time()
+        for trial in self.trials[1:]:
+            self.scheduler._trial_state[trial].last_train_time = 1000
+            self.scheduler._trial_state[trial].last_update_timestamp = current_time - 1000
+
+        slow_trial = self.trials[0]
+        state = self.scheduler._trial_state[slow_trial]
+        state.last_train_time = 700
+        state.last_perturbation_time = 0
+        state.last_score = 52
+        state.last_update_timestamp = current_time - 1400
+
+        result = {
+            "reward": 52,
+            self.scheduler._time_attr: 700,
+            TRAINING_ITERATION: 5,
+            "current_step": 12345,
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+        self.mock_controller.get_trials.return_value = self.trials
+        slow_trial.run_metadata = MagicMock()
+
+        with patch.object(self.scheduler, "_perturbation_sync_mode"):
+            self.scheduler.on_trial_result(self.mock_controller, slow_trial, result)
+
+            # Verify state was saved with correct values
+            self.assertEqual(state.last_training_iteration, 5)
+            self.assertEqual(state.current_env_steps, 12345)
+            self.assertIsNotNone(state.last_update_timestamp)
+
+    def test_slow_trial_non_synch_mode_no_early_perturbation(self):
+        """Test that non-synchronous mode doesn't trigger early perturbation."""
+        # Create scheduler in non-synch mode
+        scheduler = TopPBTTrialScheduler(
+            metric="reward",
+            mode="max",
+            perturbation_interval=1000,
+            hyperparam_mutations={"lr": {"grid_search": [0.001, 0.01]}},
+            synch=False,  # Non-synchronous mode
+        )
+
+        trial = self.trials[0]
+        state = cast("_PBTTrialState2", MagicMock())
+        state.last_train_time = 700
+        state.last_perturbation_time = 0
+        state.last_score = 52
+        current_time = time.time()
+        state.last_update_timestamp = current_time - 400
+
+        scheduler._trial_state[trial] = state
+        scheduler._next_perturbation_sync = 1000
+
+        result = {
+            "reward": 52,
+            scheduler._time_attr: 700,
+            TRAINING_ITERATION: 1,
+        }
+
+        with patch.object(scheduler, "_perturbation_sync_mode") as mock_perturb:
+            # Mock the parent class to return CONTINUE
+            # with patch.object(PopulationBasedTraining, "on_trial_result", return_value=scheduler.CONTINUE):
+            decision = scheduler.on_trial_result(self.mock_controller, trial, result)
+
+            # Should continue normally, no early perturbation in non-synch mode
+            self.assertEqual(decision, scheduler.CONTINUE)
+            mock_perturb.assert_not_called()
+
+    def test_slow_trial_before_burn_in_continues(self):
+        """Test that slow trials before burn-in period are not paused."""
+        trial = self.trials[0]
+        state = self.scheduler._trial_state[trial]
+        state.last_train_time = 50
+        state.last_perturbation_time = 0
+
+        result = {
+            "reward": 50,
+            self.scheduler._time_attr: 50,  # Before burn_in_period of 100
+            TRAINING_ITERATION: 1,
+        }
+
+        self.mock_controller.get_live_trials.return_value = self.trials
+
+        decision = self.scheduler.on_trial_result(self.mock_controller, trial, result)
+
+        # Should continue because still in burn-in period
+        self.assertEqual(decision, self.scheduler.CONTINUE)

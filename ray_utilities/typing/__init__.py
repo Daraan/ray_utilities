@@ -23,8 +23,8 @@ See Also:
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping, NamedTuple
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Mapping, NamedTuple
 
 import typing_extensions
 from typing_extensions import NotRequired, TypeAliasType, TypedDict, TypeVar
@@ -98,7 +98,7 @@ _Domain = TypeVar("_Domain", bound="Domain", default="Domain")
 _AnyT = TypeVar("_AnyT", default=Any)
 ParameterSpace = TypeAliasType(
     "ParameterSpace",
-    dict[Literal["grid_search"] | str, Iterable[_AnyT]] | _Domain,  # noqa: PYI051
+    dict[Literal["grid_search"] | str, Sequence[_AnyT]] | _Domain,
     type_params=(_AnyT, _Domain),
 )
 """Describes a tune.Domain or grid_search for a parameter sampling by tune"""

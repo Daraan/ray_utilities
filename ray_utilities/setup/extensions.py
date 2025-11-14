@@ -21,23 +21,241 @@ to provide adaptive behavior during training and hyperparameter optimization.
 
 from __future__ import annotations
 
+import json
 import logging
-from copy import deepcopy
-from typing import TYPE_CHECKING, Any, ClassVar
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, cast
 
+import optuna
 from ray import tune
+from typing_extensions import Self
 
 from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradientAccumulation
 from ray_utilities.callbacks.algorithm.dynamic_buffer_callback import DynamicBufferUpdate
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import add_dynamic_eval_callback_if_missing
-from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
+from ray_utilities.setup.experiment_base import (
+    AlgorithmType_co,
+    ConfigType_co,
+    ExperimentSetupBase,
+    ParserType_co,
+    SetupCheckpointDict,
+)
+from ray_utilities.tune import update_hyperparameters
 
 if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
+    from ray.tune.search.sample import Domain
 
     from ray_utilities.typing import ParameterSpace
 
 _logger = logging.getLogger(__name__)
+
+
+def optuna_dist_to_ray_distribution(dist: optuna.distributions.BaseDistribution) -> Domain:
+    """Convert an Optuna distribution to a Ray Tune distribution.
+
+    This method converts an Optuna distribution object into a corresponding
+    Ray Tune distribution that can be used for hyperparameter tuning.
+
+    Args:
+        dist: An Optuna distribution object.
+
+    Returns:
+        A Ray Tune distribution corresponding to the provided Optuna distribution.
+
+    Raises:
+        ValueError: If the distribution type is not supported or cannot be converted.
+    """
+    if isinstance(dist, optuna.distributions.FloatDistribution):
+        lower = dist.low
+        upper = dist.high
+        step = dist.step
+        log = dist.log
+
+        if log:
+            if step is not None:
+                return tune.qloguniform(lower, upper, step)
+            return tune.loguniform(lower, upper)
+
+        if step is not None:
+            return tune.quniform(lower, upper, step)
+        return tune.uniform(lower, upper)
+
+    if isinstance(dist, optuna.distributions.IntDistribution):
+        lower = dist.low
+        upper = dist.high
+        step = dist.step
+        log = dist.log
+        # NOTE: step is at least one in optuna distributions
+        # Optunas upper bound is inclusive, Ray Tune's is exclusive, json we also use exclusive upper bound
+
+        if log:
+            if step > 1:  # NOTE: Step is at least 1
+                return tune.qlograndint(lower, upper + 1, step)
+            return tune.lograndint(lower, upper + 1)
+
+        if step > 1:
+            # Ray Tune's qrandint expects exclusive upper bound for integers
+            return tune.qrandint(lower, upper + 1, step)
+
+        # Ray Tune's randint uses exclusive upper bound
+        return tune.randint(lower, upper + 1)
+
+    if isinstance(dist, optuna.distributions.CategoricalDistribution):
+        return tune.choice(dist.choices)
+
+    # grid_search, sample_from (included function) and normal distribution, randn, qrandn cannot be expressed by
+    # Optuna interface.
+
+    raise TypeError(
+        f"Unsupported Optuna distribution type: {type(dist).__name__}. "
+        "Supported types are FloatDistribution, IntDistribution, and CategoricalDistribution."
+    )
+
+
+def dict_to_ray_distributions(
+    dist_dict: dict[str, dict[str, Any]] | dict[Literal["grid_search"], Sequence[Any]],
+) -> ParameterSpace[Any]:
+    """Convert a dictionary of Optuna distributions to Ray Tune distributions.
+
+    This function takes a dictionary where keys are parameter names and values
+    are Optuna distribution objects, and converts each distribution to its
+    corresponding Ray Tune distribution.
+
+    Args:
+        dist_dict: A dictionary mapping parameter names to Optuna distribution objects.
+
+    Returns:
+        A dictionary mapping parameter names to Ray Tune distributions.
+    """
+    if "grid_search" in dist_dict:
+        if len(dist_dict) != 1:
+            _logger.warning("A grid_search dict should only contain the grid_search key, ignoring others keys")
+        return {"grid_search": cast("Sequence[Any]", dist_dict["grid_search"])}
+    try:
+        return optuna_dist_to_ray_distribution(optuna.distributions.json_to_distribution(json.dumps(dist_dict)))
+    except (ValueError, TypeError, KeyError):
+        # Assume key, value match tune functions
+        key, value = next(iter(dist_dict.items()))
+        return getattr(tune, key)(**value)  # pyright: ignore[reportCallIssue]
+
+
+def load_distributions_from_json(
+    json_dict: dict[str, Any] | Path | str,
+) -> dict[str, ParameterSpace[Any]]:
+    if isinstance(json_dict, str):
+        json_dict = Path(json_dict)
+    if isinstance(json_dict, Path):
+        with json_dict.open("r") as f:
+            json_dict = cast("dict[str, Any]", json.load(f))
+    return {k: dict_to_ray_distributions(v) for k, v in json_dict.items()}
+
+
+class TunableSetupMixin(ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]):
+    TUNE_PARAMETER_FILE = "experiments/tune_parameters.json"
+
+    def __init__(self, *args, **kwargs):
+        if self.__restored__:
+            _logger.debug("Not calling set_tune_parameters as instance is being restored.")
+        else:
+            self.tune_parameters: dict[str, ParameterSpace[Any] | optuna.distributions.BaseDistribution] = {}
+            self.set_tune_parameters()
+        super().__init__(*args, **kwargs)
+
+    def add_tune_parameter(self, name: str, param_space: ParameterSpace[Any]) -> None:
+        """Add a parameter to the tuning space.
+
+        This method allows adding a new parameter to the tuning space
+        dynamically. If the parameter already exists, it will be overwritten.
+
+        Args:
+            name: The name of the parameter to add.
+            param_space: The Ray Tune parameter space defining the values
+                to sample for this parameter.
+        """
+        self.tune_parameters[name] = param_space
+        # TODO: Unfinished, turn to ray Domain
+
+    def get_state(self) -> SetupCheckpointDict[ParserType_co, ConfigType_co, AlgorithmType_co]:
+        state = super().get_state()
+        state["tune_parameters"] = self.tune_parameters
+        return state
+
+    @classmethod
+    def from_saved(
+        cls,
+        data: SetupCheckpointDict[ParserType_co, ConfigType_co, AlgorithmType_co],
+        *,
+        load_class: bool = False,
+        init_trainable: bool = True,
+        init_config: Optional[bool] = None,
+        load_config_files: bool = True,
+    ) -> Self:
+        new = super().from_saved(
+            data,
+            load_class=load_class,
+            init_trainable=init_trainable,
+            init_config=init_config,
+            load_config_files=load_config_files,
+        )
+        new.tune_parameters = data.get("tune_parameters") or {}
+        return new
+
+    def create_param_space(self) -> dict[str, Any]:
+        param_space = super().create_param_space()
+        if not self.args.tune:
+            return param_space
+        update_hyperparameters(
+            self.param_space,
+            self.tune_parameters,
+            self.args.tune or [],
+            num_grid_samples=self.args.num_samples,
+            train_batch_size_per_learner=self.args.train_batch_size_per_learner,
+        )
+        return param_space
+
+    def _load_optuna_from_json(self, json_dict: dict[str, Any]) -> None:
+        for param, entry in json_dict.items():
+            if isinstance(entry, dict):
+                try:
+                    optuna_dist = optuna.distributions.json_to_distribution(json.dumps(entry))
+                except ValueError as e:
+                    _logger.warning(
+                        "Could not parse Optuna distribution for parameter '%s' from JSON entry %s: %s",
+                        param,
+                        entry,
+                        e,
+                    )
+                else:
+                    json_dict[param] = optuna_dist
+
+    def set_tune_parameters(self, json_dict: Optional[dict[str, Any] | Path] = None) -> None:
+        """Add parameters from a JSON dictionary to the tuning space.
+
+        This method allows adding multiple parameters to the tuning space
+        from a JSON-like dictionary. Each key-value pair in the dictionary
+        represents a parameter name and its corresponding Ray Tune parameter
+        space.
+
+        Args:
+            json_dict: A dictionary where keys are parameter names and values
+                are Ray Tune parameter spaces.
+                If not provided loads the default from :attr:`TUNE_PARAMETER_FILE`.
+        """
+        # Does not support callable / Domain objects
+        if json_dict is None:
+            json_dict = Path(self.TUNE_PARAMETER_FILE)
+        if isinstance(json_dict, Path):
+            if not json_dict.exists():
+                _logger.warning(
+                    "Tuning parameter file %s does not exist. No tuning parameters were added.",
+                    json_dict.resolve(),
+                )
+                return
+            json_dict = json.loads(json_dict.read_text())
+            assert isinstance(json_dict, dict)
+        for name, param_space in json_dict.items():
+            self.add_tune_parameter(name, load_distributions_from_json({name: param_space})[name])
 
 
 class SetupForDynamicTuning(ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]):
@@ -83,10 +301,6 @@ class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType_co, ConfigType_co,
         :class:`SetupWithDynamicBatchSize`: Companion mixin for batch size dynamics
     """
 
-    rollout_size_sample_space: ClassVar[ParameterSpace[int]] = tune.grid_search(
-        [32, 64, 128, 256, 512, 1024, 2048, 3072, 4096, 2048 * 3, 8192]  # 4096 * 3, 16384]
-    )
-
     @classmethod
     def _get_callbacks_from_args(cls, args) -> list[type[RLlibCallback]]:
         # Can call the parent; might be None for ExperimentSetupBase
@@ -95,27 +309,6 @@ class SetupWithDynamicBuffer(SetupForDynamicTuning[ParserType_co, ConfigType_co,
             callbacks.append(DynamicBufferUpdate)
             add_dynamic_eval_callback_if_missing(callbacks)
         return callbacks
-
-    @classmethod
-    def _create_dynamic_buffer_params(cls):
-        return deepcopy(cls.rollout_size_sample_space)
-
-    def create_param_space(self) -> dict[str, Any]:
-        self._set_dynamic_parameters_to_tune()  # sets _dynamic_parameters_to_tune
-        if not self.args.tune or not (
-            (add_all := "all" in self._dynamic_parameters_to_tune) or "rollout_size" in self._dynamic_parameters_to_tune
-        ):
-            return super().create_param_space()
-        if not add_all:
-            self._dynamic_parameters_to_tune.remove(
-                "rollout_size"
-            )  # remove before calling super().create_param_space()
-        param_space = super().create_param_space()
-        # TODO: # FIXME "rollout_size" is not used anywhere
-        # however train_batch_size_per_learner is used with the DynamicBatchSize Setup
-        # which uses in ints dynamic variant gradient accumulation.
-        param_space["rollout_size"] = self._create_dynamic_buffer_params()
-        return param_space
 
 
 class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType_co, ConfigType_co, AlgorithmType_co]):
@@ -168,52 +361,12 @@ class SetupWithDynamicBatchSize(SetupForDynamicTuning[ParserType_co, ConfigType_
             Evaluation callback
     """
 
-    batch_size_sample_space: ClassVar[ParameterSpace[int]] = tune.grid_search(
-        [32, 64, 128, 256, 512, 1024, 2048, 3072, 4096, 2048 * 3, 8192]  # 4096 * 3, 16384]
-    )
-    """
-    Tune parameter space with batch sizes from 32 to 16384.
-    """
-
     @classmethod
     def _get_callbacks_from_args(cls, args) -> list[type[RLlibCallback]]:
-        # When used as a mixin, can call the parent; might be None for ExperimentSetupBase
+        # When used as a mixin, can call the parent; might be None for
         callbacks = super()._get_callbacks_from_args(args)
+        # TODO: Add dynamic minibatch scaling option
         if args.dynamic_batch:
             callbacks.append(DynamicGradientAccumulation)
             add_dynamic_eval_callback_if_missing(callbacks)
         return callbacks
-
-    @classmethod
-    def _create_dynamic_batch_size_params(cls):
-        """Create parameter space for dynamic batch size tuning.
-
-        Returns a deep copy of the class's batch size sample space for use in
-        hyperparameter optimization. The returned parameter space contains
-        batch size values that will be achieved through gradient accumulation.
-
-        Returns:
-            A Ray Tune parameter space containing batch size values for optimization.
-
-        Note:
-            The returned parameters represent effective batch sizes achieved through
-            gradient accumulation, not the gradient accumulation multiplier values directly.
-
-        Warning:
-            This method adds ``batch_size`` parameters to the tuning space, not
-            values for direct gradient accumulation control.
-        """
-        # TODO: control this somehow via args
-        return deepcopy(cls.batch_size_sample_space)
-
-    def create_param_space(self) -> dict[str, Any]:
-        self._set_dynamic_parameters_to_tune()  # sets _dynamic_parameters_to_tune
-        if not self.args.tune or not (
-            (add_all := "all" in self._dynamic_parameters_to_tune) or "batch_size" in self._dynamic_parameters_to_tune
-        ):
-            return super().create_param_space()
-        if not add_all:
-            self._dynamic_parameters_to_tune.remove("batch_size")  # remove before calling super().create_param_space()
-        param_space = super().create_param_space()
-        param_space["train_batch_size_per_learner"] = self._create_dynamic_batch_size_params()
-        return param_space

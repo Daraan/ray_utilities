@@ -1,5 +1,8 @@
 import sys
 import pytest
+import os
+
+os.environ["CI"] = "1"  # Indicate that we are in a CI environment
 
 
 def pytest_addoption(parser: pytest.Parser):

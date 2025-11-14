@@ -5,11 +5,13 @@ import sys
 from functools import partial
 from typing import TYPE_CHECKING, Any, Optional, cast
 
+from ray.air.constants import TRAINING_ITERATION
 from ray.rllib.callbacks.callbacks import RLlibCallback
 from ray.rllib.utils.annotations import override
 from ray.tune.result import SHOULD_CHECKPOINT
 from typing_extensions import Self
 
+from ray_utilities.constants import CURRENT_STEP
 from ray_utilities.misc import get_current_step
 
 if TYPE_CHECKING:
@@ -94,16 +96,19 @@ class AlgoStepCheckpointer(AlgoMetricCheckpointer):  # type: ignore
 
     def _condition(self, result: StrictAlgorithmReturnData | LogMetricsDict | dict) -> bool:
         steps_since_last_checkpoint = get_current_step(result) - self._last_checkpoint_step  # pyright: ignore[reportArgumentType]
+        return steps_since_last_checkpoint >= self._checkpoint_frequency and (
+            not self._min_iterations
+            or result[TRAINING_ITERATION] - self._last_checkpoint_iteration >= self._min_iterations
+        )
 
-        return steps_since_last_checkpoint >= self._checkpoint_frequency
-
-    def __init__(self, checkpoint_frequency: int = 50_000) -> None:
+    def __init__(self, checkpoint_frequency: int = 65_536, min_iterations: Optional[int] = 24) -> None:
         if checkpoint_frequency == 0:
             _logger.info("Checkpoint frequency is set to 0, disabling step checkpointing.")
             checkpoint_frequency = sys.maxsize
         self._checkpoint_frequency = checkpoint_frequency
-        super().__init__("current_step", self._condition)
+        self._min_iterations = min_iterations
+        super().__init__(CURRENT_STEP, self._condition)
 
     @classmethod
-    def make_callback_class(cls, *, checkpoint_frequency, **kwargs) -> type[Self]:
-        return partial(cls, checkpoint_frequency=checkpoint_frequency, **kwargs)  # pyright: ignore[reportReturnType]
+    def make_callback_class(cls, *, checkpoint_frequency, min_iterations: Optional[int] = 24, **kwargs) -> type[Self]:
+        return partial(cls, checkpoint_frequency=checkpoint_frequency, min_iterations=min_iterations, **kwargs)  # pyright: ignore[reportReturnType]

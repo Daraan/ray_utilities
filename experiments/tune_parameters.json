@@ -1,0 +1,62 @@
+{
+  "lr": {
+    "qloguniform": {
+      "lower": 5e-05,
+      "upper": 0.1,
+      "q": 5e-05
+    }
+  },
+  "batch_size": {
+    "grid_search": [
+      128,
+      256,
+      512,
+      1024,
+      2048,
+      4096,
+      8192,
+      16384
+    ]
+  },
+  "accumulate_gradients_every": {
+    "grid_search": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32,
+      64,
+      128
+    ]
+  },
+  "minibatch_size": {
+    "grid_search": [
+      128,
+      256,
+      512,
+      1024,
+      2048,
+      4096,
+      8192,
+      16384
+    ]
+  },
+  "minibatch_scale": {
+    "grid_search": [
+      0.0625,
+      0.125,
+      0.25,
+      0.5,
+      1.0
+    ]
+  },
+  "num_envs_per_env_runner": {
+    "grid_search": [
+      1,
+      8,
+      16,
+      32
+    ]
+  }
+}

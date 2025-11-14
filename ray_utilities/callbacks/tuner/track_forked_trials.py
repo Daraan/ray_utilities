@@ -77,6 +77,8 @@ class TrackForkedTrialsMixin(LoggerCallback):
         self.parent_trial_lookup: dict[Trial, Trial | str | None] = {}
         """Mapping of trials to their parent trials, if known."""
 
+        self.__state_restored = False
+
     def is_trial_forked(self, trial: Trial) -> bool:
         """Whether the given trial was forked from another trial."""
         if trial in self._forked_trials or trial in self._current_fork_ids:
@@ -110,20 +112,40 @@ class TrackForkedTrialsMixin(LoggerCallback):
     def make_forked_trial_id(self, trial: Trial, fork_data: ForkFromData) -> str:
         return make_experiment_key(trial, fork_data)
 
-    def add_forked_trial_id(self, trial: Trial, fork_data: ForkFromData | None) -> str:
+    def add_forked_trial_id(self, trial: Trial, fork_data: ForkFromData | None, *, from_checkpoint: bool) -> str:
         """
         As we need to fork an already forked trial. We need to know the fork_id we give
         to the trial when we fork it again.
         """
         if fork_data is not None:
-            fork_id = self.make_forked_trial_id(trial, fork_data)
+            if (fork_id := fork_data.get("fork_id_this_trial")) is None:
+                fork_id = self.make_forked_trial_id(trial, fork_data)
+                fork_data["fork_id_this_trial"] = fork_id
         else:
             # assume we load for example from a checkpoint and the parent is currently not running
             # hence the id of the trial does not conflict with the parent
             fork_id = trial.trial_id
+        # from set_state we might have string in the dict
+        if trial.trial_id in self._current_fork_ids:
+            self._current_fork_ids[trial] = self._current_fork_ids.pop(trial.trial_id)
+        if fork_id in self._current_fork_ids:
+            self._current_fork_ids[trial] = self._current_fork_ids.pop(fork_id)
         # Every trial can have only one fork_id as it is currently running
         self._current_fork_ids[trial] = fork_id
-        self._past_trial_ids[trial].append(self._trial_ids[trial])
+        if trial.trial_id in self._trial_ids:
+            self._trial_ids[trial] = self._trial_ids.pop(trial.trial_id)
+        if trial.trial_id in self._past_trial_ids:
+            self._past_trial_ids[trial] = self._past_trial_ids.pop(trial.trial_id)
+        if trial in self._trial_ids:
+            self._past_trial_ids[trial].append(self._trial_ids[trial])
+        elif not from_checkpoint:
+            # Might be executed when restoring as well
+            _logger.warning(
+                "Adding forked trial id for trial %s that was not tracked before. "
+                "This is only expected when loading a checkpoint, but this is not the case here.",
+                trial,
+                stacklevel=2,
+            )
         self._trial_ids[trial] = fork_id  # Also track in the general trial IDs dict
         return fork_id
 
@@ -150,6 +172,20 @@ class TrackForkedTrialsMixin(LoggerCallback):
         """
         return trial not in self._currently_not_forked_trials
 
+    def is_fork_parent_checkpoint(self, trial: Trial) -> bool:
+        """Whether the trial was started from a checkpoint of its parent trial."""
+        controller_config = None
+        if FORK_FROM in trial.config:
+            fork_data = trial.config[FORK_FROM]
+            controller_config = fork_data.get("controller", "") == "from_checkpoint"
+        if trial in self._forked_trials:
+            fork_data = self._forked_trials[trial][-1]
+            if fork_data.get("controller", "") == "from_checkpoint":
+                if controller_config is not None:
+                    assert controller_config is True
+                return True
+        return bool(controller_config)
+
     def on_trial_start(self, iteration: int, trials: list[Trial], trial: Trial, **info):
         # Might already have a parent, has None, or will be set below
         self.parent_trial_lookup.setdefault(trial, None)
@@ -166,7 +202,7 @@ class TrackForkedTrialsMixin(LoggerCallback):
                 if not self.is_trial_forked(trial):
                     self._forked_trials[trial] = []
                 # need to load the checkpoint first too see more information
-                self._forked_trials[trial].append(
+                self._forked_trials[trial].append(  # type: ignore[typeddict-item]
                     {
                         "parent_trial_id": extracted_id,
                         "controller": "from_checkpoint",
@@ -174,7 +210,7 @@ class TrackForkedTrialsMixin(LoggerCallback):
                 )
                 self.parent_trial_lookup[trial] = extracted_id
                 _logger.info("Trial %s was started from checkpoint of trial %s", trial.trial_id, extracted_id)
-            self.add_forked_trial_id(trial, fork_data=None)
+            self.add_forked_trial_id(trial, fork_data=None, from_checkpoint=True)
         if FORK_FROM in trial.config:
             fork_data: ForkFromData = trial.config[FORK_FROM]
             parent_trial_id = fork_data["parent_trial_id"]
@@ -188,7 +224,7 @@ class TrackForkedTrialsMixin(LoggerCallback):
             else:
                 self.parent_trial_lookup[trial] = parent_trial_id
             self._forked_trials[trial].append(fork_data)
-            self.add_forked_trial_id(trial, fork_data=fork_data)
+            self.add_forked_trial_id(trial, fork_data=fork_data, from_checkpoint=False)
             self._currently_not_forked_trials.discard(trial)
             _logger.debug(
                 "Trial %s was forked from %s, fork_id of this trial %s, parent data: %s",
@@ -233,3 +269,124 @@ class TrackForkedTrialsMixin(LoggerCallback):
         self._forked_trials.pop(trial, None)
         self._currently_not_forked_trials.discard(trial)
         self.parent_trial_lookup.pop(trial, None)
+
+    def get_state(self) -> dict:
+        """Get the state of the callback for checkpointing.
+
+        Returns:
+            Dictionary containing trial tracking data. Trial objects are converted
+            to trial IDs for pickling.
+        """
+
+        def trial_id_state(trial: Trial | str) -> str:
+            if isinstance(trial, str):
+                return trial
+            return trial.trial_id
+
+        # When we restore, tune might call get_state while our trials are still saved as string
+        forked_trials = {trial_id_state(trial): fork_data_list for trial, fork_data_list in self._forked_trials.items()}
+        for data in forked_trials.values():
+            for fork_data in data:
+                fork_data.pop("parent_trial", None)
+
+        return {
+            "forked_trials": forked_trials,
+            "current_fork_ids": {trial_id_state(trial): fork_id for trial, fork_id in self._current_fork_ids.items()},
+            "past_trial_ids": {trial_id_state(trial): past_ids for trial, past_ids in self._past_trial_ids.items()},
+            "trial_ids": {trial_id_state(trial): trial_id for trial, trial_id in self._trial_ids.items()},
+            "currently_not_forked_trials": [trial_id_state(trial) for trial in self._currently_not_forked_trials],
+            "parent_trial_lookup": {
+                trial_id_state(trial): (parent.trial_id if isinstance(parent, Trial) else parent)
+                for trial, parent in self.parent_trial_lookup.items()
+            },
+        }
+
+    def set_state(self, state: dict) -> None:
+        """Set the state of the callback from checkpoint data.
+
+        Args:
+            state: State dictionary containing trial tracking data.
+
+        Note:
+            Trial objects cannot be restored from IDs alone. The restored state
+            will use trial IDs as keys until trials are restarted and the mappings
+            are rebuilt in on_trial_start.
+        """
+        super().set_state(state)
+        # Note: We cannot restore Trial objects from trial IDs alone.
+        # The dicts will be populated with actual Trial objects as trials restart.
+        # For now, we store the state with trial_id strings as keys.
+        _logger.info("Restoring TrackForkedTrialsMixin state from checkpoint")
+
+        # Clear current state
+        # Log what we clear first:
+        _logger.info(
+            "Clearing TrackForkedTrialsMixin state. Clearing %d forked trials, %d current fork ids, %d trial ids "
+            "and %d parent trial lookups",
+            len(self._forked_trials),
+            len(self._current_fork_ids),
+            len(self._trial_ids),
+            len(self.parent_trial_lookup),
+        )
+        self._forked_trials.clear()
+        self._current_fork_ids.clear()
+        self._past_trial_ids.clear()
+        self._trial_ids.clear()
+        self._currently_not_forked_trials.clear()
+        self.parent_trial_lookup.clear()
+
+        # TODO: Currently holds string values as keys
+
+        # Restore with trial_id strings as keys (will be updated with Trial objects on restart)
+        # This is intentionally using trial_id strings as keys since we can't reconstruct Trial objects
+        for trial_id, fork_data_list in state.get("forked_trials", {}).items():
+            self._forked_trials[trial_id] = fork_data_list
+
+        for trial_id, fork_id in state.get("current_fork_ids", {}).items():
+            self._current_fork_ids[trial_id] = fork_id
+
+        for trial_id, past_ids in state.get("past_trial_ids", {}).items():
+            self._past_trial_ids[trial_id] = past_ids
+
+        for trial_id, stored_trial_id in state.get("trial_ids", {}).items():
+            self._trial_ids[trial_id] = stored_trial_id
+        for trial_id in state.get("currently_not_forked_trials", []):
+            self._currently_not_forked_trials.add(trial_id)
+
+        for trial_id, parent_id in state.get("parent_trial_lookup", {}).items():
+            self.parent_trial_lookup[trial_id] = parent_id
+
+        _logger.info(
+            "Restored TrackForkedTrialsMixin: %d forked trials, %d current fork ids, %d trial ids",
+            len(self._forked_trials),
+            len(self._current_fork_ids),
+            len(self._trial_ids),
+        )
+        self.__state_restored = True
+
+    def on_trial_restore(self, iteration: int, trials: list[Trial], trial: Trial, **info):
+        _logger.info("Restoring trial %s in TrackForkedTrialsMixin", trial.trial_id)
+        if self.__state_restored:
+            # Fix string values in state:
+            if trial.trial_id in self._forked_trials:
+                self._forked_trials[trial] = self._forked_trials.pop(trial.trial_id)
+            if trial.trial_id in self._current_fork_ids:
+                self._current_fork_ids[trial] = self._current_fork_ids.pop(trial.trial_id)
+            if trial.trial_id in self._past_trial_ids:
+                self._past_trial_ids[trial] = self._past_trial_ids.pop(trial.trial_id)
+            if trial.trial_id in self._trial_ids:
+                self._trial_ids[trial] = self._trial_ids.pop(trial.trial_id)
+            if trial.trial_id in self._currently_not_forked_trials:
+                self._currently_not_forked_trials.add(trial)
+                self._currently_not_forked_trials.discard(trial.trial_id)
+            if trial.trial_id in self.parent_trial_lookup:
+                parent = self.parent_trial_lookup.pop(trial.trial_id)
+                if isinstance(parent, str):
+                    parent_trial = next((t for t in trials if t.trial_id == parent), None)
+                    if parent_trial is not None:
+                        self.parent_trial_lookup[trial] = parent_trial
+                    else:
+                        self.parent_trial_lookup[trial] = parent
+                else:
+                    self.parent_trial_lookup[trial] = parent
+        return super().on_trial_restore(iteration, trials, trial, **info)

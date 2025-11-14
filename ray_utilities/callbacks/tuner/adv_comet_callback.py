@@ -11,11 +11,12 @@ import sys
 import tempfile
 import threading
 import time
+from copy import deepcopy
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Iterable, List, Literal, Optional, cast, overload
+from typing import TYPE_CHECKING, ClassVar, Iterable, Literal, Optional, cast, overload
 
 from ray.air.integrations.comet import CometLoggerCallback
-from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
+from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS, EVALUATION_RESULTS
 from ray.tune.utils import flatten_dict
 
 from ray_utilities.callbacks.comet import CometArchiveTracker, _catch_comet_offline_logger, color_comet_log_strings
@@ -27,9 +28,10 @@ from ray_utilities.constants import (
     DEFAULT_VIDEO_DICT_KEYS,
     ENTRY_POINT,
     EPISODE_VIDEO_PREFIX,
+    EVALUATED_THIS_STEP,
     FORK_FROM,
 )
-from ray_utilities.misc import ExperimentKey, make_experiment_key
+from ray_utilities.misc import ExperimentKey, close_process_pipes, make_experiment_key, warn_if_slow
 from ray_utilities.video.numpy_to_video import numpy_to_video
 
 from ._log_result_grouping import exclude_results, non_metric_results
@@ -133,8 +135,8 @@ class AdvCometLoggerCallback(
         self,
         *,
         online: bool = True,
-        upload_offline_experiments: bool = False,
-        tags: Optional[List[str]] = None,
+        upload_intermediate: bool = False,
+        tags: Optional[list[str]] = None,
         save_checkpoints: bool = False,
         # Note: maybe want to log these in an algorithm debugger
         exclude_metrics: Optional[Iterable[str]] = None,
@@ -149,6 +151,9 @@ class AdvCometLoggerCallback(
         Args:
             online: Whether to make use of an Online or
                 Offline Experiment. Defaults to True.
+            upload_intermediate: If True, upload offline experiments intermediately when trials
+                complete/pause (corresponds to "offline+upload"). If False, uploads only happen
+                at experiment end (corresponds to "offline+upload@end").
             tags: Tags to add to the logged Experiment.
                 Defaults to None.
             save_checkpoints: If ``True``, model checkpoints will be saved to
@@ -207,12 +212,73 @@ class AdvCometLoggerCallback(
         """If log_env_details is True pip packages are already logged."""
 
         self._trials_created = 0
-        self._logged_architectures = set()
-        self.upload_offline_experiments = upload_offline_experiments
-        """If True, offline experiments will be uploaded on trial completion."""
+        self._logged_architectures: set[Trial] = set()
+        self.upload_intermediate = upload_intermediate
+        """If True, offline experiments will be uploaded intermediately when trials complete/pause.
 
-        self._threads: list[threading.Thread | AnyPopen] = []
+        Corresponds to "offline+upload" mode. When False, uploads only happen at experiment end
+        via the setup's upload_offline_experiments() method (corresponds to "offline+upload@end").
+        """
+
+        self._threads: list[threading.Thread] = []
         """Threads for uploading offline experiments."""
+
+        self._processes: list[AnyPopen] = []
+
+    def get_state(self) -> dict:
+        """Get the state of the callback for checkpointing.
+
+        Returns:
+            Dictionary containing callback state. Unpicklable objects like
+            threads, processes, and Comet experiment instances are excluded.
+        """
+        state = super().get_state() if hasattr(super(), "get_state") else {}
+        # Store basic counters and flags
+        state.update(
+            {
+                "trials_created": self._trials_created,
+                # on restore we still have strings
+                "logged_architectures": {
+                    trial.trial_id if not isinstance(trial, str) else trial for trial in self._logged_architectures
+                },
+                # "upload_intermediate": self.upload_intermediate,
+                # "online": self.online,
+            }
+        )
+        return state
+
+    def set_state(self, state: dict) -> None:
+        """Set the state of the callback from checkpoint data.
+
+        Args:
+            state: State dictionary containing callback state.
+
+        Note:
+            Threads, processes, and Comet experiment instances cannot be restored
+            and will be recreated as needed when trials restart.
+        """
+        if hasattr(super(), "set_state"):
+            super().set_state(state)
+
+        self._trials_created = state.get("trials_created", 0)
+        # Convert trial IDs back to trial objects when they restart
+        # For now, just clear the set - it will be repopulated
+        self._logged_architectures = set(state.get("logged_architectures", set()))
+        # self.upload_intermediate = state.get("upload_intermediate", False)
+        # online is set in __init__, but restore it if available
+        # if "online" in state:
+        #    self.online = state["online"]
+
+        _LOGGER.info(
+            "Restored AdvCometLoggerCallback state: %d trials created",
+            self._trials_created,
+        )
+
+    def on_trial_restore(self, iteration: int, trials: list[Trial], trial: Trial, **info):
+        if trial.trial_id in self._logged_architectures:
+            self._logged_architectures.add(trial)
+            self._logged_architectures.discard(trial.trial_id)
+        return super().on_trial_restore(iteration, trials, trial, **info)
 
     def _check_workspaces(self, trial: Trial) -> Literal[0, 1, 2]:
         """
@@ -225,6 +291,10 @@ class AdvCometLoggerCallback(
         from comet_ml.exceptions import CometRestApiException
         from comet_ml.experiment import LOGGER as COMET_LOGGER
 
+        if "COMET_API_KEY" not in os.environ:
+            from ray_utilities.setup.tuner_setup import TunerCallbackSetup
+
+            TunerCallbackSetup._set_comet_api_key()
         try:
             api = API()
             workspaces = api.get_workspaces()
@@ -233,6 +303,9 @@ class AdvCometLoggerCallback(
             _LOGGER.warning(
                 "Failed to retrieve workspaces from Comet API. Cannot check if selected workspace is valid: %s", e
             )
+            return 1
+        except Exception:
+            _LOGGER.exception("Unexpected error when retrieving workspaces from Comet API. Cannot check validity.")
             return 1
         if (workspace := self.experiment_kwargs.get("workspace", None)) is not None and (
             workspace not in workspaces and workspace.lower() not in workspaces
@@ -260,8 +333,14 @@ class AdvCometLoggerCallback(
             _LOGGER.info("Ended and restarting experiment for forked trial %s", trial)
             assert self.is_trial_forked(trial)
         except KeyError:  # forked, but not yet started, e.g. loaded from checkpoint
-            assert (_info := self.get_forked_trial_info(trial))
-            assert "parent_trial" not in _info[-1]
+            _info = self.get_forked_trial_info(trial)
+            assert _info
+            if "parent_trial" in _info[-1]:
+                _LOGGER.warning(
+                    "found parent_trial in forked info trial but trial was not being logged. "
+                    "This is only expected when loading from checkpoint, but then no parent_trial should be set. "
+                    "This could possibly happen when restoring."
+                )
         experiment_kwargs = self.experiment_kwargs.copy()
         if fork_data is None:
             fork_data = cast("ForkFromData | None", trial.config.get(FORK_FROM, None))
@@ -344,6 +423,8 @@ class AdvCometLoggerCallback(
             assert trial in self._trial_experiments
         else:
             experiment = self._trial_experiments[trial]
+        if "__ptb_main_branch__" in trial.config:
+            tags.append("pbt_main_branch")
 
         experiment.set_name(trial_name)
         experiment.add_tags(tags)
@@ -351,7 +432,7 @@ class AdvCometLoggerCallback(
 
         # NOTE: Keys here at not flattened, cannot use "cli_args/test" as a key
         # Unflattening only supports one level of nesting
-        config = trial.config.copy()
+        config = deepcopy(trial.config)
         non_parameter_keys = self._to_exclude + self._to_other
         flat_config = flatten_dict(config)
         # get all the parent/child keys that are now in the flat config
@@ -386,6 +467,7 @@ class AdvCometLoggerCallback(
         if to_other:
             experiment.log_others(to_other)
 
+    @warn_if_slow
     def log_trial_result(  # pyright: ignore[reportIncompatibleMethodOverride]
         self,
         iteration: int,
@@ -393,7 +475,9 @@ class AdvCometLoggerCallback(
         result,
     ):
         step: int = result["training_iteration"]  # maybe result.get(TIMESTEPS_TOTAL) or result[TRAINING_ITERATION]
-        # Will be flattened in super anyway
+        if not result.get(EVALUATED_THIS_STEP, True):
+            # Do not eval metric if we did not log it, ray copies the entry.
+            result.pop(EVALUATION_RESULTS, None)
         flat_result: AnyFlatLogMetricsDict = flatten_dict(result, delimiter="/")  # pyright: ignore[reportArgumentType, reportAssignmentType]
         del result  # avoid using it by mistake
 
@@ -416,23 +500,40 @@ class AdvCometLoggerCallback(
                 if k not in self._flat_video_keys and (not isinstance(v, float) or not math.isnan(v))
             }
 
-        # These are only once a list of int, after reduce this list is empty:
-        if not log_result.get("env_runners/environments/seeds", True):
-            del log_result["env_runners/environments/seeds"]
-        if not log_result.get("evaluation/env_runners/environments/seeds", True):
-            del log_result["evaluation/env_runners/environments/seeds"]
+        # These are logged only once a list of int, after reduce this list is empty:
+        for seed_key in [
+            "env_runners/environments/seeds",
+            "evaluation/env_runners/environments/seeds",
+            "env_runners/environments/seed",
+            "evaluation/env_runners/environments/seed",
+            # new log style
+            "training/environments/seeds",
+            "evaluation/environments/seeds",
+            "training/environments/seed",
+            "evaluation/environments/seed",
+        ]:
+            if seed_key in log_result and isinstance(seed_value := log_result[seed_key], list):
+                if len(seed_value) == 0:
+                    del log_result[seed_key]
+                elif len(seed_value) == 1:
+                    log_result[seed_key] = seed_value[0]
+                else:  # cast so str
+                    log_result[seed_key] = str(seed_value)
         # Cannot remove this
         log_result["training_iteration"] = step
         # Log normal metrics and parameters
         super().log_trial_result(iteration, trial, log_result)
         # Log model architecture
-        if trial not in self._logged_architectures and "model_architecture.json" in os.listdir(trial.path):
-            if trial.path is not None:
-                file_path = os.path.join(trial.path, "model_architecture.json")
-                self._trial_experiments[trial].log_model("model_architecture.json", file_path)
-                self._logged_architectures.add(trial)
-            else:
-                _LOGGER.error("Cannot save model_architecture as trial.path is None")
+        if (
+            step > 2
+            and trial not in self._logged_architectures
+            and trial.storage
+            and os.path.exists(trial.storage.trial_working_directory)
+            and "model_architecture.json" in os.listdir(trial.storage.trial_working_directory)
+        ):
+            file_path = os.path.join(trial.storage.trial_working_directory, "model_architecture.json")
+            self._trial_experiments[trial].log_model("model_architecture.json", file_path)
+            self._logged_architectures.add(trial)
         if videos:
             experiment = self._trial_experiments[trial]
             for video_key in self._flat_video_lookup_keys:
@@ -484,16 +585,39 @@ class AdvCometLoggerCallback(
     def log_trial_end(self, trial: "Trial", failed: bool = False):  # noqa: FBT001, FBT002
         """Log the end of a trial."""
         # Finish comet for this trial
+        start = time.time()
         with _catch_comet_offline_logger() as log_stream:
             super().log_trial_end(trial)
-        if not self.online and self.upload_offline_experiments:
+        end = time.time()
+        if end - start > 30:
+            _LOGGER.warning("Comet log_trial_end took a long time: %.2fs", end - start)
+        if not self.online and self.upload_intermediate:
             upload_command = self.upload_command_from_log(log_stream)
             process = self._upload_offline_experiment_if_available(trial, upload_command=upload_command, blocking=False)
+            end2 = time.time()
+            if end2 - end > 30:
+                _LOGGER.warning("Comet upload_offline_experiment_if_available took a long time: %.2fs", end2 - end)
             if process:
-                self._threads.append(process)
+                if isinstance(process, threading.Thread):
+                    self._threads.append(process)
+                else:
+                    self._processes.append(process)
 
-    def on_experiment_end(self, trials: List[Trial], **info):
+    def on_experiment_end(self, trials: list[Trial], **info):
         super().on_experiment_end(trials, **info)
+        # if there are any trials left (maybe because of an error and log_trial_end was not called)
+        for experiment in self._trial_experiments.values():
+            experiment.end()
+        self._trial_experiments.clear()
+
+        # Handle "offline+upload@end" mode: upload all experiments at the end
+        if not self.online and not self.upload_intermediate:
+            _LOGGER.info("Processing offline+upload@end: uploading all Comet experiments at experiment end")
+            for trial in trials:
+                process = self._upload_offline_experiment_if_available(trial, blocking=False)
+                if process:
+                    self._threads.append(process)
+
         total_count = 0
         for thread in self._threads:
             count = 0
@@ -543,24 +667,24 @@ class AdvCometLoggerCallback(
             self._trial_experiments = {}
             for thread in self._threads:
                 # try not to access global variables as they might be already deleted
-                if hasattr(thread, "is_alive") and thread.is_alive():  # pyright: ignore[reportAttributeAccessIssue]
+                if thread.is_alive():  # pyright: ignore[reportAttributeAccessIssue]
                     t: threading.Thread = thread  # pyright: ignore[reportAssignmentType]
                     _LOGGER.info("Waiting for Comet offline upload thread to finish")
                     # Threads are non-daemon and will block exit, wait a bit for them to finish
                     t.join(timeout=30)
                     if t.is_alive():
                         _LOGGER.warning("Comet offline upload thread did not finish in time")
-                else:
-                    process: subprocess.Popen[str] = thread  # pyright: ignore[reportAssignmentType]
-                    if (retcode := process.poll()) is None:
-                        _LOGGER.info("Comet offline is still in progress (%s)", process.args)
-                        try:  # noqa: SIM105
-                            # subprocess does continue after exit, but might be attached to a thread to move the files
-                            process.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            pass
-                    elif retcode != 0:
-                        _LOGGER.warning("Comet offline upload process exited with code %s", retcode)
+            for process in self._processes:
+                close_process_pipes(process)
+                if (retcode := process.poll()) is None:
+                    _LOGGER.info("Comet offline is still in progress (%s)", process.args)
+                    try:  # noqa: SIM105
+                        # subprocess does continue after exit, but might be attached to a thread to move the files
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+                elif retcode != 0:
+                    _LOGGER.warning("Comet offline upload process exited with code %s", retcode)
         except Exception:
             if _LOGGER is not None:  # pyright: ignore[reportUnnecessaryComparison]
                 _LOGGER.exception("Exception in __del__ of AdvCometLoggerCallback")

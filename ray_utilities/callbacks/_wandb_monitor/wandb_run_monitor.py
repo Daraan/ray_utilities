@@ -14,20 +14,23 @@ import logging
 import os
 import threading
 import time
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 import dotenv
-
 import ray
+import urllib3.exceptions
+from typing_extensions import Self
+from selenium.common.exceptions import WebDriverException
+
 import wandb
 import wandb.errors
 
-# multiprocessing version we currently do not use
-# from ray_utilities.callbacks._wandb_monitor._wandb_selenium_login_mp import WandBCredentials, WandBSeleniumSession
-# Instead we use one in the same process
 from ray_utilities.callbacks._wandb_monitor._wandb_selenium_login import WandBCredentials, WandBSeleniumSession
+from ray_utilities.constants import WANDB_MONITOR_ACTOR_NAME
+from ray_utilities.nice_logger import ImportantLogger
 
 if TYPE_CHECKING:
     from ray.actor import ActorHandle, ActorProxy
@@ -137,8 +140,8 @@ class WandbRunMonitor:
         if self.callback:
             try:
                 self.callback(status, data)
-            except Exception as e:  # ruff: noqa: BLE001
-                logger.warning("Callback error: %s", e)
+            except Exception:  # noqa: BLE001
+                logger.exception("Callback error:")
 
     def is_initialized(self) -> bool:
         """Check if the monitor is initialized."""
@@ -183,12 +186,12 @@ class WandbRunMonitor:
                     self._notify("initialization_failed", "Failed to auto-detect entity")
                     return False
 
-            logger.info("Successfully initialized monitor")
+            ImportantLogger.important_info(logger, "Successfully initialized monitor")
             self._is_initialized = True
             self._notify("monitor_initialized")
 
         except Exception as e:
-            logger.error("Failed to initialize monitor: %s", e)
+            logger.exception("Failed to initialize monitor:")
             self._notify("initialization_failed", str(e))
             return False
         else:
@@ -197,6 +200,85 @@ class WandbRunMonitor:
     def _selenium_callback(self, status: str, data: Any = None) -> None:
         """Internal callback to forward Selenium status updates."""
         self._notify(f"selenium_{status}", data)
+
+    def _check_driver_alive(self) -> bool:
+        """
+        Check if the Selenium driver is alive and responsive.
+
+        Uses multiple checks to verify driver health:
+        1. Check if driver object exists
+        2. Check window handles (most reliable check)
+        3. Try to execute a simple JavaScript command
+
+        Returns:
+            True if driver is alive and responsive, False otherwise
+        """
+        if not self.selenium_session or not self.selenium_session.driver:
+            return False
+
+        try:
+            # Most reliable check: accessing window_handles requires active browser session
+            _ = self.selenium_session.driver.window_handles
+
+            # Additional check: execute simple JavaScript to verify browser is responsive
+            result = self.selenium_session.driver.execute_script("return document.readyState")
+            if result:
+                logger.debug("Driver is alive and responsive")
+                return True
+
+            logger.warning("Driver exists but may not be responsive")
+        except WebDriverException as e:
+            logger.warning("Driver health check failed: %s", e)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Unexpected error during driver health check: %s", e)
+        return False
+
+    def _check_and_restart_driver(self, *, force_restart: bool = False) -> bool:
+        """
+        Check if Selenium driver is alive and restart if needed.
+
+        Args:
+            force_restart: If True, skip health check and force restart the driver
+
+        Returns:
+            True if driver is alive or successfully restarted, False otherwise
+        """
+        if not self.selenium_session:
+            logger.error("No Selenium session available")
+            return False
+
+        try:
+            if not force_restart and self._check_driver_alive():
+                return True
+
+            if force_restart:
+                logger.info("Force restart requested, skipping health check")
+            else:
+                logger.info("Driver not responsive, attempting restart")
+
+            self._notify("driver_restarting", {"force_restart": force_restart})
+
+            if self.selenium_session.driver:
+                try:
+                    self.selenium_session.cleanup()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("Error during driver cleanup before restart: %s", e)
+
+            self.selenium_session.driver = self.selenium_session._setup_driver()
+
+            if not self.selenium_session.login():
+                logger.error("Failed to re-login after driver restart")
+                self._notify("driver_restart_login_failed")
+                return False
+
+            logger.info("Successfully restarted driver and logged in")
+            self._notify("driver_restarted")
+
+        except Exception as e:
+            logger.error("Failed to restart driver: %s", e)
+            self._notify("driver_restart_failed", str(e))
+            return False
+        return True
 
     def visit_run_page(self, run_id: str, entity: Optional[str] = None, project: Optional[str] = None) -> bool:
         """
@@ -218,37 +300,72 @@ class WandbRunMonitor:
         entity = entity or self.entity
         project = project or self.project
 
-        if entity is None or project is None:
+        if entity is None or project is None:  # pyright: ignore[reportUnnecessaryComparison]
             logger.error("Entity and project must be set to visit run page")
             return False
         run_url = f"https://wandb.ai/{entity}/{project}/runs/{run_id}"
 
-        try:
-            self._notify("visiting_run_page", {"url": run_url})
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                self._notify("visiting_run_page", {"url": run_url, "attempt": attempt + 1})
 
-            # For multiprocessing implementation, driver is None (it's in the worker process)
-            # Just use the session directly without checking driver
-            # success = self.selenium_session.visit_wandb_page(run_url)
-            success = self.selenium_session.visit_run_page(entity, project, run_id)
+                success = self.selenium_session.visit_run_page(entity, project, run_id)
 
-        except Exception as e:
-            logger.error("Error visiting run page %s: %s", run_url, e)
-            self._notify("run_page_visit_error", {"url": run_url, "error": str(e)})
-            return False
-        else:
-            if success:
-                logger.info("Successfully visited run page: %s", run_url)
-                self._notify("run_page_visited", {"url": run_url})
-                return success
+            except urllib3.exceptions.NewConnectionError as e:  # noqa: PERF203
+                logger.error(
+                    "HTTP connection error visiting run page %s (attempt %d/%d): %s",
+                    run_url,
+                    attempt + 1,
+                    max_retries,
+                    e,
+                )
+                self._notify("run_page_visit_error", {"url": run_url, "error": str(e), "attempt": attempt + 1})
 
-            logger.error("Failed to visit run page: %s", run_url)
-            self._notify("run_page_visit_failed", {"url": run_url})
-            return False
+                if attempt < max_retries - 1:
+                    logger.info("Connection refused - forcing driver restart...")
+                    if self._check_and_restart_driver(force_restart=True):
+                        logger.info("Driver restarted successfully, retrying visit")
+                        continue
+                    logger.error("Failed to restart driver, giving up")
+                return False
+            except Exception as e:  # noqa: BLE001
+                logger.error(
+                    "Error visiting run page %s: %s\n%s", run_url, "\n".join(traceback.format_exc().split("\n")[-2:]), e
+                )
+                self._notify("run_page_visit_error", {"url": run_url, "error": str(e)})
+                return False
+            else:
+                if success:
+                    logger.info("Successfully visited run page: %s", run_url)
+                    self._notify("run_page_visited", {"url": run_url})
+                    return success
+
+                logger.error("Failed to visit run page: %s", run_url)
+                self._notify("run_page_visit_failed", {"url": run_url})
+                return False
+
+        logger.error("All attempts to visit run page failed: %s", run_url)
+        return False
 
     def close_run_tab(self, run_id: str, entity: Optional[str] = None, project: Optional[str] = None) -> bool:
         """Close the WandB run tab in the Selenium session if available."""
         if not self.selenium_session or not self._is_initialized:
-            logger.error("Monitor not initialized or Selenium session missing")
+            # Rate limit this error to avoid spam
+            if not hasattr(self, "_last_monitor_error_time"):
+                self._last_monitor_error_time = 0
+                self._monitor_error_count = 0
+
+            current_time = time.time()
+            if current_time - self._last_monitor_error_time >= 10:
+                # Reset counter after 10 seconds
+                self._last_monitor_error_time = current_time
+                self._monitor_error_count = 1
+                logger.error("Monitor not initialized or Selenium session missing")
+            elif self._monitor_error_count < 2:
+                # Allow up to 2 errors within 10 seconds
+                self._monitor_error_count += 1
+                logger.error("Monitor not initialized or Selenium session missing")
             return False
         entity = entity or self.entity
         project = project or self.project
@@ -525,6 +642,7 @@ class WandbRunMonitor:
         version: Optional[str | int] = "latest",
         check_interval: float = 5.0,
         max_wait_time: float = 300.0,
+        *,
         monitor_artifact: bool = True,
     ) -> None:
         """
@@ -622,14 +740,16 @@ class WandbRunMonitor:
         # Stop monitoring first to prevent race conditions
         try:
             self.stop_monitoring(timeout=0.2)
-        except Exception as e:  # ruff: noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             logger.warning("Error stopping monitoring: %s", e)
+        except KeyboardInterrupt:
+            pass
 
         # Clean up selenium session
         if self.selenium_session:
             try:
                 self.selenium_session.cleanup()
-            except Exception as e:  # ruff: noqa: BLE001
+            except Exception as e:  # noqa: BLE001
                 logger.warning("Error cleaning up selenium session: %s", e)
             finally:
                 self.selenium_session = None
@@ -641,10 +761,10 @@ class WandbRunMonitor:
         # Notify cleanup completion
         try:
             self._notify("monitor_cleanup_complete")
-        except Exception as e:  # ruff: noqa: BLE001
-            logger.warning("Error in cleanup notification: %s", e)
+        except Exception:
+            logger.exception("Error in cleanup notification")
 
-        logger.info("Cleaned up WandB run monitor")
+        ImportantLogger.important_info(logger, "Cleaned up WandB run monitor")
 
     def __del__(self) -> None:
         """
@@ -677,6 +797,27 @@ class WandbRunMonitor:
         self.cleanup()
 
     @classmethod
+    def is_remote_monitor_running(cls, name: str = WANDB_MONITOR_ACTOR_NAME) -> bool:
+        """
+        Check if a remote WandbRunMonitor actor is running.
+
+        This method checks for the existence of a Ray actor with the specified name.
+        Args:
+            name: Name of the WandbRunMonitor actor to check. Defaults to :const:`WANDB_MONITOR_ACTOR_NAME`.
+
+        Note:
+            Use this method rather in place for a negative check, if you want to get the actor anyway
+            use :meth:`get_remote_monitor` which will create it if not existing else returns the existing one.
+        """
+        try:
+            actor = ray.get_actor(name)
+            if actor is not None:
+                return True
+        except ValueError:
+            return False
+        return False
+
+    @classmethod
     def get_remote_monitor(
         cls,
         credentials: WandBCredentials | None = None,
@@ -690,9 +831,9 @@ class WandbRunMonitor:
         wandb_api: Optional[wandb.Api] = None,
         # actor options
         num_cpus: int = 1,
-        name: str = "remote_wandb_run_monitor",
+        name: str = WANDB_MONITOR_ACTOR_NAME,
         actor_options: Optional[dict[str, Any]] = None,
-    ) -> "ActorHandle[WandbRunMonitor] | ActorProxy[WandbRunMonitor]":
+    ) -> "ActorHandle[Self] | ActorProxy[Self]":
         """Create a remote WandbRunMonitor actor."""
         if actor_options is None:
             actor_options = {

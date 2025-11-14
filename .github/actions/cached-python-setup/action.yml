@@ -85,3 +85,11 @@ runs:
         pip install "${INPUTS_INSTALL_ARGS}" pyright
       env:
         INPUTS_INSTALL_ARGS: ${{ inputs.install-args }}
+    # Workaround for https://github.com/wandb/wandb/issues/10183
+    - name: Patch wandb install
+      if: ${{ steps.cache-venv.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: |
+        source .venv/bin/activate
+        WANDB_FILE=$(python -c "import wandb.sdk.lib.wb_logging as m; print(m.__file__)")
+        perl -i -pe 'BEGIN{undef $/;} s/    token = _run_id\.set\(_NOT_RUN_SPECIFIC\)\n    try:\n        yield\n    finally:\n        _run_id\.reset\(token\)/    if _run_id is not None:\n        token = _run_id.set(_NOT_RUN_SPECIFIC)\n    try:\n        yield\n    finally:\n        if _run_id is not None:\n            _run_id.reset(token)/s' "$WANDB_FILE"

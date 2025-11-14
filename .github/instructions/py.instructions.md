@@ -22,6 +22,7 @@ applyTo: "**/*.py"
 - For libraries or external dependencies, mention their usage and purpose in comments.
 - Use consistent naming conventions and follow language-specific best practices.
 - Write concise, efficient, and idiomatic code that is also easily understandable.
+- Do not remove comments that are unrelated and in a different parts of the code that are unrelated to your change.
 
 ## Docstring instructions
 

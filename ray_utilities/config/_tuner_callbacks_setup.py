@@ -12,6 +12,7 @@ from typing_extensions import TypeVar
 
 from ray_utilities.callbacks.tuner import AdvCometLoggerCallback, create_tuner_callbacks
 from ray_utilities.callbacks.tuner._log_result_grouping import exclude_results
+from ray_utilities.callbacks.tuner.add_experiment_key import AddExperimentKeyCallback
 from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallback
 
 try:
@@ -56,17 +57,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             - create_comet_logger: Create a Comet logger callback.
     """
 
-    EXCLUDE_METRICS: ClassVar[list[str]] = [
-        *exclude_results,
-        # "time_since_restore",
-        # "iterations_since_restore",
-        # "timestamp",  # autofilled
-        # "num_agent_steps_sampled_lifetime",
-        # "learners", # NEW: filtered by log_stats
-        # "timers",
-        # "fault_tolerance",
-        # "training_iteration", #  needed for the callback
-    ]
+    EXCLUDE_METRICS: ClassVar[list[str]] = [*exclude_results]
 
     def __init__(
         self,
@@ -103,9 +94,13 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
                 disable_git=args.test,
                 # Internal setting
                 # Disable system metrics collection.
-                x_disable_stats=args.test,
+                x_disable_stats=True,
                 # Disable check for latest version of wandb, from PyPI.
                 # x_disable_update_check=not args.test,  # not avail in latest version
+                # When we are remote we do not get the output stream anyway, when we are local
+                # we will get way too much output for now disable it
+                # must be in "auto", "off", "redirect", "wrap"
+                console=os.environ.get("WANDB_CONSOLE", "off"),  # pyright: ignore[reportArgumentType]
             )
         except NameError as e:
             if "name 'wandb' is not defined" not in str(e):
@@ -120,6 +115,14 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             adv_settings = None
         # TODO: make use of resume/resume_from/fork_from when using from_checkpoint
         # see: https://docs.wandb.ai/ref/python/sdk/functions/init/ format: {id}?_step={step}
+
+        # Determine upload behavior:
+        # - "offline+upload" -> upload intermediately when trials complete/pause (upload_intermediate=True)
+        # - "offline+upload@end" -> upload only at experiment end via setup (upload_intermediate=False)
+        upload_intermediate = False
+        if self._setup.args.wandb and "upload" in self._setup.args.wandb and "@end" not in self._setup.args.wandb:
+            upload_intermediate = True
+
         return AdvWandbLoggerCallback(
             project=self._setup.project,
             group=self._setup.group_name,  # if not set trainable name is used
@@ -127,7 +130,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
                 *self.EXCLUDE_METRICS,
                 # "fault_tolerance",
             ],
-            upload_checkpoints=False,
+            upload_checkpoints=False,  # "core" in self._setup.create_tags(),
             save_code=False,  # Code diff
             # For more keywords see: https://docs.wandb.ai/ref/python/init/
             # Log gym
@@ -137,12 +140,35 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             notes=args.comment or None,
             tags=self.get_tags(),
             mode=mode,
-            job_type="train",
-            log_config=False,  # Log "config" key of results; useful if params change. Defaults to False.
+            job_type=self.get_job_type(),
+            log_config=self._wandb_should_log_config(),  # Log "config" key of results; useful if params change.
             # settings advanced wandb.Settings
             settings=adv_settings,
-            upload_offline_experiments=self._setup.args.wandb and "upload" in self._setup.args.wandb,
+            upload_intermediate=upload_intermediate,
+            # Does nothing if upload_intermediate is True
+            upload_at_end=(self._setup.args.wandb and "upload" in self._setup.args.wandb),
         )
+
+    def get_job_type(self) -> str:
+        if self._setup.args.command_str:
+            return self._setup.args.command_str
+        if self._setup.args.tune:
+            return "tune"
+        return "train"
+
+    def _wandb_should_log_config(self) -> bool:
+        """
+        Wether the log_config parameter should be set to True for wandb.
+
+        If this returns false the ``"config"`` key in the results will not be logged.
+
+        We do this when we use:
+            - pbt
+            - dynamic_batch or dynamic_buffer option
+        """
+        if self._setup.args.command_str and "pbt" in self._setup.args.command_str.lower():
+            return True
+        return self._setup.args.dynamic_batch or self._setup.args.dynamic_buffer
 
     def create_comet_logger(
         self,
@@ -162,9 +188,18 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         # Possibly raise a warning if a pbt scheduler is used but not viewer credentials are setup
         _viewer_vars_set = self._set_wandb_viewer_credentials()
 
+        # Determine upload behavior for Comet (same logic as WandB):
+        # - "offline+upload" -> upload intermediately when trials complete/pause (upload_intermediate=True)
+        # - "offline+upload@end" -> upload only at experiment end via setup (upload_intermediate=False)
+        upload_intermediate_comet = False
+        if self._setup.args.comet and "upload" in self._setup.args.comet:
+            # Check if it's the @end variant
+            if "@end" not in self._setup.args.comet:
+                upload_intermediate_comet = True
+
         return AdvCometLoggerCallback(
             # new key
-            upload_offline_experiments=self._setup.args.comet and "upload" in self._setup.args.comet,
+            upload_intermediate=upload_intermediate_comet,
             api_key=api_key,
             disabled=not args.comet and args.test if disabled is None else disabled,
             online=not use_comet_offline,  # do not upload
@@ -210,7 +245,7 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
     def _set_comet_api_key() -> bool:
         if "COMET_API_KEY" in os.environ:
             return True
-        logger.debug("COMET_API_KEY not in environment variables, trying to load from ~/.comet_api_key.env")
+        logger.warning("COMET_API_KEY not in environment variables, trying to load from ~/.comet_api_key.env")
         return load_dotenv(Path("~/.comet_api_key.env").expanduser())
 
     @staticmethod
@@ -234,7 +269,10 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         """
         if adv_loggers is None:
             adv_loggers = bool(self._setup.args.render_mode)
-        callbacks: list[Callback] = create_tuner_callbacks(adv_loggers=adv_loggers)
+        offline_loggers = self._setup.args.offline_loggers
+        if offline_loggers is None:
+            offline_loggers = True  # should not happen
+        callbacks: list[Callback] = create_tuner_callbacks(adv_loggers=adv_loggers, offline_loggers=offline_loggers)
         if self._setup.args.wandb or self._setup.args.test:
             callbacks.append(self.create_wandb_logger())
             logger.info("Created WanbB logger" if self._setup.args.wandb else "Created WandB logger - for testing")
@@ -245,4 +283,5 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             logger.info("Created comet logger" if self._setup.args.comet else "Created comet logger - for testing")
         else:
             logger.info("Not logging to Comet")
+        callbacks.insert(0, AddExperimentKeyCallback())
         return callbacks

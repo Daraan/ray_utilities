@@ -14,6 +14,9 @@ if TYPE_CHECKING:
     from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 
+    from ray_utilities.config.parser.default_argument_parser import DefaultArgumentParser
+    from ray_utilities.training.default_class import TrainableBase
+
 
 logger = logging.getLogger(__name__)
 
@@ -24,17 +27,41 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         updater
     """
 
+    def __init__(
+        self,
+        update_function: UpdateFunction | None = None,
+        learner_config_dict: dict[Any, Any] | None = None,
+        every_n_steps_before: Optional[tuple[int, int]] = None,
+    ):
+        """
+
+        Args:
+            update_func: Function to update the buffer and batch size.
+            learner_config_dict: Configuration dictionary for the learner. At best this is the same object as
+                `algorithm.config.learner_config_dict` to ensure that the values are updated correctly.
+        """
+        self._set_budget_on__init__(learner_config_dict=learner_config_dict)
+        self.every_n_steps_before: tuple[int, int] | None = every_n_steps_before
+        self._original_interval: Optional[int] = None
+        super().__init__(update_function or self._update_eval_interval, "TBA - DynamicBufferUpdate")
+
     def _update_eval_interval(
         self,
         algorithm: Algorithm,
         metrics_logger: Optional[MetricsLogger] = None,
         *,
         global_step: int,
+        every_n_steps_before: Optional[tuple[int, int]] = None,
         **kwargs: Any,
     ) -> None:
+        """Default update function to update the evaluation interval based on the current global step."""
         assert algorithm.config
         env_steps = algorithm.config.train_batch_size_per_learner
-        new_eval_interval = self._evaluation_intervals.get(env_steps, None)
+        if every_n_steps_before and global_step <= every_n_steps_before[1]:
+            target_steps = every_n_steps_before[0]
+            new_eval_interval = max(1, target_steps // env_steps)
+        else:
+            new_eval_interval = self._evaluation_intervals.get(env_steps, None)
         if new_eval_interval is None:
             logger.warning(
                 "No evaluation interval for current step %s in %s. "
@@ -66,19 +93,6 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
             update_env_runners=False,
         )
 
-    def __init__(
-        self, update_function: UpdateFunction | None = None, learner_config_dict: dict[Any, Any] | None = None
-    ):
-        """
-
-        Args:
-            update_func: Function to update the buffer and batch size.
-            learner_config_dict: Configuration dictionary for the learner. At best this is the same object as
-                `algorithm.config.learner_config_dict` to ensure that the values are updated correctly.
-        """
-        self._set_budget_on__init__(learner_config_dict=learner_config_dict)
-        super().__init__(update_function or self._update_eval_interval, "TBA - DynamicBufferUpdate")
-
     def _set_evaluation_intervals(self, algorithm: Algorithm) -> None:
         """Sets: self._evaluation_intervals"""
         # Add intervals that are also used during tuning
@@ -89,7 +103,7 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
                 (
                     get_dynamic_evaluation_intervals(
                         step_sizes,
-                        eval_freq=self._original_interval,
+                        eval_freq=self._original_interval,  # 16. Does this hold on restore? Algorithm.eval_interval will be the restored value in __init__
                         batch_size=algorithm.config.train_batch_size_per_learner,  # pyright: ignore[reportOptionalMemberAccess]
                         take_root=True,
                     )
@@ -110,6 +124,16 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
                 self._evaluation_intervals[step_size] = 1
         logger.info("Dynamic evaluation intervals: %s", self._evaluation_intervals)
 
+    def get_state(self) -> dict[str, Any]:
+        return {
+            "every_n_steps_before": self.every_n_steps_before,
+            "original_interval": self._original_interval,
+        }
+
+    def set_state(self, state: dict[str, Any]) -> None:
+        self.every_n_steps_before = state["every_n_steps_before"]
+        self._original_interval = state["original_interval"]
+
     def on_algorithm_init(
         self,
         *,
@@ -121,10 +145,27 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         assert self._budget
         assert algorithm.config
         # TODO: When loading checkpoints and original differs from loaded, this is a problem
-        self._original_interval = algorithm.config.evaluation_interval
+        if self._original_interval is None:
+            self._original_interval = algorithm.config.evaluation_interval
         self._set_evaluation_intervals(algorithm=algorithm)
         self._set_step_counter_on_algorithm_init(algorithm=algorithm, metrics_logger=metrics_logger)
         super().on_algorithm_init(algorithm=algorithm, metrics_logger=metrics_logger)
+
+    def on_trainable_setup(self, *, trainable: TrainableBase[DefaultArgumentParser, Any, Algorithm], **kwargs) -> None:
+        if "cli_args" in trainable.config:
+            self.every_n_steps_before = trainable.config["cli_args"]["evaluate_every_n_steps_before_step"]
+        else:  # fallback
+            self.every_n_steps_before = trainable._setup.args.evaluate_every_n_steps_before_step
+        if self.every_n_steps_before and self._planned_current_step <= self.every_n_steps_before[1]:
+            # Use default updater
+            self._update_eval_interval(
+                trainable.algorithm,
+                trainable.algorithm.metrics,
+                global_step=self._planned_current_step,
+                every_n_steps_before=self.every_n_steps_before,
+            )
+        else:
+            self._updater(trainable.algorithm, trainable.algorithm.metrics, global_step=self._planned_current_step)
 
     def on_train_result(
         self,
@@ -136,7 +177,16 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         assert metrics_logger
         self._set_step_counter_on_train_result(algorithm=algorithm, metrics_logger=metrics_logger)
         # self._planned_current_step likely safer way to get correct step, instead of using metrics_logger
-        self._updater(algorithm, metrics_logger, global_step=self._planned_current_step)
+        if self.every_n_steps_before and self._planned_current_step <= self.every_n_steps_before[1]:
+            # Use default updater
+            self._update_eval_interval(
+                algorithm,
+                metrics_logger,
+                global_step=self._planned_current_step,
+                every_n_steps_before=self.every_n_steps_before,
+            )
+        else:
+            self._updater(algorithm, metrics_logger, global_step=self._planned_current_step)
 
     # Note this is not executed in the get_set_state tests
     def on_checkpoint_loaded(

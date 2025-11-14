@@ -273,11 +273,16 @@ def training_step(
     disc_eval_mean = None
     disc_running_eval_reward = None
     # Train and get results
+    evaluate_this_iter = (
+        algo.config.evaluation_interval and (algo.iteration + 1) % algo.config.evaluation_interval == 0  # pyright: ignore[reportOptionalMemberAccess]
+    )
     result = cast("StrictAlgorithmReturnData", algo.train())
+    result[EVALUATED_THIS_STEP] = evaluate_this_iter
 
     # Reduce to key-metrics
     metrics: TrainableReturnData | LogMetricsDict = {}  # type: ignore[assignment]
     metrics = create_log_metrics(result, discrete_eval=discrete_eval, log_stats=log_stats)
+
     # Possibly use if train.get_context().get_local/global_rank() == 0 to save videos
     # Unknown if should save video here and clean from metrics or save in a callback later is faster.
 

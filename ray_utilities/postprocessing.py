@@ -113,10 +113,12 @@ from ray.rllib.utils.metrics import (
 from typing_extensions import TypeVar
 
 from ray_utilities.constants import (
+    CURRENT_STEP,
     DEFAULT_VIDEO_DICT_KEYS,
     ENVIRONMENT_RESULTS,
     EPISODE_BEST_VIDEO,
     EPISODE_WORST_VIDEO,
+    SEED,
     SEEDS,
 )
 from ray_utilities.misc import deep_update, get_current_step
@@ -525,8 +527,9 @@ def log_metrics_to_new_layout(metrics: LogMetricsDict) -> NewLogMetricsDict:
         merges them.
     """
     new_metrics = deepcopy(metrics)  # pyright: ignore[reportAssignmentType]
-    new_metrics["training"] = cast("_LogMetricsEnvRunnersResultsDict", new_metrics.pop(ENV_RUNNER_RESULTS, {}))  # pyright: ignore[reportGeneralTypeIssues]
-    if "current_step" in new_metrics:
+    if "training" not in new_metrics:
+        new_metrics["training"] = cast("_LogMetricsEnvRunnersResultsDict", new_metrics.pop(ENV_RUNNER_RESULTS, {}))  # pyright: ignore[reportGeneralTypeIssues]
+    if CURRENT_STEP in new_metrics:
         new_metrics.pop(NUM_ENV_STEPS_SAMPLED_LIFETIME, None)  # superseeded by current_step
     if EVALUATION_RESULTS in new_metrics:
         new_eval = new_metrics[EVALUATION_RESULTS]
@@ -576,6 +579,11 @@ def create_log_metrics(
     if environment_results and SEEDS in environment_results:
         s_seq: Deque = environment_results[SEEDS]["seed_sequence"]
         environment_results[SEEDS]["seed_sequence"] = list(s_seq)
+    elif environment_results and SEED in environment_results:
+        s_seq: Deque = environment_results[SEED]["initial_seed"]
+        environment_results[SEED]["initial_seed"] = (
+            (list(s_seq) if len(s_seq) > 1 else s_seq[0]) if not isinstance(s_seq, (int, float, np.number)) else s_seq
+        )
 
     current_step = get_current_step(result)
     metrics: LogMetricsDict = {
@@ -593,9 +601,20 @@ def create_log_metrics(
         },
         "training_iteration": result["training_iteration"],
         "done": result["done"],
-        "current_step": current_step,
+        CURRENT_STEP: current_step,
         "batch_size": result["config"]["_train_batch_size_per_learner"],
+        "minibatch_size": result["config"]["minibatch_size"],
+        # While this could be a config parameter, we can also just calculate it here
+        "minibatch_scale": result["config"]["minibatch_size"] / result["config"]["_train_batch_size_per_learner"],
+        "effective_train_batch_size": (
+            result["config"]["minibatch_size"]
+            * result["config"]["learner_config_dict"].get("accumulate_gradients_every", 1)
+        ),
+        "num_environments": result["config"]["num_envs_per_env_runner"] * (result["config"]["num_env_runners"] or 1),
     }
+    if (grad_accum := result["config"]["learner_config_dict"].get("accumulate_gradients_every", None)) is not None:
+        metrics["accumulate_gradients_every"] = grad_accum
+
     if discrete_eval:
         metrics[EVALUATION_RESULTS]["discrete"] = {
             ENV_RUNNER_RESULTS: {
@@ -781,6 +800,7 @@ def _reorganize_timer_logs(results: _LogT) -> _LogT:
     for key in (EPISODE_DURATION_SEC_MEAN, TIME_BETWEEN_SAMPLING, SAMPLE_TIMER):
         if key in results[ENV_RUNNER_RESULTS]:
             results[TIMERS][ENV_RUNNER_RESULTS][key] = results[ENV_RUNNER_RESULTS].pop(key)
+    # If only length 1 assume only dummy nan value inserted for metric
     if EVALUATION_RESULTS in results and len(results[EVALUATION_RESULTS]) > 1:
         evaluation_timers: dict[str, Any] = results[TIMERS].setdefault(EVALUATION_RESULTS, {})
         assert EVALUATION_RESULTS not in evaluation_timers
@@ -798,7 +818,7 @@ def _reorganize_timer_logs(results: _LogT) -> _LogT:
     return results
 
 
-def _remove_small_values(d: dict[Any, Any], threshold: float = 1e-4) -> dict[Any, Any]:
+def _remove_small_values(d: dict[Any, Any], threshold: float = 5e-3) -> dict[Any, Any]:
     """
     Recursively remove all key-value pairs from a nested dictionary where the value is a float
     and less than the given threshold.

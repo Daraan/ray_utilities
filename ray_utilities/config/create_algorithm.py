@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, cast
 
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
 from ray_utilities.callbacks.algorithm.model_config_saver_callback import save_model_config_and_architecture
+from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.warn import (
     warn_about_larger_minibatch_size,
     warn_if_batch_size_not_divisible,
@@ -227,11 +228,19 @@ def create_algorithm_config(
     )
     config.learners(
         # for fractional GPUs, you should always set num_learners to 0 or 1
-        num_learners=1 if args["parallel"] else 0,
-        num_cpus_per_learner=0 if args["test"] and args["num_jobs"] < 2 else 1,
-        num_gpus_per_learner=1 if args["gpu"] else 0,
+        num_learners=args["num_learners"],
+        num_cpus_per_learner="auto",  # auto: 1 if no gpu else 0
+        num_gpus_per_learner=1 if args["gpu"] else 0,  # Can also use fraction to share GPU
     )
     config.framework(framework)
+    if learner_class is None:
+        if args["accumulate_gradients_every"] > 1 or args["dynamic_batch"]:
+            # import lazy as currently not used elsewhere
+            from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
+                PPOTorchLearnerWithGradientAccumulation,
+            )
+
+            learner_class = PPOTorchLearnerWithGradientAccumulation
     learner_mix: list[type[Learner]] = [learner_class or config.learner_class]
     if not args.get("keep_masked_samples", False):
         from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner  # noqa: PLC0415
@@ -273,10 +282,12 @@ def create_algorithm_config(
     try:
         cast("PPOConfig", config).training(
             minibatch_size=args["minibatch_size"],
+            num_epochs=32,
         )
     except TypeError:
         cast("PPOConfig", config).training(
             sgd_minibatch_size=args["minibatch_size"],
+            num_sgd_iter=32,
         )
     if isinstance(config, PPOConfig):
         config.training(
@@ -318,7 +329,10 @@ def create_algorithm_config(
     # https://docs.ray.io/en/latest/rllib/package_ref/doc/ray.rllib.algorithms.algorithm_config.AlgorithmConfig.evaluation.html
     evaluation_duration = 30
     config.evaluation(
-        evaluation_interval=16,  # Note can be adjusted dynamically by DynamicEvalInterval
+        # if evaluate_every_n_steps_before_step is used always evaluate on step 1 to not miss initial performance
+        evaluation_interval=(
+            16 if not args["evaluate_every_n_steps_before_step"] or args["no_dynamic_eval_interval"] else 1
+        ),  # Note can be adjusted dynamically by DynamicEvalInterval
         evaluation_duration=evaluation_duration,
         evaluation_duration_unit="episodes",
         evaluation_num_env_runners=(
@@ -351,9 +365,10 @@ def create_algorithm_config(
         callbacks.append(DiscreteEvalCallback)
     if args["env_seeding_strategy"] == "sequential":
         # Must set this in the trainable with seed_environments_for_config(config, env_seed)
-        logger.info(
+        ImportantLogger.important_info(
+            logger,
             "Using sequential env seed strategy, "
-            "Remember to call seed_environments_for_config(config, env_seed) with a seed acquired from the trial."
+            "Remember to call seed_environments_for_config(config, env_seed) with a seed acquired from the trial.",
         )
     elif args["env_seeding_strategy"] == "same":
         # TODO: could use env_seed here, allows to sample a constant random seed != args["seed"]

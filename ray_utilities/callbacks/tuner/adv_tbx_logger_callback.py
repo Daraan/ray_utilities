@@ -4,11 +4,12 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
+from ray.rllib.utils.metrics import EVALUATION_RESULTS
 from ray.tune.logger import TBXLoggerCallback
 
 from ray_utilities.callbacks.tuner.new_style_logger_callback import LogMetricsDictT, NewStyleLoggerCallback
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
-from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, FORK_FROM
+from ray_utilities.constants import DEFAULT_VIDEO_DICT_KEYS, EVALUATED_THIS_STEP, FORK_FROM
 
 if TYPE_CHECKING:
     from ray.tune.experiment.trial import Trial
@@ -108,6 +109,8 @@ class AdvTBXLoggerCallback(NewStyleLoggerCallback, TrackForkedTrialsMixin, TBXLo
         return result
 
     def log_trial_result(self, iteration: int, trial: Trial, result):
+        if not result.get(EVALUATED_THIS_STEP, True):
+            result.pop(EVALUATION_RESULTS, None)
         super().log_trial_result(
             iteration,
             trial,

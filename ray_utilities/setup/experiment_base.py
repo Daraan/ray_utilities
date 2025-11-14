@@ -16,9 +16,12 @@ with logging, checkpointing, and hyperparameter optimization.
 
 from __future__ import annotations
 
+import argparse
+import contextlib
+import io
 import logging
 import os
-import pickle
+import shutil
 import sys
 import warnings
 from abc import ABC, abstractmethod
@@ -43,23 +46,27 @@ from typing import (
 )
 
 import ray
+from cloudpickle import cloudpickle, pickle
+from pyarrow.fs import FileSystem
 from ray import tune
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core.rl_module import MultiRLModuleSpec
+from ray.tune import error as tune_errors
 from tap.tap import Tap
 from typing_extensions import NotRequired, Self, TypedDict, TypeVar, deprecated
 
-from ray_utilities import RUN_ID
-from ray_utilities.callbacks import LOG_IGNORE_ARGS, remove_ignored_args
+from ray_utilities import get_runtime_env
+from ray_utilities.callbacks import HPARAMS_IGNORE_ARGS, remove_ignored_args
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
 from ray_utilities.callbacks.comet import CometArchiveTracker
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.parser.default_argument_parser import ConfigFilePreParser, SupportsMetaAnnotations
+from ray_utilities.constants import get_run_id
 from ray_utilities.environment import create_env
 from ray_utilities.misc import AutoInt, get_trainable_name
+from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.setup._experiment_uploader import ExperimentUploader
 from ray_utilities.setup.tuner_setup import TunerSetup
-from ray_utilities.training.default_class import TrainableBase
 from ray_utilities.warn import (
     warn_about_larger_minibatch_size,
     warn_if_batch_size_not_divisible,
@@ -67,8 +74,6 @@ from ray_utilities.warn import (
 )
 
 if TYPE_CHECKING:
-    import argparse
-
     import gymnasium as gym
     import ray.tune.search.sample  # noqa: TC004  # present at runtime from import ray.tune
     from ray.rllib.algorithms import PPO, Algorithm
@@ -77,7 +82,6 @@ if TYPE_CHECKING:
     from ray.rllib.utils.typing import EnvType
     from ray.runtime_context import RuntimeContext as RayRuntimeContext
     from ray.tune.experiment import Trial as TuneTrial
-    from ray.tune.result_grid import ResultGrid
 
     from ray_utilities.training.default_class import TrainableBase
     from ray_utilities.typing import TrainableReturnData
@@ -110,6 +114,8 @@ AlgorithmType_co = TypeVar("AlgorithmType_co", bound="Algorithm", covariant=True
 _MaybeNone = Any
 """Attribute might be None when trainable is not set up"""
 
+RESTORE_FILE_NAME = "experiment_setup.pkl"
+
 
 class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, AlgorithmType_co]):
     """Type definition for experiment setup state data used for checkpointing.
@@ -132,6 +138,21 @@ class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, Algor
         :meth:`ExperimentSetupBase.from_saved`: Method that creates a setup from a state dict
     """
 
+    __init_config__: bool
+    """Initialization flag for configuration.
+
+    When ``True``, the config should be initialized from the args and the stored
+    ``config`` field should be ignored and remain unset.
+    """
+
+    __global__: NotRequired[bool]
+    """
+    When True, indicates that this state dict is the global state dict created when with
+    :meth:`ExperimentSetupBase.create_tuner()` and tight to the whole experiment.
+
+    `__init_config__` is False in this case.
+    """
+
     args: ParserType_co
     """Parsed command-line arguments. Typically a :class:`~ray_utilities.config.DefaultArgumentParser` instance."""
 
@@ -148,13 +169,6 @@ class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, Algor
     config: ConfigType_co
     """RLlib algorithm configuration instance."""
 
-    __init_config__: bool
-    """Initialization flag for configuration.
-
-    When ``True``, the config should be initialized from the args and the stored
-    ``config`` field should be ignored and remain unset.
-    """
-
     config_overrides: dict[str, Any]
     """Hold the current dict created by updating config_overrides"""
 
@@ -166,6 +180,10 @@ class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, Algor
 
     trial_name_creator: NotRequired[Optional[Callable[[TuneTrial], str]]]
     """Optional trial name creator function for Ray Tune trials."""
+
+    tune_parameters: NotRequired[dict[str, Any]]
+    """Domain information for parameters to be tuned"""
+    # TODO: rename? parameter_domains?
 
 
 class ExperimentSetupBase(
@@ -219,12 +237,12 @@ class ExperimentSetupBase(
     """
 
     default_extra_tags: ClassVar[list[str]] = [
-        "dev",
         "<test>",
         "<gpu>",
         "<env_type>",
         "<agent_type>",
         "<num_envs:num_envs_per_env_runner=#>",
+        "<minibatch_scale=#>",
     ]
     """extra tags to add"""
 
@@ -249,8 +267,8 @@ class ExperimentSetupBase(
     _fixed_argv: ClassVar[list[str] | None] = None
     """When using remote (no sys.args available) and checkpoints fix the args to the time of creation"""
 
-    storage_path: str | Path = "./outputs/experiments"
-    """Base path where experiment outputs are stored by the tuner."""
+    storage_path: str | Path = os.environ.get("RAY_UTILITIES_STORAGE_PATH", "./outputs/shared/experiments")
+    """Base path where experiment outputs are stored by the tuner. Can point to S3 path"""
 
     @property
     def project(self) -> str:
@@ -285,6 +303,45 @@ class ExperimentSetupBase(
             - wandb group
             - comet project
         """
+
+    def __new__(cls, args: Optional[Sequence[str]] = None, *arguments, **kwargs) -> Self:  # noqa: ARG004
+        instance = super().__new__(cls)
+        if "--restore_path" not in (args or sys.argv):
+            return instance
+        if os.environ.get("RAY_UTILITIES_RESTORED", "0") == "1":
+            logger.debug(
+                "Creating an experiment with --restore_path but RAY_UTILITIES_RESTORED already set. "
+                "Avoiding recursion. Not restoring experiment again"
+            )
+            return instance
+        instance._change_log_level = False
+        try:
+            parser = instance.create_parser()
+            parser.exit_on_error = False
+            # Suppress logging output and all stderr during this pre-parsing
+            logging.disable(logging.ERROR)
+            with contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    if isinstance(parser, Tap):
+                        parsed_args = cast("ParserType_co", parser.parse_args(known_only=True))
+                    else:
+                        parsed_args, _ = parser.parse_known_args()
+                finally:
+                    logging.disable(logging.NOTSET)
+        except argparse.ArgumentError:
+            pass  # handle that by init
+        else:
+            if parsed_args.restore_path:
+                ImportantLogger.important_info(
+                    logger, f"Restoring ExperimentSetup from {parsed_args.restore_path}. Ignoring all other arguments."
+                )
+                return cls.restore_experiment(
+                    parsed_args.restore_path,
+                    restore_overrides=(
+                        parsed_args.get_restore_overrides() if hasattr(parsed_args, "get_restore_overrides") else {}
+                    ),
+                )
+        return instance
 
     def __init__(
         self,
@@ -332,6 +389,10 @@ class ExperimentSetupBase(
             - self.create_parser(): Creates and assigns the argument parser.
             - self.setup(): Performs further setup based on initialization flags.
         """
+        if "RAY_UTILITIES_STORAGE_PATH" not in os.environ:
+            os.environ["RAY_UTILITIES_STORAGE_PATH"] = str(self.storage_path)
+        if self.__restored__:
+            return
         cfg_file_parser = ConfigFilePreParser()
         cfgs_from_cli = cfg_file_parser.parse_args(args, known_only=True)
         if config_files:
@@ -356,6 +417,7 @@ class ExperimentSetupBase(
             if isinstance(self.parser, Tap):
                 logger.info("When using parse_args with a loaded config, argument parsing will be skipped.")
                 parse_args = False  # cannot parse again
+        self.__copied_to_working_dir = False
         self.setup(
             pre_parsed_args,
             init_config=init_config,
@@ -419,6 +481,7 @@ class ExperimentSetupBase(
         if init_param_space:
             # relies on trainable to get its name
             self.param_space: dict[str, Any] | _MaybeNone = self.create_param_space()
+        self._update_working_dir(copy_tune_parameters=init_param_space)
 
     # region Argument Parsing
 
@@ -443,11 +506,19 @@ class ExperimentSetupBase(
         )
         return args
 
-    def args_to_dict(self, args: Optional[NamespaceType[ParserType_co] | dict[str, Any]] = None) -> dict[str, Any]:
+    def args_to_dict(
+        self, args: Optional[NamespaceType[ParserType_co] | Tap | dict[str, Any]] = None
+    ) -> dict[str, Any]:
         if args is None:
             args = self.args
         if isinstance(args, Tap):
-            return {k: getattr(args, k) for k in args.class_variables}
+            data = {k: getattr(args, k) for k in args.class_variables}
+            if hasattr(args, "_command_str"):
+                data["_command_str"] = args._command_str  # pyright: ignore[reportAttributeAccessIssue]
+                if hasattr(args, "command") and args.command:  # pyright: ignore[reportAttributeAccessIssue]
+                    # NOTE: This is a delegator - should work as it is a Tap class but test.
+                    data["COMMAND_ARGS"] = self.args_to_dict(args.command)  # pyright: ignore[reportAttributeAccessIssue]
+            return data
         if isinstance(args, dict):
             return args.copy()
         return vars(args).copy()
@@ -501,6 +572,9 @@ class ExperimentSetupBase(
         args = sys.argv if args is None else args
         if "--udiscovery" in args:
             start = args.index("--udiscovery")
+            # Because of a strange situation there might be double execution.py in the args.
+            if "unittestadapter/execution.py" in args[start - 1]:
+                start -= 1
             if "--" in args[start:]:
                 # slice args away until --
                 end = start + args[start:].index("--")
@@ -546,6 +620,13 @@ class ExperimentSetupBase(
             parsed = self._merge_args_from_checkpoint(parsed, checkpoint)
 
         self.args = self.postprocess_args(parsed)
+        if self.args.restore_path:
+            logger.info("restore_path is set. NOTE: Auto restore will only work with setup = Setup(parse_args=True)")
+        if self.args.test and (
+            test_storage_path := os.environ.get("RAY_UTILITIES_TEST_STORAGE_PATH", "./outputs/experiments/test")
+        ) not in ("", "0"):
+            logger.info("Test mode active, setting storage_path to %s", test_storage_path)
+            self.storage_path = test_storage_path
         return self.args
 
     # endregion
@@ -577,6 +658,12 @@ class ExperimentSetupBase(
                 if isinstance(value, float):
                     value = round(value, 2)
                 return nickname + "=" + str(value)
+            if isinstance(value, (int, float)):
+                warnings.warn(
+                    f"Requested substitution of float tag {tag} without =#. This will just add the value.",
+                    UserWarning,
+                    stacklevel=2,
+                )
             return value
         return None  # error
 
@@ -604,7 +691,6 @@ class ExperimentSetupBase(
                 )
                 continue
             extra_tags[i] = subst
-        extra_tags.append(f"run_id:{RUN_ID}")
         return list(filter(None, extra_tags))
 
     def create_tags(self, extra_tags: Sequence[str] | None = None) -> list[str]:
@@ -623,7 +709,7 @@ class ExperimentSetupBase(
 
     def clean_args_to_hparams(self, args: Optional[NamespaceType[ParserType_co]] = None) -> dict[str, Any]:
         args = args or self.get_args()
-        to_remove: list[str] = [*LOG_IGNORE_ARGS, "process_number", "command"]  # do not add subparser
+        to_remove: list[str] = [*HPARAMS_IGNORE_ARGS, "process_number", "command"]  # do not add subparser
         if isinstance(args, SupportsMetaAnnotations):
             to_remove.extend(args.get_non_cli_args())
         upload_args = remove_ignored_args(args, remove=to_remove)
@@ -736,12 +822,13 @@ class ExperimentSetupBase(
         # Other args not shown in the CLI
         # Log CLI args as hyperparameters
         param_space["cli_args"] = self.clean_args_to_hparams(self.args)
-        param_space["run_id"] = RUN_ID
-        param_space["experiment_id"] = RUN_ID
+        param_space["run_id"] = get_run_id()
+        param_space["experiment_id"] = get_run_id()
         param_space["experiment_name"] = self.project
         param_space["experiment_group"] = self.group_name
         self.param_space = param_space
-        del self._dynamic_parameters_to_tune
+        if hasattr(self, "_dynamic_parameters_to_tune"):
+            del self._dynamic_parameters_to_tune
         if self._config_files:
             # Store config files for trial to sync when using a scheduler or remote node.
             param_space["_config_files"] = self._config_files
@@ -1199,11 +1286,23 @@ class ExperimentSetupBase(
             return True  # If the iteration is set manually do add a stopper
         return False if len({"iterations", "batch_size", "train_batch_size_per_learner"} & tune_keys) > 0 else None
 
-    def create_tuner(self: ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]) -> tune.Tuner:
+    _tuner_setup_cls = TunerSetup
+
+    @property
+    def tuner_setup_class(self):
+        return self._tuner_setup_cls
+
+    def create_tuner(
+        self: ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co], *, adv_loggers: bool = True
+    ) -> tune.Tuner:
         """Create a Ray Tune tuner for hyperparameter optimization.
 
         Creates a tuner with sensible defaults for reinforcement learning experiments,
         including episode return maximization and standard stopping criteria.
+
+        Args:
+            adv_loggers: If True (default), adds the advanced variants of the CSV, JSON, and TBX logger
+                instead of the default variants.
 
         Returns:
             Configured Ray Tune tuner ready for hyperparameter optimization.
@@ -1220,13 +1319,32 @@ class ExperimentSetupBase(
             :class:`TunerSetup`: Advanced tuner configuration options
             :class:`ray.tune.Tuner`: Underlying Ray Tune tuner class
         """
-        return TunerSetup(
+        if os.environ.get("CI") or (str(self.storage_path).startswith("s3://") and self.args.test):
+            # CI is env variable used by GitHub actions
+            # Do not use remote when we are testing
+            self.storage_path = Path("./outputs/experiments/").resolve()
+        tuner_setup = self.tuner_setup_class(
             setup=self,
             eval_metric=self.args.metric,
             eval_metric_order=self.args.mode,
             add_iteration_stopper=self._tuner_add_iteration_stopper(),
             trial_name_creator=self._tune_trial_name_creator,
-        ).create_tuner()
+        )
+        # Create backup in dir, get run_config from tuner
+        tuner = tuner_setup.create_tuner(adv_loggers=adv_loggers)
+        if hasattr(tuner, "_local_tuner"):
+            assert tuner._local_tuner
+            run_config = tuner._local_tuner.get_run_config()
+        else:
+            run_config: tune.RunConfig = ray.get(tuner._remote_tuner.get_run_config.remote())  # pyright: ignore[reportOptionalMemberAccess, ]
+        if run_config.storage_path is None or run_config.name is None:
+            # Could get the name from the trainable
+            logger.warning("No storage path or name set in the RunConfig, cannot backup the setup state.")
+        else:
+            # Can point to S3 etc. Do not use PATH for joining, will mess up s3://
+            storage_path = os.path.join(run_config.storage_path, run_config.name)
+            self._backup_for_restore(storage_path)
+        return tuner
 
     # endregion
 
@@ -1300,6 +1418,49 @@ class ExperimentSetupBase(
 
     # region save and restore
 
+    def _update_working_dir(self, *, copy_tune_parameters: bool = True):
+        """
+        We want to update the working dir only once during the first setup - possibly also when restored, but not
+        when the trainable is created. Could do this only when not ray.is_initialized()
+        """
+        if ray.is_initialized():
+            logger.info(
+                "Ray is already initialized, not updating working_dir. Create the setup class before initializing ray."
+            )
+            return
+        runtime_env = get_runtime_env()
+        working_dir = runtime_env.get("working_dir", None)
+        if not working_dir:
+            if self._config_files:
+                logger.warning(
+                    "Config files %s were specified, but no working_dir is set in the runtime_env. "
+                    "These files will not be copied to the working_dir of the Ray workers.",
+                    self._config_files,
+                )
+            return
+        # Copy all .cfg files and tune_parameters.json to working_dir
+        working_dir_path = Path(working_dir)
+        working_dir_path.mkdir(parents=True, exist_ok=True)
+        for cfg_file in self._config_files:
+            src_path = Path(cfg_file)
+            if src_path.exists() and src_path.is_file():
+                dest_path = working_dir_path / src_path.name
+                shutil.copy2(src_path, dest_path)
+                logger.debug("Copied config file %s to working_dir %s", src_path, dest_path)
+            else:
+                logger.warning("Could not find local config file %s to copy to working_dir.", src_path)
+        if not copy_tune_parameters:
+            return
+        # Also save tune_parameters.json
+        tune_params_path = working_dir_path / "tune_parameters.json"
+        local_tune_parameters = Path("experiments", "tune_parameters.json")
+        if local_tune_parameters.exists() and local_tune_parameters.is_file():
+            shutil.copy2(local_tune_parameters, tune_params_path)
+            logger.debug("Copied tune_parameters.json to working_dir %s", tune_params_path)
+        else:
+            logger.warning("Could not find local tune_parameters.json to copy to working_dir.")
+        self.__copied_to_working_dir = True
+
     def get_state(self) -> SetupCheckpointDict[ParserType_co, ConfigType_co, AlgorithmType_co]:
         """
         Saves the current setup state to a dictionary.
@@ -1316,7 +1477,190 @@ class ExperimentSetupBase(
             "setup_class": type(self),
             "trial_name_creator": self._tune_trial_name_creator,
         }
+        if not hasattr(data["args"], "_command_str"):
+            data["args"]._command_str = self.args._command_str
         return data
+
+    def _backup_for_restore(self, path: str):
+        """
+        Saves the state of the experiment to a pickle file named by RESTORE_FILE_NAME in the given directory.
+
+        The resulting pickle file can be used for experiment restoration via restore_path.
+        """
+        state = self.get_state()
+        state["__init_config__"] = False
+        state["__global__"] = True
+        run_state = {
+            "RUN_ID": get_run_id(),
+            "state": state,
+        }
+        # Might point to S3
+        if path.startswith("s3://"):
+            if not path.endswith(RESTORE_FILE_NAME):
+                path = path.rstrip("/") + "/" + RESTORE_FILE_NAME
+            s3_fs, s3_path = FileSystem.from_uri(path)
+            with s3_fs.open_output_stream(s3_path) as f:
+                cloudpickle.dump(run_state, f)
+            logger.info("Created experiment restore file at %s %s", s3_fs.type_name, s3_path)
+            # TODO Save copy in local dir as well, but local path is created later by ray.
+        else:
+            path_obj = Path(path)
+            if path_obj.is_dir():
+                path_obj = path_obj / RESTORE_FILE_NAME
+            elif not path.endswith(RESTORE_FILE_NAME):
+                # otherwise take as is
+                logger.warning(
+                    "Provided path %s is not a directory but does not end with %s. Using the path as is.",
+                    path_obj,
+                    RESTORE_FILE_NAME,
+                )
+            path_obj.parent.mkdir(parents=True, exist_ok=True)
+            with path_obj.open("wb") as f:
+                cloudpickle.dump(run_state, f)
+            logger.info("Created experiment restore file at %s", path_obj)
+
+    @classmethod
+    def restore_experiment(cls, path: str | Path, restore_overrides: Optional[dict[str, Any]] = None) -> Self:
+        """
+        Restore the setup from the main pickle file created during :meth:`_backup_for_restore`
+        in :meth:`create_tuner`.
+
+        Note:
+            This method is intended to be used when an *aborted* experiment should be continued,
+            e.g. with :meth:`ray.tune.Tuner.restore`.
+            This also loads and sets global variables like the :const:`_RUN_ID` obtained via :meth:`get_run_id`.
+            It will modify the default runtime_env and should be called before ray.init().
+
+        Args:
+            path: The path to the checkpoint file or directory.
+
+        Returns:
+            The restored Setup instance.
+        """
+        if str(path).startswith("s3://"):
+            if not str(path).endswith(RESTORE_FILE_NAME):
+                restore_file = str(path).rstrip("/") + "/" + RESTORE_FILE_NAME
+            else:
+                restore_file = str(path)
+
+            s3_fs, s3_path = FileSystem.from_uri(str(restore_file))
+            try:
+                with s3_fs.open_input_stream(s3_path) as f:
+                    data = pickle.load(f)
+                logger.info("Restored experiment from S3 path %s", restore_file)
+            except FileNotFoundError:
+                logger.error("Restore file %s does not exist in S3. Cannot restore experiment.", restore_file)
+                raise
+        else:
+            path = Path(path)
+            if path.is_dir():
+                restore_file = path / RESTORE_FILE_NAME
+            else:
+                restore_file = path
+            if not restore_file.exists():
+                # assume RUN_ID is in the path
+                run_id_candidate = path.name.split("-")[-1]
+                # Try to find a checkpoint:
+                try:
+                    checkpoint_file = next(path.glob("**/checkpoint_*/state.pkl"))
+                except StopIteration:
+                    raise FileNotFoundError(
+                        f"Restore file {RESTORE_FILE_NAME} does not exist. "
+                        f"Could also not find a checkpoint in {path}/**/checkpoint*."
+                    ) from None
+                with open(checkpoint_file, "rb") as f:
+                    try:
+                        state = cloudpickle.load(f)
+                    except tune_errors.TuneError as e:
+                        if "unknown trainable" in str(e).lower():
+                            logger.error(
+                                "Tune does not know the trainable in the checkpoint, trying to register a dummy one."
+                            )
+                            # We have DefinedTrainable which is local :/
+                            trainable_name = str(e).split()[-1].strip("'\"")
+                            # HACK: But otherwise difficult
+                            import ray.tune.registry  # noqa: PLC0415
+
+                            from ray_utilities.training.default_class import TrainableBase  # noqa: PLC0415
+
+                            tune.register_trainable(trainable_name, TrainableBase)
+                            f.seek(0)
+                            state = cloudpickle.load(f)
+                            ray.tune.registry._global_registry.unregister(
+                                ray.tune.registry.TRAINABLE_CLASS, trainable_name
+                            )
+                        else:
+                            raise
+                state["__init_config__"] = False
+                state["__global__"] = True
+                try:
+                    run_id_candidate = state["setup"]["param_space"]["run_id"]
+                except KeyError:
+                    logger.error("Could not find run_id in the checkpoint at %s", checkpoint_file)
+                data = {"state": state["setup"], "RUN_ID": run_id_candidate}
+                logger.error(
+                    "Could not find restore file at %s. Fallback to checkpoint %s: Assuming RUN_ID is %s. "
+                    "Restored setup might not reflect the correct global state",
+                    restore_file,
+                    checkpoint_file.parent,
+                    run_id_candidate,
+                )
+            else:
+                with open(restore_file, "rb") as f:
+                    data = pickle.load(f)
+
+        # Update RUN_ID in environment - get_run_id() will now return this value
+        new_run_id = data.get("RUN_ID", get_run_id())
+        if new_run_id != os.environ.get("RUN_ID", None):
+            ImportantLogger.important_info(
+                logger,
+                "Restoring RUN_ID from %s to %s. Subsequent calls to get_run_id() will return the restored value.",
+                os.environ.get("RUN_ID", None),
+                new_run_id,
+            )
+            # Also update the hard string constants
+            import ray_utilities._runtime_constants  # noqa: PLC0415
+            import ray_utilities.constants  # noqa: PLC0415
+
+            ray_utilities._RUN_ID = new_run_id
+            ray_utilities.constants._RUN_ID = new_run_id
+            ray_utilities._runtime_constants._RUN_ID = new_run_id
+        os.environ["RUN_ID"] = new_run_id
+        runtime_env = get_runtime_env()
+        runtime_env["RUN_ID"] = os.environ["RUN_ID"]
+
+        if os.environ.get("RAY_UTILITIES_RESTORED", "0") == "1":
+            logger.warning(
+                "RAY_UTILITIES_RESTORED has already been restored this session. "
+                "This may indicate that the experiment has already been restored. "
+                "Restoring multiple times may lead to unexpected behavior.",
+            )
+        os.environ["RAY_UTILITIES_RESTORED"] = "1"
+
+        restored = cls.from_saved(data["state"], load_class=True, init_config=False, load_config_files=False)
+        restored.__restored__ = True
+        if restore_overrides:
+            # Apply overrides to args
+            for key, value in restore_overrides.items():
+                setattr(restored.args, key, value)
+        # HACK: Temp to restore a PBT setup from checkpoint when global is not available
+        # if True:
+        #    from ray_utilities.config.parser.pbt_scheduler_parser import PopulationBasedTrainingParser#
+        #    restored.args._process_subparsers()
+        # if not restored.args.command:
+        #    restored.args.command = PopulationBasedTrainingParser()
+        #    restored.args.quantile_fraction = 0.1875
+        #    restored.args.perturbation_interval = 0.125
+        #    restored.args.command._parsed = True
+        #    restored.args._command_str = "pbt"
+        #    restored.args.comet = "offline+upload@end"
+        #    restored.args.wandb = "offline+upload@end"
+        if not restored.args.restore_path:
+            restored.args.restore_path = str(path)
+        return restored
+
+    __restored__ = False
+    """Indicates that a setup was restored via :meth:`restore_experiment` its __init__ has been replaced with a NoOp"""
 
     @classmethod
     def from_saved(
@@ -1343,6 +1687,18 @@ class ExperimentSetupBase(
         unchecked_keys.discard("setup_class")
         setup_class = saved_class if load_class else cls
         if saved_class is not cls:
+            if data.get("__global__", False):
+                logger.critical(
+                    "This class %s is not the same as the one used to save the data %s. "
+                    "The __global__ flag in the state is set, this indicates that possibly a wrong script "
+                    "is executed to restore the experiment. To the currently saved state of the experiment we abort. "
+                    "If this is correct use the correct setup class in your script.",
+                    cls,
+                    saved_class,
+                )
+                raise RuntimeError(
+                    f"Aborting experiment restoration. Wrong setup class used. saved: {saved_class!s}, used: {cls!s}"
+                )
             logger.warning(
                 "This class %s is not the same as the one used to save the data %s. "
                 "Will use this class %s to restore the setup. "
@@ -1360,7 +1716,21 @@ class ExperimentSetupBase(
         config_files_to_use = None
 
         if load_config_files and (original_config_files := data.get("config_files")):
+            found_reachable_files = []
             not_existing_files = [file for file in map(Path, original_config_files) if not file.exists()]
+            # We likely find them in Path(TUNE_ORIG_WORKING_DIR)
+            if not_existing_files and "TUNE_ORIG_WORKING_DIR" in os.environ:
+                global_working_dir = Path(os.environ.get("TUNE_ORIG_WORKING_DIR", ""))
+                # all files found in working dir
+                found_reachable_files = [
+                    str(found_file)
+                    for file in map(Path, original_config_files)
+                    if (found_file := Path(file)).exists() or (found_file := global_working_dir / file).exists()
+                ]
+                relative_found = {Path(f).relative_to(global_working_dir) for f in found_reachable_files}
+                not_existing_files = [
+                    still_not_found for still_not_found in not_existing_files if still_not_found not in relative_found
+                ]
             if not_existing_files:
                 synced_files = []
                 try:
@@ -1410,12 +1780,15 @@ class ExperimentSetupBase(
                         # TODO: possibly create empty files so that parser does not fail
                 except Exception:
                     logger.exception("Could not restore missing config files %s.", not_existing_files)
-                config_files_to_use = [
-                    file for file in map(Path, original_config_files) if file not in not_existing_files
+                # NOTE: TODO: order mgiht be off
+                config_files_to_use = found_reachable_files + [
+                    file
+                    for file in map(Path, original_config_files)
+                    if file not in not_existing_files and file not in found_reachable_files
                 ]
                 config_files_to_use.extend(synced_files)
             else:
-                config_files_to_use = original_config_files
+                config_files_to_use = found_reachable_files
 
         new = setup_class(
             init_config=False,
@@ -1457,7 +1830,53 @@ class ExperimentSetupBase(
 
         if config:
             new.config = config
-        new.args = data["args"]
+        command_args = data["args"].__dict__.pop("COMMAND_ARGS", None)
+        new.args = data["args"]  # might be just a simple namespace
+        if isinstance(new.parser, Tap):
+            try:
+                new.parser.from_dict(vars(new.args), skip_unsettable=True)
+            except (ValueError, AttributeError) as e:
+                logger.error(
+                    "Error restoring args from saved state into the parser: %s. This may lead to unexpected behavior.",
+                    e,
+                )
+            else:
+                new._args_backup = data["args"]
+                # Use the parser for properties
+                new.args = cast("ParserType_co", new.parser)
+            new.parser._parsed = True
+        else:
+            for arg, value in vars(new.args).items():
+                setattr(new.parser, arg, value)
+            new._args_backup = data["args"]
+            new.args = cast("ParserType_co", new.parser)
+        # Need to restore command subparser
+        try:
+            new.args._process_subparsers()
+        except (SystemExit, Exception):
+            logger.exception("Could not restore command subparser")
+        else:
+            # NOTE MIGHT NOT HAVE KEYS!
+            if command_args is not None:
+                for c_command, c_value in command_args.items():
+                    # The command is a delegator, set ONLY on main parser
+                    if hasattr(new.args, c_command):
+                        # check that we do not override something
+                        present = getattr(new.args, c_command)
+                        if present != c_value:
+                            logger.warning(
+                                "While restoring the command subparser found key %s in both the subparser and main parser."
+                                "The value in the main parser (%s) differs from the one in the subparser (%s). "
+                                "Using the value from the subparser.",
+                                c_command,
+                                present,
+                                c_value,
+                            )
+                            continue
+                    else:
+                        # subcommands are available on the main parser
+                        setattr(new.args, c_command, c_value)
+
         unchecked_keys.discard("args")
         new.setup(
             None,
@@ -1468,7 +1887,7 @@ class ExperimentSetupBase(
         )
         if new.args.comet and not new.comet_tracker:
             new.comet_tracker = CometArchiveTracker()
-            logger.info("CometArchiveTracker setup")
+            logger.debug("CometArchiveTracker setup")
         if unchecked_keys:  # possibly a subclass has more keys
             logger.info(
                 "Some keys in the state were not used: %s.",
@@ -1492,22 +1911,29 @@ class ExperimentSetupBase(
     # region contextmanager
 
     @contextmanager
-    def open_config(self) -> Generator[ConfigType_co, Any, None]:
+    def open_config(self_or_config: Self | ConfigType_co) -> Generator[ConfigType_co, Any, None]:  # noqa: N805
         """
         Contextmanager that unfreezes the setups config for editing.
 
         Updates the config_overrides with the changes made within.
         """
-        _was_frozen = self.config._is_frozen
-        config_before = self.config.to_dict()
-        self._unfreeze_config()
-        yield self.config
-        config_after = self.config.to_dict()
-        diff = {k: v for k, v in config_after.items() if config_before.get(k) != v}
-        if diff:
-            self._config_overrides = self.config_overrides(update=True, **diff)
-        if _was_frozen:
-            self.config.freeze()
+        if isinstance(self_or_config, AlgorithmConfig):
+            _was_frozen = self_or_config._is_frozen
+            ExperimentSetupBase._unfreeze_config(self_or_config)
+            yield self_or_config
+            if _was_frozen:
+                self_or_config.freeze()
+        else:
+            _was_frozen = self_or_config.config._is_frozen
+            config_before = self_or_config.config.to_dict()
+            self_or_config._unfreeze_config()
+            yield self_or_config.config
+            config_after = self_or_config.config.to_dict()
+            diff = {k: v for k, v in config_after.items() if config_before.get(k) != v}
+            if diff:
+                self_or_config._config_overrides = self_or_config.config_overrides(update=True, **diff)
+            if _was_frozen:
+                self_or_config.config.freeze()
 
     def __enter__(self) -> Self:
         """

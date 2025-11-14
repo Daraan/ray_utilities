@@ -22,6 +22,7 @@ from ray.tune.result import TRAINING_ITERATION  # pyright: ignore[reportPrivateI
 from ray.tune.stopper.maximum_iteration import MaximumIterationStopper as _RayMaximumIterationStopper
 
 from ray_utilities.misc import get_current_step
+from ray_utilities.nice_logger import ImportantLogger
 
 if TYPE_CHECKING:
     from ray_utilities.typing.metrics import AutoExtendedLogMetricsDict
@@ -77,7 +78,8 @@ class MaximumResultIterationStopper(_RayMaximumIterationStopper):
         self._iter[trial_id] += 1  # basically training iterations since restore
         stop = result[TRAINING_ITERATION] >= self._max_iter
         if stop:
-            logger.info(
+            ImportantLogger.important_info(
+                logger,
                 "Stopping trial %s at iteration %s >= max_iter %s, with %s environment steps sampled.",
                 trial_id,
                 result[TRAINING_ITERATION],
