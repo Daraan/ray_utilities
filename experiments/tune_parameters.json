@@ -54,6 +54,8 @@
   "num_envs_per_env_runner": {
     "grid_search": [
       1,
+      2,
+      4,
       8,
       16,
       32

@@ -673,9 +673,6 @@ class WandbUploaderMixin(UploadHelperMixin):
                                 out_data, _, _ = select.select([process.stdout], [], [], 1.0)
                                 if out_data:
                                     output_left = process.stdout.read()
-                                    output_left = (
-                                        output_left if isinstance(output_left, bytes) else "\n".join(output_left)
-                                    )  # pyright: ignore[reportArgumentType, reportCallIssue]
                                 if isinstance(output_left, bytes):
                                     output_left = output_left.decode("utf-8")
                             except (ValueError, OSError) as e:

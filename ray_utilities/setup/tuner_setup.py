@@ -502,7 +502,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         # Prepare resource requirements (used for both new and restored tuners)
         resource_requirements = PPO.default_resource_request(
             self._setup.config.copy(copy_frozen=False).update_from_dict(
-                AlgorithmConfig.overrides(custom_resources_per_env_runner={"memory": 0.75 * 1024 * 1024 * 1024})
+                AlgorithmConfig.overrides(custom_resources_per_env_runner={"memory": 0.5 * 1024 * 1024 * 1024})
             )
         )
         resource_requirements = cast(
@@ -511,7 +511,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         bundles = resource_requirements.bundles
         # When tracking memory calculate RES - SHR
         # https://docs.ray.io/en/latest/ray-core/scheduling/memory-management.html
-        bundles[0]["memory"] = bundles[0].get("memory", 0) + 2.5 * 1024 * 1024 * 1024
+        bundles[0]["memory"] = bundles[0].get("memory", 0) + 1.75 * 1024 * 1024 * 1024
         if len(bundles) == 1:
             # No env runners, reserve some extra memory
             bundles[0]["memory"] = bundles[0].get("memory", 0) + 0.5 * 1024 * 1024 * 1024
