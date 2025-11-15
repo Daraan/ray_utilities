@@ -1,0 +1,20 @@
+pbt_batch_size:
+  <ENV_TYPE>:
+  - Ant-v5
+  - Hopper-v5
+  - Walker2d-v5
+  - HalfCheetah-v5
+  - Reacher-v5
+  - Swimmer-v5
+  - # Pusher-v5
+  - InvertedPendulum-v5
+  - InvertedDoublePendulum-v5
+  - Humanoid-v5
+  - # HumanoidStandup-v5
+
+  entrypoint_pattern: python experiments/tune_with_scheduler.py --env_type <ENV_TYPE>
+    --tune batch_size --num_samples 1 --tag:core --log_stats learners
+    --buffer_length auto
+    --comet  offline+upload@end  --wandb  offline+upload@end    --tag:pbt
+    --hostname_selector '!dws-login-02'
+    pbt  --perturbation_interval 0.125 --quantile_fraction 0.1

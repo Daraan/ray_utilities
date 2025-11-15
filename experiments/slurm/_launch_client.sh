@@ -404,7 +404,7 @@ if [ "${RUN_PYTHON_SCRIPT}" = "false" ]; then
         --num-cpus="${SLURM_CPUS_PER_TASK}" \
         --num-gpus="${SLURM_GPUS_PER_TASK:-0}" \
         --temp-dir="${RAY_TMPDIR}" \
-        --labels="hostname=$(hostname -s),head=false" \
+        --labels="hostname=$(hostname -s),head=false,slurmnode=true" \
         --block; then
         echo "ERROR: Failed to connect to Ray cluster"
         if [ "${CONNECTION_MODE}" = "job_id" ]; then

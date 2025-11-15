@@ -2,12 +2,13 @@
 #SBATCH --job-name=ray-head
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=200G
-#SBATCH --time=30:00:00
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=40G
+#SBATCH --time=40:00:00
 #SBATCH --signal=B:SIGUSR1@600
 #SBATCH --output=outputs/slurm_logs/%j-%x.out
 #SBATCH --error=outputs/slurm_logs/%j-%x.err
+#SBATCH --mail-type=END,FAIL,TIME_LIMIT_80
 
 ################################################################################
 # SLURM Script for Persistent Ray Head Node
@@ -363,8 +364,9 @@ ray start --head \
     --min-worker-port="${MIN_WORKER_PORT}" \
     --max-worker-port="${MAX_WORKER_PORT}" \
     --object-store-memory="${RAY_OBJECT_STORE}000000000" \
-    --num-cpus="${SLURM_CPUS_PER_TASK}" \
-    --num-gpus="${SLURM_GPUS_PER_TASK:-0}" \
+    --labels="hostname=$(hostname -s),head=true,slurmnode=true" \
+    --num-cpus=0 \
+    --num-gpus=0 \
     --temp-dir="${RAY_TMPDIR}" \
     --disable-usage-stats
 
