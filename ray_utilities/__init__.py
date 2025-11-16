@@ -119,6 +119,16 @@ def get_runtime_env() -> _RuntimeEnv:
     else:
         working_dir = None
         original_working_dir = None
+    # when using ray job submitt with working dir, os.getcwd() points to an unwritable temp dir
+    if working_dir and "_ray_pkg_" in working_dir:
+        # This is a temporary working dir, we should not rely on it
+        pass
+    if original_working_dir and "_ray_pkg_" in original_working_dir:
+        # This is a temporary working dir, we should not rely on it
+        logger.warning(
+            "Detected _ray_pkg_ in original_working_dir - "
+            "it likely points to a UNWRITABLE and temporary working dir location. Use with caution."
+        )
     import ray
 
     if ray.is_initialized() and (runtime_context := ray.get_runtime_context()).runtime_env:
@@ -147,6 +157,11 @@ def get_runtime_env() -> _RuntimeEnv:
     # 16384       | 24          |  8
 
     try_ = 0
+    if "_ray_pkg_" in COMET_OFFLINE_DIRECTORY:
+        logger.warning(
+            "Detected _ray_pkg_ in COMET_OFFLINE_DIRECTORY - "
+            "it likely points to a UNWRITABLE and temporary working dir location"
+        )
     while try_ < 2:
         try_ += 1
         try:

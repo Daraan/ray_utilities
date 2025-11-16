@@ -128,7 +128,7 @@ if __name__ == "__main__":
                 runtime_env=settings.get("runtime_env", {"working_dir": "."}),
                 entrypoint_num_cpus=settings.get("entrypoint_num_cpus", 1),
                 entrypoint_num_gpus=settings.get("entrypoint_num_gpus", 0),
-                entrypoint_memory=settings.get("entrypoint_memory", 3 * 1000 * 1000 * 1000),  # 3 GB
+                entrypoint_memory=int(settings.get("entrypoint_memory", 1.25 * 1000 * 1000 * 1000)),  # 1.25 GB
                 entrypoint_resources=settings.get("entrypoint_resources", None),
                 metadata=settings.get("metadata", None),
             )
@@ -167,7 +167,7 @@ if __name__ == "__main__":
                         job_status = CLIENT.get_job_status(job_id)
                         if job_status in JOB_END_STATES:
                             if run_id := task_run_ids.get(job_id):
-                                write_back(args.group, job_id, {run_id: job_status.name})
+                                write_back(args.group, job_id, {run_id: job_status.name, "submission_id": job_id})
                             del tasks[job_id]
                             break
             # Print outputs for all jobs after interval

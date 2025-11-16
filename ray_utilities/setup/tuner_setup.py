@@ -24,6 +24,7 @@ reinforcement learning experiments.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, Optional, Protocol, cast, overload
 
@@ -33,7 +34,7 @@ from ray.rllib.algorithms.ppo import PPO
 from ray.tune.execution.placement_groups import PlacementGroupFactory
 from ray.tune.schedulers import MedianStoppingRule
 from ray.tune.search.optuna import OptunaSearch
-from ray.tune.search.sample import Domain, Categorical
+from ray.tune.search.sample import Categorical, Domain
 from ray.tune.stopper import CombinedStopper, FunctionStopper
 from typing_extensions import TypeVar
 
@@ -579,6 +580,13 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             f"{FORK_FROM} is not expected to be in the param_space that is passed to the Tuner by default."
         )
         run_config = self.create_run_config(self.create_callbacks(adv_loggers=adv_loggers))
+        if "_ray_pkg_" in str(run_config.storage_path):
+            raise ValueError(
+                "Storage path points to a _ray_pkg_ directory, which is an UNWRITABLE and temporary working dir. "
+                "Check storage_path / RAY_UTILITIES_STORAGE_PATH setup.\n"
+                f"Storage path: {run_config.storage_path} "
+                f"RAY_UTILITIES_STORAGE_PATH: {os.environ.get('RAY_UTILITIES_STORAGE_PATH')}"
+            )
         logger.info(
             "Creating new Tuner with experiment name: %s at storage path: %s",
             run_config.name,

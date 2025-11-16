@@ -414,6 +414,7 @@ class AdvWandbLoggerCallback(
         # TODO: MedianStoppingPruner seems to not end trials correctly.
         wandb_init_kwargs["reinit"] = "create_new"  # <-- create a new run
         local_logging_actor = self._logger_actor_cls(
+            # Despite getcwd() maybe pointing to a temp _ray_pkg_dir_ it should be fine as we keep chdir there.
             logdir=os.getcwd(),  # <-- in init will call os.chdir, we do not want this in local mode
             queue=self._trial_queues[trial],
             exclude=exclude_results,

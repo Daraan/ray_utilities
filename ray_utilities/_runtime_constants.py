@@ -73,7 +73,13 @@ Attention: When restoring experiments the RUN_ID is updated to the restored expe
 
 os.environ["RUN_ID"] = _RUN_ID
 
-COMET_OFFLINE_DIRECTORY_BASE = os.environ.get("COMET_OFFLINE_DIRECTORY_BASE", "./outputs/.cometml-runs")
+if "RAY_UTILITIES_STORAGE_PATH" in os.environ:
+    ray_utilities_storage_path = os.environ["RAY_UTILITIES_STORAGE_PATH"]
+    _comet_offline_default_base_default = str(Path(ray_utilities_storage_path).parent / ".cometml-runs")
+else:
+    _comet_offline_default_base_default = "./outputs/.cometml-runs"
+
+COMET_OFFLINE_DIRECTORY_BASE = os.environ.get("COMET_OFFLINE_DIRECTORY_BASE", _comet_offline_default_base_default)
 
 _COMET_OFFLINE_DIRECTORY_SUGGESTION = (
     Path(COMET_OFFLINE_DIRECTORY_BASE)

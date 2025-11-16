@@ -623,7 +623,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         self._param_overrides: dict[str, Any] = args.get("__overwritten_keys__", {})
         """Changed parameters via the hparams argument, e.g. passed by the tuner. See also: --tune"""
         self._pbar: tqdm | range | tqdm_ray.tqdm = episode_iterator(
-            args, config, use_pbar=self.use_pbar, flush_interval=3.5
+            args,
+            config,
+            use_pbar=self.use_pbar,
+            flush_interval=float(os.environ.get("RAY_UTILITIES_TQDM_FLUSH_INTERVAL", 3.5)),
         )
         self._iteration: int = 0
         self.log_stats: LogStatsChoices = args[LOG_STATS]
@@ -1072,12 +1075,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # can return dict_or_path
         # NOTE: Do not rely on absolute paths in the implementation of
         state = self.get_state()
+        if "_ray_pkg_" in checkpoint_dir or (self._storage and "_ray_pkg_" in self._storage.checkpoint_fs_path):
+            _logger.error("Checkpoint dir points to TEMPORARY working dir. Check storage_path setup.")
         # save in subdir
         assert isinstance(state, dict)
         if self._storage:
             # Assume we are used with a Tuner and StorageContext handles checkpoints.
             # NOTE: This is a fixed path as relative paths are not well supported by restore
-            # which just passes a temp dir here.
+            # which just passes a temp dir here - we want the entry to point to the *final* path after moving by tune
 
             # Checkpoint index is updated after this function returns
             self._storage.current_checkpoint_index += 1
@@ -1736,7 +1741,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     os.environ.get("ORIGINAL_WORKING_DIR"),
                     os.environ.get("TUNE_ORIG_WORKING_DIR"),
                 }:
-                    if fallback is not None:
+                    if fallback is not None and "_ray_pkg_" not in fallback:
                         try:
                             repo = git.Repo(fallback, search_parent_directories=True)
                             break

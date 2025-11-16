@@ -389,8 +389,20 @@ class ExperimentSetupBase(
             - self.create_parser(): Creates and assigns the argument parser.
             - self.setup(): Performs further setup based on initialization flags.
         """
+        if "_ray_pkg_" in str(self.storage_path):
+            logger.error(
+                "RAY_UTILITIES_STORAGE_PATH points to a temporary Ray package directory (%s). "
+                "This will cause issues with checkpointing",
+                self.storage_path,
+            )
         if "RAY_UTILITIES_STORAGE_PATH" not in os.environ:
             os.environ["RAY_UTILITIES_STORAGE_PATH"] = str(self.storage_path)
+        if "_ray_pkg_" in os.environ["RAY_UTILITIES_STORAGE_PATH"]:
+            logger.error(
+                "RAY_UTILITIES_STORAGE_PATH points to a temporary Ray package directory (%s). "
+                "This will cause issues with checkpointing",
+                os.environ["RAY_UTILITIES_STORAGE_PATH"],
+            )
         if self.__restored__:
             return
         cfg_file_parser = ConfigFilePreParser()
@@ -1431,10 +1443,11 @@ class ExperimentSetupBase(
         runtime_env = get_runtime_env()
         working_dir = runtime_env.get("working_dir", None)
         if not working_dir:
-            if self._config_files:
+            if self._config_files and any(not p.exists() for p in map(Path, self._config_files)):
                 logger.warning(
-                    "Config files %s were specified, but no working_dir is set in the runtime_env. "
-                    "These files will not be copied to the working_dir of the Ray workers.",
+                    "Config files %s were specified and not found, no working_dir was set in the runtime_env. "
+                    "These files will not be copied to the working_dir of the Ray workers "
+                    "- settings might change unexpectedly!",
                     self._config_files,
                 )
             return
@@ -1513,6 +1526,13 @@ class ExperimentSetupBase(
                     "Provided path %s is not a directory but does not end with %s. Using the path as is.",
                     path_obj,
                     RESTORE_FILE_NAME,
+                )
+            if "_ray_pkg_" in str(path_obj):
+                raise ValueError(
+                    "Path points to a _ray_pkg_ directory, which is an UNWRITABLE and temporary working dir. "
+                    "Check storage_path / RAY_UTILITIES_STORAGE_PATH setup.\n"
+                    f"Storage path: {self.storage_path} "
+                    f"RAY_UTILITIES_STORAGE_PATH: {os.environ.get('RAY_UTILITIES_STORAGE_PATH')}"
                 )
             path_obj.parent.mkdir(parents=True, exist_ok=True)
             with path_obj.open("wb") as f:

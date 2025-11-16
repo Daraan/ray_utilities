@@ -847,6 +847,8 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         they exploit to ensure balanced exploitation.
         """
         # Note, is iterated in order: upper_quantile, not in quantiles, lower_quantile
+        if trial.storage and trial.storage and "_ray_pkg_" in trial.storage.storage_fs_path:
+            logger.error("Trial %s has storage path in _ray_pkg_: %s", trial, trial.storage.storage_fs_path)
         state = self._trial_state[trial]
         # Remove any fork controlling keys from the config
         for k in self.additional_config_keys:

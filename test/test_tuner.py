@@ -1584,6 +1584,7 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
             trial.is_finished.return_value = False
             trial.status = Trial.RUNNING
             trial.config = {"lr": 0.001}
+            trial.storage = None
 
             # Set total_time_spent to be equal for all trials to avoid early exit in total_time_spent check
             state = MockPBTTrialState(

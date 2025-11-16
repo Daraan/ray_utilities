@@ -189,6 +189,17 @@ def create_algorithm_config(
         env_config.update({"seed": env_seed, "env_type": env_spec})
         # Will use a SeededEnvCallback to apply seed and generators
     config.environment(env_spec, env_config=env_config)
+    # NOTE: This might needs adjustment when using VectorEnv
+    if isinstance(config.env, str) and config.env != "seeded_env":
+        init_env = gym.make(config.env)
+    elif config.env == "seeded_env":
+        if isinstance(env_spec, str):
+            init_env = gym.make(env_spec)
+        else:
+            init_env = env_spec
+    else:
+        assert not TYPE_CHECKING or config.env
+        init_env = gym.make(config.env.unwrapped.spec.id)  # pyright: ignore[reportOptionalMemberAccess]
     if args["test"]:
         # increase time in case of debugging the sampler
         config.env_runners(sample_timeout_s=1000)
@@ -199,10 +210,17 @@ def create_algorithm_config(
         )
     except TypeError:
         logger.error("Current ray version does not support AlgorithmConfig.env_runners(gym_env_vectorize_mode=...)")
+    # Increase cpus for expensive environments
+    main_cpus = 1
+    if args["num_env_runners"] == 0:
+        main_cpus = 1 + min(1, args["num_envs_per_env_runner"] // 16) if args["num_envs_per_env_runner"] > 8 else 1
+        if args["num_envs_per_env_runner"] > 2 and init_env.observation_space.shape:
+            main_cpus += sum(init_env.observation_space.shape) // 100
+
     config.resources(
         # num_gpus=1 if args["gpu"] else 0,4
         # process that runs Algorithm.training_step() during Tune
-        num_cpus_for_main_process=1,
+        num_cpus_for_main_process=main_cpus,
         # num_learner_workers=4 if args["parallel"] else 1,
         # num_cpus_per_learner_worker=1,
         # num_cpus_per_worker=1,
@@ -301,17 +319,6 @@ def create_algorithm_config(
             use_gae=True,  # Must be true to use "truncate_episodes"
         )
     # Create a single agent RL module spec.
-    # NOTE: This might needs adjustment when using VectorEnv
-    if isinstance(config.env, str) and config.env != "seeded_env":
-        init_env = gym.make(config.env)
-    elif config.env == "seeded_env":
-        if isinstance(env_spec, str):
-            init_env = gym.make(env_spec)
-        else:
-            init_env = env_spec
-    else:
-        assert not TYPE_CHECKING or config.env
-        init_env = gym.make(config.env.unwrapped.spec.id)  # pyright: ignore[reportOptionalMemberAccess]
     # Note: legacy keys are updated below
     module_spec = RLModuleSpec(
         module_class=module_class,
@@ -320,6 +327,7 @@ def create_algorithm_config(
         model_config=cast("dict[str, Any]", model_config),
         catalog_class=catalog_class,
     )
+    init_env.close()
     # module = module_spec.build()
     config.rl_module(  # only in RLModuleSpec is not sufficient
         rl_module_spec=module_spec,
