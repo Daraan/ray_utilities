@@ -96,6 +96,7 @@ _COMET_OFFLINE_DIRECTORY_SUGGESTION = (
         (
             Path(ENTRY_POINT).stem
             + time.strftime(r"_%Y-%m-%d_%H-%M-%S", time.localtime(RAY_UTILITIES_INITIALIZATION_TIMESTAMP))
+            + _RUN_ID
         )
         if os.environ.get("RAY_UTILITIES_SEPARATE_COMET_LOG_DIRS", "1") == "1"
         else ""

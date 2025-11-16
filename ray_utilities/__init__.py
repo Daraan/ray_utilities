@@ -111,7 +111,7 @@ def get_runtime_env() -> _RuntimeEnv:
     if os.environ.get("_RAY_UTILITIES_RUNTIME_ENV_LOADED", "0") != "1":
         working_dir = Path("outputs/shared/.ray_working_dir")
         if not working_dir.exists():
-            logger.error("Working dir %s does not exist, setting working_dir to None", working_dir)
+            logger.warning("Working dir %s does not exist, setting working_dir to None", working_dir)
             working_dir = None
         else:
             working_dir = working_dir.as_posix()
@@ -127,7 +127,9 @@ def get_runtime_env() -> _RuntimeEnv:
         # This is a temporary working dir, we should not rely on it
         logger.warning(
             "Detected _ray_pkg_ in original_working_dir - "
-            "it likely points to a UNWRITABLE and temporary working dir location. Use with caution."
+            "it likely points to a UNWRITABLE and temporary working dir location. Use with caution. "
+            "This message can be ignored if created by a worker",
+            stacklevel=2,
         )
     import ray
 

@@ -11,10 +11,15 @@ pbt_batch_size:
   - InvertedDoublePendulum-v5
   - Humanoid-v5
   - HumanoidStandup-v5
-  entrypoint_pattern: python experiments/tune_with_scheduler.py --env_type <ENV_TYPE>
-    --tune batch_size --num_samples 1 --tag:core --log_stats learners --buffer_length
-    auto --comet  offline+upload@end  --wandb  offline+upload@end    --tag:pbt --hostname_selector
-    '!dws-login-02' pbt  --perturbation_interval 0.125 --quantile_fraction 0.1
+  entrypoint_pattern:
+    python experiments/tune_with_scheduler.py
+    --env_type <ENV_TYPE>
+    --tune batch_size --num_samples 1
+    --tag:core --tag:pbt
+    --buffer_length auto
+    --comet offline+upload@end --wandb offline+upload@end --log_stats timers+learners
+    --hostname_selector '!dws-login-02'
+    pbt --perturbation_interval 0.125 --quantile_fraction 0.1
 pbt_num_envs:
   <ENV_TYPE>:
   - Ant-v5
@@ -28,7 +33,68 @@ pbt_num_envs:
   - InvertedDoublePendulum-v5
   - Humanoid-v5
   - HumanoidStandup-v5
+  # this is a comment
+  comment: small minibatch_size=256 and train_batch_size=2048
   entrypoint_pattern: python experiments/tune_with_scheduler.py --env_type <ENV_TYPE>
     --tune num_envs_per_env_runner --num_samples 1 --tag:core --log_stats learners
     --buffer_length auto --comet  offline+upload@end  --wandb  offline+upload@end    --tag:pbt
-    --hostname_selector '!dws-login-02' pbt  --perturbation_interval 0.125 --quantile_fraction 0.1
+    --hostname_selector '!dws-login-02' pbt  --perturbation_interval 0.125 --quantile_fraction
+    0.1
+  run_ids:
+    (Ant-v5):
+      tws47f25111613162c0c4: RUNNING
+    (HalfCheetah-v5):
+      tws47f251116131644cd4: RUNNING
+    (Hopper-v5):
+      tws47f251116131696844: RUNNING
+    (Humanoid-v5):
+      tws47f251116132047a84: RUNNING
+    (HumanoidStandup-v5):
+      tws47f251116132077264: RUNNING
+    (InvertedDoublePendulum-v5):
+      tws47f251116155671db4: RUNNING
+    (InvertedPendulum-v5):
+      tws47f2511161320022c4:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_InvertedPendulum-v5_5343
+    (Pusher-v5):
+      tws47f251116132006fa4:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_Pusher-v5_5343
+    (Reacher-v5):
+      tws47f25111613166c304:
+        status: SUCCEEDED
+        comment: single env worked best, most envs worst. 2 envs at the start superior
+          to all others. reducing to single env after first perturbation big boost.
+          2 & 4 envs were good as well. Strange drop at 3rd perturbation, recovered
+          at 4th
+        submission_id: pbt_num_envs_Reacher-v5_5343
+    (Swimmer-v5):
+      tws47f2511161320d60e4: RUNNING
+    (Walker2d-v5):
+      tws47f251116131630b04: RUNNING
+pbt_num_envs_large:
+  <ENV_TYPE>:
+  - Ant-v5
+  - Hopper-v5
+  - Walker2d-v5
+  - HalfCheetah-v5
+  - Reacher-v5
+  - Swimmer-v5
+  - Pusher-v5
+  - InvertedPendulum-v5
+  - InvertedDoublePendulum-v5
+  - Humanoid-v5
+  - HumanoidStandup-v5
+  comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16) scale
+  entrypoint_resources:
+    # custom resource to not schedule on SLURM nodes that time out too early
+    persistent_node: 1
+  entrypoint_pattern: >
+    python experiments/tune_with_scheduler.py --env_type <ENV_TYPE>
+    --minibatch_size 1024 --train_batch_size_per_learner 8192
+    --tune num_envs_per_env_runner --num_samples 1 --tag:core --log_stats learners
+    --buffer_length auto --comet  offline+upload@end --wandb  offline+upload@end --tag:pbt
+    --hostname_selector '!dws-login-02'
+    --comment 'Tune (PBT): Batch size with higher batch sizes'
+    pbt  --perturbation_interval 0.125 --quantile_fraction 0.1

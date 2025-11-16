@@ -9,10 +9,26 @@ from typing import AsyncIterator
 from ray.job_submission import JobSubmissionClient, JobStatus
 import os
 import argparse
-import yaml
 import asyncio
 import re
 import itertools
+
+try:
+    from ruamel.yaml import YAML
+
+    yaml = YAML()
+    yaml.preserve_quotes = True  # Optional: preserves quotes
+except ModuleNotFoundError:
+    import yaml
+
+    print(
+        "ruamel.yaml not found, falling back to PyYAML which may not preserve formatting. Please install ruamel.yaml."
+    )
+    yaml_load = yaml.safe_load
+    yaml_dump = yaml.safe_dump
+else:
+    yaml_load = yaml.load
+    yaml_dump = yaml.dump
 
 CLIENT: JobSubmissionClient | None = None
 JOB_END_STATES = {JobStatus.SUCCEEDED, JobStatus.STOPPED, JobStatus.FAILED}
@@ -24,10 +40,10 @@ RANDOM_SUFFIX = str(int(time.time()))[-4:]
 
 def get_submissions(group: str, *, file="experiments/submissions.yaml") -> dict[str, dict]:
     with open(file, "r") as f:
-        data = yaml.safe_load(f)
+        data = yaml_load(f)
     group_data = data.get(group)
     if "entrypoint_pattern" not in group_data:
-        return {k: v for k, v in yaml.safe_load(f)[group].items() if k not in IGNORE_KEYS}
+        return {k: v for k, v in yaml_load(f)[group].items() if k not in IGNORE_KEYS}
     pattern: str = group_data["entrypoint_pattern"]
     other_keys: dict[str, list[str]] = {
         k: v for k, v in group_data.items() if k not in IGNORE_KEYS and k.startswith("<") and k.endswith(">")
@@ -57,9 +73,11 @@ def get_submissions(group: str, *, file="experiments/submissions.yaml") -> dict[
     return submissions
 
 
-def write_back(group: str, job_id: str, run_id: str | dict[str, str], *, file="experiments/submissions.yaml"):
+def write_back(
+    group: str, job_id: str, run_id: str | dict[str, str | dict[str, str]], *, file="experiments/submissions.yaml"
+):
     with open(file, "r") as f:
-        data = yaml.safe_load(f)
+        data = yaml_load(f)
     job_id = job_id.removesuffix(RANDOM_SUFFIX)
     if "entrypoint_pattern" not in data[group]:
         data[group][job_id].setdefault("run_ids", {})
@@ -77,7 +95,7 @@ def write_back(group: str, job_id: str, run_id: str | dict[str, str], *, file="e
         else:
             data[group]["run_ids"].setdefault(run_key, {})[run_id] = "RUNNING"
     with open(file, "w") as f:
-        yaml.safe_dump(data, f)
+        yaml_dump(data, f)
 
 
 def wait_until_status(job_id, status_to_wait_for, timeout_seconds=5, client: JobSubmissionClient | None = None):
@@ -91,6 +109,12 @@ def wait_until_status(job_id, status_to_wait_for, timeout_seconds=5, client: Job
         if status in status_to_wait_for:
             break
         time.sleep(1)
+
+
+def get_tmux_log_command(job_id: str) -> str:
+    ray_command = f"ray job logs {job_id} -f"
+    tmux_command = f'tmux new-session -s "{job_id}" -n "{job_id}" -d "bash -c \'source ../env/bin/activate && {ray_command}; exec bash\'"'
+    return tmux_command
 
 
 if __name__ == "__main__":
@@ -144,8 +168,13 @@ if __name__ == "__main__":
     async def gather_and_print_job_outputs(jobs_tracked: dict[str, AsyncIterator[str]], interval: float = 5.0):
         assert CLIENT
         outputs: dict[str, list[str]] = {job_id: [] for job_id in jobs_tracked}
-        tasks = {job_id: asyncio.create_task(aiterator.__anext__()) for job_id, aiterator in jobs_tracked.items()}
 
+        async def get_next(aiterator):
+            return await aiterator.__anext__()
+
+        tasks = {job_id: asyncio.create_task(get_next(aiterator)) for job_id, aiterator in jobs_tracked.items()}
+
+        last_tmux_print = time.time()
         while tasks:
             start = time.time()
             collected: dict[str, list[str]] = {job_id: [] for job_id in tasks}
@@ -160,14 +189,16 @@ if __name__ == "__main__":
                                 output = task.result()
                                 collected[job_id].append(output)
                                 outputs[job_id].append(output)
-                                tasks[job_id] = asyncio.create_task(jobs_tracked[job_id].__anext__())
+                                tasks[job_id] = asyncio.create_task(get_next(jobs_tracked[job_id]))
                             except StopAsyncIteration:
                                 del tasks[job_id]
                             break
                         job_status = CLIENT.get_job_status(job_id)
                         if job_status in JOB_END_STATES:
                             if run_id := task_run_ids.get(job_id):
-                                write_back(args.group, job_id, {run_id: job_status.name, "submission_id": job_id})
+                                write_back(
+                                    args.group, job_id, {run_id: {"status": job_status.name, "submission_id": job_id}}
+                                )
                             del tasks[job_id]
                             break
             # Print outputs for all jobs after interval
@@ -183,18 +214,28 @@ if __name__ == "__main__":
                                 if run_id_match:
                                     run_id = run_id_match.group(1)
                                     task_run_ids[job_id] = run_id
-                                    write_back(args.group, job_id, {run_id: "RUNNING"})
+                                    write_back(
+                                        args.group, job_id, {run_id: {"status": "RUNNING", "submission_id": job_id}}
+                                    )
                                     break
                     print(f"\n\n ============= Out: {job_id} =============\n\n")
                     print("".join(lines))
+            if last_tmux_print + 240 < time.time():
+                print("You can follow all jobs individually in separate tmux sessions using the following commands:")
+                tmux_commands = [get_tmux_log_command(job_id) for job_id in jobs_tracked]
+                print("\n".join(tmux_commands))
+                last_tmux_print = time.time()
 
         # Final output after all jobs are done
         for job_id, lines in outputs.items():
             print(f"\n\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Final Out: {job_id} ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n\n")
             print("".join(lines))
 
-    print("Starting job output in 20 seconds...")
-    time.sleep(5)
+    print("Starting job output in 10 seconds...")
+    print("You can follow all jobs individually in separate tmux sessions using the following commands:")
+    tmux_commands = [get_tmux_log_command(job_id) for job_id in jobs_tracked]
+    print("\n".join(tmux_commands))
+    time.sleep(10)
 
     try:
         # Run the async loop to gather and print outputs

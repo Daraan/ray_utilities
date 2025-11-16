@@ -626,7 +626,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             args,
             config,
             use_pbar=self.use_pbar,
-            flush_interval=float(os.environ.get("RAY_UTILITIES_TQDM_FLUSH_INTERVAL", 3.5)),
+            flush_interval=float(os.environ.get("RAY_UTILITIES_TQDM_FLUSH_INTERVAL", 3.5)),  # noqa: PLW1508
         )
         self._iteration: int = 0
         self.log_stats: LogStatsChoices = args[LOG_STATS]
