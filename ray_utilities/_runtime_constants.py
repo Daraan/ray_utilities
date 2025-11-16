@@ -40,10 +40,19 @@ ENTRY_POINT: str = os.environ.get(
 
 os.environ["ENTRY_POINT"] = ENTRY_POINT
 
-ENTRY_POINT_ID: str = hashlib.blake2b(
-    os.path.basename(ENTRY_POINT).encode(), digest_size=3, usedforsecurity=False
-).hexdigest()
-"""Hash of the entry point script's filename, i.e. sys.argv[0]'s basename"""
+_entry_point_basename = os.path.basename(ENTRY_POINT)
+_entry_point_basename = _entry_point_basename.removesuffix("".join(Path(ENTRY_POINT).suffixes))
+_entry_point_letters = "".join([part[0] for part in _entry_point_basename.split("_") if len(part) > 0])
+
+ENTRY_POINT_ID: str = (
+    _entry_point_letters[:4]
+    + hashlib.blake2b(_entry_point_basename.encode(), digest_size=3, usedforsecurity=False).hexdigest()
+)[:6]
+"""
+first letters of '_' split parts of the entry point script's filename (max 4) filled up to 6 chars with
+a 3-byte blake2b hash of the filename.
+Hash of the entry point script's filename, i.e. sys.argv[0]'s basename
+"""
 # Deterministic no need to write to environ
 
 _RUN_ID = os.environ.get(
@@ -52,7 +61,7 @@ _RUN_ID = os.environ.get(
         ENTRY_POINT_ID
         + time.strftime("%y%m%d%H%M", time.localtime(RAY_UTILITIES_INITIALIZATION_TIMESTAMP))
         + hashlib.blake2b(os.urandom(8) + ENTRY_POINT_ID.encode(), digest_size=2, usedforsecurity=False).hexdigest()
-        + "3"
+        + "4"
     ),
 )
 """
@@ -63,7 +72,7 @@ It is 6 + 10 + 4 + 1 = 21 characters long.
 It can be used to more easily identify trials that have the same entry point and were run
 during the same execution.
 
-The last character is the version of the run_id format. It is currently "3".
+The last character is the version of the run_id format. It is currently "4".
 
 Attention: When restoring experiments the RUN_ID is updated to the restored experiment's RUN_ID.
     Therefore it is preferred to use :func:`get_run_id()` to get the current RUN_ID instead of using this constant directly.
