@@ -46,8 +46,9 @@ import tree
 from ray.train._internal.session import _FutureTrainingResult, _TrainingResult
 from ray.tune.execution.tune_controller import TuneController
 from ray.tune.experiment import Trial
-from ray.tune.result import TRAINING_ITERATION, TIME_TOTAL_S  # pyright: ignore[reportPrivateImportUsage]
+from ray.tune.result import TIME_TOTAL_S, TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.schedulers.pbt import PopulationBasedTraining, _fill_config
+from ray.tune.utils import flatten_dict
 from typing_extensions import Sentinel
 
 from ray_utilities.constants import FORK_FROM, PERTURBED_HPARAMS, get_run_id
@@ -605,7 +606,48 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
 
         Updates the trials config based on :attr:`hyperparam_mutations`.
         """
+        # NOTE: On restore we might add a trial that is already at the perturbation point and should stay paused
         super().on_trial_add(tune_controller, trial)
+        if self._unpickled and trial.last_result:
+            last_time = trial.last_result[self._time_attr]
+            # self._next_perturbation_sync is likely the inital value
+            # NOTE: Should also be able to find the next perturbation interval with parent_time in fork_data
+            if last_time % self._perturbation_interval == 0:
+                # NOTE: This only works if no overstepping happens during training
+                # NOTE 2: Scheduling a trial pause causes error - cannot do that - might leave us with only PENDING in choose_trial_to_run
+                # tune_controller.pause_trial(trial, should_checkpoint=False)
+                if last_time > self._next_perturbation_sync:
+                    # Make them equal. In case all are pause, choose_trial_to_run will handle that case
+                    self._next_perturbation_sync = last_time
+                    logger.info(
+                        "Updated _next_perturbation_sync to %s after adding trial %s with last_time %s",
+                        self._next_perturbation_sync,
+                        trial,
+                        last_time,
+                    )
+            elif last_time > self._next_perturbation_sync:
+                # set to last multiple BELOW of this trial - might allow some stragglers to catch up
+                # In case all are PENDING chose_trial_to_run has to handle it
+                self._next_perturbation_sync = (last_time // self._perturbation_interval) * self._perturbation_interval
+                logger.info(
+                    "Updated _next_perturbation_sync to %s after adding trial %s with last_time %s",
+                    self._next_perturbation_sync,
+                    trial,
+                    last_time,
+                )
+            flat_results = flatten_dict(trial.last_result)
+            if self.metric not in flat_results:
+                logger.warning(
+                    "Trial %s added with last_result %s but metric %s not found - cannot record last score.",
+                    trial,
+                    trial.last_result,
+                    self.metric,
+                )
+                flat_results[self.metric] = float("nan")
+                self._save_trial_state(self._trial_state[trial], last_time, flat_results, trial)
+                self._trial_state[trial].last_score = None  # avoid nan sorting bug
+            else:
+                self._save_trial_state(self._trial_state[trial], last_time, flat_results, trial)
         # Check minibatch_size constraint
         if "minibatch_size" in trial.config:
             minibatch_size = trial.config["minibatch_size"]
@@ -643,10 +685,16 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             self._fork_data_file = Path(trial.local_experiment_path) / f"pbt_fork_data-{get_run_id()}.csv"
             # if we restore it might already exist, only write header if not existing
             if not self._fork_data_file.exists():
-                # TODO: but what if trial is on another host, does this still work?
+                fork_data_file_remote = Path(trial.remote_experiment_path) / f"pbt_fork_data-{get_run_id()}.csv"
                 self._fork_data_file.parent.mkdir(parents=True, exist_ok=True)
-                with self._fork_data_file.open("w") as f:
-                    f.write(make_fork_from_csv_header())
+                if fork_data_file_remote.exists():
+                    # copy to local location
+                    # TODO: but what if trial is on another host, does this still work?
+                    with fork_data_file_remote.open("r") as f_src, self._fork_data_file.open("w") as f_dst:
+                        f_dst.write(f_src.read())
+                else:
+                    with self._fork_data_file.open("w") as f:
+                        f.write(make_fork_from_csv_header())
 
         if FORK_FROM in trial.config:
             fork_config: ForkFromData = trial.config[FORK_FROM]
