@@ -16,6 +16,7 @@ from ray_utilities.dynamic_config.dynamic_buffer_update import SplitBudgetReturn
 from ray_utilities.misc import get_current_step
 
 if TYPE_CHECKING:
+    from ray_utilities.typing.algorithm_return import AlgorithmReturnData
     from ray.rllib.algorithms.algorithm import Algorithm
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 
@@ -197,7 +198,7 @@ class StepCounterMixin(GetGlobalStepMixin):
         *,
         algorithm: Algorithm,
         metrics_logger: MetricsLogger,
-        result: dict[str, Any],
+        result: dict[str, Any] | AlgorithmReturnData,
     ) -> None:
         """
         Increment the step counter _training_iteration by one and update the planned current step.

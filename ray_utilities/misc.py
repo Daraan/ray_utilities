@@ -819,7 +819,7 @@ def flat_dict_to_nested(metrics: dict[str, Any]) -> dict[str, Any | dict[str, An
     return nested_metrics
 
 
-def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict | dict[str, Any] | MetricsLogger) -> int:
+def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict | Mapping[str, Any] | MetricsLogger) -> int:
     """
     Get the current step from the result dictionary. This will prefer the exact steps as logged by
     the :func:`exact_sampling_callback` or a ``Learner`` connector logging to the

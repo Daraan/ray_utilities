@@ -507,8 +507,8 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             "memory": int(
                 (
                     (
-                        max(0.5, self._setup.config.num_envs_per_env_runner or 8)
-                        # NOTE: self._setup.config.num_envs_per_env_runner does work when argument is added later by tune.
+                        max(0.5, (self._setup.config.num_envs_per_env_runner or 8) * 0.075)
+                        # NOTE: config.num_envs_per_env_runner does work when argument is added later by tune.
                         # Use a mean scale instead
                         if self._setup.args.tune and "num_envs_per_env_runner" not in self._setup.args.tune
                         else 0.8
@@ -530,7 +530,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         # When tracking memory calculate RES - SHR
         # https://docs.ray.io/en/latest/ray-core/scheduling/memory-management.html
         bundles[0]["memory"] = int(
-            (bundles[0].get("memory", 0) + 2 * GB)
+            (bundles[0].get("memory", 2 * GB))  # base memory
             # Scale also with batch_size, however when tuned argument is not avaliable here
             * (1.0 + self._setup.config.train_batch_size_per_learner / 2024 // 10)
             # So when we tune it increase by a flat amount, mean need is about * 1.2

@@ -10,6 +10,7 @@ from ray_utilities.dynamic_config.dynamic_buffer_update import get_dynamic_evalu
 from ray_utilities.misc import AutoInt
 
 if TYPE_CHECKING:
+    from ray_utilities.typing.algorithm_return import AlgorithmReturnData
     from ray.rllib.algorithms.algorithm import Algorithm
     from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
@@ -172,7 +173,7 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         *,
         algorithm: Algorithm,
         metrics_logger: Optional[MetricsLogger] = None,
-        result: dict[str, Any],
+        result: dict[str, Any] | AlgorithmReturnData,
         **kwargs,
     ) -> None:
         assert metrics_logger
