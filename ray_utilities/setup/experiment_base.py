@@ -243,6 +243,7 @@ class ExperimentSetupBase(
         "<agent_type>",
         "<num_envs:num_envs_per_env_runner=#>",
         "<minibatch_scale=#>",
+        "<tune>",
     ]
     """extra tags to add"""
 
@@ -666,6 +667,11 @@ class ExperimentSetupBase(
                     if value:  # is True
                         return nickname
                     return None
+            if isinstance(value, (list, tuple)):
+                # append each value as nickname:value e.g. tune:batch_size
+                tags = [f"{nickname}:{v}" for v in value]
+                tags.insert(0, nickname)
+                return tags
             if append_value:
                 if isinstance(value, float):
                     value = round(value, 2)
@@ -692,8 +698,12 @@ class ExperimentSetupBase(
             extra_tags = self.default_extra_tags.copy()
         else:
             extra_tags = list(extra_tags)
+        multi_tags: dict[tuple[str, int], list[str]] = {}
         for i, tag in enumerate(extra_tags):
             subst = self._substitute_tag(tag)
+            if isinstance(subst, list):
+                multi_tags[(tag, i)] = subst
+                continue
             if not isinstance(subst, str):
                 extra_tags[i] = ""
                 # Info if a tag is not found, this could be due to a not provided bool argument
@@ -703,6 +713,10 @@ class ExperimentSetupBase(
                 )
                 continue
             extra_tags[i] = subst
+        for (subst_tag, pos), tags in reversed(multi_tags.items()):
+            extra_tags.remove(subst_tag)
+            for tag in reversed(tags):
+                extra_tags.insert(pos, tag)
         return list(filter(None, extra_tags))
 
     def create_tags(self, extra_tags: Sequence[str] | None = None) -> list[str]:
@@ -713,7 +727,8 @@ class ExperimentSetupBase(
             [
                 *self.args.tags,
                 *self._parse_extra_tags(extra_tags),
-            ]
+            ],
+            allow_multiple=["tune"],
         )
 
     # endregion

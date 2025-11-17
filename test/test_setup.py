@@ -128,6 +128,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 "--tag:mlp:test",
                 "--test",
                 "--num_envs_per_env_runner", 1,  # for num_env tag
+                "--tune", "minibatch_size", "batch_size",
             ):  # fmt: skip
                 tags = AlgorithmSetup(
                     init_trainable=False,
@@ -147,6 +148,9 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         self.assertNotIn("mlp:small", tags)
         self.assertNotIn("num_envs:2", tags)
         self.assertNotIn("num_envs=3", tags)
+        self.assertIn("tune", tags)
+        self.assertIn("tune:minibatch_size", tags)
+        self.assertIn("tune:batch_size", tags)
 
     @mock_trainable_algorithm
     def test_frozen_config(self):

@@ -19,7 +19,7 @@ import shlex
 import sys
 from ast import literal_eval
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Generic, Optional, Sequence, cast
+from typing import TYPE_CHECKING, Any, Collection, Generic, Optional, Sequence, cast
 
 from typing_extensions import Self, TypeIs, TypeVar
 
@@ -1097,7 +1097,7 @@ class DefaultLoggingArgParser(Tap):
             self.tags = tags_to_add
 
     @staticmethod
-    def organize_subtags(tags: Iterable[str]) -> list[str]:
+    def organize_subtags(tags: Iterable[str], allow_multiple: Collection[str] = ()) -> list[str]:
         """Ensure that for tag:value or tag=val, only the last occurrence per key is kept.
         'key' and 'key:' are allowed both to be present; but 'key:' and 'key=' are considered duplicates.
         """
@@ -1114,7 +1114,7 @@ class DefaultLoggingArgParser(Tap):
                 key = tag
                 normalized_key = None  # plain key, not normalized
 
-            if normalized_key is not None:
+            if normalized_key is not None and normalized_key not in allow_multiple:
                 tag_map.pop(f"{normalized_key}:", None)  # remove 'key:' if exists
                 tag_map.pop(f"{normalized_key}=", None)  # remove 'key=' if exists
                 tag_map[key] = tag  # set new with : or =
