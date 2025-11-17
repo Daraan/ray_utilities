@@ -12,6 +12,7 @@ from math import log2
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
+import numpy as np
 from optuna.distributions import (
     BaseDistribution,
     CategoricalDistribution,
@@ -44,7 +45,10 @@ assert max_exp.is_integer()
 max_exp = int(max_exp)
 
 default_distributions: dict[str, DistributionDefinition] = {
-    "lr": {"qloguniform": {"lower": 5e-5, "upper": 1e-1, "q": 5e-5}},
+    # "lr": {"qloguniform": {"lower": 5e-5, "upper": 1e-1, "q": 5e-5}},
+    # qloguniform does not sample that well, samples that are close by and not spreading over the whole range
+    # pure random would be nicer if a setting is totally not usable
+    "lr": {"grid_search": np.round(np.logspace(np.log2(1e-6), np.log2(0.05), num=10, base=2), 6).tolist()},
     "batch_size": {"grid_search": [128, 256, 512, 1024, 2048, 4096, 8192, 8192 * 2]},
     # NOTE: Upperbound of accumulate_gradients_every num_epochs * train_batch_size_per_learner / minibatch_size
     "accumulate_gradients_every": {

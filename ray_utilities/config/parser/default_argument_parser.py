@@ -1408,12 +1408,13 @@ class OptunaArgumentParser(_GoalParser, Tap):
     tune: NeverRestore[
         list[
             Literal[
+                "all",
+                "accumulate_gradients_every",
                 "batch_size",
+                "lr",
                 "minibatch_size",
                 "minibatch_scale",
                 "num_envs_per_env_runner",
-                "accumulate_gradients_every",
-                "all",
             ]
         ]
         | Literal[False]
@@ -1432,12 +1433,13 @@ class OptunaArgumentParser(_GoalParser, Tap):
             nargs="+",
             default=False,
             choices=[
+                "all",
+                "accumulate_gradients_every",
                 "batch_size",
+                "lr",
                 "minibatch_size",
                 "minibatch_scale",
                 "num_envs_per_env_runner",
-                "accumulate_gradients_every",
-                "all",
             ],
             type=_parse_tune_choices,
         )

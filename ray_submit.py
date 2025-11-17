@@ -42,6 +42,8 @@ def get_submissions(group: str, *, file="experiments/submissions.yaml") -> dict[
     with open(file, "r") as f:
         data = yaml_load(f)
     group_data = data.get(group)
+    if group_data is None:
+        raise KeyError(f"Group '{group}' not found in the submissions file.")
     if "entrypoint_pattern" not in group_data:
         return {k: v for k, v in yaml_load(f)[group].items() if k not in IGNORE_KEYS}
     pattern: str = group_data["entrypoint_pattern"]

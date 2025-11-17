@@ -61,11 +61,12 @@ class RunSlowTrialsFirstMixin(PopulationBasedTraining):
             if self.__last_candidate__scheduled is not None and time.time() - self.__last_candidate__scheduled > 90:
                 trials = tune_controller.get_trials()
                 trial_states = [trial.status for trial in trials]
-                logger.warning(
-                    "No candidates found to run. Not scheduling any trial. Has %d managed trials in states: %s",
-                    len(trials),
-                    trial_states,
-                )
+                if not some_unpaused:
+                    logger.warning(
+                        "No candidates found to run. Not scheduling any trial. Has %d managed trials in states: %s",
+                        len(trials),
+                        trial_states,
+                    )
                 # we still update this because else this would be very frequent
                 self.__last_candidate__scheduled = time.time() + 60
                 if all(t.status == Trial.PAUSED for t in trials):
