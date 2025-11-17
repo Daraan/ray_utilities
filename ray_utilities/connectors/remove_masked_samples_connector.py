@@ -88,7 +88,9 @@ class RemoveMaskedSamplesConnector(ConnectorV2):
             metrics.log_value(
                 (module_id, NUM_ENV_STEPS_PASSED_TO_LEARNER), module_steps, reduce="sum", clear_on_reduce=True
             )
-            metrics.log_value((module_id, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), module_steps, reduce="sum")
+            metrics.log_value(
+                (module_id, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), module_steps, reduce="sum", clear_on_reduce=False
+            )
         return num_steps + module_steps
 
     def __call__(
@@ -127,5 +129,7 @@ class RemoveMaskedSamplesConnector(ConnectorV2):
             metrics.log_value(
                 (ALL_MODULES, NUM_ENV_STEPS_PASSED_TO_LEARNER), num_steps, reduce="sum", clear_on_reduce=True
             )
-            metrics.log_value((ALL_MODULES, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), num_steps, reduce="sum")
+            metrics.log_value(
+                (ALL_MODULES, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), num_steps, reduce="sum", clear_on_reduce=False
+            )
         return batch

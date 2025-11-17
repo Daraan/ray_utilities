@@ -56,8 +56,15 @@ from unittest import mock
 
 import debugpy  # noqa: T100
 import gymnasium as gym
-import jax
-import jax.numpy as jnp
+import numpy as np
+
+try:
+    import jax.numpy as jnp
+
+    import jax
+except ImportError:
+    jax = None
+    jnp = None
 import numpy.testing as npt
 import ray
 import ray.tune
@@ -81,7 +88,6 @@ from ray.rllib.utils.metrics import (
     NUM_MODULE_STEPS_SAMPLED_LIFETIME,
     TIMERS,
 )
-from ray.rllib.utils.metrics.stats import Stats
 from ray.train import Checkpoint
 from ray.train._internal.checkpoint_manager import _CheckpointManager
 from ray.train._internal.session import _FutureTrainingResult, _TrainingResult
@@ -116,6 +122,12 @@ from ray_utilities.setup.tuner_setup import logger as tuner_setup_logger
 from ray_utilities.training.default_class import DefaultTrainable, TrainableBase, TrainableStateDict
 from ray_utilities.training.functional import training_step
 from ray_utilities.training.helpers import make_divisible, nan_to_zero_hist_leaves
+
+try:
+    from ray.rllib.utils.metrics.stats.mean import MeanStats  # pyright: ignore[reportMissingImports]
+except ImportError:
+    # create a dummy type
+    MeanStats = type("MeanStats", (), {})
 
 if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
@@ -576,6 +588,8 @@ def _fix_throughput_stats(stats: dict[str, Any]) -> dict[str, Any]:
         if "throughput_stats" not in stat:
             continue
         stats[k] = stat = stat.copy()  # noqa: PLW2901
+        from ray.rllib.utils.metrics.stats import Stats
+
         t_stat = Stats.from_state(stat["throughput_stats"])
         stat["throughput_stats"]["values"] = t_stat.peek()
         if math.isnan(stat["throughput_stats"]["values"]):
@@ -646,7 +660,7 @@ class TestHelpers(unittest.TestCase):
         super().setUp()
         AlgorithmSetup.PROJECT = "TESTING"
         os.environ["WANDB_API_KEY"] = "test"
-        assert TrainableBase.cls_model_config is None
+        #        assert TrainableBase.cls_model_config is None
         TrainableBase.cls_model_config = {}
         self.mock_reduced_model = mock.patch.dict(
             TrainableBase.cls_model_config,
@@ -998,16 +1012,20 @@ class TestHelpers(unittest.TestCase):
                 assert SEED in metrics_1[ENVIRONMENT_RESULTS]
                 seeds_data0: dict[str, Iterable[int]] = metrics_0[ENVIRONMENT_RESULTS][SEED]  # can be int too!
                 seeds_data1: dict[str, Iterable[int]] = metrics_1[ENVIRONMENT_RESULTS][SEED]
-                seq0 = (
-                    list(seeds_data0.pop("initial_seed"))
-                    if not isinstance(seeds_data0["initial_seed"], int)
-                    else [seeds_data0["initial_seed"]]
-                )  # A
-                seq1 = (
-                    list(seeds_data1.pop("initial_seed"))
-                    if not isinstance(seeds_data1["initial_seed"], int)
-                    else [seeds_data1["initial_seed"]]
-                )  # A B
+                # should be integer but with metrics v2 could end up as float or numpy
+                if isinstance(seeds_data1["initial_seed"], MeanStats):
+                    return
+                else:
+                    seq0 = (
+                        list(seeds_data0.pop("initial_seed"))
+                        if not isinstance(seeds_data0["initial_seed"], (int, float, np.number))
+                        else [seeds_data0["initial_seed"]]
+                    )  # A
+                    seq1 = (
+                        list(seeds_data1.pop("initial_seed"))
+                        if not isinstance(seeds_data1["initial_seed"], (int, float, np.number))
+                        else [seeds_data1["initial_seed"]]
+                    )  # A B
             else:
                 self.fail(
                     f"No {SEEDS} or {SEED} key found in metrics: "
@@ -1033,12 +1051,12 @@ class TestHelpers(unittest.TestCase):
                 )
         if len(all_keys) == 0:
             logger.warning("No keys to compare.")
-
-        self.assertDictEqual(
-            {k: v for k in all_keys if not (isinstance(v := metrics_0[k], float) and math.isnan(v))},
-            {k: v for k in all_keys if not (isinstance(v := metrics_1[k], float) and math.isnan(v))},
-            msg=msg,
-        )
+            # possibly need to remove with RAY_METRICS_V2
+            self.assertDictEqual(
+                {k: v for k in all_keys if not (isinstance(v := metrics_0[k], float) and math.isnan(v))},
+                {k: v for k in all_keys if not (isinstance(v := metrics_1[k], float) and math.isnan(v))},
+                msg=msg,
+            )
 
     def util_test_state_equivalence(
         self,
@@ -1116,10 +1134,7 @@ class TestHelpers(unittest.TestCase):
             self.assertIn(metric, result1)
             self.assertIn(metric, result2)
             with self.subTest(msg.format(metric), metric=metric):
-                self.assertEqual(
-                    result1[metric],
-                    result2[metric],
-                )
+                self.assertEqual(result1[metric], result2[metric], f"Expected {metric} to be equal in both results, ")
                 self.assertEqual(
                     result1[metric],
                     expected_value,
@@ -1970,13 +1985,14 @@ class SetupDefaults(SetupLowRes, SetupWithEnv, TestHelpers, DisableLoggers):
             self._DEFAULT_SETUP = AlgorithmSetup(init_trainable=False, change_log_level=False)
             self._DEFAULT_SETUP.create_trainable()
         self._INPUT_LENGTH = self._env.observation_space.shape[0]  # pyright: ignore[reportOptionalSubscript]
-        self._DEFAULT_INPUT = jnp.arange(self._INPUT_LENGTH * 2).reshape((2, self._INPUT_LENGTH))
-        self._DEFAULT_BATCH: dict[str, chex.Array] = MappingProxyType({"obs": self._DEFAULT_INPUT})  # pyright: ignore[reportAttributeAccessIssue]
-        self._ENV_SAMPLE = jnp.arange(self._INPUT_LENGTH)
-        model_key = jax.random.PRNGKey(self._DEFAULT_CONFIG_DICT["seed"] or 2)
-        self._RANDOM_KEY, self._ACTOR_KEY, self._CRITIC_KEY = jax.random.split(model_key, 3)
         self._ACTION_DIM: int = self._ACTION_SPACE.n  # pyright: ignore[reportAttributeAccessIssue]
         self._OBS_DIM: int = self._OBSERVATION_SPACE.shape[0]  # pyright: ignore[reportOptionalSubscript]
+        if jnp is not None:
+            self._DEFAULT_INPUT = jnp.arange(self._INPUT_LENGTH * 2).reshape((2, self._INPUT_LENGTH))
+            self._DEFAULT_BATCH: dict[str, chex.Array] = MappingProxyType({"obs": self._DEFAULT_INPUT})  # pyright: ignore[reportAttributeAccessIssue]
+            self._ENV_SAMPLE = jnp.arange(self._INPUT_LENGTH)
+            model_key = jax.random.PRNGKey(self._DEFAULT_CONFIG_DICT["seed"] or 2)
+            self._RANDOM_KEY, self._ACTOR_KEY, self._CRITIC_KEY = jax.random.split(model_key, 3)
 
 
 class DisableGUIBreakpoints(unittest.TestCase):

@@ -13,7 +13,7 @@ try:
 except ImportError:
     from ray.rllib.algorithms.callbacks import DefaultCallbacks as RLlibCallback
 
-from ray_utilities.constants import ENVIRONMENT_RESULTS, SEED, SEEDS
+from ray_utilities.constants import ENVIRONMENT_RESULTS, RAY_METRICS_V2, SEED, SEEDS
 
 try:
     from ray.tune.callback import _CallbackMeta
@@ -243,13 +243,23 @@ class ResetSeedEnvsCallback(SeedEnvsCallbackBase):
             first_observation[:, 0],
         )
         if metrics_logger:
-            metrics_logger.log_value(
-                (ENVIRONMENT_RESULTS, SEED, "initial_seed"),
-                [int(starting_seed[0])],  # assure int and not numpy int
-                clear_on_reduce=False,
-                reduce=None,
-                window=(env_context.num_workers or 1),
-            )
+            if RAY_METRICS_V2:
+                metrics_logger.log_value(
+                    (ENVIRONMENT_RESULTS, SEED, "initial_seed"),
+                    [int(starting_seed[0])],  # assure int and not numpy int
+                    clear_on_reduce=False,
+                    reduce="item",
+                    window=(env_context.num_workers or 1),
+                )
+            else:
+                # Old interface
+                metrics_logger.log_value(
+                    (ENVIRONMENT_RESULTS, SEED, "initial_seed"),
+                    [int(starting_seed[0])],  # assure int and not numpy int
+                    clear_on_reduce=False,
+                    reduce=None,
+                    window=(env_context.num_workers or 1),
+                )
 
 
 class DirectRngSeedEnvsCallback(SeedEnvsCallbackBase):

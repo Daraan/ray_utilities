@@ -171,7 +171,7 @@ class DynamicBufferUpdate(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         # Safer way to get correct steps, # TODO: re-evaluate: possible use the one from metrics_logger instead
         # Updater needs to change current_step_planned for NEXT step in case there is an increase in batch size.
         batch_size_old = algorithm.config.train_batch_size_per_learner  # pyright: ignore[reportOptionalMemberAccess]
-        self._set_step_counter_on_train_result(algorithm=algorithm, metrics_logger=metrics_logger)
+        self._set_step_counter_on_train_result(algorithm=algorithm, metrics_logger=metrics_logger, result=result)
         self._updater(algorithm, metrics_logger, global_step=self._planned_current_step)  # pyright: ignore[reportArgumentType]
         if algorithm.config.train_batch_size_per_learner != batch_size_old:  # pyright: ignore[reportOptionalMemberAccess]
             # report that batch_size has changed

@@ -22,8 +22,12 @@ import pandas as pd
 import ray
 import ray.exceptions
 import tree
-from wandb.apis.public.runs import Run
-import wandb.errors
+
+try:
+    import wandb.errors
+    from wandb import Api
+except ImportError:
+    pass
 from pyarrow.fs import LocalFileSystem
 from tqdm import tqdm
 
@@ -31,7 +35,6 @@ from ray_utilities.callbacks.upload_helper import AnyPopen, ExitCode, UploadHelp
 from ray_utilities.constants import FORK_DATA_KEYS, FORK_FROM, get_run_id
 from ray_utilities.misc import RE_GET_TRIAL_ID, ExperimentKey, close_process_pipes, get_trials_from_tuner
 from ray_utilities.nice_logger import ImportantLogger
-from wandb import Api
 
 if TYPE_CHECKING:
     from ray import tune

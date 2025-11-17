@@ -112,7 +112,7 @@ class DynamicGradientAccumulation(StepCounterMixin, BudgetMixin, DynamicHyperpar
     ) -> None:
         assert metrics_logger
         # Safer way to get correct steps:
-        self._set_step_counter_on_train_result(algorithm=algorithm, metrics_logger=metrics_logger)
+        self._set_step_counter_on_train_result(algorithm=algorithm, metrics_logger=metrics_logger, result=result)
         self._updater(algorithm, metrics_logger, global_step=self._planned_current_step)  # pyright: ignore[reportArgumentType]
         # Exact way to update steps:
         # self._updater(algorithm, metrics_logger, global_step=self._get_global_step(metrics_logger))

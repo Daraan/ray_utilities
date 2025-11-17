@@ -1506,6 +1506,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             if self._algorithm is None:
                 _logger.warning("Cannot set algorithm state as algorithm is None.")
             else:
+                # Chore: Check how it behaves with MetricsV2
                 if self.algorithm.metrics and COMPONENT_METRICS_LOGGER in state["algorithm"]:
                     assert self.algorithm.metrics
                     self.algorithm.metrics.reset()
@@ -1625,17 +1626,20 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             self._rebuild_algorithm_if_necessary(new_algo_config)
             sync_env_runner_states_after_reload(self.algorithm)  # NEW, Test, sync states here
             if self.algorithm.metrics and RAY_VERSION >= Version("2.50.0"):
-                for stat in tree.flatten(self.algorithm.metrics.stats):
-                    stat = cast("Stats", stat)
-                    if (
-                        stat._reduce_method == "sum"
-                        and stat._inf_window
-                        and stat._clear_on_reduce is False
-                        and len(stat.values) > 0
-                        and not stat._prev_merge_values  # TODO recheck with ray >2.50.0 # pyright: ignore[reportAttributeAccessIssue]  # noqa: E501
-                    ):
-                        last_value = stat.values[-1]
-                        stat._prev_merge_values = defaultdict(lambda val=last_value: val)  # pyright: ignore[reportAttributeAccessIssue]
+                try:
+                    for stat in tree.flatten(self.algorithm.metrics.stats):
+                        stat = cast("Stats", stat)
+                        if (
+                            stat._reduce_method == "sum"
+                            and stat._inf_window
+                            and stat._clear_on_reduce is False
+                            and len(stat.values) > 0
+                            and not stat._prev_merge_values  # TODO recheck with ray >2.50.0 # pyright: ignore[reportAttributeAccessIssue]  # noqa: E501
+                        ):
+                            last_value = stat.values[-1]
+                            stat._prev_merge_values = defaultdict(lambda val=last_value: val)  # pyright: ignore[reportAttributeAccessIssue]
+                except AttributeError:
+                    pass  # superseeded by newer ray versions
             # Restore callback states
             set_algorithm_callback_states(self.algorithm, state.get("algorithm_callback_states", {}))
             keys_to_process.remove("algorithm_callback_states")
@@ -1822,7 +1826,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         restored = super().from_checkpoint(path, filesystem=filesystem, **kwargs)
         restored = cast("Self", restored)
         # Restore algorithm metric states; see my PR https://github.com/ray-project/ray/pull/54148/
-        # sync_env_runner_states_after_reload(restored.algorithm)
+        sync_env_runner_states_after_reload(restored.algorithm)
         # callbacks are not called by the above methods.
         make_callback(
             "on_checkpoint_loaded",

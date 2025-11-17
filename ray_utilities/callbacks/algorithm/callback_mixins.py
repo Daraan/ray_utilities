@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Mapping, Optional, TypeVar
 
 from ray.rllib.algorithms.algorithm import Algorithm
@@ -12,6 +13,7 @@ from ray.rllib.utils.metrics import (
 
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 from ray_utilities.dynamic_config.dynamic_buffer_update import SplitBudgetReturnDict, split_timestep_budget
+from ray_utilities.misc import get_current_step
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms.algorithm import Algorithm
@@ -122,11 +124,24 @@ class GetGlobalStepMixin:
     """
 
     @staticmethod
-    def _get_global_step(metrics_logger: MetricsLogger) -> int:
+    def _get_global_step(metrics_logger: MetricsLogger, result: dict[str, Any] | None) -> int:
         """Assumes metrics_logger.stats is not empty and contains necessary keys."""
         # other possible keys are num_module_steps_sampled_lifetime/default_policy
         # or num_agent_steps_sampled_lifetime/default_agent
         # look for our custom keys
+
+        # Deprecated via metrics_logger:
+
+        if result:
+            try:
+                gs = get_current_step(result)
+            except KeyError:
+                if not math.isnan(gs := get_current_step(metrics_logger)):
+                    return int(gs)
+            else:
+                return int(gs)
+            # during init
+
         gs = metrics_logger.peek((LEARNER_RESULTS, ALL_MODULES, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=-1)
         if gs == -1:  # alternative custom key
             gs = metrics_logger.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=-1)
@@ -168,9 +183,13 @@ class StepCounterMixin(GetGlobalStepMixin):
         assert algorithm.config
         self._training_iterations: int = 0
         # training_iterations is most likely not yet logged - only after the learner, therefore increase attr manually
+        # TODO peek might return nan in future versions, just use algorithm.iteration?
         self._training_iterations = metrics_logger.peek("training_iteration", default=0) if metrics_logger else 0
+        assert not math.isnan(self._training_iterations)
         self._planned_current_step: int = (
-            self._get_global_step(metrics_logger) if metrics_logger and metrics_logger.stats else 0
+            self._get_global_step(metrics_logger, result=algorithm._last_result or None)
+            if metrics_logger and metrics_logger.stats
+            else 0
         )
 
     def _set_step_counter_on_train_result(
@@ -178,6 +197,7 @@ class StepCounterMixin(GetGlobalStepMixin):
         *,
         algorithm: Algorithm,
         metrics_logger: MetricsLogger,
+        result: dict[str, Any],
     ) -> None:
         """
         Increment the step counter _training_iteration by one and update the planned current step.
@@ -193,7 +213,7 @@ class StepCounterMixin(GetGlobalStepMixin):
             self._planned_current_step += size_change[0]
         else:
             self._planned_current_step += algorithm.config.total_train_batch_size  # pyright: ignore[reportOptionalMemberAccess]
-        if self._planned_current_step != (global_step := self._get_global_step(metrics_logger)):
+        if self._planned_current_step != (global_step := get_current_step(result)):
             _logger.error(
                 "%s: Expected step %d (%d + %d) but got %d (difference: %d) instead. Iteration: %d. "
                 "Expected step should at least be smaller but not larger: %s",
