@@ -212,10 +212,14 @@ def create_algorithm_config(
         logger.error("Current ray version does not support AlgorithmConfig.env_runners(gym_env_vectorize_mode=...)")
     # Increase cpus for expensive environments
     main_cpus = 1
+    if init_env.observation_space.shape:
+        env_size = sum(init_env.observation_space.shape)
+    else:
+        env_size = 1
     if args["num_env_runners"] == 0:
         main_cpus = 1 + min(1, args["num_envs_per_env_runner"] // 16) if args["num_envs_per_env_runner"] > 8 else 1
         if args["num_envs_per_env_runner"] > 2 and init_env.observation_space.shape:
-            main_cpus += sum(init_env.observation_space.shape) // 100
+            main_cpus += env_size // 100
 
     config.resources(
         # num_gpus=1 if args["gpu"] else 0,4
@@ -243,6 +247,9 @@ def create_algorithm_config(
         #    size. Episodes aren't truncated, but multiple episodes
         #    may be packed within one batch to meet the (minimum) batch size.
         batch_mode="truncate_episodes",
+        # For more and large environments increase memory requirement
+        # NOTE: "memory" is not allowed key need to setup with all other bundles
+        # custom_resources_per_env_runner=...
     )
     config.learners(
         # for fractional GPUs, you should always set num_learners to 0 or 1

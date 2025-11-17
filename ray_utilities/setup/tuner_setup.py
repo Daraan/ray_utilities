@@ -48,7 +48,7 @@ from ray_utilities.constants import (
     TUNE_RESULT_IS_A_COPY,
     get_run_id,
 )
-from ray_utilities.misc import get_current_step, new_log_format_used
+from ray_utilities.misc import calc_env_size, get_current_step, new_log_format_used
 from ray_utilities.misc import trial_name_creator as default_trial_name_creator
 from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.tune.searcher.constrained_minibatch_search import constrained_minibatch_search
@@ -501,9 +501,26 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             ValueError: If ``restore_path`` is set but the path holds not tuner.pkl file.
         """
         # Prepare resource requirements (used for both new and restored tuners)
+        # NOTE: "memory" is not allowed in custom_resources_per_env_runner when building a config
+        GB = 1024 * 1024 * 1024
+        custom_resources_per_env_runner = {
+            "memory": int(
+                (
+                    (
+                        max(0.5, self._setup.config.num_envs_per_env_runner or 8)
+                        # NOTE: self._setup.config.num_envs_per_env_runner does work when argument is added later by tune.
+                        # Use a mean scale instead
+                        if self._setup.args.tune and "num_envs_per_env_runner" not in self._setup.args.tune
+                        else 0.8
+                    )
+                    * (1.0 + calc_env_size(self._setup.config.env) / 1000)
+                )
+                * GB
+            )
+        }
         resource_requirements = PPO.default_resource_request(
             self._setup.config.copy(copy_frozen=False).update_from_dict(
-                AlgorithmConfig.overrides(custom_resources_per_env_runner={"memory": 0.5 * 1024 * 1024 * 1024})
+                AlgorithmConfig.overrides(custom_resources_per_env_runner=custom_resources_per_env_runner)
             )
         )
         resource_requirements = cast(
@@ -512,10 +529,18 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         bundles = resource_requirements.bundles
         # When tracking memory calculate RES - SHR
         # https://docs.ray.io/en/latest/ray-core/scheduling/memory-management.html
-        bundles[0]["memory"] = bundles[0].get("memory", 0) + 1.75 * 1024 * 1024 * 1024
+        bundles[0]["memory"] = int(
+            (bundles[0].get("memory", 0) + 2 * GB)
+            # Scale also with batch_size, however when tuned argument is not avaliable here
+            * (1.0 + self._setup.config.train_batch_size_per_learner / 2024 // 10)
+            # So when we tune it increase by a flat amount, mean need is about * 1.2
+            * (1.25 if self._setup.args.tune and "batch_size" in self._setup.args.tune else 1.0)
+        )
         if len(bundles) == 1:
-            # No env runners, reserve some extra memory
-            bundles[0]["memory"] = bundles[0].get("memory", 0) + 0.5 * 1024 * 1024 * 1024
+            # No env runners, reserve some extra memory as default need. But has less overhead
+            bundles[0]["memory"] = int(
+                bundles[0].get("memory", 0) + custom_resources_per_env_runner.get("memory", 0.5 * GB) * 0.75
+            )
         if self._setup.args.node_id_selector or self._setup.args.hostname_selector:
             hostname_label = (
                 {"hostname": self._setup.args.hostname_selector} if self._setup.args.hostname_selector else {}

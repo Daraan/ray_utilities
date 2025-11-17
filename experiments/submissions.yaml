@@ -157,6 +157,19 @@ pbt_lr_base:
     --comet offline+upload@end --wandb offline+upload@end --log_stats timers+learners
     --hostname_selector '!dws-login-02'
     pbt --perturbation_interval 0.125 --quantile_fraction 0.1
+  run_ids:
+    (CartPole-v1):
+      tws47f25111703370cb24:
+        status: RUNNING
+        submission_id: pbt_lr_base_CartPole-v1_7014
+    (Acrobot-v1):
+      tws47f251117033729d54:
+        status: RUNNING
+        submission_id: pbt_lr_base_Acrobot-v1_7014
+    (LunarLander-v3):
+      tws47f2511170337ff2f4:
+        status: RUNNING
+        submission_id: pbt_lr_base_LunarLander-v3_7014
 pbt_lr:
   <ENV_TYPE>:
   - Ant-v5

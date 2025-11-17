@@ -154,8 +154,8 @@ if __name__ == "__main__":
                 runtime_env=settings.get("runtime_env", {"working_dir": "."}),
                 entrypoint_num_cpus=settings.get("entrypoint_num_cpus", 1),
                 entrypoint_num_gpus=settings.get("entrypoint_num_gpus", 0),
-                entrypoint_memory=int(settings.get("entrypoint_memory", 1.25 * 1000 * 1000 * 1000)),  # 1.25 GB
-                entrypoint_resources=settings.get("entrypoint_resources", None),
+                entrypoint_memory=int(settings.get("entrypoint_memory", 2 * 1000 * 1000 * 1000)),
+                entrypoint_resources=settings.get("entrypoint_resources", {"persistent_node": 1}),
                 metadata=settings.get("metadata", None),
             )
         except Exception as e:

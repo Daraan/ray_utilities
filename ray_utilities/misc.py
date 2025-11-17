@@ -19,6 +19,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, cast, overload
 
 import base62
+import gymnasium as gym
+import numpy as np
 import pyarrow.fs as pyfs
 import ray
 import ray.exceptions
@@ -1038,3 +1040,31 @@ def close_process_pipes(process: AnyPopen):
                     process.pid,
                     process.returncode,
                 )
+
+
+def calc_env_size(env: gym.Env | str | None):
+    """Calculate the size of the environment's observation and action spaces.
+
+    Args:
+        env: The Gym environment instance or its name as a string.
+    Returns:
+        1 on error else the cumprod of env.observation_space.shape
+    """
+    if env is None:
+        return 1
+    close_env = False
+    if isinstance(env, str):
+        env = gym.make(env)
+        close_env = True
+    try:
+        prod = np.prod(env.observation_space.shape)  # pyright: ignore[reportArgumentType, reportCallIssue]
+    except (AttributeError, TypeError):
+        _logger.warning("Could not determine observation space shape for env %s", env)
+        return 1
+    else:
+        if not prod:
+            return 1
+        return int(prod)
+    finally:
+        if close_env:
+            env.close()
