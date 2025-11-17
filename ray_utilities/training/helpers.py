@@ -25,7 +25,7 @@ from typing_extensions import Sentinel, TypeAliasType
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
 from ray_utilities.config import seed_environments_for_config, DefaultArgumentParser
-from ray_utilities.constants import ENVIRONMENT_RESULTS, RAY_VERSION, SEED, SEEDS
+from ray_utilities.constants import ENVIRONMENT_RESULTS, RAY_METRICS_V2, RAY_VERSION, SEED, SEEDS
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, calculate_steps
 from ray_utilities.learners import mix_learners
 from ray_utilities.misc import AutoInt
@@ -707,8 +707,7 @@ def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
     )[COMPONENT_LEARNER]
 
     # Sync states, especially env_steps
-
-    metrics_state = {"stats": {}}  # algorithm.metrics.get_state()
+    metrics_state = {"stats": {}} if RAY_METRICS_V2 else algorithm.metrics.get_state()
     # State keys are "--" joined
     env_runner_metrics_state = {
         COMPONENT_METRICS_LOGGER: {

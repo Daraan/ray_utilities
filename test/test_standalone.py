@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from collections import defaultdict
 import os
 import tempfile
 import unittest
+from collections import defaultdict
 from typing import TYPE_CHECKING
 
 import ray
@@ -15,6 +15,7 @@ from ray.rllib.utils.metrics import (
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
 )
 
+from ray_utilities.constants import RAY_METRICS_V2
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
@@ -45,7 +46,7 @@ expected_results = {
 os.environ["PYTHONWARNINGS"] = "ignore::DeprecationWarning"
 
 
-# @unittest.skip("Needs to be fixed in ray first")
+@unittest.skipUnless(RAY_METRICS_V2, "Needs to be fixed in ray first")
 class TestAlgorithm(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

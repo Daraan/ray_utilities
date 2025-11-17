@@ -1051,12 +1051,12 @@ class TestHelpers(unittest.TestCase):
                 )
         if len(all_keys) == 0:
             logger.warning("No keys to compare.")
-
-    #        self.assertDictEqual(
-    #            {k: v for k in all_keys if not (isinstance(v := metrics_0[k], float) and math.isnan(v))},
-    #            {k: v for k in all_keys if not (isinstance(v := metrics_1[k], float) and math.isnan(v))},
-    #            msg=msg,
-    #        )
+            # possibly need to remove with RAY_METRICS_V2
+            self.assertDictEqual(
+                {k: v for k in all_keys if not (isinstance(v := metrics_0[k], float) and math.isnan(v))},
+                {k: v for k in all_keys if not (isinstance(v := metrics_1[k], float) and math.isnan(v))},
+                msg=msg,
+            )
 
     def util_test_state_equivalence(
         self,
@@ -1793,9 +1793,6 @@ class TestHelpers(unittest.TestCase):
             self.assertEqual(result2[TRAINING_ITERATION], result2_restored[TRAINING_ITERATION], msg)
             self.assertEqual(result2[TRAINING_ITERATION], iteration_after_step, msg)
             self.assertEqual(result2["current_step"], result2_restored["current_step"])
-            from ray_utilities.testing_utils import remote_breakpoint
-
-            remote_breakpoint()
             self.compare_env_runner_results(
                 result2_restored[ENV_RUNNER_RESULTS],  # pyright: ignore[reportArgumentType]
                 result2[ENV_RUNNER_RESULTS],  # pyright: ignore[reportArgumentType]

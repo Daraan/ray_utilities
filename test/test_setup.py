@@ -44,6 +44,7 @@ from ray_utilities.constants import (
     EVAL_METRIC_RETURN_MEAN,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
+    RAY_METRICS_V2,
     SEED,
     SEEDS,
 )
@@ -1207,7 +1208,7 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
         # This would be amazing, but does not look possible:
         # self.assertEqual(env_runner1[EPISODE_RETURN_MEAN], env_runner2[EPISODE_RETURN_MEAN])
 
-    # @unittest.skip("Needs to be fixed in ray first")
+    @unittest.skipUnless(RAY_METRICS_V2, "Needs to be fixed in ray first")
     def test_checkpointing_native(self):
         """
         NOTE: This test needs a patch in ray (very!) earliest coming with 2.47.2+
@@ -1535,32 +1536,33 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
             for metric in metrics:
                 self.assertIn(metric, metrics_0_restored.stats[ENV_RUNNER_RESULTS])
                 self.assertIn(metric, metrics_1_restored.stats[ENV_RUNNER_RESULTS])
-                # with self.subTest(f"(Checkpointed) Check {metric} after restored step 1", metric=metric):
-                #    self.assertEqual(
-                #        metrics_0_restored.peek((ENV_RUNNER_RESULTS, metric)),
-                #        ENV_STEPS_PER_ITERATION,
-                #    )
-                #    self.assertEqual(
-                #        metrics_1_restored.peek((ENV_RUNNER_RESULTS, metric)),
-                #        ENV_STEPS_PER_ITERATION,
-                #    )
+                # Likely have to remove on RAY_METRICS_V2
+                with self.subTest(f"(Checkpointed) Check {metric} after restored step 1", metric=metric):
+                    self.assertEqual(
+                        metrics_0_restored.peek((ENV_RUNNER_RESULTS, metric)),
+                        ENV_STEPS_PER_ITERATION,
+                    )
+                    self.assertEqual(
+                        metrics_1_restored.peek((ENV_RUNNER_RESULTS, metric)),
+                        ENV_STEPS_PER_ITERATION,
+                    )
             tree.assert_same_structure(metrics_0_restored, metrics_1_restored)
 
             # --- Step 2 from restored & checkpoint ---
 
             result_algo0_step2_restored = algo_0_runner_restored.step()
             result_algo1_step2_restored = algo_1_runner_restored.step()
-            # Check that metrics was updated
-            # for metric in metrics:
-            # with self.subTest(f"(Checkpointed) Check {metric} after restored step 2", metric=metric):
-            #    self.assertEqual(
-            #        metrics_0_restored.peek((ENV_RUNNER_RESULTS, metric)),
-            #        ENV_STEPS_PER_ITERATION * 2,
-            #    )
-            #    self.assertEqual(
-            #        metrics_1_restored.peek((ENV_RUNNER_RESULTS, metric)),
-            #        ENV_STEPS_PER_ITERATION * 2,
-            #    )
+            # Check that metrics was updated - likely need to disable with RAY_METRICS_V2
+            for metric in metrics:
+                with self.subTest(f"(Checkpointed) Check {metric} after restored step 2", metric=metric):
+                    self.assertEqual(
+                        metrics_0_restored.peek((ENV_RUNNER_RESULTS, metric)),
+                        ENV_STEPS_PER_ITERATION * 2,
+                    )
+                    self.assertEqual(
+                        metrics_1_restored.peek((ENV_RUNNER_RESULTS, metric)),
+                        ENV_STEPS_PER_ITERATION * 2,
+                    )
             algo_0_runner_restored.save_checkpoint(checkpoint_0_step2_restored)
             algo_1_runner_restored.save_checkpoint(checkpoint_1_step2_restored)
 
@@ -1634,19 +1636,20 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
                 self.assertIn(metric, metrics_0_restored_x2.stats[ENV_RUNNER_RESULTS])
                 self.assertIn(metric, metrics_1_restored_x2.stats[ENV_RUNNER_RESULTS])
 
-                # with self.subTest(f"(Checkpointed x2) Check {metric} after step 2", metric=metric):
-            #     self.assertEqual(
-            #        metrics_0_restored_x2.peek((ENV_RUNNER_RESULTS, metric)),
-            #        ENV_STEPS_PER_ITERATION * 2,
-            #        f"Restored x2 num_env_runners=0: {metric} does not match expected value "
-            #        f"{ENV_STEPS_PER_ITERATION * 2}",
-            #    )
-            #    self.assertEqual(
-            #        metrics_1_restored_x2.peek((ENV_RUNNER_RESULTS, metric)),
-            #        ENV_STEPS_PER_ITERATION * 2,
-            #        f"Restored x2 num_env_runners=1: {metric} does not match expected value "
-            #        f"{ENV_STEPS_PER_ITERATION * 2}",
-            #    )
+                # Likely have to remove on RAY_METRICS_V2
+                with self.subTest(f"(Checkpointed x2) Check {metric} after step 2", metric=metric):
+                    self.assertEqual(
+                        metrics_0_restored_x2.peek((ENV_RUNNER_RESULTS, metric)),
+                        ENV_STEPS_PER_ITERATION * 2,
+                        f"Restored x2 num_env_runners=0: {metric} does not match expected value "
+                        f"{ENV_STEPS_PER_ITERATION * 2}",
+                    )
+                    self.assertEqual(
+                        metrics_1_restored_x2.peek((ENV_RUNNER_RESULTS, metric)),
+                        ENV_STEPS_PER_ITERATION * 2,
+                        f"Restored x2 num_env_runners=1: {metric} does not match expected value "
+                        f"{ENV_STEPS_PER_ITERATION * 2}",
+                    )
             # Step 3 from restored x2
             result_algo_0_step3_restored_x2 = algo_0_restored_x2.step()
             result_algo_1_step3_restored_x2 = algo_1_restored_x2.step()
@@ -1730,7 +1733,7 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
             }
         }
 
-    @Cases([[0, 0]])
+    @Cases(TWO_ENV_RUNNER_CASES)
     @pytest.mark.env_runner_cases
     @pytest.mark.length(speed="medium")
     @pytest.mark.timeout(method="thread")
@@ -1801,7 +1804,7 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
                 results["env_runners"][num_env_runners_b]["step_3"],
             )
 
-    # @unittest.skip("Needs to be fixed in ray first")
+    @unittest.skipUnless(RAY_METRICS_V2, "Needs to be fixed in ray first")
     def test_algorithm_checkpointing(self):
         # similar to test_trainable_checkpointing, but pure algorithms
         with patch_args(
@@ -1834,6 +1837,7 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
             results["env_runners"][1]["step_3"],
         )
 
+    @unittest.skipUnless(RAY_METRICS_V2, "Needs to be fixed in ray first")
     def test_algorithm_checkpointing_native(self):
         # similar to test_trainable_checkpointing, but pure algorithms
         config = PPOConfig().environment(env="CartPole-v1")

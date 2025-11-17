@@ -1303,7 +1303,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     **algo_kwargs,
                 ),
             )
-            # sync_env_runner_states_after_reload(self.algorithm)
+            sync_env_runner_states_after_reload(self.algorithm)
         else:
             raise ValueError(f"Checkpoint must be a dict or a path. Not {type(checkpoint)}")
         if perturbed:  # XXX: check that perturbed has highest priority and updated the config
@@ -1506,9 +1506,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             if self._algorithm is None:
                 _logger.warning("Cannot set algorithm state as algorithm is None.")
             else:
-                # if self.algorithm.metrics and COMPONENT_METRICS_LOGGER in state["algorithm"]:
-                #    assert self.algorithm.metrics
-                #    self.algorithm.metrics.reset()
+                # Chore: Check how it behaves with MetricsV2
+                if self.algorithm.metrics and COMPONENT_METRICS_LOGGER in state["algorithm"]:
+                    assert self.algorithm.metrics
+                    self.algorithm.metrics.reset()
                 for component in COMPONENT_ENV_RUNNER, COMPONENT_EVAL_ENV_RUNNER, COMPONENT_LEARNER_GROUP:
                     if component not in state["algorithm"]:
                         _logger.warning("Restoring algorithm without %s component in state.", component)
