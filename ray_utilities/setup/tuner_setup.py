@@ -42,13 +42,11 @@ from ray_utilities.callbacks.tuner.metric_checkpointer import StepCheckpointer
 from ray_utilities.config._tuner_callbacks_setup import TunerCallbackSetup
 from ray_utilities.constants import (
     DEFAULT_EVAL_METRIC,
-    EVAL_METRIC_RETURN_MEAN,
     FORK_FROM,
-    NEW_LOG_EVAL_METRIC,
     TUNE_RESULT_IS_A_COPY,
     get_run_id,
 )
-from ray_utilities.misc import calc_env_size, get_current_step, new_log_format_used
+from ray_utilities.misc import calc_env_size, get_current_step, resolve_default_eval_metric
 from ray_utilities.misc import trial_name_creator as default_trial_name_creator
 from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.tune.searcher.constrained_minibatch_search import constrained_minibatch_search
@@ -150,7 +148,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
 
     def __init__(
         self,
-        eval_metric: str | DEFAULT_EVAL_METRIC = EVAL_METRIC_RETURN_MEAN,
+        eval_metric: str | DEFAULT_EVAL_METRIC = "DEFAULT_EVAL_METRIC",
         eval_metric_order: Literal["max", "min"] = "max",
         *,
         setup: SetupType_co,  # ExperimentSetupBase[ParserTypeT, ConfigTypeT, _AlgorithmType_co],
@@ -158,8 +156,8 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         add_iteration_stopper: bool | None = None,
         trial_name_creator: Optional[Callable[[Trial], str]] = None,
     ):
-        if eval_metric is DEFAULT_EVAL_METRIC:
-            eval_metric = NEW_LOG_EVAL_METRIC if new_log_format_used() else EVAL_METRIC_RETURN_MEAN
+        if eval_metric is DEFAULT_EVAL_METRIC or eval_metric == "DEFAULT_EVAL_METRIC":
+            eval_metric = resolve_default_eval_metric(for_logger=False, use_ema=not setup.args.no_eval_ema)
         self.eval_metric: str = eval_metric
         self.eval_metric_order: Literal["max", "min"] = eval_metric_order
         self._setup: SetupType_co = setup

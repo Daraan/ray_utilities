@@ -469,7 +469,14 @@ def create_optuna_searcher(
             Otherwise the default of ray's `OptunaSearch` is used.
         kwargs: Forwarded to OptunaSearch, for example `evaluated_rewards`.
     """
-    if metric is DEFAULT_EVAL_METRIC:
+    if metric is DEFAULT_EVAL_METRIC or metric == "DEFAULT_EVAL_METRIC":
+        ImportantLogger.important_warning(
+            _logger,
+            "create_optuna_searcher has metric=DEFAULT_EVAL_METRIC, "
+            "but no information if the EMA variant should be used. "
+            "Pass a specific metric to the searcher, for example: "
+            "EVAL_METRIC_RETURN_MEAN, EVAL_METRIC_RETURN_MEAN_EMA. ",
+        )
         metric = NEW_LOG_EVAL_METRIC if new_log_format_used() else EVAL_METRIC_RETURN_MEAN
     grid_values = {}
     if hparams:

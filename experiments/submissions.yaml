@@ -18,8 +18,89 @@ pbt_batch_size:
     --tag:core --tag:pbt
     --buffer_length auto
     --comet offline+upload@end --wandb offline+upload@end --log_stats timers+learners
-    --hostname_selector '!dws-login-02'
+    --hostname_selector '!in(dws-login-01,dws-login-02)'
     pbt --perturbation_interval 0.125 --quantile_fraction 0.1
+  run_ids:
+    (Ant-v5):
+      tws47f251117033903704:
+        status: RUNNING
+        submission_id: pbt_batch_size_Ant-v5_7132
+      tws47f2511171634c38a4:
+        status: STOPPED
+        submission_id: pbt_batch_size_Ant-v5_3674
+      tws47f2511171708de6a4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Ant-v5_5708
+    (Hopper-v5):
+      tws47f2511170339db774:
+        status: RUNNING
+        submission_id: pbt_batch_size_Hopper-v5_7132
+      tws47f2511171708558e4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Hopper-v5_5708
+    (Walker2d-v5):
+      tws47f251117033976924:
+        status: RUNNING
+        submission_id: pbt_batch_size_Walker2d-v5_7132
+      tws47f251117170873d54:
+        status: RUNNING
+        submission_id: pbt_batch_size_Walker2d-v5_5708
+    (HalfCheetah-v5):
+      tws47f2511170339a2834:
+        status: RUNNING
+        submission_id: pbt_batch_size_HalfCheetah-v5_7132
+      tws47f25111717085a004:
+        status: RUNNING
+        submission_id: pbt_batch_size_HalfCheetah-v5_5708
+    (Reacher-v5):
+      tws47f25111703397c174:
+        status: RUNNING
+        submission_id: pbt_batch_size_Reacher-v5_7132
+      tws47f251117171689e64:
+        status: RUNNING
+        submission_id: pbt_batch_size_Reacher-v5_5708
+    (Swimmer-v5):
+      tws47f2511170339c7be4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Swimmer-v5_7132
+      tws47f251117171618cf4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Swimmer-v5_5708
+    (Pusher-v5):
+      tws47f25111703471fd54:
+        status: RUNNING
+        submission_id: pbt_batch_size_Pusher-v5_7132
+      tws47f2511171716f61b4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Pusher-v5_5708
+    (InvertedPendulum-v5):
+      tws47f2511170347b25a4:
+        status: RUNNING
+        submission_id: pbt_batch_size_InvertedPendulum-v5_7132
+      tws47f2511171716c6d84:
+        status: RUNNING
+        submission_id: pbt_batch_size_InvertedPendulum-v5_5708
+    (InvertedDoublePendulum-v5):
+      tws47f251117034770ac4:
+        status: RUNNING
+        submission_id: pbt_batch_size_InvertedDoublePendulum-v5_7132
+      tws47f251117171816d94:
+        status: RUNNING
+        submission_id: pbt_batch_size_InvertedDoublePendulum-v5_5708
+    (Humanoid-v5):
+      tws47f25111703470cfd4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Humanoid-v5_7132
+      tws47f251117171725b64:
+        status: RUNNING
+        submission_id: pbt_batch_size_Humanoid-v5_5708
+    (HumanoidStandup-v5):
+      tws47f25111703473f5d4:
+        status: RUNNING
+        submission_id: pbt_batch_size_HumanoidStandup-v5_7132
+      tws47f2511171718c69c4:
+        status: RUNNING
+        submission_id: pbt_batch_size_HumanoidStandup-v5_5708
 pbt_num_envs:
   <ENV_TYPE>:
   - Ant-v5
@@ -39,7 +120,7 @@ pbt_num_envs:
     python experiments/tune_with_scheduler.py --env_type <ENV_TYPE>
     --tune num_envs_per_env_runner --num_samples 1 --tag:core --log_stats learners
     --buffer_length auto --comet  offline+upload@end  --wandb  offline+upload@end    --tag:pbt
-    --hostname_selector '!dws-login-02'
+    --hostname_selector '!in(dws-login-01,dws-login-02)'
     pbt  --perturbation_interval 0.125 --quantile_fraction 0.1
   run_ids:
     (Ant-v5):
@@ -100,7 +181,7 @@ pbt_num_envs_large:
     --minibatch_size 1024 --train_batch_size_per_learner 8192
     --tune num_envs_per_env_runner --num_samples 1 --tag:core --log_stats learners
     --buffer_length auto --comet  offline+upload@end --wandb  offline+upload@end --tag:pbt
-    --hostname_selector '!dws-login-02'
+    --hostname_selector '!in(dws-login-01,dws-login-02)'
     --comment 'Tune (PBT): Batch size with higher batch sizes'
     pbt  --perturbation_interval 0.125 --quantile_fraction 0.1
   # TODO all states are GONE
@@ -155,7 +236,7 @@ pbt_lr_base:
     --tag:core --tag:pbt
     --buffer_length auto
     --comet offline+upload@end --wandb offline+upload@end --log_stats timers+learners
-    --hostname_selector '!dws-login-02'
+    --hostname_selector '!in(dws-login-01,dws-login-02)'
     pbt --perturbation_interval 0.125 --quantile_fraction 0.1
   run_ids:
     (CartPole-v1):
@@ -192,6 +273,6 @@ pbt_lr:
     --tune lr --num_samples 1
     --tag:core --tag:pbt
     --buffer_length auto
-    --comet offline+upload@end --wandb offline+upload@end --log_stats timers+learners
-    --hostname_selector '!dws-login-02'
+    --comet offline+upload@end --wandb offline+upload@end --log_stats learners
+    --hostname_selector '!in(dws-login-01,dws-login-02)'
     pbt --perturbation_interval 0.125 --quantile_fraction 0.1

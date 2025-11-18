@@ -143,36 +143,81 @@ else
     usage
 fi
 
-# Find Python script (first .py file in remaining arguments)
-# Everything before .py file = SBATCH options
-# Everything after .py file = Python arguments
-PYTHON_FILE=""
-PYTHON_FILE_INDEX=0
-SBATCH_OPTIONS=()
-PYTHON_ARGS=()
+# Find -- separator (for Ray start options)
+# Everything before -- = SBATCH options or Python file + args
+# Everything after -- and before .py = Ray start options
+# Everything after .py = Python arguments
+RAY_START_OPTIONS=()
+RAY_SEPARATOR_INDEX=0
 
 for i in $(seq 1 $#); do
-    arg="${!i}"
-    if [[ "${arg}" == *.py ]]; then
-        PYTHON_FILE="${arg}"
-        PYTHON_FILE_INDEX=$i
+    if [ "${!i}" = "--" ]; then
+        RAY_SEPARATOR_INDEX=$i
         break
     fi
 done
 
-if [ -z "${PYTHON_FILE}" ]; then
-    # No Python file - all remaining args are SBATCH options
-    SBATCH_OPTIONS=("$@")
-else
-    # Collect SBATCH options (everything before .py file)
-    for i in $(seq 1 $((PYTHON_FILE_INDEX - 1))); do
+# Parse based on whether -- separator exists
+if [ ${RAY_SEPARATOR_INDEX} -gt 0 ]; then
+    # With -- separator: parse SBATCH options, Ray options, and Python script/args
+    PYTHON_FILE=""
+    PYTHON_FILE_INDEX=0
+    SBATCH_OPTIONS=()
+    PYTHON_ARGS=()
+
+    # Collect SBATCH options (everything before --)
+    for i in $(seq 1 $((RAY_SEPARATOR_INDEX - 1))); do
         SBATCH_OPTIONS+=("${!i}")
     done
 
-    # Collect Python args (everything after .py file)
-    for i in $(seq $((PYTHON_FILE_INDEX + 1)) $#); do
-        PYTHON_ARGS+=("${!i}")
+    # Collect Ray start options and find Python file (everything after --)
+    for i in $(seq $((RAY_SEPARATOR_INDEX + 1)) $#); do
+        arg="${!i}"
+        if [[ "${arg}" == *.py ]] && [ -z "${PYTHON_FILE}" ]; then
+            PYTHON_FILE="${arg}"
+            PYTHON_FILE_INDEX=$i
+            break
+        else
+            RAY_START_OPTIONS+=("${arg}")
+        fi
     done
+
+    # Collect Python args (everything after .py file)
+    if [ -n "${PYTHON_FILE}" ]; then
+        for i in $(seq $((PYTHON_FILE_INDEX + 1)) $#); do
+            PYTHON_ARGS+=("${!i}")
+        done
+    fi
+else
+    # No -- separator: original behavior
+    PYTHON_FILE=""
+    PYTHON_FILE_INDEX=0
+    SBATCH_OPTIONS=()
+    PYTHON_ARGS=()
+
+    for i in $(seq 1 $#); do
+        arg="${!i}"
+        if [[ "${arg}" == *.py ]]; then
+            PYTHON_FILE="${arg}"
+            PYTHON_FILE_INDEX=$i
+            break
+        fi
+    done
+
+    if [ -z "${PYTHON_FILE}" ]; then
+        # No Python file - all remaining args are SBATCH options
+        SBATCH_OPTIONS=("$@")
+    else
+        # Collect SBATCH options (everything before .py file)
+        for i in $(seq 1 $((PYTHON_FILE_INDEX - 1))); do
+            SBATCH_OPTIONS+=("${!i}")
+        done
+
+        # Collect Python args (everything after .py file)
+        for i in $(seq $((PYTHON_FILE_INDEX + 1)) $#); do
+            PYTHON_ARGS+=("${!i}")
+        done
+    fi
 fi
 
 # ============================================================================
@@ -215,6 +260,7 @@ else
     info "Mode:             Worker only (no Python script)"
 fi
 info "SBATCH options:   ${SBATCH_OPTIONS[*]:-none}"
+info "Ray start opts:   ${RAY_START_OPTIONS[*]:-none}"
 info "Workspace:        ${WORKSPACE_DIR}"
 echo "========================================================================"
 
@@ -287,6 +333,12 @@ if [ "${CONNECTION_MODE}" = "job_id" ]; then
     SBATCH_CMD+=("--export=ALL,RAY_HEAD_JOB_ID=${HEAD_JOB_ID}")
 else
     SBATCH_CMD+=("--export=ALL,RAY_ADDRESS=${RAY_ADDRESS}")
+fi
+
+# Export Ray start options if provided
+if [ ${#RAY_START_OPTIONS[@]} -gt 0 ]; then
+    RAY_START_OPTS_STR="${RAY_START_OPTIONS[*]}"
+    SBATCH_CMD[-1]="${SBATCH_CMD[-1]},RAY_START_OPTS=${RAY_START_OPTS_STR}"
 fi
 
 # Add script and arguments

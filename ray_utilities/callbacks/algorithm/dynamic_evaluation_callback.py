@@ -123,7 +123,6 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
                     iterations,
                 )
                 self._evaluation_intervals[step_size] = 1
-        logger.info("Dynamic evaluation intervals: %s", self._evaluation_intervals)
 
     def get_state(self) -> dict[str, Any]:
         return {
@@ -145,7 +144,6 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         self._set_budget_on_algorithm_init(algorithm=algorithm, metrics_logger=metrics_logger, **kwargs)
         assert self._budget
         assert algorithm.config
-        # TODO: When loading checkpoints and original differs from loaded, this is a problem
         if self._original_interval is None:
             self._original_interval = algorithm.config.evaluation_interval
         self._set_evaluation_intervals(algorithm=algorithm)

@@ -15,12 +15,8 @@ from ray.tune.logger import CSVLoggerCallback
 
 from ray_utilities.callbacks.tuner._file_logger_fork_mixin import FileLoggerForkMixin
 from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback
-from ray_utilities.constants import (
-    DEFAULT_EVAL_METRIC,
-    EVAL_METRIC_RETURN_MEAN,
-    NEW_LOG_EVAL_METRIC,
-    RAY_UTILITIES_NEW_LOG_FORMAT,
-)
+from ray_utilities.constants import DEFAULT_EVAL_METRIC
+from ray_utilities.misc import resolve_default_eval_metric
 from ray_utilities.postprocessing import remove_videos
 
 if TYPE_CHECKING:
@@ -115,12 +111,14 @@ class AdvCSVLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, CSVLogge
     def log_trial_result(self, iteration: int, trial: "Trial", result: AnyLogMetricsDict):  # pyright: ignore[reportIncompatibleMethodOverride]
         if self.metric:
             if self.metric is DEFAULT_EVAL_METRIC or self.metric == "DEFAULT_EVAL_METRIC":
-                if os.environ.get(RAY_UTILITIES_NEW_LOG_FORMAT, "1").lower() in ("0", "false", "off"):
-                    self.metric = EVAL_METRIC_RETURN_MEAN
-                else:
-                    self.metric = NEW_LOG_EVAL_METRIC
+                for ema in (True, False):
+                    ema_variant = resolve_default_eval_metric(for_logger=True, use_ema=ema)
+                    if ema_variant not in result:
+                        result[ema_variant] = float("nan")
+                # TODO: hardcoded True, but not that important here, we just have to make sure the key is in the header
+                self.metric = resolve_default_eval_metric(for_logger=True, use_ema=True)
             if self.metric not in result:
-                result[self.metric] = float("nan")  # pyright: ignore[reportGeneralTypeIssues]
+                result[self.metric] = float("nan")
         if trial not in self._trial_csv:
             # Keys are permanently set; remove videos from the first iteration.
             # Therefore also need eval metric in first iteration

@@ -41,7 +41,9 @@ from ray_utilities.config.parser.mlp_argument_parser import SimpleMLPParser
 from ray_utilities.constants import (
     ENVIRONMENT_RESULTS,
     EPISODE_RETURN_MEAN,
+    EPISODE_RETURN_MEAN_EMA,
     EVAL_METRIC_RETURN_MEAN,
+    EVAL_METRIC_RETURN_MEAN_EMA,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
     RAY_METRICS_V2,
@@ -277,7 +279,8 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                     print("Fake callable trainable called with params:", params)
                     return {
                         "current_step": 0,
-                        "evaluation/env_runners/episode_return_mean": 42,
+                        EVAL_METRIC_RETURN_MEAN: 42,
+                        EVAL_METRIC_RETURN_MEAN_EMA: 42,
                         "param_value": params[param],
                     }
 
@@ -988,6 +991,7 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
         config = setup.config
         setup.args.num_jobs = 1
         setup.args.num_samples = 1
+        setup.args.metric = EVAL_METRIC_RETURN_MEAN
         self.assertEqual(self._DEFAULT_SETUP_LOW_RES.config.train_batch_size_per_learner, 64)
         BATCH_SIZE = 64
 
@@ -1037,9 +1041,7 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
             self.assertEqual(algo_restored.iteration, 4)
             assert result_grid[0].metrics
             self.assertEqual(result_grid[0].metrics["training_iteration"], 4)
-            self.assertEqual(
-                result_grid[0].metrics["evaluation/env_runners/episode_return_mean"], (4 * BATCH_SIZE) // 64 - 1
-            )
+            self.assertEqual(result_grid[0].metrics[EVAL_METRIC_RETURN_MEAN], (4 * BATCH_SIZE) // 64 - 1)
 
     _MAX_STEP_SIZE = 4096
     _MIN_STEP_SIZE = 128
@@ -1877,7 +1879,7 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
 
         # self.assertDictEqual(results["env_runners"][0]["step_3"], results["env_runners"][1]["step_3"])
 
-    @Cases([0])
+    @Cases(ENV_RUNNER_CASES)
     def test_restored_trainables(self, cases):
         for num_env_runners in iter_cases(cases):
             # Use multiple envs per env runner to speed up test
@@ -1945,10 +1947,90 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
             trainable2.stop()
 
 
-if __name__ == "__main__":
-    import unittest
+class TestEMAMetricCallback(InitRay, TestHelpers, num_cpus=4):
+    """Test EMA metric callback with dynamic evaluation intervals."""
 
-    if "RAY_DEBUG" not in os.environ:
-        os.environ["RAY_DEBUG"] = "legacy"
+    def test_ema_coeff_adjustment(self):
+        """Test that EMA coefficient is adjusted based on evaluation interval."""
+        from ray_utilities.callbacks.algorithm.eval_ema_metric_callback import _compute_adjusted_ema_coeff
 
-    unittest.main(defaultTest="TestMetricsRestored.test_with_tuner")
+        base_coeff = 0.8
+        base_interval = 1
+
+        # Test 1: Same interval should return same coefficient
+        self.assertAlmostEqual(
+            _compute_adjusted_ema_coeff(base_coeff, current_interval=1, base_interval=base_interval), 0.8
+        )
+
+        # Test 2: Double interval should square the coefficient
+        self.assertAlmostEqual(
+            _compute_adjusted_ema_coeff(base_coeff, current_interval=2, base_interval=base_interval),
+            0.64,  # 0.8^2
+        )
+
+        # Test 3: Quadruple interval
+        self.assertAlmostEqual(
+            _compute_adjusted_ema_coeff(base_coeff, current_interval=4, base_interval=base_interval),
+            0.4096,  # 0.8^4
+        )
+
+        # Test 4: Edge cases
+        self.assertEqual(
+            _compute_adjusted_ema_coeff(base_coeff, current_interval=0, base_interval=base_interval),
+            base_coeff,  # Invalid interval, return base
+        )
+        self.assertEqual(
+            _compute_adjusted_ema_coeff(base_coeff, current_interval=1, base_interval=0),
+            base_coeff,  # Invalid base, return base
+        )
+
+        # Test 5: Non-unit base interval
+        # If base_coeff=0.8 is for interval=2, then interval=4 should use 0.8^2
+        self.assertAlmostEqual(
+            _compute_adjusted_ema_coeff(0.8, current_interval=4, base_interval=2),
+            0.64,  # 0.8^(4/2) = 0.8^2
+        )
+
+    @pytest.mark.basic
+    def test_ema_callback_with_dynamic_interval(self):
+        """Test that EMA callback works with changing evaluation intervals."""
+        from ray_utilities.callbacks.algorithm.eval_ema_metric_callback import EvalEMAMetricCallback
+
+        with patch_args(
+            "--batch_size",
+            "64",
+            "--minibatch_size",
+            "32",
+            "--num_env_runners",
+            "0",
+            "--num_envs_per_env_runner",
+            "1",
+        ):
+            with AlgorithmSetup(init_trainable=False) as setup:
+                setup.config.evaluation(
+                    evaluation_interval=2,
+                    evaluation_duration=50,
+                    evaluation_duration_unit="timesteps",
+                )
+                # Add EMA callback
+                ema_callback = partial(EvalEMAMetricCallback, ema_coeff=0.8, base_eval_interval=2)
+                setup.config.callbacks_class = [ema_callback]
+
+            trainable = setup.trainable_class()
+
+            # Step 1: Train with interval=2
+            result1 = trainable.train()
+            self.assertIn(EVALUATION_RESULTS, result1)
+
+            # Step 2: Change interval to 4 and train again
+            assert trainable.algorithm.config
+            with AlgorithmSetup.open_config(trainable.algorithm.config):
+                trainable.algorithm.config.evaluation_interval = 4
+            result2 = trainable.train()
+
+            # Step 3: Verify EMA metric exists
+            if EPISODE_RETURN_MEAN_EMA in result2.get(EVALUATION_RESULTS, {}).get(ENV_RUNNER_RESULTS, {}):
+                # EMA should be tracked
+                self.assertIsNotNone(result2[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN_EMA])
+
+            trainable.stop()

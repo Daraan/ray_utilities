@@ -5,13 +5,14 @@ from __future__ import annotations
 import inspect
 import logging
 from ast import literal_eval
-from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Optional, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, Callable, Optional, TypeAlias, TypeVar
 
 from ray.tune.schedulers import PopulationBasedTraining
 from tap import to_tap_class
 
+from ray_utilities.config.parser._common import GoalParser
 from ray_utilities.config.parser.subcommand import SubcommandMixin
-from ray_utilities.constants import CURRENT_STEP, DEFAULT_EVAL_METRIC, EVAL_METRIC_RETURN_MEAN
+from ray_utilities.constants import CURRENT_STEP, DEFAULT_EVAL_METRIC
 from ray_utilities.tune.scheduler.top_pbt_scheduler import TopPBTTrialScheduler
 
 if TYPE_CHECKING:
@@ -43,7 +44,7 @@ def _to_hyperparam_mutations(string: str) -> _HPMutationsType:
         ) from e
 
 
-class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining), SubcommandMixin[ParentT]):
+class PopulationBasedTrainingParser(GoalParser, to_tap_class(PopulationBasedTraining), SubcommandMixin[ParentT]):
     """
     Attributes:
         time_attr: The training result attr to use for comparing time.
@@ -108,10 +109,6 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining), Subco
             https://arxiv.org/pdf/1711.09846.pdf.
     """
 
-    mode: Literal["min", "max"] = "max"
-    """One of {min, max}.Determines whether objective is minimizing or maximizing the metric attribute."""
-    metric: str = EVAL_METRIC_RETURN_MEAN
-    """The metric to be optimized as flat key, e.g. 'evaluation/env_runners/episode_return_mean'."""
     hyperparam_mutations: Optional[_HPMutationsType] = None
     require_attrs: NotAModelParameter[bool] = True
     synch: NotAModelParameter[bool] = True
@@ -180,7 +177,8 @@ class PopulationBasedTrainingParser(to_tap_class(PopulationBasedTraining), Subco
                     action.default = new_default
                     break
 
-        for var, val in vars(PopulationBasedTrainingParser).items():
+        # HACK: as noted above, use this class and parent to override defaults
+        for var, val in (vars(GoalParser) | vars(PopulationBasedTrainingParser)).items():
             # On python < 3.11 Sentinel passes callable() check
             if val is DEFAULT_EVAL_METRIC or not (
                 var.startswith("_") or callable(val) or isinstance(val, (staticmethod, classmethod, property))

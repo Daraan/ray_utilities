@@ -1883,7 +1883,7 @@ class ExperimentSetupBase(
         else:
             for arg, value in vars(new.args).items():
                 setattr(new.parser, arg, value)
-            new._args_backup = data["args"]
+            new._args_backup = data["args"]  # pyright: ignore[reportAttributeAccessIssue]
             new.args = cast("ParserType_co", new.parser)
         # Need to restore command subparser
         try:

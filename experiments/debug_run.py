@@ -54,7 +54,7 @@ if __name__ == "__main__":
                 config_files=["experiments/pbt.cfg", "experiments/default.cfg", "experiments/models/mlp/default.cfg"],
                 # TODO: Trials are reused, trial name might be wrong then
             )
-            assert setup.args.tune
+            assert setup.args.tune, "Use --tune ... when using PBT setup"
             hyperparameters = {k: HYPERPARAMETERS[k] for k in setup.args.tune}
             hyperparameters = update_hyperparameters(
                 setup.param_space,

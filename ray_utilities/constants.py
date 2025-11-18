@@ -134,6 +134,16 @@ TRAINING = "training"
 """For the rllib layout use ENV_RUNNER_RESULTS instead of "training"."""
 
 # Evaluation and Training Metric Keys
+EPISODE_RETURN_MEAN_EMA = EPISODE_RETURN_MEAN + "_ema"
+"""
+Key for exponential moving average of episode return mean metric as added by
+:class:`EvalEMAMetricCallback`.
+
+See Also:
+    :const:`ray.rllib.utils.metrics.EPISODE_RETURN_MEAN`
+    :const:`EVAL_METRIC_RETURN_MEAN_EMA`
+"""
+
 EVAL_METRIC_RETURN_MEAN = EVALUATION_RESULTS + "/" + ENV_RUNNER_RESULTS + "/" + EPISODE_RETURN_MEAN
 """str: Standard path for evaluation episode return mean metric.
 
@@ -141,7 +151,18 @@ This metric key path follows Ray RLlib's hierarchical result structure:
 ``evaluation/env_runner_results/episode_return_mean``
 """
 
+EVAL_METRIC_RETURN_MEAN_EMA = EVAL_METRIC_RETURN_MEAN + "_ema"
+"""
+str: Standard path for evaluation episode return mean exponential moving average metric.
+
+Note:
+    This metrics must be logged separately in the Trainable.
+"""
+
 NEW_LOG_EVAL_METRIC = EVALUATION_RESULTS + "/" + EPISODE_RETURN_MEAN
+"""Metric key used in loggers when new log format is used."""
+
+NEW_LOG_EVAL_METRIC_EMA = NEW_LOG_EVAL_METRIC + "_ema"
 """Metric key used in loggers when new log format is used."""
 
 DISC_EVAL_METRIC_RETURN_MEAN = EVALUATION_RESULTS + "/discrete/" + ENV_RUNNER_RESULTS + "/" + EPISODE_RETURN_MEAN
@@ -151,7 +172,20 @@ Used when discrete evaluation is enabled alongside standard evaluation:
 ``evaluation/discrete/env_runner_results/episode_return_mean``
 """
 
+DISC_EVAL_METRIC_RETURN_MEAN_EMA = DISC_EVAL_METRIC_RETURN_MEAN + "_ema"
+"""str: Path for the exponentially moving average (EMA) of discrete evaluation episode return mean.
+
+Used to log the EMA of the discrete evaluation return mean metric, providing a smoothed version of
+:data:`DISC_EVAL_METRIC_RETURN_MEAN`. This is useful for tracking performance trends in discrete evaluation
+scenarios where episodic returns may be noisy.
+
+Metric path: ``evaluation/discrete/env_runner_results/episode_return_mean_ema``
+"""
+
 NEW_LOG_DISC_EVAL_METRIC = EVALUATION_RESULTS + "/discrete/" + EPISODE_RETURN_MEAN
+"""Metric key used in loggers when new log format is used and discrete evaluation is enabled."""
+
+NEW_LOG_DISC_EVAL_METRIC_EMA = NEW_LOG_DISC_EVAL_METRIC + "_ema"
 """Metric key used in loggers when new log format is used and discrete evaluation is enabled."""
 
 TRAIN_METRIC_RETURN_MEAN = ENV_RUNNER_RESULTS + "/" + EPISODE_RETURN_MEAN
@@ -215,6 +249,7 @@ DISCRETE_EVALUATION_WORST_VIDEO = "/".join(DISCRETE_EVALUATION_WORST_VIDEO_KEYS)
 # region: new layout for log metrics
 
 # NEW variants: omit ENV_RUNNER_RESULTS for evaluation, substitute ENV_RUNNER_RESULTS with "training" for training
+
 EVALUATION_BEST_VIDEO_KEYS_NEW = (EVALUATION_RESULTS, EPISODE_BEST_VIDEO)
 EVALUATION_WORST_VIDEO_KEYS_NEW = (EVALUATION_RESULTS, EPISODE_WORST_VIDEO)
 DISCRETE_EVALUATION_BEST_VIDEO_KEYS_NEW = (EVALUATION_RESULTS, "discrete", EPISODE_BEST_VIDEO)
@@ -247,7 +282,6 @@ DEFAULT_VIDEO_DICT_KEYS_FLATTENED_NEW = (
 
 Evaluation keys omit ENV_RUNNER_RESULTS, training keys use "training" instead.
 """
-
 # endregion
 
 DEFAULT_VIDEO_DICT_KEYS = (
