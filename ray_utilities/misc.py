@@ -42,9 +42,11 @@ from ray_utilities.constants import (
     CURRENT_STEP,
     DEFAULT_EVAL_METRIC,
     EVAL_METRIC_RETURN_MEAN,
+    EVAL_METRIC_RETURN_MEAN_EMA,
     FORK_DATA_KEYS,
     FORK_FROM_CSV_KEY_MAPPING,
     NEW_LOG_EVAL_METRIC,
+    NEW_LOG_EVAL_METRIC_EMA,
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
     OPTIONAL_FORK_DATA_KEYS,
     RAY_UTILITIES_INITIALIZATION_TIMESTAMP,
@@ -716,7 +718,9 @@ def new_log_format_used() -> bool:
     return _new_log_format_used
 
 
-def resolve_default_eval_metric(eval_metric: str | DEFAULT_EVAL_METRIC | None = None) -> str:
+def resolve_default_eval_metric(
+    eval_metric: str | DEFAULT_EVAL_METRIC | None = None, *, for_logger: bool, use_ema: bool = True
+) -> str:
     """Resolve the default evaluation metric based on log format.
 
     This function determines the evaluation metric key to use
@@ -727,7 +731,12 @@ def resolve_default_eval_metric(eval_metric: str | DEFAULT_EVAL_METRIC | None = 
     the log format.
 
     Args:
+        for_logger: (Required keyword) Whether or not this metric is used for a logger.
+            If True will return the metric depending on the RAY_UTILITIES_NEW_LOG_FORMAT env setting.
         eval_metric: The evaluation metric key to resolve, or ``None`` to use the default.
+        use_ema: If ``True``, use the EMA (Exponential Moving Average) version of the metric.
+            Note: This is the adjusted metric inserted by the :class:`EvalEMAMetricCallback` and
+            not a default Ray RLlib metric.
 
     Returns:
         The resolved evaluation metric key as a string.
@@ -739,9 +748,9 @@ def resolve_default_eval_metric(eval_metric: str | DEFAULT_EVAL_METRIC | None = 
     """
     if eval_metric is not DEFAULT_EVAL_METRIC and eval_metric is not None:
         return eval_metric
-    if new_log_format_used():
-        return NEW_LOG_EVAL_METRIC
-    return EVAL_METRIC_RETURN_MEAN
+    if for_logger and new_log_format_used():
+        return NEW_LOG_EVAL_METRIC_EMA if use_ema else NEW_LOG_EVAL_METRIC
+    return EVAL_METRIC_RETURN_MEAN_EMA if use_ema else EVAL_METRIC_RETURN_MEAN
 
 
 def get_value_by_path(tree_dict: Mapping[Any, Any], path: tuple[Any, ...]) -> Any:

@@ -23,8 +23,8 @@ from typing import TYPE_CHECKING, Any, Collection, Generic, Optional, Sequence, 
 
 from typing_extensions import Self, TypeIs, TypeVar
 
+from ray_utilities.config.parser._common import GoalParser
 from ray_utilities.config.parser.subcommand import SubcommandMixin
-from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN
 
 try:
     import argcomplete
@@ -637,14 +637,7 @@ class SubcommandHandlerBase(Tap, Generic[Subparsers]):
         return delegator
 
 
-class _GoalParser(Tap):
-    mode: Literal["min", "max"] = "max"
-    """One of {min, max}.Determines whether objective is minimizing or maximizing the metric attribute."""
-    metric: str = EVAL_METRIC_RETURN_MEAN
-    """The metric to be optimized as flat key, e.g. 'evaluation/env_runners/episode_return_mean'."""
-
-
-class _DefaultSetupArgumentParser(_GoalParser, Tap):
+class _DefaultSetupArgumentParser(GoalParser, Tap):
     agent_type: AlwaysRestore[str] = "mlp"
     """Agent Architecture"""
 
@@ -1192,7 +1185,7 @@ class DefaultExtraArgs(Tap):
 
 
 class CheckpointConfigArgumentParser(Tap):
-    checkpoint_frequency: int | None = 65_536  # 8192*8
+    checkpoint_frequency: int | None = 8192 * 9  # 8192*9, half of standard perturbation interval
     """
     Frequency of checkpoints in steps (or iterations, see checkpoint_frequency_unit)
     0 or None for no checkpointing
@@ -1399,7 +1392,7 @@ def _parse_tune_choices(
     return value
 
 
-class OptunaArgumentParser(_GoalParser, Tap):
+class OptunaArgumentParser(GoalParser, Tap):
     optimize_config: NotAModelParameter[NeverRestore[bool]] = (
         False  # legacy argument name; possible replace with --tune later
     )

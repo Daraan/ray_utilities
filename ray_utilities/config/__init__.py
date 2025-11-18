@@ -22,6 +22,7 @@ from ray_utilities.callbacks.algorithm.seeded_env_callback import (
 from .parser.default_argument_parser import DefaultArgumentParser
 
 if TYPE_CHECKING:
+    from functools import partial
     from typing import Any, Callable
 
     from ray.rllib.algorithms import AlgorithmConfig
@@ -76,7 +77,10 @@ def _note_removal(
 def add_callbacks_to_config(
     config: AlgorithmConfig,
     callbacks: Optional[
-        type[RLlibCallback] | list[type[RLlibCallback]] | dict[str, Callable[..., Any] | list[Callable[..., Any]]]
+        type[RLlibCallback]
+        | partial[RLlibCallback]
+        | Sequence[type[RLlibCallback] | partial[RLlibCallback]]
+        | dict[str, Callable[..., Any] | list[Callable[..., Any]]]
     ] = None,
     *,
     remove_existing: Callable[[Any], bool] = lambda cb: False,  # noqa: ARG005

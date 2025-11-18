@@ -184,6 +184,13 @@ else
     RUN_PYTHON_SCRIPT=true
 fi
 
+# Parse Ray start options from environment
+RAY_START_OPTIONS=()
+if [ -n "${RAY_START_OPTS:-}" ]; then
+    # Convert space-separated string to array
+    IFS=' ' read -r -a RAY_START_OPTIONS <<< "${RAY_START_OPTS}"
+fi
+
 # ============================================================================
 # Load Ray Head Connection Info
 # ============================================================================
@@ -328,6 +335,7 @@ echo "========================================================================"
 echo "Ray Configuration"
 echo "  Connecting to:  ${RAY_ADDRESS}"
 echo "  Object store:   ${RAY_OBJECT_STORE}GB"
+echo "  Extra options:  ${RAY_START_OPTIONS[*]:-none}"
 echo "========================================================================"
 
 mkdir -p "${OUTPUT_DIR}" "${LOG_DIR}" "${RAY_TMPDIR}"
@@ -405,6 +413,7 @@ if [ "${RUN_PYTHON_SCRIPT}" = "false" ]; then
         --num-gpus="${SLURM_GPUS_PER_TASK:-0}" \
         --temp-dir="${RAY_TMPDIR}" \
         --labels="hostname=$(hostname -s),head=false,slurmnode=true" \
+        "${RAY_START_OPTIONS[@]}" \
         --block; then
         echo "ERROR: Failed to connect to Ray cluster"
         if [ "${CONNECTION_MODE}" = "job_id" ]; then
@@ -423,7 +432,8 @@ else
         --object-store-memory="${RAY_OBJECT_STORE}000000000" \
         --num-cpus="${SLURM_CPUS_PER_TASK}" \
         --num-gpus="${SLURM_GPUS_PER_TASK:-0}" \
-        --temp-dir="${RAY_TMPDIR}"; then
+        --temp-dir="${RAY_TMPDIR}" \
+        "${RAY_START_OPTIONS[@]}"; then
         echo "ERROR: Failed to connect to Ray cluster"
         if [ "${CONNECTION_MODE}" = "job_id" ]; then
             echo "Check that head node (job ${RAY_HEAD_JOB_ID}) is running and accessible"

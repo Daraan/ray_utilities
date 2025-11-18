@@ -44,6 +44,9 @@ class BaseEnvRunnersResultsDict(TypedDict):
     episode_len_mean: NotRequired[float]
     """Mean length of episodes in the current batch"""
 
+    episode_return_mean_ema: NotRequired[float]
+    """Exponentially moving average of episode return mean"""
+
 
 class VideoTypes:
     """Common video type definitions used across the type hierarchy."""

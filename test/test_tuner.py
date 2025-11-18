@@ -52,7 +52,9 @@ from ray_utilities.callbacks.tuner.metric_checkpointer import StepCheckpointer  
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.constants import (
     CURRENT_STEP,
+    EPISODE_RETURN_MEAN_EMA,
     EVAL_METRIC_RETURN_MEAN,
+    EVAL_METRIC_RETURN_MEAN_EMA,
     NUM_ENV_STEPS_PASSED_TO_LEARNER,
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
 )
@@ -118,9 +120,9 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             self.assertIsInstance(tuner._local_tuner._tune_config.search_alg, OptunaSearch)
             # verify metrics key
             assert tuner._local_tuner._tune_config.search_alg
-            self.assertEqual(
+            self.assertIn(
                 tuner._local_tuner._tune_config.search_alg.metric,
-                EVAL_METRIC_RETURN_MEAN,
+                (EVAL_METRIC_RETURN_MEAN, EVAL_METRIC_RETURN_MEAN_EMA),
             )
         with patch_args("--num_samples", "1"):
             setup2 = AlgorithmSetup()
@@ -484,10 +486,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
         )
 
         # Now restore from checkpoint
-        with patch_args(
-            "--restore_path",
-            str(experiment_path),
-        ):
+        with patch_args("--restore_path", str(experiment_path)):
             setup2 = MLPSetup()
         del os.environ["RAY_UTILITIES_RESTORED"]
         self.maxDiff = None
@@ -518,7 +517,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 f"Trial should complete 10 iterations, got {result.metrics[TRAINING_ITERATION]}",
             )
             self.assertEqual(result.metrics[CURRENT_STEP], ITERATIONS * batch_size)
-        self.assertIsNotNone(results2.get_best_result())
+        self.assertIsNotNone(results2.get_best_result(filter_nan_and_inf=False))
 
         self._setup_backup_mock.start()
 
@@ -904,7 +903,15 @@ class TestOptunaTuner(TestHelpers, DisableLoggers):
         """
         MAX_STEP = 15
         with patch_args(
-            "--optimize_config", "--pruner_warmup_steps", 3, "--num_samples", "15", "--num_jobs", "4", "--seed", "42"
+            "--optimize_config",
+            "--pruner_warmup_steps",
+            3,
+            "--num_samples",
+            "15",
+            "--num_jobs",
+            "4",
+            "--seed",
+            "42",
         ):
 
             def trainable(params: dict[str, Any]) -> TrainableReturnData:
@@ -913,13 +920,23 @@ class TestOptunaTuner(TestHelpers, DisableLoggers):
                     tune.report(
                         {
                             "current_step": i,
-                            EVALUATION_RESULTS: {ENV_RUNNER_RESULTS: {EPISODE_RETURN_MEAN: params["fake_result"]}},
+                            EVALUATION_RESULTS: {
+                                ENV_RUNNER_RESULTS: {
+                                    EPISODE_RETURN_MEAN: params["fake_result"],
+                                    EPISODE_RETURN_MEAN_EMA: params["fake_result"],
+                                }
+                            },
                         }
                     )
                 return {
                     "done": True,
                     "current_step": MAX_STEP,
-                    EVALUATION_RESULTS: {ENV_RUNNER_RESULTS: {EPISODE_RETURN_MEAN: params["fake_result"]}},
+                    EVALUATION_RESULTS: {
+                        ENV_RUNNER_RESULTS: {
+                            EPISODE_RETURN_MEAN: params["fake_result"],
+                            EPISODE_RETURN_MEAN_EMA: params["fake_result"],
+                        }
+                    },
                 }
 
             class RandomParamsSetup(AlgorithmSetup):
@@ -1363,6 +1380,9 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
                 result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN] = fake_results[
                     self.algorithm_config.train_batch_size_per_learner
                 ][self._current_step]
+                result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN_EMA] = result[EVALUATION_RESULTS][
+                    ENV_RUNNER_RESULTS
+                ][EPISODE_RETURN_MEAN]
                 result["_checking_class_"] = "CheckTrainableForTop"  # pyright: ignore[reportGeneralTypeIssues]
                 logger.info(
                     "Batch size: %s, step %s, result: %s",

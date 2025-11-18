@@ -28,6 +28,7 @@ import sys
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, cast
 
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
+from ray_utilities.callbacks.algorithm.eval_ema_metric_callback import make_eval_ema_metrics_callback
 from ray_utilities.callbacks.algorithm.model_config_saver_callback import save_model_config_and_architecture
 from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.warn import (
@@ -368,6 +369,9 @@ def create_algorithm_config(
     add_callbacks_to_config(config, on_algorithm_init=save_model_config_and_architecture)
     # add_callbacks_to_config(config, on_sample_end=reset_episode_metrics_each_iteration)
 
+    # Add a callback to compute an exponential moving average (EMA) of evaluation metrics.
+    # This helps smooth out fluctuations in evaluation results and provides a more stable metric for monitoring performance.
+    add_callbacks_to_config(config, make_eval_ema_metrics_callback(ema_coeff=0.8))
     # region Stateful callbacks
     callbacks: list[type[DefaultCallbacks]] = []
     base_callbacks = None

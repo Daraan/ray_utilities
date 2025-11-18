@@ -117,6 +117,7 @@ from ray_utilities.constants import (
     DEFAULT_VIDEO_DICT_KEYS,
     ENVIRONMENT_RESULTS,
     EPISODE_BEST_VIDEO,
+    EPISODE_RETURN_MEAN_EMA,
     EPISODE_WORST_VIDEO,
     SEED,
     SEEDS,
@@ -570,11 +571,18 @@ def create_log_metrics(
 
         if "discrete" in evaluation_results:
             disc_eval_mean = evaluation_results["discrete"][ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN]
+            disc_eval_ema = evaluation_results["discrete"][ENV_RUNNER_RESULTS].get(
+                EPISODE_RETURN_MEAN_EMA, float("nan")
+            )
         else:
             disc_eval_mean = float("nan")
+            disc_eval_ema = float("nan")
+        eval_ema = evaluation_results[ENV_RUNNER_RESULTS].get(EPISODE_RETURN_MEAN_EMA, float("nan"))
     else:
         eval_mean = float("nan")
+        eval_ema = float("nan")
         disc_eval_mean = float("nan")
+        disc_eval_ema = float("nan")
     environment_results = result[ENV_RUNNER_RESULTS].get(ENVIRONMENT_RESULTS, {})
     if environment_results and SEEDS in environment_results:
         s_seq: Deque = environment_results[SEEDS]["seed_sequence"]
@@ -595,9 +603,7 @@ def create_log_metrics(
             NUM_ENV_STEPS_SAMPLED_LIFETIME: result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_SAMPLED_LIFETIME],
         },
         EVALUATION_RESULTS: {
-            ENV_RUNNER_RESULTS: {
-                EPISODE_RETURN_MEAN: eval_mean,
-            },
+            ENV_RUNNER_RESULTS: {EPISODE_RETURN_MEAN: eval_mean, EPISODE_RETURN_MEAN_EMA: eval_ema},
         },
         "training_iteration": result["training_iteration"],
         "done": result["done"],
@@ -617,9 +623,7 @@ def create_log_metrics(
 
     if discrete_eval:
         metrics[EVALUATION_RESULTS]["discrete"] = {
-            ENV_RUNNER_RESULTS: {
-                EPISODE_RETURN_MEAN: disc_eval_mean,
-            },
+            ENV_RUNNER_RESULTS: {EPISODE_RETURN_MEAN: disc_eval_mean, EPISODE_RETURN_MEAN_EMA: disc_eval_ema},
         }
 
     if EVALUATION_RESULTS in result:
