@@ -326,6 +326,11 @@ def create_algorithm_config(
             use_kl_loss=False,
             use_gae=True,  # Must be true to use "truncate_episodes"
         )
+    if model_config is not None and "vf_share_layers" not in model_config:
+        # Workaround for https://github.com/ray-project/ray/issues/58715 avoid no sync mishaps
+        from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig  # noqa: PLC0415
+
+        model_config["vf_share_layers"] = DefaultModelConfig.vf_share_layers
     # Create a single agent RL module spec.
     # Note: legacy keys are updated below
     module_spec = RLModuleSpec(

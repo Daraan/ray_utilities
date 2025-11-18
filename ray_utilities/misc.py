@@ -219,9 +219,6 @@ def trial_name_creator(trial: Trial) -> str:
         >>> trial_name_creator(trial)
         'PPO_CartPole-v1_ppo_2023-01-01_12:00_id=abc123_456'
     """
-    start_time = datetime.datetime.fromtimestamp(
-        trial.run_metadata.start_time or RAY_UTILITIES_INITIALIZATION_TIMESTAMP
-    )
     module = trial.config.get("module", None)
     if module is None and "cli_args" in trial.config:
         module = trial.config["cli_args"]["agent_type"]
@@ -244,7 +241,7 @@ def trial_name_creator(trial: Trial) -> str:
         experiment_tag = ""
     fields = [
         cast("str", trial.config["env"]).rstrip("v0123456789").rstrip("_-"),  # remove version suffix for brevity
-        trial.trainable_name,
+        trainable_name,
         module,
         "id=" + trial.trial_id,
         experiment_tag,
