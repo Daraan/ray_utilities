@@ -1941,7 +1941,16 @@ class SetupLowRes(TestHelpers):
         super().setUpClass()
         # need ray when EnvRunnerGroups are created
         if not ray.is_initialized():
-            ray.init(num_cpus=1, log_to_driver=False, include_dashboard=False, object_store_memory=1024**3 // 4)
+            try:
+                ray.init(num_cpus=1, log_to_driver=False, include_dashboard=False, object_store_memory=1024**3 // 4)
+            except Exception as e:
+                if "connecting to an existing cluster" in str(e) and ALLOW_TEST_WITH_ACTIVE_CLUSTER:
+                    ray.init(
+                        ignore_reinit_error=True,
+                        runtime_env=get_runtime_env(),
+                    )
+                else:
+                    raise
 
     @classmethod
     def tearDownClass(cls):

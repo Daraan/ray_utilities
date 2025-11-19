@@ -6,8 +6,12 @@ global_pattern_1: >
   --tag:core --tag:pbt
   --buffer_length auto
   --comet offline+upload@end --wandb offline+upload@end --log_stats learners
-  --hostname_selector '!in(dws-login-01,dws-login-02)'
+  --hostname_selector '!in(dws-login-01,dws-login-02,dws-10)'
   pbt --perturbation_interval 0.125 --quantile_fraction 0.1
+submit_pattern: ray job submit --working-dir "." --entrypoint-memory 3000000000 \
+  --entrypoint-num-cpus 1 --entrypoint-resources '{"persistent_node":1}' \
+  --submission-id <SUBMISSION_ID> -- \
+  <ENTRYPOINT:>
 # --- Envs --- #
 <mujoco_envs>:
 - Ant-v5
@@ -41,7 +45,7 @@ pbt_batch_size:
   entrypoint_resources:
     # custom resource to not schedule on SLURM nodes that time out too early
     persistent_node: 1
-  run_ids:
+  run_ids_no_pbt:  # pnly the later ones are no pbt. # TODO Filter
     (Ant-v5):
       tws47f251117033903704:
         status: RUNNING
@@ -152,10 +156,50 @@ pbt_batch_size:
       tws47f2511171718c69c4:
         status: RUNNING
         submission_id: pbt_batch_size_HumanoidStandup-v5_5708
-# ---
       tws47f25111902128e204:
         status: RUNNING
         submission_id: pbt_batch_size_HumanoidStandup-v5_4359
+  run_ids:
+    (Ant-v5):
+      tws47f2511200307a0794:
+        status: RUNNING
+        submission_id: pbt_batch_size_Ant-v5_4463
+    (Hopper-v5):
+      tws47f251120030841d44:
+        status: RUNNING
+        submission_id: pbt_batch_size_Hopper-v5_4463
+    (Walker2d-v5):
+      tws47f2511200308c82a4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Walker2d-v5_4463
+    (HalfCheetah-v5):
+      tws47f25112003086ce24:
+        status: RUNNING
+        submission_id: pbt_batch_size_HalfCheetah-v5_4463
+    (Reacher-v5):
+      tws47f2511200308e27f4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Reacher-v5_4463
+    (Swimmer-v5):
+      tws47f2511200308ecad4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Swimmer-v5_4463
+    (Pusher-v5):
+      tws47f2511200309d9784:
+        status: FAILED
+        submission_id: pbt_batch_size_Pusher-v5_4463
+    (InvertedDoublePendulum-v5):
+      tws47f25112003109d8f4:
+        status: RUNNING
+        submission_id: pbt_batch_size_InvertedDoublePendulum-v5_4463
+    (Humanoid-v5):
+      tws47f2511200310a24e4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Humanoid-v5_4463
+    (HumanoidStandup-v5):
+      tws47f25112003104dfd4:
+        status: RUNNING
+        submission_id: pbt_batch_size_HumanoidStandup-v5_4463
 pbt_num_envs:
   # This is a comment
   comment: small minibatch_size=256 and train_batch_size=2048
@@ -265,7 +309,7 @@ pbt_lr_base:
     substitutions:
       <TUNE_PARAM>: lr
       <ENV_TYPE>: <basic_envs>
-  run_ids:
+  run_ids_no_pbt:
     (CartPole-v1):
       tws47f25111703370cb24:
         status: RUNNING
@@ -288,7 +332,7 @@ pbt_lr_base:
         status: RUNNING
         submission_id: pbt_lr_base_LunarLander-v3_8731
 pbt_lr:
-  comment: random lr between 5e-5 and 5e-1
+  comment: spread lr
   entrypoint_resources:
     persistent_node: 1
   entrypoint_pattern:
@@ -297,6 +341,52 @@ pbt_lr:
       <TUNE_PARAM>: lr
       <ENV_TYPE>: <mujoco_envs>
   run_ids:
+    (Ant-v5):
+      tws47f2511200247226f4:
+        status: RUNNING
+        submission_id: pbt_lr_failed_Ant-v5_3207
+    (Hopper-v5):
+      tws47f251120022436154:
+        status: RUNNING
+        submission_id: pbt_lr_Hopper-v5_1820
+    (Walker2d-v5):
+      tws47f2511200247e3ba4:
+        status: RUNNING
+        submission_id: pbt_lr_failed_Walker2d-v5_3207
+    (HalfCheetah-v5):
+      tws47f251120022453e24:
+        status: RUNNING
+        submission_id: pbt_lr_HalfCheetah-v5_1820
+    (Swimmer-v5):
+      tws47f2511200224a6854:
+        status: RUNNING
+        submission_id: pbt_lr_Swimmer-v5_1820
+    (Reacher-v5):
+      tws47f2511200224a45d4:
+        status: RUNNING
+        submission_id: pbt_lr_Reacher-v5_1820
+    (Pusher-v5):
+      tws47f2511200224663c4:
+        status: RUNNING
+        submission_id: pbt_lr_Pusher-v5_1820
+    (InvertedPendulum-v5):
+      tws47f25112002245d9b4:
+        status: RUNNING
+        submission_id: pbt_lr_InvertedPendulum-v5_1820
+    (InvertedDoublePendulum-v5):
+      tws47f251120022491774:
+        status: RUNNING
+        submission_id: pbt_lr_InvertedDoublePendulum-v5_1820
+    (Humanoid-v5):
+      tws47f2511200224333a4:
+        status: RUNNING
+        submission_id: pbt_lr_Humanoid-v5_1820
+    (HumanoidStandup-v5):
+      tws47f2511200224536b4:
+        status: RUNNING
+        submission_id: pbt_lr_HumanoidStandup-v5_1820
+
+  run_ids_no_pbt:
     (Ant-v5):
       tws47f251119033847804:
         status: RUNNING

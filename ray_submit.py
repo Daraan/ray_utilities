@@ -384,13 +384,22 @@ if __name__ == "__main__":
                 CLIENT.stop_job(job_id)
             sys.exit(1)
         print("Performing only monitoring of job statuses...")
-        while jobs_tracked:
-            for job_id in jobs_tracked.keys():
-                job_status = CLIENT.get_job_status(job_id)
-                current_time = time.strftime("%Y-%m-%d %H:%M:%S")
-                print(f"[{current_time}] Job {job_id} status: {job_status}.")
-                if job_status in JOB_END_STATES:
-                    if run_id := task_run_ids.get(job_id):
-                        write_back(args.group, job_id, {run_id: {"status": job_status.name, "submission_id": job_id}})
-                    del jobs_tracked[job_id]
-            time.sleep(180)
+        try:
+            jobs_tracked_left = jobs_tracked.copy()
+            while jobs_tracked_left:
+                jobs_to_delete = []
+                for job_id in jobs_tracked.keys():
+                    job_status = CLIENT.get_job_status(job_id)
+                    current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+                    print(f"[{current_time}] Job {job_id} status: {job_status}.")
+                    if job_status in JOB_END_STATES:
+                        if run_id := task_run_ids.get(job_id):
+                            write_back(args.group, job_id, {run_id: {"status": job_status.name, "submission_id": job_id}})
+                        jobs_to_delete.append(job_id)
+                for job_id in jobs_to_delete:
+                    jobs_tracked_left.pop(job_id, None)
+                time.sleep(180)
+        except KeyboardInterrupt:
+            print("\n\n\n\n########################## Second Keyboard Interrupt Detected #########################\n\n\n\n")
+            print("Exiting monitoring.")
+            sys.exit(1)

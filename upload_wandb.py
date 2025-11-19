@@ -1,6 +1,8 @@
 #!/usr/bin/bash
 # PYTHON_ARGCOMPLETE_OK
 
+# ruff: noqa: T201
+
 from __future__ import annotations
 
 import argparse

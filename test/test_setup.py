@@ -1849,8 +1849,8 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
         config = PPOConfig().environment(env="CartPole-v1")
         config.debugging(seed=11)
         config.environment(env="CartPole-v1")
-        global ENV_STEPS_PER_ITERATION
-        ENV_STEPS_PER_ITERATION = 32
+        #global ENV_STEPS_PER_ITERATION
+        #ENV_STEPS_PER_ITERATION = 32
         config.training(
             train_batch_size_per_learner=ENV_STEPS_PER_ITERATION,
             num_epochs=2,

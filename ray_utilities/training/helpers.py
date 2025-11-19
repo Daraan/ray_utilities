@@ -370,8 +370,7 @@ def get_args_and_config(
 def update_running_reward(new_reward: float, reward_array: list[float]) -> float:
     if not math.isnan(new_reward):
         reward_array.append(new_reward)
-    running_reward = sum(reward_array[-100:]) / (min(100, len(reward_array)) or float("nan"))  # nan for 0
-    return running_reward
+    return sum(reward_array[-100:]) / (min(100, len(reward_array)) or float("nan"))  # nan for 0
 
 
 def create_running_reward_updater(initial_array: Optional[list[float]] = None) -> RewardUpdater:

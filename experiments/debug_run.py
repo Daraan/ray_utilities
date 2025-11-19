@@ -37,7 +37,7 @@ if __name__ == "__main__":
         "--test",
         # Meta / less influential arguments for the experiment.
         # Assure constant total_steps across experiments.
-        "--num_samples", 2,
+        "--num_samples", 1,
         "--num_jobs", 2,
         "--max_step_size", 4096,
         "--total_steps", 4096 * 5,

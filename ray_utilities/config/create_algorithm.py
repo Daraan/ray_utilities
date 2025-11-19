@@ -374,9 +374,8 @@ def create_algorithm_config(
     add_callbacks_to_config(config, on_algorithm_init=save_model_config_and_architecture)
     # add_callbacks_to_config(config, on_sample_end=reset_episode_metrics_each_iteration)
 
-    # Add a callback to compute an exponential moving average (EMA) of evaluation metrics.
-    # This helps smooth out fluctuations in evaluation results and provides a more stable metric for monitoring performance.
-    add_callbacks_to_config(config, make_eval_ema_metrics_callback(ema_coeff=0.8))
+    # NOTE: Do not use add_callbacks_to_config(config, stateful_callbacks=...) as this overwrites
+
     # region Stateful callbacks
     callbacks: list[type[DefaultCallbacks]] = []
     base_callbacks = None
@@ -401,6 +400,9 @@ def create_algorithm_config(
         seed_environments_for_config(config, SeedEnvsCallback.env_seed)
     if args["render_mode"]:
         callbacks.append(make_render_callback())
+    # Add a callback to compute an exponential moving average (EMA) of evaluation metrics.
+    # This helps smooth out fluctuations in evaluation results and provides a more stable metric for monitoring performance.
+    callbacks.append(make_eval_ema_metrics_callback(0.8, base_eval_interval=16))
     if not args["no_dynamic_eval_interval"]:
         callbacks.append(DynamicEvalInterval)
     if base_callbacks:

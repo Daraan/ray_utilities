@@ -31,7 +31,7 @@ import pyarrow.fs
 import ray
 import tree
 from packaging.version import Version
-from ray import get_runtime_context, tune
+from ray import tune
 from ray.air.constants import TRAINING_ITERATION
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.callbacks.utils import make_callback
@@ -86,7 +86,6 @@ if TYPE_CHECKING:
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
     from ray.rllib.utils.metrics.stats import Stats
     from ray.rllib.utils.typing import StateDict
-    from ray.runtime_context import RuntimeContext
     from tqdm import tqdm
     from typing_extensions import NotRequired
 
@@ -1105,11 +1104,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         self.save_to_path(
             (Path(checkpoint_dir)).absolute().as_posix(), state=cast("dict[str, Any]", state)
         )  # saves components
-        save = {
+        return {
             "state": state,  # contains most information
             "algorithm_checkpoint_dir": algorithm_checkpoint_dir,
         }
-        return save
 
     @override(tune.Trainable)
     def load_checkpoint(self, checkpoint: Optional[dict | str], *, ignore_setup: bool = False, **kwargs) -> None:

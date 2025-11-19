@@ -528,8 +528,8 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         # When tracking memory calculate RES - SHR
         # https://docs.ray.io/en/latest/ray-core/scheduling/memory-management.html
         bundles[0]["memory"] = int(
-            (bundles[0].get("memory", 2 * GB))  # base memory
-            # Scale also with batch_size, however when tuned argument is not avaliable here
+            (bundles[0].get("memory", 1.25 * GB))  # base memory
+            # Scale also with batch_size, however when tuned argument is not available here
             * (1.0 + self._setup.config.train_batch_size_per_learner / 2024 // 10)
             # So when we tune it increase by a flat amount, mean need is about * 1.2
             * (1.25 if self._setup.args.tune and "batch_size" in self._setup.args.tune else 1.0)

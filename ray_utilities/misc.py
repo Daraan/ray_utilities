@@ -7,7 +7,6 @@ trainable introspection, dictionary operations, and error handling.
 
 from __future__ import annotations
 
-import datetime
 import functools
 import logging
 import math
@@ -49,7 +48,6 @@ from ray_utilities.constants import (
     NEW_LOG_EVAL_METRIC_EMA,
     NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
     OPTIONAL_FORK_DATA_KEYS,
-    RAY_UTILITIES_INITIALIZATION_TIMESTAMP,
     RE_PARSE_FORK_FROM,
     WANDB_MONITOR_ACTOR_NAME,
     get_run_id,

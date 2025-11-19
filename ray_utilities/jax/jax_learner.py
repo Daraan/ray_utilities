@@ -171,8 +171,7 @@ class JaxLearner(Learner):
         # TODO: put on device
         logger.warning("_convert_batch_type called which is not fully implemented")
         length = max(len(b) for b in batch.values())
-        batch = MultiAgentBatch(batch, env_steps=length)
-        return batch
+        return MultiAgentBatch(batch, env_steps=length)
 
     @staticmethod
     def _get_clip_function():

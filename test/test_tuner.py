@@ -749,7 +749,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 self.assertEqual(result2.metrics["iterations_since_restore"], NUM_ITERS_2)
 
                 # Change batch size change:
-                # do not check NUM_ENV_STEPS_SAMPLED_LIFETIME when using multiple envs per env runner
+                # do not check NUM_ENV_STEPS_PASSED_TO_LEARNER when using multiple envs per env runner
                 self.assertEqual(
                     result2.metrics[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME],
                     batch_size * 2 * NUM_ITERS_2 + batch_size,
@@ -1440,7 +1440,6 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
                 }
             )
             results = run_tune(setup)
-            print("Num exploits:", num_exploits)
             raise_tune_errors(results)  # pyright: ignore[reportArgumentType]
             self.assertTrue(all(result.metrics["_checking_class_"] == "CheckTrainableForTop" for result in results))  # pyright: ignore[reportOptionalSubscript, reportAttributeAccessIssue]
             # At final step (if batch_size % perturbation_interval) there is no exploitation
@@ -1770,17 +1769,17 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
         state = self.scheduler._trial_state[slow_trial]
         state.last_train_time = 700
         state.last_perturbation_time = 0
-        state.last_score = 52  # Bad score, in bottom 33%
+        state.last_score = 10  # Bad score, in bottom 33%
         # Slow trial timestamp should be more than 300 seconds behind the max
         state.last_update_timestamp = current_time - 400
         # Set total_time_spent to be equal to others to avoid early exit
-        state.total_time_spent = 1000.0
+        state.total_time_spent = 5000.0
 
         result = {
-            "reward": 52,
+            "reward": 10,
             self.scheduler._time_attr: 700,
             TRAINING_ITERATION: 1,
-            TIME_TOTAL_S: 1000.0,  # Match total_time_spent to avoid early exit
+            TIME_TOTAL_S: 5000.0,  # Match total_time_spent to avoid early exit
         }
 
         self.mock_controller.get_live_trials.return_value = self.trials
@@ -1803,7 +1802,7 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
         """Test that slow, bad trials that are not the last one are paused."""
         # 2 slow trials, rest finished
         current_time = time.time()
-        for trial in self.trials:
+        for trial in self.trials[2:]:
             self.scheduler._trial_state[trial].last_train_time = 1000
             self.scheduler._trial_state[trial].last_update_timestamp = current_time - 1000
             self.scheduler._trial_state[trial].total_time_spent = 1000.0  # Ensure equal total_time_spent
@@ -1811,25 +1810,44 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
         slow_trial_1 = self.trials[0]
         slow_trial_2 = self.trials[1]
 
-        # Slow trials have not reported yet
-        for slow_trial in [slow_trial_1, slow_trial_2]:
+        self.scheduler._trial_state[slow_trial_2] = MockPBTTrialState(
+            last_score=9,
+            last_checkpoint=None,
+            last_perturbation_time=0,
+            last_train_time=900,
+            last_result={"reward": 9, TRAINING_ITERATION: 1},
+            last_training_iteration=1,
+            current_env_steps=900,
+            last_update_timestamp=current_time - 2000,
+            total_time_spent=4000.0,  # All trials have same total_time_spent
+        )
+
+        # Adjust slow trials so that the logic triggers a pause:
+        # - Make them sufficiently behind in train_time
+        # - Set their scores low enough to be in the bottom quantile
+        # - Set their update timestamps old enough
+        # - Set their total_time_spent much higher than others to trigger the slow/bad logic
+
+        def update(slow_trial, total_time_spent=5000.0):
             state = self.scheduler._trial_state[slow_trial]
             state.last_train_time = 500
             state.last_perturbation_time = 0
-            state.last_score = 52
-            state.last_update_timestamp = current_time - 1400
-            state.total_time_spent = 1000.0  # Ensure equal total_time_spent
+            state.last_score = 10  # Very bad score
+            state.last_update_timestamp = current_time - 2000
+            state.total_time_spent = total_time_spent  # Much higher than others
+        update(slow_trial_1)
 
         result = {
-            "reward": 52,
+            "reward": 10,
             self.scheduler._time_attr: 700,
             TRAINING_ITERATION: 1,
-            TIME_TOTAL_S: 1000.0,  # Match total_time_spent to avoid early exit
+            TIME_TOTAL_S: 5000.0,  # Much higher than others
         }
 
         self.mock_controller.get_live_trials.return_value = self.trials
         self.mock_controller.get_trials.return_value = self.trials
 
+        # First slow trial should be paused, not trigger perturbation
         with patch.object(self.scheduler, "_perturbation_sync_mode") as mock_perturb:
             decision = self.scheduler.on_trial_result(self.mock_controller, slow_trial_1, result)
 
@@ -1841,11 +1859,16 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
             self.assertEqual(slow_trial_1.status, Trial.PAUSED)
         # As we pause trial1 we update the max last_update_timestamp, trial2 will therefore continue
         # With slow trial 2 we get perturbation
+        update(slow_trial_2)
         with patch.object(self.scheduler, "_perturbation_sync_mode") as mock_perturb:
+            # now that trial 1 is saved max_other_time + (min(max_other_time * 0.05, 300))) has effect
+            result[TIME_TOTAL_S] = 5500
             decision = self.scheduler.on_trial_result(self.mock_controller, slow_trial_2, result)
 
             self.assertEqual(decision, self.scheduler.PAUSE)
             mock_perturb.assert_called()
+            # slow_trial_2.status = Trial.PAUSED if decision in (self.scheduler.NOOP, self.scheduler.PAUSE) else decision
+            # self.assertEqual(slow_trial_2.status, Trial.PAUSED)
 
     def test_slow_trial_already_paused_returns_noop(self):
         """Test that already paused slow trials return NOOP instead of PAUSE."""
@@ -1861,15 +1884,15 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
         state = self.scheduler._trial_state[slow_trial]
         state.last_train_time = 700
         state.last_perturbation_time = 0
-        state.last_score = 52
+        state.last_score = 10
         state.last_update_timestamp = current_time - 400
-        state.total_time_spent = 1000.0  # Ensure equal total_time_spent
+        state.total_time_spent = 5000.0  # Ensure equal total_time_spent
 
         result = {
-            "reward": 52,
+            "reward": 10,
             self.scheduler._time_attr: 700,
             TRAINING_ITERATION: 1,
-            TIME_TOTAL_S: 1000.0,  # Match total_time_spent to avoid early exit
+            TIME_TOTAL_S: 5000.0,  # Match total_time_spent to avoid early exit
         }
 
         self.mock_controller.get_live_trials.return_value = self.trials

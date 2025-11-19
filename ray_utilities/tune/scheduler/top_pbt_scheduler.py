@@ -64,6 +64,7 @@ from ray_utilities.misc import (
     make_fork_from_csv_line,
     warn_if_slow,
 )
+from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.tune.scheduler.run_slow_trials_first_mixin import RunSlowTrialsFirstMixin
 from ray_utilities.typing import ForkFromData, Forktime, ForktimeTuple
 
@@ -743,6 +744,12 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         trials.sort(key=lambda t: self._trial_state[t].last_score)  # pyright: ignore[reportArgumentType]
 
         if len(trials) <= 1:
+            ImportantLogger.important_warning(
+                logger,
+                "Found 0/%d trials with valid scores to compute quantiles. "
+                "Metric is likely NaN/None or all trials already finished.",
+                len(self._trial_state),
+            )
             return [], []
 
         # Calculate number of trials in top quantile
@@ -1241,24 +1248,39 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         # if it is too early or too late, do nothing, except if it is really slow
         other_total_times = [self._trial_state[t].total_time_spent for t in self._trial_state if t is not trial]
         trial_total_time = result.get(TIME_TOTAL_S, 0)
-        max_other_time = max(other_total_times)
+        if other_total_times:
+            max_other_time = max(other_total_times)
+        else:
+            max_other_time = None
+        # If this trial was just started late and is not slow by itself continue
+        # NOTE: A problem is that good trials have more episodes and are therefore slower
+        if other_total_times and (trial_total_time <= max_other_time + (min(max_other_time * 0.05, 300))):
+            return decision
         if (
             time_since_perturb
-            # for every 5min difference allow 1% earlier termination.
-            < min(0.5, max(0.2, (0.50 - 0.01 * max(0, ((trial_total_time - max_other_time) // 300)))))
+            # for every 10 min difference allow 1% earlier termination.
+            < min(
+                0.5,
+                max(
+                    0.2,
+                    (
+                        0.50
+                        - 0.01
+                        * max(0, ((trial_total_time - (max_other_time if max_other_time else trial_total_time)) // 600))
+                    ),
+                ),
+            )
             * self._perturbation_interval
             or time_since_perturb > 0.95 * self._perturbation_interval
         ):
             return decision
-        # If this trial was just started late and is not slow by itself continue
-        if other_total_times and (trial_total_time <= (max_other := max_other_time) - (min(max_other * 0.05, 180))):
-            return decision
-        # If we are less than 5 min behind other trials (excluding current), ignore
+        # If we are less than 15 min behind other trials (excluding current), ignore
         # Exclude current trial from comparison to avoid self-comparison
         other_trial_timestamps = [
             self._trial_state[t].last_update_timestamp for t in self._trial_state if t is not trial
+            and self._trial_state[t].last_train_time > state.last_train_time
         ]
-        if other_trial_timestamps and get_time() - max(other_trial_timestamps) < 300:
+        if other_trial_timestamps and get_time() - max(other_trial_timestamps) < 900:
             return decision
         # Check this is in the 5% of not-yet finished trials
         if (
@@ -1269,12 +1291,24 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         ) > len(tune_controller.get_live_trials()) * 0.05:
             return decision
         # NOTE: The states are from the paused ahead trials and the *last* perturbation interval from the still running
-        lowest_scores = [state.last_score for state in self._trial_state.values() if state.last_score is not None]
-        if len(lowest_scores) == 0:
+        # PROBLEM: if this trial is far behind it is not really valid to compare with the scores that are from much later
+        # Exclude states of behind trials
+        lowest_states = sorted(
+            (state for state in self._trial_state.values() if state.last_score is not None), key=lambda s: s.last_score
+        )
+        if len(lowest_states) == 0:
             return decision
+        # choose one of the last three depending on how many trials there are
+        compare_state = lowest_states[min(3, int(len(lowest_states) * 0.20)) - 1]
+        compare_score = compare_state.last_score
+        # scale compare score down depending on the step difference
+        step_diff_scale = (
+            max(0, compare_state.last_train_time - time_of_slow_interval) / self._perturbation_interval / 20
+        )
+        adjusted_compare_score = compare_score * (1 - step_diff_scale)
 
-        # We assume quantiles are sorted
-        if result[self._metric] > lowest_scores[min(3, int(len(lowest_scores) * 0.33)) - 1]:
+        # trial must be 10% worse than adjusted compare score for early perturbation.
+        if result[self._metric] > adjusted_compare_score * 0.9:
             return decision
         # last trial is slow and in worst 33%. Pause trial and if last start perturbation
         # When return of super() is CONTINUE we should not have had a perturbation this result.

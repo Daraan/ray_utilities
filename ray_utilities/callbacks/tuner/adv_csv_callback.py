@@ -7,7 +7,6 @@ Note:
 from __future__ import annotations
 
 import logging
-import os
 from typing import TYPE_CHECKING, Literal, Optional
 
 from ray.air.constants import EXPR_PROGRESS_FILE

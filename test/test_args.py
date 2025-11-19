@@ -231,6 +231,43 @@ class TestExtensionsAdded(SetupWithEnv, SetupLowRes, DisableLoggers):
                 )
         trainable.stop()
 
+    @patch_args()
+    @mock_trainable_algorithm
+    def test_eval_ema_metric_callback_added(self):
+        """
+        Test that EvalEMAMetricCallback is added to the algorithm's callbacks.
+        """
+        from ray_utilities.callbacks.algorithm.eval_ema_metric_callback import (
+            EvalEMAMetricCallback,
+            _PartialEvalEMAMetaCallback,
+        )
+
+        setup = self._DEFAULT_SETUP_LOW_RES
+        trainable = setup.trainable_class()
+        for config in (setup.config, trainable.algorithm_config):
+            with self.subTest("setup.config" if config is setup.config else "trainable.algorithm_config"):
+                # Check if EvalEMAMetricCallback is present in callbacks_class
+                if isinstance(config.callbacks_class, type):
+                    self.assertTrue(
+                        issubclass(config.callbacks_class, EvalEMAMetricCallback)
+                        or isinstance(config.callbacks_class, _PartialEvalEMAMetaCallback),
+                        "Expected EvalEMAMetricCallback to be in callbacks_class.",
+                    )
+                elif isinstance(config.callbacks_class, (list, tuple)):
+                    self.assertTrue(
+                        any(
+                            cb is EvalEMAMetricCallback
+                            or (
+                                (isinstance(cb, type) and issubclass(cb, EvalEMAMetricCallback))
+                                or isinstance(cb, _PartialEvalEMAMetaCallback)
+                            )
+                            for cb in config.callbacks_class
+                        ),
+                        "Expected EvalEMAMetricCallback to be in callbacks_class list.",
+                    )
+        self.assertTrue(any(isinstance(cb, EvalEMAMetricCallback) for cb in trainable.algorithm.callbacks))
+        trainable.stop()
+
 
 class TestProcessing(unittest.TestCase):
     @patch_args("--batch_size", "64", "--minibatch_size", "128")
