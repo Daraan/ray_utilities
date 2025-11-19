@@ -270,14 +270,23 @@ pbt_lr_base:
       tws47f25111703370cb24:
         status: RUNNING
         submission_id: pbt_lr_base_CartPole-v1_7014
+      tws47f251119032027524:
+        status: RUNNING
+        submission_id: pbt_lr_base_CartPole-v1_8731
     (Acrobot-v1):
       tws47f251117033729d54:
         status: RUNNING
         submission_id: pbt_lr_base_Acrobot-v1_7014
+      tws47f2511190323ecef4:
+        status: RUNNING
+        submission_id: pbt_lr_base_Acrobot-v1_8731
     (LunarLander-v3):
       tws47f2511170337ff2f4:
         status: RUNNING
         submission_id: pbt_lr_base_LunarLander-v3_7014
+      tws47f251119032484a24:
+        status: RUNNING
+        submission_id: pbt_lr_base_LunarLander-v3_8731
 pbt_lr:
   comment: random lr between 5e-5 and 5e-1
   entrypoint_resources:
@@ -287,3 +296,48 @@ pbt_lr:
     substitutions:
       <TUNE_PARAM>: lr
       <ENV_TYPE>: <mujoco_envs>
+  run_ids:
+    (Ant-v5):
+      tws47f251119033847804:
+        status: RUNNING
+        submission_id: pbt_lr_Ant-v5_9739
+    (Hopper-v5):
+      tws47f2511190338ff5e4:
+        status: RUNNING
+        submission_id: pbt_lr_Hopper-v5_9739
+    (Walker2d-v5):
+      tws47f2511190338c3bc4:
+        status: RUNNING
+        submission_id: pbt_lr_Walker2d-v5_9739
+    (HalfCheetah-v5):
+      tws47f251119033895014:
+        status: RUNNING
+        submission_id: pbt_lr_HalfCheetah-v5_9739
+    (Swimmer-v5):
+      tws47f2511190339dd304:
+        status: RUNNING
+        submission_id: pbt_lr_Swimmer-v5_9739
+    (Reacher-v5):
+      tws47f251119033992a34:
+        status: RUNNING
+        submission_id: pbt_lr_Reacher-v5_9739
+    (Pusher-v5):
+      tws47f2511190340d5864:
+        status: RUNNING
+        submission_id: pbt_lr_Pusher-v5_9739
+    (InvertedPendulum-v5):
+      tws47f251119034238d44:
+        status: RUNNING
+        submission_id: pbt_lr_InvertedPendulum-v5_9739
+    (InvertedDoublePendulum-v5):
+      tws47f2511190349b1844:
+        status: RUNNING
+        submission_id: pbt_lr_InvertedDoublePendulum-v5_9739
+    (Humanoid-v5):
+      tws47f251119034959964:
+        status: RUNNING
+        submission_id: pbt_lr_Humanoid-v5_9739
+    (HumanoidStandup-v5):
+      tws47f2511190349be1a4:
+        status: RUNNING
+        submission_id: pbt_lr_HumanoidStandup-v5_9739
