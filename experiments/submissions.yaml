@@ -10,21 +10,21 @@ global_pattern_1: >
   pbt --perturbation_interval 0.125 --quantile_fraction 0.1
 # --- Envs --- #
 <mujoco_envs>:
-  - Ant-v5
-  - Hopper-v5
-  - Walker2d-v5
-  - HalfCheetah-v5
-  - Reacher-v5
-  - Swimmer-v5
-  - Pusher-v5
-  - InvertedPendulum-v5
-  - InvertedDoublePendulum-v5
-  - Humanoid-v5
-  - HumanoidStandup-v5
+- Ant-v5
+- Hopper-v5
+- Walker2d-v5
+- HalfCheetah-v5
+- Reacher-v5
+- Swimmer-v5
+- Pusher-v5
+- InvertedPendulum-v5
+- InvertedDoublePendulum-v5
+- Humanoid-v5
+- HumanoidStandup-v5
 <basic_envs>:
-  - CartPole-v1
-  - Acrobot-v1
-  - LunarLander-v3
+- CartPole-v1
+- Acrobot-v1
+- LunarLander-v3
 # ---
 test_command:
   test:id:
@@ -52,6 +52,9 @@ pbt_batch_size:
       tws47f2511171708de6a4:
         status: RUNNING
         submission_id: pbt_batch_size_Ant-v5_5708
+      tws47f25111902062e9e4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Ant-v5_4359
     (Hopper-v5):
       tws47f2511170339db774:
         status: RUNNING
@@ -59,6 +62,9 @@ pbt_batch_size:
       tws47f2511171708558e4:
         status: RUNNING
         submission_id: pbt_batch_size_Hopper-v5_5708
+      tws47f2511190206c3ec4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Hopper-v5_4359
     (Walker2d-v5):
       tws47f251117033976924:
         status: RUNNING
@@ -66,6 +72,9 @@ pbt_batch_size:
       tws47f251117170873d54:
         status: RUNNING
         submission_id: pbt_batch_size_Walker2d-v5_5708
+      tws47f2511190206f46b4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Walker2d-v5_4359
     (HalfCheetah-v5):
       tws47f2511170339a2834:
         status: RUNNING
@@ -73,6 +82,9 @@ pbt_batch_size:
       tws47f25111717085a004:
         status: RUNNING
         submission_id: pbt_batch_size_HalfCheetah-v5_5708
+      tws47f2511190206d1264:
+        status: RUNNING
+        submission_id: pbt_batch_size_HalfCheetah-v5_4359
     (Reacher-v5):
       tws47f25111703397c174:
         status: RUNNING
@@ -80,6 +92,9 @@ pbt_batch_size:
       tws47f251117171689e64:
         status: RUNNING
         submission_id: pbt_batch_size_Reacher-v5_5708
+      tws47f2511190206003f4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Reacher-v5_4359
     (Swimmer-v5):
       tws47f2511170339c7be4:
         status: RUNNING
@@ -87,6 +102,9 @@ pbt_batch_size:
       tws47f251117171618cf4:
         status: RUNNING
         submission_id: pbt_batch_size_Swimmer-v5_5708
+      tws47f251119020624744:
+        status: RUNNING
+        submission_id: pbt_batch_size_Swimmer-v5_4359
     (Pusher-v5):
       tws47f25111703471fd54:
         status: RUNNING
@@ -94,6 +112,9 @@ pbt_batch_size:
       tws47f2511171716f61b4:
         status: RUNNING
         submission_id: pbt_batch_size_Pusher-v5_5708
+      tws47f2511190206a72b4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Pusher-v5_4359
     (InvertedPendulum-v5):
       tws47f2511170347b25a4:
         status: RUNNING
@@ -101,6 +122,9 @@ pbt_batch_size:
       tws47f2511171716c6d84:
         status: RUNNING
         submission_id: pbt_batch_size_InvertedPendulum-v5_5708
+      tws47f2511190212a5914:
+        status: RUNNING
+        submission_id: pbt_batch_size_InvertedPendulum-v5_4359
     (InvertedDoublePendulum-v5):
       tws47f251117034770ac4:
         status: RUNNING
@@ -108,6 +132,9 @@ pbt_batch_size:
       tws47f251117171816d94:
         status: RUNNING
         submission_id: pbt_batch_size_InvertedDoublePendulum-v5_5708
+      tws47f2511190214e3e44:
+        status: RUNNING
+        submission_id: pbt_batch_size_InvertedDoublePendulum-v5_4359
     (Humanoid-v5):
       tws47f25111703470cfd4:
         status: RUNNING
@@ -115,6 +142,9 @@ pbt_batch_size:
       tws47f251117171725b64:
         status: RUNNING
         submission_id: pbt_batch_size_Humanoid-v5_5708
+      tws47f2511190213081f4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Humanoid-v5_4359
     (HumanoidStandup-v5):
       tws47f25111703473f5d4:
         status: RUNNING
@@ -123,6 +153,9 @@ pbt_batch_size:
         status: RUNNING
         submission_id: pbt_batch_size_HumanoidStandup-v5_5708
 # ---
+      tws47f25111902128e204:
+        status: RUNNING
+        submission_id: pbt_batch_size_HumanoidStandup-v5_4359
 pbt_num_envs:
   # This is a comment
   comment: small minibatch_size=256 and train_batch_size=2048
@@ -160,9 +193,9 @@ pbt_num_envs:
     (Reacher-v5):
       tws47f25111613166c304:
         status: SUCCEEDED
-        comment: single env worked best, most envs worst. 2 envs at the start
-          superior to all others. reducing to single env after first
-          perturbation big boost. 2 & 4 envs were good as well. Strange drop at
+        comment: single env worked best, most envs worst. 2 envs at the start 
+          superior to all others. reducing to single env after first 
+          perturbation big boost. 2 & 4 envs were good as well. Strange drop at 
           3rd perturbation, recovered at 4th
         submission_id: pbt_num_envs_Reacher-v5_5343
     (Swimmer-v5):
@@ -170,7 +203,7 @@ pbt_num_envs:
     (Walker2d-v5):
       tws47f251116131630b04: RUNNING
 pbt_num_envs_large:
-  comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
+  comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16) 
     scale
   entrypoint_resources:
     persistent_node: 1
@@ -191,10 +224,10 @@ pbt_num_envs_large:
       tws47f251116132047a84: DONE?
     (Ant-v5):
       tws47f2511161804f37c4:
-        status: RESTORING - possibly messed up perturbation ray job submit
-          --working-dir "." --entrypoint-memory 1250000000
+        status: RESTORING - possibly messed up perturbation ray job submit 
+          --working-dir "." --entrypoint-memory 1250000000 
           --entrypoint-resources '{"persistent_node":1}' --entrypoint-num-cpus 1
-          --submission-id pbt_num_envs_large_Ant-v5_restore -- python
+          --submission-id pbt_num_envs_large_Ant-v5_restore -- python 
           experiments/tune_with_scheduler.py --restore_path
     (InvertedDoublePendulum-v5):
       tws47f25111618057db34:
