@@ -63,9 +63,12 @@ class RunSlowTrialsFirstMixin(PopulationBasedTraining):
                 trial_states = [trial.status for trial in trials]
                 if not some_unpaused:
                     logger.warning(
-                        "No candidates found to run. Not scheduling any trial. Has %d managed trials in states: %s",
+                        "No candidates found to run. Not scheduling any trial. Has %d managed trials in states: %s\n"
+                        "Next perturbation sync at: %s. Trials last train_times: %s",
                         len(trials),
                         trial_states,
+                        self._next_perturbation_sync,
+                        [self._trial_state[trial].last_train_time for trial in trials],
                     )
                 # we still update this because else this would be very frequent
                 self.__last_candidate__scheduled = time.time() + 60
@@ -79,6 +82,15 @@ class RunSlowTrialsFirstMixin(PopulationBasedTraining):
                         "All trials are paused. Increasing _next_perturbation_sync to %d to unpause trials.",
                         self._next_perturbation_sync,
                     )
+                elif sum(t.status == Trial.TERMINATED for t in trials) == len(trials) - 1:
+                    # if there is one last paused trial return int, something must have gotten mixed up somewhere
+                    # NOTE: Might create an issue if another new trial should be added - but as we already waited 90s
+                    # this might be unlikely.
+                    logger.warning(
+                        "Only one trial is not terminated - but was not selected as a candidate. "
+                        "Scheduling the paused trial to continue progress."
+                    )
+                    return next((t for t in trials if t.status == Trial.PAUSED), None) or None
             return None
         self.__last_candidate__scheduled = time.time()
         return candidates[0] if candidates else None

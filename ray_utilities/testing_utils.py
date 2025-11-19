@@ -687,9 +687,13 @@ class TestHelpers(unittest.TestCase):
     def _clean_output_dir():
         # if on GitHub do not clean
         if "GITHUB_REF" in os.environ:
+            if sys.stdout.closed or sys.stderr.closed:
+                return
             logger.info("Skipping cleaning output dir in GitHub Actions")
             return
         if "RAY_UTILITIES_KEEP_TESTING_STORAGE" in os.environ:
+            if sys.stdout.closed or sys.stderr.closed:
+                return
             logger.info("Skipping cleaning output dir, RAY_UTILITIES_KEEP_TESTING_STORAGE is set")
             return
         # Remove TESTING storage path
@@ -714,7 +718,8 @@ class TestHelpers(unittest.TestCase):
             storage_path = pathlib.Path(run_config.storage_path) / run_config.name  # pyright: ignore[reportOperatorIssue]
             if storage_path.exists() and not sys.stdout.closed:
                 assert "TESTING" in storage_path.name, f"{storage_path} is not a TESTING storage path"
-                logger.info("Removing testing storage path: %s", storage_path)
+                if not (sys.stdout.closed and sys.stderr.closed):
+                    logger.info("Removing testing storage path: %s", storage_path)
 
                 shutil.rmtree(storage_path.as_posix(), ignore_errors=True)
         except OSError:

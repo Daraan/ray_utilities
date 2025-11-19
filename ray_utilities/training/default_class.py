@@ -788,6 +788,17 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 else float("inf")
             ),
         )
+        # Also check if we not overshoot total steps
+        if (
+            current_step := get_current_step(self.algorithm.metrics)
+        ) + self.algorithm_config.train_batch_size_per_learner * max_iterations > budget["total_steps"]:
+            # limit max_iterations so that we are not over the budget
+            steps_left = budget["total_steps"] - current_step
+            if steps_left % self.algorithm_config.train_batch_size_per_learner != 0:
+                # add one step more
+                max_iterations = steps_left // self.algorithm_config.train_batch_size_per_learner + 1
+            else:
+                max_iterations = steps_left // self.algorithm_config.train_batch_size_per_learner
         # check checkpoint frequency
         checkpoint_freq = self.config["cli_args"]["checkpoint_frequency"]
         if checkpoint_freq:
@@ -1957,9 +1968,15 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
         ):
             ImportantLogger.important_info(
                 _logger,
-                "Current step %s exceeds total steps. Expecting the trainable to have stopped.",
+                "Current step %s exceeds total steps %s (+1 iteration with %s steps). "
+                "Expecting the trainable to have stopped. "
+                "Setting done=True in result.",
                 self._current_step,
+                self.config["cli_args"].get("total_steps", float("inf"))
+                + self.algorithm_config.train_batch_size_per_learner,
+                self.algorithm_config.train_batch_size_per_learner,
             )
+            result["done"] = True
         # HACK: For ray < 2.50.0 where result is copied in for the callbacks
         # see for example: https://github.com/ray-project/ray/pull/55527
         if (  # When we are doing pbt let pbt handle the checkpointing

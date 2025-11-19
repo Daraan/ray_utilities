@@ -20,6 +20,7 @@ import itertools
 import logging
 import math
 import random
+import shutil
 from collections.abc import Iterable
 from functools import partial
 from itertools import cycle
@@ -684,14 +685,15 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         if self._fork_data_file is None:
             self._fork_data_file = Path(trial.local_experiment_path) / f"pbt_fork_data-{get_run_id()}.csv"
             # if we restore it might already exist, only write header if not existing
+            # NOTE: That when we restore the creation of the new local file can overwrite the old one!
             if not self._fork_data_file.exists():
                 fork_data_file_remote = Path(trial.remote_experiment_path) / f"pbt_fork_data-{get_run_id()}.csv"
                 self._fork_data_file.parent.mkdir(parents=True, exist_ok=True)
                 if fork_data_file_remote.exists():
-                    # copy to local location
-                    # TODO: but what if trial is on another host, does this still work?
-                    with fork_data_file_remote.open("r") as f_src, self._fork_data_file.open("w") as f_dst:
-                        f_dst.write(f_src.read())
+                    # copy to local location, tune will copy to remote again!
+                    # First create a copy of the parent in the remote location before copying it locally
+                    shutil.copyfile(fork_data_file_remote, fork_data_file_remote.with_suffix(".copy"))
+                    shutil.copyfile(fork_data_file_remote, self._fork_data_file)
                 else:
                     with self._fork_data_file.open("w") as f:
                         f.write(make_fork_from_csv_header())
@@ -1236,17 +1238,20 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             return decision
         state = self._trial_state[trial]
         time_since_perturb = time_of_slow_interval - state.last_perturbation_time
-        # if it is too early or too late, do nothing
+        # if it is too early or too late, do nothing, except if it is really slow
+        other_total_times = [self._trial_state[t].total_time_spent for t in self._trial_state if t is not trial]
+        trial_total_time = result.get(TIME_TOTAL_S, 0)
+        max_other_time = max(other_total_times)
         if (
-            time_since_perturb < 0.50 * self._perturbation_interval
+            time_since_perturb
+            # for every 5min difference allow 1% earlier termination.
+            < min(0.5, max(0.2, (0.50 - 0.01 * max(0, ((trial_total_time - max_other_time) // 300)))))
+            * self._perturbation_interval
             or time_since_perturb > 0.95 * self._perturbation_interval
         ):
             return decision
         # If this trial was just started late and is not slow by itself continue
-        other_total_times = [self._trial_state[t].total_time_spent for t in self._trial_state if t is not trial]
-        if other_total_times and (
-            result.get(TIME_TOTAL_S, 0) <= (max_other := max(other_total_times)) - (min(max_other * 0.05, 180))
-        ):
+        if other_total_times and (trial_total_time <= (max_other := max_other_time) - (min(max_other * 0.05, 180))):
             return decision
         # If we are less than 5 min behind other trials (excluding current), ignore
         # Exclude current trial from comparison to avoid self-comparison
