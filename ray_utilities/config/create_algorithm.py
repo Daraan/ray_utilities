@@ -345,7 +345,17 @@ def create_algorithm_config(
             epsilon=args.get("epsilon", [(0, 1.0), (10000, 0.05)]),
             double_q=args.get("double_q", True),
             dueling=args.get("dueling", True),
+            num_atoms=args.get("num_atoms", 0),  # FIXME: hardcoded 0 - has no num_atoms parameter
         )
+        if model_config is None:
+            model_config = {}
+        # Needed for DefaultDQNRLModule
+        model_config["dueling"] = args.get("dueling", True)
+        model_config["double_q"] = args.get("double_q", True)
+        model_config["num_atoms"] = args.get("num_atoms", 1)
+        model_config["v_min"] = args.get("v_min", -10)
+        model_config["v_max"] = args.get("v_max", 10)
+        model_config["epsilon"] = args.get("epsilon", [(0, 1.0), (10000, 0.05)])
     else:
         logger.warning("No specific training configuration for algorithm type '%s'", algorithm_type)
     if model_config is not None and "vf_share_layers" not in model_config:

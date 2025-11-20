@@ -872,6 +872,9 @@ class DQNArgumentParser(_BaseRLlibArgumentParser):
     dueling: bool = True
     """Whether to use dueling DQN architecture"""
 
+    num_atoms: int = 1
+    """Number of atoms for distributional DQN. Default: 1 (standard DQN)."""
+
     def configure(self) -> None:
         super().configure()
         self.add_argument("--target_network_update_freq", type=int, required=False)

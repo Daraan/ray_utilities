@@ -700,10 +700,17 @@ class TestHelpers(unittest.TestCase):
         try:
             AlgorithmSetup.PROJECT = "TESTING"
             # Create run config to have access to output dir
+            project_root_logger = logging.getLogger("ray_utilities")
+            during_shutdown = any(
+                handler.stream.closed for handler in project_root_logger.handlers if hasattr(handler, "stream")
+            )  # pyright: ignore[reportAttributeAccessIssue]
+            if during_shutdown:
+                change_log_level(project_root_logger, logging.CRITICAL)
+                project_root_logger.disabled = True
             with (
-                change_log_level(experiment_base_logger, logging.ERROR),
-                change_log_level(tuner_setup_logger, logging.ERROR),
-                change_log_level(extensions_logger, logging.ERROR),
+                change_log_level(experiment_base_logger, logging.ERROR if not during_shutdown else logging.CRITICAL),
+                change_log_level(tuner_setup_logger, logging.ERROR if not during_shutdown else logging.CRITICAL),
+                change_log_level(extensions_logger, logging.ERROR if not during_shutdown else logging.CRITICAL),
                 mock.patch("logging.getLogger") as mock_get_logger,  # not log or adjust
                 patch_args(),
             ):

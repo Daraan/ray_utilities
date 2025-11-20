@@ -8,11 +8,17 @@ Note:
 
 from __future__ import annotations
 
-import gymnasium as gym
-import numpy as np
 import pytest
 
-from ray_utilities.jax.dqn import JaxDQNCatalog
+try:
+    from ray_utilities.jax.dqn import JaxDQNCatalog
+except ImportError:
+    print("JaxDQNCatalog import failed, skipping tests.")
+    pytest.skip("JaxDQNCatalog not available", allow_module_level=True)
+
+import gymnasium as gym
+import numpy as np
+
 from ray_utilities.testing_utils import DisableLoggers, TestHelpers, patch_args
 
 

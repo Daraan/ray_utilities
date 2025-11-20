@@ -5,6 +5,7 @@ from contextlib import nullcontext
 from typing import TYPE_CHECKING, NamedTuple
 
 import torch
+from unittest import mock
 
 from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradientAccumulation
 from ray_utilities.config import DefaultArgumentParser
@@ -416,29 +417,35 @@ class TestLearners(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
         )
 
 
-class TestDQNGradientAccumulation(TestHelpers, DisableLoggers):
-    def test_dqn_torch_learner_with_gradient_accumulation(self):
+class TestDQNGradientAccumulation(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
+    @mock.patch("ray.rllib.algorithms.dqn.dqn.calculate_rr_weights")
+    def test_dqn_torch_learner_with_gradient_accumulation(self, mock_rr):
         """
         Test that DQNTorchLearnerWithGradientAccumulation accumulates gradients and applies them only at the correct steps.
         """
-        batch_size = 32
+        batch_size = 1
         accumulate_every = 3
+        mock_rr.return_value = [1, 1]
         with patch_args(
-            "--algorithm",
-            "dqn",
-            "-a",
-            "mlp",
-            "--accumulate_gradients_every",
-            str(accumulate_every),
-            "--batch_size",
-            str(batch_size),
-            "--minibatch_size",
-            str(batch_size),
-            "--fcnet_hiddens",
-            "[8, 8]",
-        ):
-            setup = DQNMLPSetup(init_trainable=False)
-        setup.config.training(num_epochs=1)
+            "--algorithm", "dqn",
+            "-a", "mlp",
+            "--accumulate_gradients_every", accumulate_every,
+            "--batch_size", batch_size,
+            "--minibatch_size", 1,
+            "--fcnet_hiddens", "[8, 8]",
+            "--num_steps_sampled_before_learning_starts", "1",
+            "--no_exact_sampling",
+            "--num_envs_per_env_runner", "1",
+        ):  # fmt: skip
+            with DQNMLPSetup(init_trainable=False) as setup:
+                setup.config.training(
+                    num_epochs=1,
+                    training_intensity=None,  # 1/32,
+                    hiddens=[4],
+                )
+                # if we do not set this low repeat until 1000 steps were samples
+                setup.config.reporting(min_sample_timesteps_per_iteration=1)
+                setup.config.minibatch_size = None
         algorithm = setup.config.build_algo()
         learner: DQNTorchLearnerWithGradientAccumulation = (
             algorithm.learner_group._learner  # pyright: ignore[reportAssignmentType, reportOptionalMemberAccess]
@@ -517,28 +524,33 @@ class TestDQNGradientAccumulation(TestHelpers, DisableLoggers):
             if i in expected_apply_steps:
                 self.assertEqual(learner._last_gradient_update_step, i, f"Wrong last update step at step {i}")
 
-    def test_dqn_torch_learner_accumulation_sums_gradients(self):
+    @mock.patch("ray.rllib.algorithms.dqn.dqn.calculate_rr_weights")
+    def test_dqn_torch_learner_accumulation_sums_gradients(self, mock_rr):
         """
         Test that DQNTorchLearnerWithGradientAccumulation sums gradients over steps and applies the mean at the correct time.
         """
-        batch_size = 32
+        batch_size = 1000
         accumulate_every = 2
+        mock_rr.return_value = [1, 1]
         with patch_args(
-            "--algorithm",
-            "dqn",
-            "-a",
-            "mlp",
-            "--accumulate_gradients_every",
-            str(accumulate_every),
-            "--batch_size",
-            str(batch_size),
-            "--minibatch_size",
-            str(batch_size),
-            "--fcnet_hiddens",
-            "[8, 8]",
-        ):
-            setup = DQNMLPSetup(init_trainable=False)
-        setup.config.training(num_epochs=1)
+            "--algorithm", "dqn",
+            "-a","mlp",
+            "--accumulate_gradients_every", accumulate_every,
+            "--batch_size", batch_size,
+            "--minibatch_size", batch_size,
+            "--fcnet_hiddens", "[8, 8]",
+            "--no_exact_sampling",
+            "--num_envs_per_env_runner", 1,
+        ):  # fmt: skip
+            with DQNMLPSetup(init_trainable=False) as setup:
+                setup.config.training(
+                    num_epochs=1,
+                    train_batch_size=batch_size,
+                    training_intensity=None,
+                )
+                setup.config.env_runners(
+                    rollout_fragment_length=batch_size,
+                )
         algorithm = setup.config.build_algo()
         learner: DQNTorchLearnerWithGradientAccumulation = (
             algorithm.learner_group._learner  # pyright: ignore[reportAssignmentType, reportOptionalMemberAccess]
@@ -605,11 +617,12 @@ class TestDQNGradientAccumulation(TestHelpers, DisableLoggers):
         self.assertIs(param_tensor, learner._params[param_ref], "Parameter reference should match")
         grad_step2 = unaccumulated_grads[1]
         manual_sum = grad_step1 + grad_step2
+        manual_mean = manual_sum / accumulate_every
         torch.testing.assert_close(
-            raw_gradients[1], manual_sum, msg="Raw accumulated gradient should be the sum of step gradients"
+            raw_gradients[1], manual_mean, msg="Raw accumulated gradient should be the mean of step gradients"
         )
         torch.testing.assert_close(
             updated_gradients[1][param_ref],
-            manual_sum / accumulate_every,
+            manual_mean,
             msg="Applied gradient should be the mean of accumulated gradients",
         )

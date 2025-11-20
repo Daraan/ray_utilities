@@ -8,15 +8,23 @@ Note:
 """
 
 from __future__ import annotations
-from typing import cast, TYPE_CHECKING
+
+from typing import TYPE_CHECKING, cast
 
 import gymnasium as gym
-import jax
 import numpy as np
 import pytest
+
+try:
+    import jax
+
+    from ray_utilities.jax.dqn import JaxDQNCatalog, JaxDQNModule
+except ModuleNotFoundError:
+    print("JaxDQNCatalog import failed, skipping tests.")
+    pytest.skip("JaxDQNCatalog not available", allow_module_level=True)
+
 from ray.rllib.core.columns import Columns
 
-from ray_utilities.jax.dqn import JaxDQNCatalog, JaxDQNModule
 from ray_utilities.testing_utils import DisableLoggers, TestHelpers, patch_args
 
 if TYPE_CHECKING:
@@ -61,7 +69,7 @@ class TestJaxDQNModule(DisableLoggers, TestHelpers):
             catalog_class=JaxDQNCatalog,
         )
         # Call setup() - framework will be "torch" but catalog builds JAX models
-        #module.setup()
+        # module.setup()
 
         # Check module attributes
         assert module.observation_space == self.observation_space
@@ -88,7 +96,7 @@ class TestJaxDQNModule(DisableLoggers, TestHelpers):
             model_config_dict=self.dueling_model_config,
             catalog_class=JaxDQNCatalog,
         )
-        #module.setup()
+        # module.setup()
 
         # Check dueling components
         assert module.uses_dueling
@@ -104,7 +112,7 @@ class TestJaxDQNModule(DisableLoggers, TestHelpers):
             model_config_dict=self.model_config,
             catalog_class=JaxDQNCatalog,
         )
-        #module.setup()
+        # module.setup()
 
         # Create sample batch
         batch_size = 8
@@ -128,7 +136,7 @@ class TestJaxDQNModule(DisableLoggers, TestHelpers):
             model_config_dict=self.dueling_model_config,
             catalog_class=JaxDQNCatalog,
         )
-        #module.setup()
+        # module.setup()
 
         batch_size = 8
         batch = {
@@ -149,7 +157,7 @@ class TestJaxDQNModule(DisableLoggers, TestHelpers):
             model_config_dict=self.distributional_model_config,
             catalog_class=JaxDQNCatalog,
         )
-        #module.setup()
+        # module.setup()
 
         batch_size = 8
         batch = {

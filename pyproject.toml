@@ -61,9 +61,10 @@ optuna = [
 ]
 jax = [
   "jax",
+  "chex",
+  "distrax",
   "flax",
   "optax",
-  "chex",
 ]
 argcomplete = [
   "argcomplete",

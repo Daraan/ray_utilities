@@ -59,9 +59,6 @@ if __name__ == "__main__":
         "--comment", "Default training run",
     ):  # fmt: skip
         # Replace with your own setup class
-        setup = SetupClass(
-            config_files=["experiments/default.cfg", "experiments/models/mlp/default.cfg"]
-        )
+        setup = SetupClass(config_files=["experiments/default.cfg", "experiments/models/mlp/default.cfg"])
         with init_ray_with_setup(setup, runtime_env=get_runtime_env()):
             results = run_tune(setup)
-

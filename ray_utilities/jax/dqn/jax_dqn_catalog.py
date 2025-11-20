@@ -76,14 +76,12 @@ class JaxDQNCatalog(DQNCatalog, JaxCatalog):
             view_requirements=view_requirements,  # type: ignore[arg-type]
         )
 
-
     @override(DQNCatalog)
     def get_action_dist_cls(self, framework: str | None = None):
         # RLlib expects framework="torch" for DQN, even for JAX modules.
         if framework is None:
             framework = "torch"
         return super().get_action_dist_cls(framework=framework)
-
 
     @override(DQNCatalog)
     def _get_head_config(self, output_layer_dim: int) -> MLPHeadConfig:
