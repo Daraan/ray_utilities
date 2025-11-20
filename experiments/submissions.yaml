@@ -10,8 +10,8 @@ global_pattern_1: >
   pbt --perturbation_interval 0.125 --quantile_fraction 0.1
 submit_pattern: ray job submit --working-dir "." --entrypoint-memory 3000000000 \
   --entrypoint-num-cpus 1 --entrypoint-resources '{"persistent_node":1}' \
-  --submission-id <SUBMISSION_ID> -- \
-  <ENTRYPOINT:>
+  --submission-id pbt_batch_size_mlp-xxxxxxxxx_restore -- \
+  python experiments/tune_with_scheduler.py --restore_path yyyyy
 # --- Envs --- #
 <mujoco_envs>:
 - Ant-v5
@@ -188,6 +188,10 @@ pbt_batch_size:
       tws47f2511200309d9784:
         status: FAILED
         submission_id: pbt_batch_size_Pusher-v5_4463
+    (InvertedPendulum-v5):
+      tws47f251120033152e44:
+        status: RUNNING
+        submission_id: pbt_batch_size_InvertedPendulum-v5_4463_try3sfc
     (InvertedDoublePendulum-v5):
       tws47f25112003109d8f4:
         status: RUNNING
@@ -309,6 +313,19 @@ pbt_lr_base:
     substitutions:
       <TUNE_PARAM>: lr
       <ENV_TYPE>: <basic_envs>
+  run_ids:
+    (CartPole-v1):
+      tws47f2511210007313e4:
+        status: RUNNING
+        submission_id: pbt_lr_base_CartPole-v1_0030
+    (Acrobot-v1):
+      tws47f251121000761eb4:
+        status: RUNNING
+        submission_id: pbt_lr_base_Acrobot-v1_0030
+    (LunarLander-v3):
+      tws47f2511210007c41a4:
+        status: RUNNING
+        submission_id: pbt_lr_base_LunarLander-v3_0030
   run_ids_no_pbt:
     (CartPole-v1):
       tws47f25111703370cb24:
