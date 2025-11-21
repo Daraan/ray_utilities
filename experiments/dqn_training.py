@@ -8,8 +8,6 @@ Deep Q-Network experiments.
 
 import os
 
-import ray
-
 # Enable shell completion for this file
 import default_arguments.PYTHON_ARGCOMPLETE_OK
 from experiments.ray_init_helper import init_ray_with_setup

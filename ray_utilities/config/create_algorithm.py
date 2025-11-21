@@ -345,7 +345,7 @@ def create_algorithm_config(
             epsilon=args.get("epsilon", [(0, 1.0), (10000, 0.05)]),
             double_q=args.get("double_q", True),
             dueling=args.get("dueling", True),
-            num_atoms=args.get("num_atoms", 0),  # FIXME: hardcoded 0 - has no num_atoms parameter
+            num_atoms=args.get("num_atoms", 1),  # FIXME: hardcoded 0 - has no num_atoms parameter
         )
         if model_config is None:
             model_config = {}

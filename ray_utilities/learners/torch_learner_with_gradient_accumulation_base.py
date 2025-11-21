@@ -25,6 +25,7 @@ if TYPE_CHECKING:
         ParamDict,
         ParamRef,
         TensorType,
+        StateDict,
     )
 
 
@@ -45,7 +46,7 @@ class TorchLearnerWithGradientAccumulationBase(TorchLearner):
     # [ ] What about last batches if not divisible by accumulate_gradients_every? Reset, keep until next batch?
     # [ ] Add scaling: mean (sum divided by accumulate_gradients_every) or just sum
     @override(TorchLearner)
-    def compute_gradients(self, loss_per_module: dict[ModuleID, TensorType], **kwargs):  # noqa: ARG002
+    def compute_gradients(self, loss_per_module: dict[ModuleID, TensorType], **kwargs) -> ParamDict:  # noqa: ARG002
         self._step_count += 1
         accumulate_gradients_every = self.config.learner_config_dict["accumulate_gradients_every"]
         update_gradients_this_step = self._step_count % accumulate_gradients_every == 0
@@ -91,7 +92,7 @@ class TorchLearnerWithGradientAccumulationBase(TorchLearner):
         return {}
 
     @override(TorchLearner)
-    def apply_gradients(self, gradients_dict):
+    def apply_gradients(self, gradients_dict: ParamDict):
         """
         Apply gradients only when accumulation cycle is complete, compatible with TorchLearner interface.
         Args:
@@ -126,7 +127,7 @@ class TorchLearnerWithGradientAccumulationBase(TorchLearner):
         *,
         not_components: str | Collection[str] | None = None,
         **kwargs,
-    ):
+    ) -> StateDict:
         state_dict = super().get_state(components, not_components=not_components, **kwargs)
         state_dict.update(
             {
@@ -138,7 +139,7 @@ class TorchLearnerWithGradientAccumulationBase(TorchLearner):
         )
         return state_dict
 
-    def set_state(self, state) -> None:
+    def set_state(self, state: StateDict) -> None:
         super().set_state(state)
         self._step_count = state.get("step_count", 0)
         self._gradient_updates = state.get("gradient_updates", 0)
