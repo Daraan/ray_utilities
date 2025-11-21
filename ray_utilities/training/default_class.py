@@ -86,6 +86,7 @@ if TYPE_CHECKING:
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
     from ray.rllib.utils.metrics.stats import Stats
     from ray.rllib.utils.typing import StateDict
+    from ray.tune.experiment.trial import _TrialInfo
     from tqdm import tqdm
     from typing_extensions import NotRequired
 
@@ -1104,6 +1105,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         self.save_to_path(
             (Path(checkpoint_dir)).absolute().as_posix(), state=cast("dict[str, Any]", state)
         )  # saves components
+        # Also store marker marker of trial id and current step
+        try:
+            Path(checkpoint_dir, f"{self.config['experiment_key']}_{self._current_step}.marker").touch()
+        except (OSError, KeyError, AttributeError) as e:
+            _logger.error("Failed to create checkpoint marker file: %s", e)
         return {
             "state": state,  # contains most information
             "algorithm_checkpoint_dir": algorithm_checkpoint_dir,
@@ -1734,9 +1740,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
         """
         metadata = super().get_metadata()
+        if self._trial_info:
+            metadata["trial_id"] = cast("_TrialInfo", self._trial_info).trial_id
+        if "experiment_key" in self.config:
+            metadata["experiment_key"] = self.config["experiment_key"]
+        metadata["current_step"] = self._current_step
         try:
             metadata["ray_utilities_version"] = importlib.metadata.version("ray_utilities")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             _logger.error("Failed to get ray_utilities_version: %s", e)
         if self._git_repo_sha == _UNKNOWN_GIT_SHA:
             repo = None

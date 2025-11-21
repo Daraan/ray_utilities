@@ -1455,6 +1455,7 @@ class DummyTrial:
         self.trial_id = trial_id
         self._finished = finished
         self.config = config if config is not None else {}
+        self.local_experiment_path = "testing"
 
     def is_finished(self):
         return self._finished
@@ -1472,7 +1473,8 @@ class DummyState:
 
 
 class PBTQuantileNaNTest(unittest.TestCase):
-    def test_nan_last_score_in_quantiles(self):
+    @mock.patch.object(TopPBTTrialScheduler, "save_state")
+    def test_nan_last_score_in_quantiles(self, _):
         # Create three trials: one with nan, two with valid scores
         # Patch _trial_state with dummy states
 
