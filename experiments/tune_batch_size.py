@@ -12,8 +12,6 @@ from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
 os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
 
 if __name__ == "__main__":
-    PPOMLPSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
-    PPOMLPSetup.group_name = "tune:batch_size"  # pyright: ignore
     from experiments.create_tune_parameters import (
         default_distributions,
         load_distributions_from_json,
@@ -40,11 +38,13 @@ if __name__ == "__main__":
         "--comet", "offline+upload",
         "--log_level", "INFO",
     ):  # fmt: skip
-        setup = PPOMLPSetup(
+        with PPOMLPSetup(
             config_files=["experiments/default.cfg", "experiments/models/mlp/default.cfg"],
             trial_name_creator=extend_trial_name(insert=["<batch_size>"], prepend="Tune_BatchSize"),
-        )
-        assert setup.args.tune
+        ) as setup:
+            assert setup.args.tune
+            setup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
+            setup.GROUP = "tune-batch_size_<tune>" if len(setup.args.tune) > 1 else "tune-batch_size"
         assert "batch_size" in setup.args.tune or "train_batch_size_per_learner" in setup.args.tune
         setup.param_space["train_batch_size_per_learner"] = HYPERPARAMETERS["batch_size"]
         with init_ray_with_setup(setup, runtime_env=get_runtime_env()):

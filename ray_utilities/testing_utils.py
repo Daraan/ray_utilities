@@ -640,7 +640,8 @@ class TestHelpers(unittest.TestCase):
         os.environ["CI"] = "1"  # Indicate that we are in a CI environment
         cls._disable_ray_auto_init()
         os.environ["RAY_UTILITIES_STORAGE_PATH"] = "./outputs/experiments/TESTING"
-        ExperimentSetupBase.storage_path = "./outputs/experiments/TESTING"
+        ExperimentSetupBase.base_storage_path = "./outputs/experiments/TESTING"
+        ExperimentSetupBase.PROJECT = "TEST-PROJECT"
         sys.modules["selenium"] = mock.MagicMock()
         cls._setup_backup_mock: mock._patch_pass_arg[mock.MagicMock | mock.AsyncMock] = mock.patch.object(
             ExperimentSetupBase, ExperimentSetupBase._backup_for_restore.__name__, return_value=None
@@ -1717,7 +1718,12 @@ class TestHelpers(unittest.TestCase):
             if "tune_parameters" in setup_data1 and "tune_parameters" in setup_data2:
                 self.compare_param_space(setup_data1["tune_parameters"], setup_data2["tune_parameters"])
                 keys.remove("tune_parameters")
-
+            if "GROUP" in setup_data1 or "GROUP" in setup_data2:
+                self.assertEqual(setup_data1["GROUP"], setup_data2["GROUP"])  # pyright: ignore[reportTypedDictNotRequiredAccess]
+                keys.remove("GROUP")
+            if "PROJECT" in setup_data1 or "PROJECT" in setup_data2:
+                self.assertEqual(setup_data1["PROJECT"], setup_data2["PROJECT"])  # pyright: ignore[reportTypedDictNotRequiredAccess]
+                keys.remove("PROJECT")
             self.assertEqual(len(keys), 0, f"Unchecked keys: {keys}")  # checked all params
             self.compare_param_space(param_space1, param_space2)  # pyright: ignore[reportArgumentType]
 

@@ -437,8 +437,8 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             logger.info("Disabling checkpointing by Tuner, handled by PBT scheduler.")
         return RunConfig(
             # Trial artifacts are uploaded periodically to this directory
-            storage_path=str(self.get_storage_path()),
             name=self.get_experiment_name(),
+            storage_path=str(self.get_storage_path()),
             log_to_file=False,  # True for hydra like logging to files; or (stoud, stderr.log) files
             # JSON, CSV, and Tensorboard loggers are created automatically by Tune
             # to disable set TUNE_DISABLE_AUTO_CALLBACK_LOGGERS environment variable to "1"
@@ -591,6 +591,11 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             param_space = self._grid_search_to_normal_search_space(self._setup.param_space)
         else:
             param_space = self._setup.param_space
+        # NOTE: This allows for late setup of group / project names
+        if param_space.get("group", None) is None:
+            param_space["group"] = self._setup.group_name
+        if param_space.get("project") in ("Unnamed Project", None):
+            param_space["project"] = self._setup.project
         if "minibatch_size" in param_space:
             if "train_batch_size_per_learner" not in param_space:
                 # Let searcher know which train_batch_size is used. Alternatively could set this info on the searcher

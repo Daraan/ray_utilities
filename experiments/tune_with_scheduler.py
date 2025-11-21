@@ -26,8 +26,6 @@ if __name__ == "__main__":
         write_distributions_to_json,
     )
 
-    PPOMLPWithPBTSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
-    PPOMLPWithPBTSetup.group_name = "pbt:batch_size"  # pyright: ignore
     HYPERPARAMETERS = load_distributions_from_json(
         write_distributions_to_json(default_distributions, PPOMLPWithPBTSetup.TUNE_PARAMETER_FILE)
     )
@@ -54,14 +52,15 @@ if __name__ == "__main__":
         "--perturbation_interval", 1/8,
         config_files=["experiments/pbt.cfg"]
     ):  # fmt: skip
-        setup = PPOMLPWithPBTSetup(
+        with PPOMLPWithPBTSetup(
             config_files=["experiments/pbt.cfg", "experiments/default.cfg", "experiments/models/mlp/default.cfg"],
-            # TODO: Trials are reused, trial name might be wrong then,
-        )
-        assert setup.args.tune
-        setup._tune_trial_name_creator = extend_trial_name(
-            append=[f"<{k}>" for k in setup.args.tune], prepend="PBT_" + "_".join(setup.args.tune)
-        )
+        ) as setup:
+            setup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB, parent directory
+            setup.GROUP = "pbt-<tune>"  # group on Comet / WandB, sub directory
+            assert setup.args.tune
+            setup._tune_trial_name_creator = extend_trial_name(
+                append=[f"<{k}>" for k in setup.args.tune], prepend="PBT_" + "_".join(setup.args.tune)
+            )
         mutations: dict[str, KeepMutation[object]] = {k: KeepMutation() for k in setup.args.tune}
 
         setup.args.command.set_hyperparam_mutations(mutations)  # pyright: ignore[reportArgumentType]
