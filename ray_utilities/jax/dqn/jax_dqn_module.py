@@ -200,6 +200,8 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
         Args:
             batch: Input batch with observations
             parameters: Network parameters (if None, uses current states)
+                Note: In the current placeholder implementation, parameters are
+                accepted but not actually used by the lambda function models.
 
         Returns:
             Dictionary containing:
@@ -207,6 +209,12 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
                 - "qf_logits": Logits (for distributional DQN)
                 - "qf_probs": Probabilities (for distributional DQN)
                 - "atoms": Support atoms (for distributional DQN)
+        
+        Warning:
+            The parameters argument extends the parent DefaultDQNRLModule interface.
+            This is needed for JAX gradient computation but may cause interface
+            compatibility issues. Consider removing it and managing parameters
+            internally via states once real Flax models are integrated.
         """
         if parameters is None:
             # Type cast needed because states has broader type for parent class compatibility
@@ -227,9 +235,16 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
         Args:
             batch: Input batch with observations
             parameters: Target network parameters (if None, uses current target states)
+                Note: In the current placeholder implementation, parameters are
+                accepted but not actually used by the lambda function models.
 
         Returns:
             Dictionary with target Q-value predictions
+        
+        Warning:
+            The parameters argument may not be needed in the public API if states
+            are properly managed internally. Consider whether this should be a
+            private implementation detail once real Flax models are integrated.
         """
         if parameters is None:
             # Type cast needed because states has broader type for parent class compatibility
@@ -252,15 +267,18 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
             batch: Input batch with observations (JAX arrays)
             encoder: JAX/Flax encoder model
             head: JAX/Flax head model(s)
-            parameters: Model parameters to use (if None, uses model's internal params)
+            parameters: Model parameters to use (CURRENTLY IGNORED in placeholder impl)
 
         Returns:
             Dictionary with Q-value predictions and optionally logits/probs/atoms
         
-        Note:
-            For now, encoder and head are placeholder lambda functions that don't
-            accept parameters. When real Flax models are integrated (via catalog),
-            this method should pass parameters to model calls like:
+        Warning:
+            This is a placeholder implementation. The `parameters` argument is
+            accepted for API consistency but currently ignored because encoder and
+            head are lambda functions, not real Flax models.
+            
+            When real Flax models are integrated (via catalog in setup()), this
+            method will pass parameters to model calls:
             `encoder(obs, parameters=params)` instead of `encoder(obs)`.
         """
         obs = batch.get("obs")
@@ -273,7 +291,8 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
         
         # TODO: Once real Flax models are integrated, pass parameters:
         # encoder_out = encoder(obs, parameters=parameters["encoder"])
-        # For now, lambdas don't accept parameters
+        # For now, lambdas don't accept parameters - parameters argument is kept for
+        # API consistency but ignored until real Flax models are integrated.
         encoder_out = encoder(obs)
         output = {}
 
