@@ -1835,6 +1835,7 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
             state.last_score = 10  # Very bad score
             state.last_update_timestamp = current_time - 2000
             state.total_time_spent = total_time_spent  # Much higher than others
+
         update(slow_trial_1)
 
         result = {

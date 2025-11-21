@@ -13,12 +13,21 @@ Train a PPO agent on CartPole-v1 with default settings and log to WandB after th
 python experiments/default_training.py --env CartPole-v1 --wandb offline+upload
 ```
 
+Train a DQN agent with the same setup:
+
+```bash
+python experiments/dqn_training.py --env CartPole-v1 --wandb offline+upload
+# Or use the unified default_training script:
+python experiments/default_training.py --algorithm dqn --env CartPole-v1 --wandb offline+upload
+```
+
 
 ## Features
 
 
 Many features are stand-alone and can be used independently. The main features include:
 
+- **Multiple RL Algorithms**: Support for PPO (Proximal Policy Optimization) and DQN (Deep Q-Networks) with seamless switching via `--algorithm` flag
 - **JAX PPO for RLlib**: A JAX-based implementation of the Proximal Policy Optimization (PPO) algorithm compatible with RLlib Algorithm.
 - **Ray + Optuna Grid Search + Optuna Pruners**: Extends ray's `OptunaSearch` to be compatible with RLlib and supports advanced pruners.
 - **Experiment Framework**: A base class for setting up experiments with dynamic parameters and parameter spaces, easily run via CLI and `ray.tune.Tuner`.

@@ -1277,8 +1277,9 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         # If we are less than 15 min behind other trials (excluding current), ignore
         # Exclude current trial from comparison to avoid self-comparison
         other_trial_timestamps = [
-            self._trial_state[t].last_update_timestamp for t in self._trial_state if t is not trial
-            and self._trial_state[t].last_train_time > state.last_train_time
+            self._trial_state[t].last_update_timestamp
+            for t in self._trial_state
+            if t is not trial and self._trial_state[t].last_train_time > state.last_train_time
         ]
         if other_trial_timestamps and get_time() - max(other_trial_timestamps) < 900:
             return decision

@@ -9,11 +9,11 @@ inputs:
   install-args:
     description: 'Arguments to pass to pip install'
     required: false
-    default: '.[test]'
+    default: '.[test,jax]'
   use-pip-cache:
     description: 'Whether to use pip cache'
     required: false
-    default: false
+    default: "false"
 outputs:
   venv-cache-hit:
     description: 'Whether the virtualenv cache was hit'

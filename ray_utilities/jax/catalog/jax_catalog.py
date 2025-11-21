@@ -13,7 +13,11 @@ if TYPE_CHECKING:
 
 
 class JaxCatalog(Catalog):
-    """Provides _get_dist_cls_from_action_space to return JAX based action distributions."""
+    """Provides JAX-based models and distributions.
+
+    Workaround: RLlib requires framework="torch" but we build JAX models by
+    intercepting the encoder_config's build() call.
+    """
 
     @classmethod
     def _get_dist_cls_from_action_space(  # pyright: ignore[reportIncompatibleMethodOverride] # ray is wrong should return type
