@@ -4,8 +4,7 @@ from typing import TYPE_CHECKING
 
 from ray.tune.callback import Callback
 
-from ray_utilities.constants import FORK_FROM
-from ray_utilities.misc import make_experiment_key
+from ray_utilities.tune.experiments import set_experiment_key_on_trial
 
 if TYPE_CHECKING:
     from ray.tune.experiment.trial import Trial
@@ -31,11 +30,6 @@ class AddExperimentKeyCallback(Callback):
             **info: Kwargs dict for forward compatibility.
 
         """
-        if FORK_FROM not in trial.config:
-            trial.config["experiment_key"] = make_experiment_key(trial)
-        elif fork_id := trial.config[FORK_FROM].get("fork_id_this_trial"):
-            trial.config["experiment_key"] = fork_id
-        else:
-            trial.config["experiment_key"] = make_experiment_key(trial, trial.config[FORK_FROM])
-        if "original_experiment_key" not in trial.config:
-            trial.config["original_experiment_key"] = trial.config["experiment_key"]
+        # NOTE: This callback is called *after* the trial has been started, adjusting the config here
+        # will not have the desired effect of having it available during Trainable.__init__
+        set_experiment_key_on_trial(trial)

@@ -122,6 +122,7 @@ class TestTopTrialScheduler(DisableLoggers, TestHelpers):
             state.last_checkpoint = None
             state.last_perturbation_time = 0
             state.last_result = {"reward": score}
+            state.last_train_time = 0
 
             self.trials.append(trial)
             self.trial_scores.append(score)
@@ -216,6 +217,7 @@ class TestTopTrialScheduler(DisableLoggers, TestHelpers):
         self.assertIsNone(self.scheduler._current_assignments)
 
     @patch("ray.tune.execution.tune_controller.TuneController")
+    @patch("pathlib.Path.open", new=MagicMock())
     def test_on_trial_complete(self, mock_controller):
         """Test on_trial_complete resets exploitation assignments."""
         # Setup current assignments
@@ -224,7 +226,7 @@ class TestTopTrialScheduler(DisableLoggers, TestHelpers):
 
         # Call on_trial_complete
         trial = self.trials[0]
-        result = {"reward": 100}
+        result = {"reward": 100, "training_iteration": 1}
 
         # Mock parent class method
         self.scheduler.on_trial_complete(mock_controller, trial, result)

@@ -241,9 +241,9 @@ pbt_num_envs:
     (Reacher-v5):
       tws47f25111613166c304:
         status: SUCCEEDED
-        comment: single env worked best, most envs worst. 2 envs at the start 
-          superior to all others. reducing to single env after first 
-          perturbation big boost. 2 & 4 envs were good as well. Strange drop at 
+        comment: single env worked best, most envs worst. 2 envs at the start
+          superior to all others. reducing to single env after first
+          perturbation big boost. 2 & 4 envs were good as well. Strange drop at
           3rd perturbation, recovered at 4th
         submission_id: pbt_num_envs_Reacher-v5_5343
     (Swimmer-v5):
@@ -251,7 +251,7 @@ pbt_num_envs:
     (Walker2d-v5):
       tws47f251116131630b04: RUNNING
 pbt_num_envs_large:
-  comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16) 
+  comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale
   entrypoint_resources:
     persistent_node: 1
@@ -272,10 +272,10 @@ pbt_num_envs_large:
       tws47f251116132047a84: DONE?
     (Ant-v5):
       tws47f2511161804f37c4:
-        status: RESTORING - possibly messed up perturbation ray job submit 
-          --working-dir "." --entrypoint-memory 1250000000 
+        status: RESTORING - possibly messed up perturbation ray job submit
+          --working-dir "." --entrypoint-memory 1250000000
           --entrypoint-resources '{"persistent_node":1}' --entrypoint-num-cpus 1
-          --submission-id pbt_num_envs_large_Ant-v5_restore -- python 
+          --submission-id pbt_num_envs_large_Ant-v5_restore -- python
           experiments/tune_with_scheduler.py --restore_path
     (InvertedDoublePendulum-v5):
       tws47f25111618057db34:
@@ -316,15 +316,15 @@ pbt_lr_base:
   run_ids:
     (CartPole-v1):
       tws47f2511210007313e4:
-        status: RUNNING
+        status: FAILED
         submission_id: pbt_lr_base_CartPole-v1_0030
     (Acrobot-v1):
       tws47f251121000761eb4:
-        status: RUNNING
+        status: FAILED
         submission_id: pbt_lr_base_Acrobot-v1_0030
     (LunarLander-v3):
       tws47f2511210007c41a4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_lr_base_LunarLander-v3_0030
   run_ids_no_pbt:
     (CartPole-v1):

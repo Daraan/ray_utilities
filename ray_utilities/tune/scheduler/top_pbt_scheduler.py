@@ -19,6 +19,7 @@ from __future__ import annotations
 import itertools
 import logging
 import math
+import pickle
 import random
 import shutil
 from collections.abc import Iterable
@@ -65,6 +66,8 @@ from ray_utilities.misc import (
     warn_if_slow,
 )
 from ray_utilities.nice_logger import ImportantLogger
+from ray_utilities.tune.experiments import CONFIG_HASH_EXCLUDE_KEYS
+from ray_utilities.tune.scheduler.add_experiment_keys_mixin import AddExperimentKeysMixin
 from ray_utilities.tune.scheduler.run_slow_trials_first_mixin import RunSlowTrialsFirstMixin
 from ray_utilities.typing import ForkFromData, Forktime, ForktimeTuple
 
@@ -168,6 +171,21 @@ def wrap_custom_perturbed_hparams(func: Callable[[dict], dict], mutation_keys) -
 
 def _dummy_pass_through(new_config: dict) -> dict:
     return new_config
+
+
+# Convert Trial keys to trial IDs for serialization
+# NOTE: In this function do not assume that the keys are really trial objects, they might be strings from restore
+@overload
+def _trial_id(trial: None) -> None: ...
+
+
+@overload
+def _trial_id(trial: Trial | str) -> str: ...
+
+
+def _trial_id(trial: Trial | str | None) -> str | None:
+    """Helper function that returns the trials id, or a string if a string is given."""
+    return trial.trial_id if isinstance(trial, Trial) else trial
 
 
 class KeepMutation(Generic[_T]):
@@ -345,7 +363,7 @@ class CyclicMutation(Generic[_T]):
 SAVE_ALL_CHECKPOINTS = False
 
 
-class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
+class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, PopulationBasedTraining):
     """Enhanced Population Based Training scheduler with grid search and flexible quantiles.
 
     This scheduler extends Ray Tune's PopulationBasedTraining with support for grid search
@@ -411,6 +429,9 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         "_top_pbt_perturbed",
     )
     """Keys inserted into the config of trials to track PBT state."""
+
+    _trial_run_states_after_pkl: dict[str, str] | None = None
+    """Temporary storage for trial run states after unpickling."""
 
     def __init__(
         self,
@@ -581,7 +602,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             True if the config was modified (i.e., reseeded), False if the config was already unique,
             None if no reseeding was performed due to missing "env_seed" key or its value being None.
         """
-        frozen_config = deep_freeze(config)
+        frozen_config = deep_freeze({k: v for k, v in config.items() if k not in CONFIG_HASH_EXCLUDE_KEYS})
         counter = 0
         hash_key = hash(frozen_config)
         initial_seed = self._trial_initial_seeds.get(trial, None) or config.get("env_seed")
@@ -603,53 +624,70 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         self._seen_config_hashes.add(hash_key)
         return counter > 0
 
-    def on_trial_add(self, tune_controller: TuneController, trial: Trial):
+    def on_trial_add(self, tune_controller: TuneController, trial: Trial, **kwargs):  # noqa: ARG002
         """Called when a new trial is added to the Tuner.
 
         Updates the trials config based on :attr:`hyperparam_mutations`.
         """
         # NOTE: On restore we might add a trial that is already at the perturbation point and should stay paused
+        min_time_after_restore = float("inf")
         super().on_trial_add(tune_controller, trial)
-        if self._unpickled and trial.last_result:
-            last_time = trial.last_result[self._time_attr]
-            # self._next_perturbation_sync is likely the inital value
-            # NOTE: Should also be able to find the next perturbation interval with parent_time in fork_data
-            if last_time % self._perturbation_interval == 0:
-                # NOTE: This only works if no overstepping happens during training
-                # NOTE 2: Scheduling a trial pause causes error - cannot do that - might leave us with only PENDING in choose_trial_to_run
-                # tune_controller.pause_trial(trial, should_checkpoint=False)
-                if last_time > self._next_perturbation_sync:
-                    # Make them equal. In case all are pause, choose_trial_to_run will handle that case
-                    self._next_perturbation_sync = last_time
+        if self._unpickled:
+            # Load saved state for this trial
+            if not self._state_loaded_after_pkl:
+                # First check local path then remote path if lookup fails
+                if not self.load_state(Path(trial.local_experiment_path)):
+                    if not self.load_state(Path(trial.remote_experiment_path)):
+                        ImportantLogger.important_warning(logger, "Could not load PBT state after it was unpickled.")
+            # This might pause the trial if needed
+            self._update_trial_states_after_unpickle(trial)
+            if trial.last_result:
+                last_time = trial.last_result[self._time_attr]
+                min_time_after_restore = min(min_time_after_restore, last_time)  # TODO: use or remove
+                # self._next_perturbation_sync is likely the inital value
+                # NOTE: Should also be able to find the next perturbation interval with parent_time in fork_data
+                if last_time % self._perturbation_interval == 0:
+                    # NOTE: This only works if no overstepping happens during training
+                    # NOTE 2: Scheduling a trial pause causes error - cannot do that - might leave us with only PENDING in choose_trial_to_run
+                    # tune_controller.pause_trial(trial, should_checkpoint=False)
+                    if last_time > self._next_perturbation_sync:
+                        # Make them equal. In case all are pause, choose_trial_to_run will handle that case
+                        self._next_perturbation_sync = last_time
+                        logger.info(
+                            "Updated _next_perturbation_sync to %s after adding trial %s with last_time %s",
+                            self._next_perturbation_sync,
+                            trial,
+                            last_time,
+                        )
+                elif last_time > self._next_perturbation_sync:
+                    # set to last multiple BELOW of this trial - might allow some stragglers to catch up
+                    # In case all are PENDING chose_trial_to_run has to handle it
+                    self._next_perturbation_sync = (
+                        last_time // self._perturbation_interval
+                    ) * self._perturbation_interval
                     logger.info(
                         "Updated _next_perturbation_sync to %s after adding trial %s with last_time %s",
                         self._next_perturbation_sync,
                         trial,
                         last_time,
                     )
-            elif last_time > self._next_perturbation_sync:
-                # set to last multiple BELOW of this trial - might allow some stragglers to catch up
-                # In case all are PENDING chose_trial_to_run has to handle it
-                self._next_perturbation_sync = (last_time // self._perturbation_interval) * self._perturbation_interval
-                logger.info(
-                    "Updated _next_perturbation_sync to %s after adding trial %s with last_time %s",
-                    self._next_perturbation_sync,
-                    trial,
-                    last_time,
-                )
-            flat_results = flatten_dict(trial.last_result)
-            if self.metric not in flat_results:
-                logger.warning(
-                    "Trial %s added with last_result %s but metric %s not found - cannot record last score.",
-                    trial,
-                    trial.last_result,
-                    self.metric,
-                )
-                flat_results[self.metric] = float("nan")
-                self._save_trial_state(self._trial_state[trial], last_time, flat_results, trial)
-                self._trial_state[trial].last_score = None  # avoid nan sorting bug
-            else:
-                self._save_trial_state(self._trial_state[trial], last_time, flat_results, trial)
+                flat_results = flatten_dict(trial.last_result)
+                if self.metric not in flat_results:
+                    logger.warning(
+                        "Trial %s added with last_result %s but metric %s not found - cannot record last score.",
+                        trial,
+                        trial.last_result,
+                        self.metric,
+                    )
+                    flat_results[self.metric] = float("nan")
+                    self._save_trial_state(
+                        self._trial_state[trial], last_time, flat_results, trial, save_scheduler_state=False
+                    )
+                    self._trial_state[trial].last_score = None  # avoid nan sorting bug
+                else:
+                    self._save_trial_state(
+                        self._trial_state[trial], last_time, flat_results, trial, save_scheduler_state=False
+                    )
         # Check minibatch_size constraint
         if "minibatch_size" in trial.config:
             minibatch_size = trial.config["minibatch_size"]
@@ -903,6 +941,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         For trials in the lower quantile, evenly distribute which top trial
         they exploit to ensure balanced exploitation.
         """
+        self._block_resume_after_unpickle = False  # XXX: Remove after some testing, only relevant for synch restore
         # Note, is iterated in order: upper_quantile, not in quantiles, lower_quantile
         if trial.storage and trial.storage and "_ray_pkg_" in trial.storage.storage_fs_path:
             logger.error("Trial %s has storage path in _ray_pkg_: %s", trial, trial.storage.storage_fs_path)
@@ -1129,8 +1168,10 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         time: int,
         result: AlgorithmReturnData | dict,
         trial: Trial,
+        trials: Optional[List[Trial]] = None,
         *,
         update_timestamp: bool = True,
+        save_scheduler_state: bool = True,
     ):
         """Save trial state, optionally updating the wall-clock timestamp.
 
@@ -1153,6 +1194,11 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         if update_timestamp:
             state.last_update_timestamp = get_time()  # pyright: ignore[reportAttributeAccessIssue]
         state.total_time_spent = result.get(TIME_TOTAL_S, 0.0)  # pyright: ignore[reportAttributeAccessIssue]
+        if save_scheduler_state:
+            self.save_state(
+                Path(trial.local_experiment_path),
+                trial_run_states={_trial_id(trial): trial.status for trial in trials if trial} if trials else None,
+            )
         return score
 
     def reset_exploitations(self):
@@ -1254,7 +1300,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
             max_other_time = None
         # If this trial was just started late and is not slow by itself continue
         # NOTE: A problem is that good trials have more episodes and are therefore slower
-        if other_total_times and (trial_total_time <= max_other_time + (min(max_other_time * 0.05, 300))):
+        if max_other_time and (trial_total_time <= max_other_time + (min(max_other_time * 0.05, 300))):
             return decision
         if (
             time_since_perturb
@@ -1277,8 +1323,9 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         # If we are less than 15 min behind other trials (excluding current), ignore
         # Exclude current trial from comparison to avoid self-comparison
         other_trial_timestamps = [
-            self._trial_state[t].last_update_timestamp for t in self._trial_state if t is not trial
-            and self._trial_state[t].last_train_time > state.last_train_time
+            self._trial_state[t].last_update_timestamp
+            for t in self._trial_state
+            if t is not trial and self._trial_state[t].last_train_time > state.last_train_time
         ]
         if other_trial_timestamps and get_time() - max(other_trial_timestamps) < 900:
             return decision
@@ -1294,13 +1341,14 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         # PROBLEM: if this trial is far behind it is not really valid to compare with the scores that are from much later
         # Exclude states of behind trials
         lowest_states = sorted(
-            (state for state in self._trial_state.values() if state.last_score is not None), key=lambda s: s.last_score
+            (state for state in self._trial_state.values() if state.last_score is not None),
+            key=lambda s: cast("float", s.last_score),
         )
         if len(lowest_states) == 0:
             return decision
         # choose one of the last three depending on how many trials there are
         compare_state = lowest_states[min(3, int(len(lowest_states) * 0.20)) - 1]
-        compare_score = compare_state.last_score
+        compare_score = cast("float", compare_state.last_score)
         # scale compare score down depending on the step difference
         step_diff_scale = (
             max(0, compare_state.last_train_time - time_of_slow_interval) / self._perturbation_interval / 20
@@ -1315,7 +1363,9 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         # Expect when a good trial is slow, but then we do not end up here.
         perturbation_time = max(state.last_train_time for state in self._trial_state.values())
         # Save state without updating timestamp to avoid interfering with other slow trials' detection
-        self._save_trial_state(state, perturbation_time, result, trial, update_timestamp=False)
+        self._save_trial_state(
+            state, perturbation_time, result, trial, update_timestamp=False, trials=tune_controller.get_trials()
+        )
         # TODO If there are multiple slow do not perturb yet just pause the others.
         if still_active_trials == 0:
             logger.info("Last trial %s is a bad performing straggler. Starting early PBT perturbation.", trial)
@@ -1338,6 +1388,12 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         )
         # Reset assignments when trials complete to ensure proper redistribution
         self.reset_exploitations()
+        self._save_trial_state(
+            self._trial_state[trial],
+            self._trial_state[trial].last_train_time,
+            cast("dict", result),
+            trial,
+        )
 
     # NOTE: Tune does NOT support get_state for schedulers yet, so this is custom
 
@@ -1351,22 +1407,18 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         # TODO: possiblly use self.__dict__
         state = super().get_state() if hasattr(super(), "get_state") else {}  # pyright: ignore[reportAttributeAccessIssue]
 
-        # Convert Trial keys to trial IDs for serialization
         state.update(
             {
-                "trial_initial_seeds": {
-                    (trial.trial_id if trial is not None else None): seed
-                    for trial, seed in self._trial_initial_seeds.items()
-                },
+                "trial_initial_seeds": {_trial_id(trial): seed for trial, seed in self._trial_initial_seeds.items()},
                 "reseed": self._reseed,
-                "current_trial_keys": {trial.trial_id: key for trial, key in self.current_trial_keys.items()},
+                "current_trial_keys": {_trial_id(trial): key for trial, key in self.current_trial_keys.items()},
                 "fork_ids": {
-                    (trial.trial_id, (parent.trial_id if parent else None, step) if parent_step else None): fork_ids
+                    (_trial_id(trial), (_trial_id(parent), step) if parent_step else None): fork_ids
                     for (trial, parent_step), fork_ids in self._fork_ids.items()
                     for parent, step in ([parent_step] if parent_step else [(None, None)])
                 },
                 "fork_time_data": {
-                    (trial.trial_id, (parent.trial_id if parent else None, step) if parent_step else None): time_data
+                    (_trial_id(trial), (_trial_id(parent), step) if parent_step else None): time_data
                     for (trial, parent_step), time_data in self._fork_time_data.items()
                     for parent, step in ([parent_step] if parent_step else [(None, None)])
                 },
@@ -1374,9 +1426,79 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
                 "num_samples": self._num_samples,
                 "seen_config_hashes": list(self._seen_config_hashes),
                 "prune_late_trials": self.prune_late_trials,
+                "next_perturbation_sync": self._next_perturbation_sync,
             }
         )
         return state
+
+    def save_state(self, path, trial_run_states: dict[str, str] | None = None) -> Path:
+        state = self.get_state()
+        if trial_run_states is not None:
+            state["trial_run_states"] = trial_run_states
+        save_file = Path(path) / "top_pbt_scheduler_state.pkl"
+        with save_file.open("wb") as f:
+            pickle.dump(state, f)
+        return save_file
+
+    def _update_trial_states_after_unpickle(self, trial: Trial):
+        # Need to replace the trial_id keys with Trial objects after unpickling
+        if self._state_loaded_after_pkl:
+            if trial.trial_id in self._trial_initial_seeds:
+                seed = self._trial_initial_seeds.pop(trial.trial_id)
+                self._trial_initial_seeds[trial] = seed
+
+            if trial.trial_id in self.current_trial_keys:
+                key = self.current_trial_keys.pop(trial.trial_id)
+                self.current_trial_keys[trial] = key
+
+            # Update fork_ids
+            updated_fork_ids = {}
+            for (trial_id, parent_data), fork_ids in self._fork_ids.items():
+                if trial_id == trial.trial_id:  # pyright: ignore[reportUnnecessaryComparison]
+                    updated_key = (trial, parent_data)
+                else:
+                    updated_key = (trial_id, parent_data)
+                updated_fork_ids[updated_key] = fork_ids
+            self._fork_ids = updated_fork_ids
+
+            # Update fork_time_data
+            updated_fork_time_data = {}
+            for (trial_id, parent_data), time_data in self._fork_time_data.items():
+                if trial_id == trial.trial_id:  # pyright: ignore[reportUnnecessaryComparison]
+                    updated_key = (trial, parent_data)
+                else:
+                    updated_key = (trial_id, parent_data)
+                updated_fork_time_data[updated_key] = time_data
+            self._fork_time_data = updated_fork_time_data
+
+            if self._trial_run_states_after_pkl and "trial_run_states" in self._trial_run_states_after_pkl:
+                saved_state = self._trial_run_states_after_pkl.get(trial.trial_id)
+                if saved_state != trial.status:
+                    logger.info("Restoring trial %s status from %s to %s", trial.trial_id, trial.status, saved_state)
+                    trial.set_status(saved_state)
+                elif saved_state is None:
+                    logger.warning(
+                        "No saved state for trial %s in TopPBTTrialScheduler state. Current status: %s",
+                        trial.trial_id,
+                        trial.status,
+                    )
+                # Do not use it more than once
+                self._trial_run_states_after_pkl.pop(trial.trial_id, None)
+
+    def load_state(self, path) -> bool:
+        if self._state_loaded_after_pkl:
+            logger.warning("TopPBTTrialScheduler state has already been loaded after unpickling. Skipping load_state")
+            return False
+        state_file = Path(path) / "top_pbt_scheduler_state.pkl"
+        if not state_file.exists():
+            logger.warning("No TopPBTTrialScheduler state file found at %s. Skipping load_state.", state_file)
+            return False
+        with open(state_file, "rb") as f:
+            state = pickle.load(f)
+        self.set_state(state)
+        self._state_loaded_after_pkl = True
+        self._trial_run_states_after_pkl = state.get("trial_run_states", None)
+        return True
 
     def set_state(self, state: dict) -> None:
         """Set the state of the scheduler from checkpoint data.
@@ -1423,6 +1545,7 @@ class TopPBTTrialScheduler(RunSlowTrialsFirstMixin, PopulationBasedTraining):
         self._seen_config_hashes = set(state.get("seen_config_hashes", []))
 
         self.prune_late_trials = state.get("prune_late_trials", False)
+        self._next_perturbation_sync = max(self._next_perturbation_sync, state.get("next_perturbation_sync", 0))
 
         logger.info(
             "Restored TopPBTTrialScheduler state: %d trial seeds, %d fork ids, %d seen configs",

@@ -20,6 +20,19 @@ class RunSlowTrialsFirstMixin(PopulationBasedTraining):
     _unpickled = False
     """Set to True on __setstate__ to indicate the object was unpickled."""
 
+    _state_loaded_after_pkl = False
+    """Set to True if the state was loaded from a checkpoint sometime after unpickling."""
+
+    _block_resume_after_unpickle = False
+    """
+    After restore trials that should be paused will be put into a PENDING -> RUNNING state
+
+    While this flag is set prevents PENDING trials to be chosen as candidates to run if their
+    last_train_time is less than the next_perturbation_sync time.
+
+    Set this to False again on checkpoint_or_exploit.
+    """
+
     def choose_trial_to_run(self, tune_controller: "TuneController") -> Optional[Trial]:
         """Ensures all trials get fair share of time (as defined by time_attr).
 
@@ -44,13 +57,6 @@ class RunSlowTrialsFirstMixin(PopulationBasedTraining):
                     candidates.append(trial)
         # Take trials with lowest last_train_time and secondary by batch size
         # so slower trials get scheduled first and at best run in parallel
-        candidates.sort(
-            key=lambda trial: (
-                self._trial_state[trial].last_train_time,
-                trial.config.get("minibatch_size", 256),
-                trial.config.get("train_batch_size_per_learner", 512),
-            )
-        )
         if (not some_unpaused or self._unpickled) and not candidates:
             if self._unpickled and all(t.status == Trial.PAUSED for t in trials):
                 # If not all trials were added yet we do not want to unpause.
@@ -82,7 +88,7 @@ class RunSlowTrialsFirstMixin(PopulationBasedTraining):
                         "All trials are paused. Increasing _next_perturbation_sync to %d to unpause trials.",
                         self._next_perturbation_sync,
                     )
-                elif sum(t.status == Trial.TERMINATED for t in trials) == len(trials) - 1:
+                elif sum(t.status in (Trial.ERROR, Trial.TERMINATED) for t in trials) == len(trials) - 1:
                     # if there is one last paused trial return int, something must have gotten mixed up somewhere
                     # NOTE: Might create an issue if another new trial should be added - but as we already waited 90s
                     # this might be unlikely.
@@ -90,15 +96,25 @@ class RunSlowTrialsFirstMixin(PopulationBasedTraining):
                         "Only one trial is not terminated - but was not selected as a candidate. "
                         "Scheduling the paused trial to continue progress."
                     )
-                    return next((t for t in trials if t.status == Trial.PAUSED), None) or None
+                    return next((t for t in trials if t.status in (Trial.PAUSED, Trial.PENDING)), None) or None
             return None
+        candidates.sort(
+            key=lambda trial: (
+                self._trial_state[trial].last_train_time,
+                trial.config.get("minibatch_size", 256),
+                trial.config.get("train_batch_size_per_learner", 512),
+            )
+        )
         self.__last_candidate__scheduled = time.time()
         return candidates[0] if candidates else None
 
     def __setstate__(self, state: dict) -> None:
         # we likely receive the state dict from right after the initialization, i.e. trial data is empty
         self._unpickled = True
+        self._block_resume_after_unpickle = True
         self.__last_candidate__scheduled = time.time()
+        state.pop("_state_loaded_after_pkl", None)
+        state.pop("_trial_run_states_after_pkl", None)
         if hasattr(super(), "__setstate__"):
             super().__setstate__(state)  # pyright: ignore[reportAttributeAccessIssue]
         else:
