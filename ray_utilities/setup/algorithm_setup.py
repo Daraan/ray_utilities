@@ -234,6 +234,20 @@ class PPOSetup(AlgorithmSetup[ParserType_co, "PPOConfig", "PPO"]):
     config_class = PPOConfig
     algo_class = PPO
 
+    def parse_args(
+        self, args: list[str] | None = None, *, known_only: bool | None = None, checkpoint: str | None = None
+    ):
+        namespace = super().parse_args(args, known_only=known_only, checkpoint=checkpoint)
+        if "ppo" not in namespace.algorithm.lower():
+            raise ValueError(f"PPOSetup can only be used with the PPO algorithm, got {namespace.algorithm}")
+        return namespace
+
+    def _create_config(self, base: PPOConfig | None = None):
+        config = super()._create_config(base=base)
+        if not isinstance(config, PPOConfig):
+            raise TypeError(f"Expected config to be of type PPOConfig, got {type(config)}")
+        return config
+
 
 class DQNSetup(AlgorithmSetup[ParserType_co, "DQNConfig", "DQN"]):
     """Specialized setup class for Deep Q-Networks (DQN) experiments.
@@ -279,6 +293,20 @@ class DQNSetup(AlgorithmSetup[ParserType_co, "DQNConfig", "DQN"]):
 
     config_class = DQNConfig
     algo_class = DQN
+
+    def parse_args(
+        self, args: list[str] | None = None, *, known_only: bool | None = None, checkpoint: str | None = None
+    ):
+        namespace = super().parse_args(args, known_only=known_only, checkpoint=checkpoint)
+        if "dqn" not in namespace.algorithm.lower():
+            raise ValueError(f"DQNSetup can only be used with the DQN algorithm, got {namespace.algorithm}")
+        return namespace
+
+    def _create_config(self, base: DQNConfig | None = None):
+        config = super()._create_config(base=base)
+        if not isinstance(config, DQNConfig):
+            raise TypeError(f"Expected config to be of type DQNConfig, got {type(config)}")
+        return config
 
 
 if TYPE_CHECKING:  # check ABC
