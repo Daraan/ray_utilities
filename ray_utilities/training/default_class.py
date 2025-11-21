@@ -1979,7 +1979,7 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
         # see for example: https://github.com/ray-project/ray/pull/55527
         if (  # When we are doing pbt let pbt handle the checkpointing
             not (
-                "pbt" in self.config.get("experiment_group", "").lower()
+                "pbt" in (self.config.get("experiment_group") or "").lower()
                 or "pbt" == self.config.get("cli_args", {}).get("command_str", "")
             )
             and TUNE_RESULT_IS_A_COPY  # 2.50 + we handle checkpoints with a real callback

@@ -100,10 +100,6 @@ class AlgorithmSetup(
     config_class: type[ConfigType_co] = PPOConfig  # evaluate the forward ref of ConfigType.__default__
     algo_class: type[AlgorithmType_co] = PPO
 
-    @property
-    def group_name(self) -> str:
-        return "algorithm_setup"
-
     def _create_trainable(self) -> type[DefaultTrainable[ParserType_co, ConfigType_co, AlgorithmType_co]]:
         """
         Create a trainable instance for the algorithm setup.
