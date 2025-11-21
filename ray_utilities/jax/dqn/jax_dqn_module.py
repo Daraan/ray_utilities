@@ -210,11 +210,14 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
                 - "qf_probs": Probabilities (for distributional DQN)
                 - "atoms": Support atoms (for distributional DQN)
         
-        Warning:
-            The parameters argument extends the parent DefaultDQNRLModule interface.
-            This is needed for JAX gradient computation but may cause interface
-            compatibility issues. Consider removing it and managing parameters
-            internally via states once real Flax models are integrated.
+        Note:
+            The parameters argument extends the parent DefaultDQNRLModule interface
+            (which only has `batch`). This is a common pattern in JAX implementations
+            (see JaxPPOModule.compute_values) because JAX requires explicit parameter
+            passing for gradient computation.
+            
+            The parameter is keyword-only with a default value, so it maintains
+            backward compatibility with code that calls `compute_q_values(batch)`.
         """
         if parameters is None:
             # Type cast needed because states has broader type for parent class compatibility
@@ -241,10 +244,11 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
         Returns:
             Dictionary with target Q-value predictions
         
-        Warning:
-            The parameters argument may not be needed in the public API if states
-            are properly managed internally. Consider whether this should be a
-            private implementation detail once real Flax models are integrated.
+        Note:
+            This method is not part of the parent DefaultDQNRLModule interface,
+            which uses `forward_target(batch)` instead. The JAX implementation
+            provides this as an additional method for clarity and consistency with
+            `compute_q_values`.
         """
         if parameters is None:
             # Type cast needed because states has broader type for parent class compatibility
