@@ -96,13 +96,35 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
         self.encoder: Any  # Will be JaxEncoder after setup
 
     def setup(self) -> None:
-        """Initialize the DQN module networks and states (JAX-only workaround)."""
-        # Dummy encoder: identity
+        """Initialize the DQN module networks and states.
+        
+        Note:
+            This is currently a placeholder implementation for testing without Ray.
+            For production use with Ray RLlib, this should call super().setup() to
+            build real models via the catalog, then initialize JAX states similar
+            to how JaxPPOModule does it:
+            
+                super().setup()  # Builds encoder, af, vf via catalog
+                # Initialize JAX states from models
+                module_key = jax.random.PRNGKey(seed)
+                module_key, qf_key, qf_target_key = jax.random.split(module_key, 3)
+                qf_state = self.af.init_state(qf_key, sample)
+                qf_target_state = self.af.init_state(qf_target_key, sample)
+                self.states = JaxDQNStateDict({
+                    "qf": qf_state,
+                    "qf_target": qf_target_state,
+                    "module_key": module_key,
+                })
+        """
+        # Placeholder implementation: Dummy encoder and heads
+        # These are lambda functions that don't accept parameters
         self.encoder = lambda x: x
+        
         # Only support Discrete action spaces for DQN
         if not isinstance(self.action_space, gym.spaces.Discrete):
             raise TypeError("JaxDQNModule only supports Discrete action spaces.")
         n_actions = self.action_space.n
+        
         # Set uses_dueling from model config
         config = self._temp_model_config_dict or {}
         self.uses_dueling = config.get("dueling", False)
@@ -110,6 +132,7 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
         self.v_min = config.get("v_min", -10.0)
         self.v_max = config.get("v_max", 10.0)
         num_atoms = self.num_atoms
+        
         if self.uses_dueling:
             self.af = (
                 lambda x: jnp.zeros((x.shape[0], n_actions, num_atoms))
@@ -124,7 +147,9 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
                 else jnp.zeros((x.shape[0], n_actions))
             )
             self.vf = None
-        # Always set states with qf, qf_target, and module_key
+        
+        # Placeholder states (empty dicts instead of real TrainState objects)
+        # In production, these should be actual TrainState objects with .params
         self.states = JaxDQNStateDict(
             {
                 "qf": {},
@@ -175,6 +200,8 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
         Args:
             batch: Input batch with observations
             parameters: Network parameters (if None, uses current states)
+                Note: In the current placeholder implementation, parameters are
+                accepted but not actually used by the lambda function models.
 
         Returns:
             Dictionary containing:
@@ -182,16 +209,23 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
                 - "qf_logits": Logits (for distributional DQN)
                 - "qf_probs": Probabilities (for distributional DQN)
                 - "atoms": Support atoms (for distributional DQN)
+        
+        Note:
+            The parameters argument extends the parent DefaultDQNRLModule interface
+            (which only has `batch`). This is a common pattern in JAX implementations
+            (see JaxPPOModule.compute_values) because JAX requires explicit parameter
+            passing for gradient computation.
+            
+            The parameter is keyword-only with a default value, so it maintains
+            backward compatibility with code that calls `compute_q_values(batch)`.
         """
         if parameters is None:
             # Type cast needed because states has broader type for parent class compatibility
             parameters = cast("JaxDQNStateDict", self.states)["qf"]
 
         # Compute Q-values for current observations
-        # Note: We pass the model objects, not parameters, since JAX models
-        # handle parameters internally via their call methods
         head = {"af": self.af, "vf": self.vf} if self.uses_dueling else self.af
-        return self._qf_forward_helper(batch, self.encoder, head)
+        return self._qf_forward_helper(batch, self.encoder, head, parameters=parameters)
 
     def compute_target_q_values(
         self,
@@ -204,23 +238,32 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
         Args:
             batch: Input batch with observations
             parameters: Target network parameters (if None, uses current target states)
+                Note: In the current placeholder implementation, parameters are
+                accepted but not actually used by the lambda function models.
 
         Returns:
             Dictionary with target Q-value predictions
+        
+        Note:
+            This method is not part of the parent DefaultDQNRLModule interface,
+            which uses `forward_target(batch)` instead. The JAX implementation
+            provides this as an additional method for clarity and consistency with
+            `compute_q_values`.
         """
         if parameters is None:
             # Type cast needed because states has broader type for parent class compatibility
             parameters = cast("JaxDQNStateDict", self.states)["qf_target"]
 
-        # Use model objects, not parameters (JAX handles params internally)
+        # Compute Q-values using target network
         head = {"af": self.af, "vf": self.vf} if self.uses_dueling else self.af
-        return self._qf_forward_helper(batch, self.encoder, head)
+        return self._qf_forward_helper(batch, self.encoder, head, parameters=parameters)
 
     def _qf_forward_helper(
         self,
         batch: dict[str, Any],
         encoder: Any,  # JAX/Flax model
         head: Any,  # JAX/Flax model or dict thereof
+        parameters: Optional[Mapping[str, Any]] = None,
     ) -> dict[str, "jnp.ndarray"]:
         """Helper to compute Q-values through encoder and heads (pure JAX/Flax).
 
@@ -228,9 +271,19 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
             batch: Input batch with observations (JAX arrays)
             encoder: JAX/Flax encoder model
             head: JAX/Flax head model(s)
+            parameters: Model parameters to use (CURRENTLY IGNORED in placeholder impl)
 
         Returns:
             Dictionary with Q-value predictions and optionally logits/probs/atoms
+        
+        Warning:
+            This is a placeholder implementation. The `parameters` argument is
+            accepted for API consistency but currently ignored because encoder and
+            head are lambda functions, not real Flax models.
+            
+            When real Flax models are integrated (via catalog in setup()), this
+            method will pass parameters to model calls:
+            `encoder(obs, parameters=params)` instead of `encoder(obs)`.
         """
         obs = batch.get("obs")
         if obs is None:
@@ -239,10 +292,18 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
         expected_shape = self.observation_space.shape
         if obs.shape[1:] != expected_shape:
             raise ValueError(f"Observation shape mismatch: got {obs.shape[1:]}, expected {expected_shape}")
+        
+        # TODO: Once real Flax models are integrated, pass parameters:
+        # encoder_out = encoder(obs, parameters=parameters["encoder"])
+        # For now, lambdas don't accept parameters - parameters argument is kept for
+        # API consistency but ignored until real Flax models are integrated.
         encoder_out = encoder(obs)
         output = {}
 
         if self.uses_dueling:
+            # TODO: Once real Flax models are integrated, pass parameters:
+            # af_out = head["af"](encoder_out, parameters=parameters["af"])
+            # vf_out = head["vf"](encoder_out, parameters=parameters["vf"])
             af_out = head["af"](encoder_out)
             vf_out = head["vf"](encoder_out)
             if self.num_atoms > 1:
@@ -274,6 +335,8 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
                 q_preds = values_broadcast + (advantages - mean_advantages)
                 output["qf_preds"] = q_preds
         else:
+            # TODO: Once real Flax models are integrated, pass parameters:
+            # af_out = head(encoder_out, parameters=parameters["af"])
             af_out = head(encoder_out)
             if self.num_atoms > 1:
                 q_logits = af_out
