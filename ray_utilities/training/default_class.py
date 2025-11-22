@@ -869,7 +869,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 left_from_last_time = self._buffer_steps_left
                 self._buffer_steps_left = max(0, buffer_goal - self.iteration)
                 if self.iteration < buffer_goal:
-                    _logger.info(
+                    _logger.debug(
                         "Did not finish buffered training. Stopped at iteration %d instead of %d "
                         "Only trained %d/%d buffered iterations with step size %d - "
                         "%d iterations leftover from last buffered training. "

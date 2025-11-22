@@ -218,9 +218,10 @@ def create_algorithm_config(
     else:
         env_size = 1
     if args["num_env_runners"] == 0:
-        main_cpus = 1 + min(1, args["num_envs_per_env_runner"] // 16) if args["num_envs_per_env_runner"] > 8 else 1
-        if args["num_envs_per_env_runner"] > 2 and init_env.observation_space.shape:
-            main_cpus += env_size // 100
+        main_cpus = 1 + args["num_envs_per_env_runner"] // 8 * 0.5
+        # If we have asynchronous and large environments, scale up the cpus
+        if args["num_envs_per_env_runner"] > 2:
+            main_cpus += (env_size // 100) * 0.50
 
     config.resources(
         # num_gpus=1 if args["gpu"] else 0,4

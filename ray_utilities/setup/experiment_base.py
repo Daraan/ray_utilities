@@ -1904,6 +1904,10 @@ class ExperimentSetupBase(
             new.config = config
         command_args = data["args"].__dict__.pop("COMMAND_ARGS", None)
         new.args = data["args"]  # might be just a simple namespace
+        new.GROUP = data.get("GROUP", new.GROUP)
+        new.PROJECT = data.get("PROJECT", new.PROJECT)
+        unchecked_keys.discard("GROUP")
+        unchecked_keys.discard("PROJECT")
         if isinstance(new.parser, Tap):
             try:
                 new.parser.from_dict(vars(new.args), skip_unsettable=True)

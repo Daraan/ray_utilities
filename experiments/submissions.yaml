@@ -6,12 +6,18 @@ global_pattern_1: >
   --tag:core --tag:pbt
   --buffer_length auto
   --comet offline+upload@end --wandb offline+upload@end --log_stats learners
-  --hostname_selector '!in(dws-login-01,dws-login-02,dws-10)'
+  --hostname_selector '!in(dws-login-01,dws-login-02)'
   pbt --perturbation_interval 0.125 --quantile_fraction 0.1
-submit_pattern: ray job submit --working-dir "." --entrypoint-memory 3000000000 \
-  --entrypoint-num-cpus 1 --entrypoint-resources '{"persistent_node":1}' \
-  --submission-id pbt_batch_size_mlp-xxxxxxxxx_restore -- \
-  python experiments/tune_with_scheduler.py --restore_path yyyyy
+# NOTE: Use set +H when using hostname selector
+submit_pattern: >
+  ray job submit --working-dir "." --entrypoint-memory 3000000000  --entrypoint-num-cpus
+  0.66 --entrypoint-resources '{"persistent_node":1}'
+  --submission-id pbt_batch_size_mlp-xxxxxxxxx_restore -- \  python  experiments/tune_with_scheduler.py
+  --restore_path yyyyy  --hostname_selector '!in(dws-login-01,dws-login-02)'
+
+  --submission-id pbt_batch_size_InvertedDoublePendulum-v5_7435_restore -- python  experiments/tune_with_scheduler.py
+  --restore_path /home/dsperber/master/repos/ray_utilities/outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:batch_size/Default-mlp-InvertedPendulum-v5-tws47f25112200240e674
+  --hostname_selector '!in(dws-login-01,dws-login-02)'
 # --- Envs --- #
 <mujoco_envs>:
 - Ant-v5
@@ -144,7 +150,7 @@ pbt_batch_size:
         status: RUNNING
         submission_id: pbt_batch_size_Humanoid-v5_7132
       tws47f251117171725b64:
-        status: RUNNING
+        status: okayis
         submission_id: pbt_batch_size_Humanoid-v5_5708
       tws47f2511190213081f4:
         status: RUNNING
@@ -164,46 +170,80 @@ pbt_batch_size:
       tws47f2511200307a0794:
         status: RUNNING
         submission_id: pbt_batch_size_Ant-v5_4463
+      tws47f2511220024084b4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Ant-v5_7435
     (Hopper-v5):
       tws47f251120030841d44:
         status: RUNNING
         submission_id: pbt_batch_size_Hopper-v5_4463
+      tws47f2511220024c5ee4:
+        status: RUNNING
+        submission_id: pbt_batch_size_Hopper-v5_7435
     (Walker2d-v5):
       tws47f2511200308c82a4:
-        status: RUNNING
+        status: FAILED after Restore
         submission_id: pbt_batch_size_Walker2d-v5_4463
+      tws47f25112200243ab74: FAILED
+      tws47f2511220039e8b44:
+        status: RUNNING
+        submission_id: pbt_batch_size_Walker2d-v5_7435_try3
     (HalfCheetah-v5):
       tws47f25112003086ce24:
         status: RUNNING
         submission_id: pbt_batch_size_HalfCheetah-v5_4463
+      tws47f2511220024c3c44:
+        status: RUNNING
+        submission_id: pbt_batch_size_HalfCheetah-v5_7435
     (Reacher-v5):
       tws47f2511200308e27f4:
         status: RUNNING
         submission_id: pbt_batch_size_Reacher-v5_4463
+      tws47f2511220024ae994:
+        status: SUCCEEDED
+        submission_id: pbt_batch_size_Reacher-v5_7435
     (Swimmer-v5):
       tws47f2511200308ecad4:
         status: RUNNING
         submission_id: pbt_batch_size_Swimmer-v5_4463
+      tws47f2511220024d8a64:
+        status: RUNNING
+        submission_id: pbt_batch_size_Swimmer-v5_7435
     (Pusher-v5):
       tws47f2511200309d9784:
         status: FAILED
         submission_id: pbt_batch_size_Pusher-v5_4463
+      tws47f2511220024937c4:
+        status: SUCCEEDED
+        submission_id: pbt_batch_size_Pusher-v5_7435
     (InvertedPendulum-v5):
       tws47f251120033152e44:
         status: RUNNING
         submission_id: pbt_batch_size_InvertedPendulum-v5_4463_try3sfc
+      tws47f25112200240e674:
+        status: RUNNING
+        submission_id: pbt_batch_size_InvertedPendulum-v5_7435
     (InvertedDoublePendulum-v5):
       tws47f25112003109d8f4:
         status: RUNNING
         submission_id: pbt_batch_size_InvertedDoublePendulum-v5_4463
+      tws47f251122002462e94:
+        status: RESTORING after FAILED
+        submission_id: pbt_batch_size_InvertedDoublePendulum-v5_7435
     (Humanoid-v5):
       tws47f2511200310a24e4:
         status: RUNNING
         submission_id: pbt_batch_size_Humanoid-v5_4463
+      tws47f25112200243edd4:
+        status: SUCCEEDED
+        submission_id: pbt_batch_size_Humanoid-v5_7435
     (HumanoidStandup-v5):
       tws47f25112003104dfd4:
         status: RUNNING
         submission_id: pbt_batch_size_HumanoidStandup-v5_4463
+      tws47f2511220024ba054:
+        status: RUNNING
+        submission_id: pbt_batch_size_HumanoidStandup-v5_7435
 pbt_num_envs:
   # This is a comment
   comment: small minibatch_size=256 and train_batch_size=2048
@@ -268,8 +308,14 @@ pbt_num_envs_large:
     (HumanoidStandup-v5):
       tws47f2511161809011b4:
         status: RESTORING - possible early perturbation of last trial
+      tws47f2511221256abf74:
+        status: RUNNING
+        submission_id: pbt_num_envs_large_HumanoidStandup-v5_2565
     (Humanoid-v5):
       tws47f251116132047a84: DONE?
+      tws47f25112212572f804:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Humanoid-v5_2565
     (Ant-v5):
       tws47f2511161804f37c4:
         status: RESTORING - possibly messed up perturbation ray job submit
@@ -277,30 +323,57 @@ pbt_num_envs_large:
           --entrypoint-resources '{"persistent_node":1}' --entrypoint-num-cpus 1
           --submission-id pbt_num_envs_large_Ant-v5_restore -- python
           experiments/tune_with_scheduler.py --restore_path
+      tws47f25112212568a464:
+        status: RUNNING
+        submission_id: pbt_num_envs_large_Ant-v5_2565
     (InvertedDoublePendulum-v5):
       tws47f25111618057db34:
         status: SUCCEEDED - needs wandb upload
+      tws47f2511221256d7dc4:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_InvertedDoublePendulum-v5_2565
     (Swimmer-v5):
       tws47f2511161805fe2c4:
         status: RESTORING  - some wrong perturbations at the end. Needs Uupload
+      tws47f2511221257fdb94:
+        status: RUNNING
+        submission_id: pbt_num_envs_large_Swimmer-v5_2565
     (Hopper-v5):
       tws47f25111618041c084:
         status: SUCCEEDED
+      tws47f2511221256a0cb4:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Hopper-v5_2565
     (InvertedPendulum-v5):
       tws47f25111618050c314:
         status: SUCCEEDED
+      tws47f2511221256d55a4:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_InvertedPendulum-v5_2565
     (HalfCheetah-v5):
       tws47f251116180419184:
         status: SUCCEEDED
+      tws47f25112212561c584:
+        status: RUNNING
+        submission_id: pbt_num_envs_large_HalfCheetah-v5_2565
     (Pusher-v5):
       tws47f25111618054c884:
         status: SUCCEEDED
+      tws47f2511221256dc2e4:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Pusher-v5_2565
     (Reacher-v5):
       tws47f25111618056b3b4:
         status: SUCCEEDED
+      tws47f2511221256c0d64:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Reacher-v5_2565
     (Walker2d-v5):
       tws47f2511161804f11044:
         status: SUCCEEDED
+      tws47f251122125685904:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Walker2d-v5_2565
 pbt_lr_base:
   <ENV_TYPE>:
   - CartPole-v1
@@ -318,14 +391,23 @@ pbt_lr_base:
       tws47f2511210007313e4:
         status: FAILED
         submission_id: pbt_lr_base_CartPole-v1_0030
+      tws47f251122002153db4:
+        status: RUNNING
+        submission_id: pbt_lr_base_CartPole-v1_7228
     (Acrobot-v1):
       tws47f251121000761eb4:
         status: FAILED
         submission_id: pbt_lr_base_Acrobot-v1_0030
+      tws47f25112200211c5e4:
+        status: RUNNING
+        submission_id: pbt_lr_base_Acrobot-v1_7228
     (LunarLander-v3):
       tws47f2511210007c41a4:
         status: SUCCEEDED
         submission_id: pbt_lr_base_LunarLander-v3_0030
+      tws47f251122002100744:
+        status: RESTORING
+        submission_id: pbt_lr_base_LunarLander-v3_7228_restore_4
   run_ids_no_pbt:
     (CartPole-v1):
       tws47f25111703370cb24:
@@ -362,47 +444,79 @@ pbt_lr:
       tws47f2511200247226f4:
         status: RUNNING
         submission_id: pbt_lr_failed_Ant-v5_3207
+      tws47f251122003367394:
+        status: SUCCEEDED
+        submission_id: pbt_lr_Ant-v5_7605
     (Hopper-v5):
       tws47f251120022436154:
         status: RUNNING
         submission_id: pbt_lr_Hopper-v5_1820
+      tws47f2511220032d3034:
+        status: SUCCEEDED
+        submission_id: pbt_lr_Hopper-v5_7605
     (Walker2d-v5):
       tws47f2511200247e3ba4:
         status: RUNNING
         submission_id: pbt_lr_failed_Walker2d-v5_3207
+      tws47f25112200350ef74:
+        status: SUCCEEDED
+        submission_id: pbt_lr_Walker2d-v5_7605
     (HalfCheetah-v5):
       tws47f251120022453e24:
         status: RUNNING
         submission_id: pbt_lr_HalfCheetah-v5_1820
+      tws47f251122003399864:
+        status: RUNNING
+        submission_id: pbt_lr_HalfCheetah-v5_7605
     (Swimmer-v5):
       tws47f2511200224a6854:
         status: RUNNING
         submission_id: pbt_lr_Swimmer-v5_1820
+      tws47f25112200336cd34:
+        status: RUNNING
+        submission_id: pbt_lr_Swimmer-v5_7605
     (Reacher-v5):
       tws47f2511200224a45d4:
         status: RUNNING
         submission_id: pbt_lr_Reacher-v5_1820
+      tws47f251122003639204:
+        status: SUCCEEDED
+        submission_id: pbt_lr_Reacher-v5_7605
     (Pusher-v5):
       tws47f2511200224663c4:
         status: RUNNING
         submission_id: pbt_lr_Pusher-v5_1820
+      tws47f251122003542fa4:
+        status: SUCCEEDED
+        submission_id: pbt_lr_Pusher-v5_7605
     (InvertedPendulum-v5):
       tws47f25112002245d9b4:
         status: RUNNING
         submission_id: pbt_lr_InvertedPendulum-v5_1820
+      tws47f251122003372fa4:
+        status: SUCCEEDED
+        submission_id: pbt_lr_InvertedPendulum-v5_7605
     (InvertedDoublePendulum-v5):
       tws47f251120022491774:
         status: RUNNING
         submission_id: pbt_lr_InvertedDoublePendulum-v5_1820
+      tws47f2511220032f9dd4:
+        status: SUCCEEDED
+        submission_id: pbt_lr_InvertedDoublePendulum-v5_7605
     (Humanoid-v5):
       tws47f2511200224333a4:
         status: RUNNING
         submission_id: pbt_lr_Humanoid-v5_1820
+      tws47f2511220035f8de4:
+        status: SUCCEEDED
+        submission_id: pbt_lr_Humanoid-v5_7605
     (HumanoidStandup-v5):
       tws47f2511200224536b4:
         status: RUNNING
         submission_id: pbt_lr_HumanoidStandup-v5_1820
-
+      tws47f2511220032b5b04:
+        status: SUCCEEDED
+        submission_id: pbt_lr_HumanoidStandup-v5_7605
   run_ids_no_pbt:
     (Ant-v5):
       tws47f251119033847804:
@@ -448,3 +562,87 @@ pbt_lr:
       tws47f2511190349be1a4:
         status: RUNNING
         submission_id: pbt_lr_HumanoidStandup-v5_9739
+pbt_lr_large:
+  comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
+    scale
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: lr
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+pbt_lr_base_large:
+  <ENV_TYPE>:
+  - CartPole-v1
+  - Acrobot-v1
+  - LunarLander-v3
+  #entrypoint_resources:
+  #  persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: lr
+      <ENV_TYPE>: <basic_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+pbt_minibatch_size_8192:
+  comment: tune minibatch_size with fixed train_batch_size_per_learner=8192
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: minibatch_size
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |-
+        --train_batch_size_per_learner 8192
+  run_ids:
+    (Ant-v5):
+      tws47f25112219404a224:
+        status: RUNNING
+        submission_id: pbt_minibatch_size_8192_Ant-v5_6798
+    (Hopper-v5):
+      tws47f25112219406e584:
+        status: RUNNING
+        submission_id: pbt_minibatch_size_8192_Hopper-v5_6798
+    (Walker2d-v5):
+      tws47f2511221940a4374:
+        status: RUNNING
+        submission_id: pbt_minibatch_size_8192_Walker2d-v5_6798
+    (HalfCheetah-v5):
+      tws47f2511221940c4fb4:
+        status: RUNNING
+        submission_id: pbt_minibatch_size_8192_HalfCheetah-v5_6798
+    (Reacher-v5):
+      tws47f2511221940359e4:
+        status: RUNNING
+        submission_id: pbt_minibatch_size_8192_Reacher-v5_6798
+    (Swimmer-v5):
+      tws47f2511221940993a4:
+        status: RUNNING
+        submission_id: pbt_minibatch_size_8192_Swimmer-v5_6798
+    (Pusher-v5):
+      tws47f2511221940a7374:
+        status: RUNNING
+        submission_id: pbt_minibatch_size_8192_Pusher-v5_6798
+    (InvertedDoublePendulum-v5):
+      tws47f2511221940567e4:
+        status: RUNNING
+        submission_id: pbt_minibatch_size_8192_InvertedDoublePendulum-v5_6798
+    (InvertedPendulum-v5):
+      tws47f25112219402a7f4:
+        status: RUNNING
+        submission_id: pbt_minibatch_size_8192_InvertedPendulum-v5_6798
+    (HumanoidStandup-v5):
+      tws47f2511221941950a4:
+        status: RUNNING
+        submission_id: pbt_minibatch_size_8192_HumanoidStandup-v5_6798
+    (Humanoid-v5):
+      tws47f25112219418b3c4:
+        status: RUNNING
+        submission_id: pbt_minibatch_size_8192_Humanoid-v5_6798

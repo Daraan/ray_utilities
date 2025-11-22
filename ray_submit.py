@@ -6,7 +6,7 @@ Uses the Ray Job Submission API to submit jobs, track their logs, and update the
 from __future__ import annotations
 from pprint import pformat
 import time
-from typing import AsyncIterator
+from typing import AsyncIterator, cast
 from ray.job_submission import JobSubmissionClient, JobStatus
 import os
 import argparse
@@ -264,9 +264,9 @@ if __name__ == "__main__":
                 entrypoint=settings["entrypoint"],
                 submission_id=settings.get("submission_id", args.group + "_" + job_id + "_" + RANDOM_SUFFIX),
                 runtime_env=settings.get("runtime_env", {"working_dir": "."}),
-                entrypoint_num_cpus=settings.get("entrypoint_num_cpus", 1),
+                entrypoint_num_cpus=settings.get("entrypoint_num_cpus", 0.66),
                 entrypoint_num_gpus=settings.get("entrypoint_num_gpus", 0),
-                entrypoint_memory=int(settings.get("entrypoint_memory", 2 * 1000 * 1000 * 1000)),
+                entrypoint_memory=int(settings.get("entrypoint_memory", 3 * 1000 * 1000 * 1000)),
                 entrypoint_resources=settings.get("entrypoint_resources", {"persistent_node": 1}),
                 metadata=settings.get("metadata", None),
             )
@@ -386,13 +386,23 @@ if __name__ == "__main__":
         print("Performing only monitoring of job statuses...")
         try:
             jobs_tracked_left = jobs_tracked.copy()
+            final_states: dict[str, JobStatus] = {}
             while jobs_tracked_left:
+                print("-" * 80)
                 jobs_to_delete = []
                 for job_id in jobs_tracked.keys():
-                    job_status = CLIENT.get_job_status(job_id)
+                    try:
+                        job_status = CLIENT.get_job_status(job_id)
+                    except RuntimeError as e:
+                        # If we delete a job it does not show up anymore
+                        if "does not exist" not in str(e):
+                            raise
+                        job_status = final_states.get(job_id, "UNKNOWN (Deleted)")
                     current_time = time.strftime("%Y-%m-%d %H:%M:%S")
                     print(f"[{current_time}] Job {job_id} status: {job_status}.")
                     if job_status in JOB_END_STATES:
+                        job_status = cast("JobStatus", job_status)
+                        final_states[job_id] = job_status
                         if run_id := task_run_ids.get(job_id):
                             write_back(
                                 args.group, job_id, {run_id: {"status": job_status.name, "submission_id": job_id}}
