@@ -641,8 +641,9 @@ class TestGroupedTopPBTIntegration(InitRay, TestHelpers, DisableLoggers):
             "--log_stats", "minimal",
             "--no_dynamic_eval_interval",
             "--fcnet_hiddens", "[4]",
+            "--test",
             "--num_envs_per_env_runner", 5,
-            "--test", "pbt",
+            "pbt",
             "--quantile_fraction", "0.34",  # Top 1/3 of groups (1 out of 3)
             "--perturbation_interval", perturbation_interval,
         ):  # fmt: skip

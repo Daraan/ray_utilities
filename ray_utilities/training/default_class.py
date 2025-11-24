@@ -816,7 +816,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # Should be a divider of checkpoint frequency and has to be a divider of perturbation_interval if we are in PBT
         # Check for PBT
         if self.config["cli_args"].get("command_str") == "pbt":
-            # If we are in PBT mode, we need to adjust the max_iterations to not overhoot perturbation interval
+            # If we are in PBT mode, we need to adjust the max_iterations to not overshoot perturbation interval
             pbt_interval = self.config["cli_args"]["perturbation_interval"]
             pbt_unit = self.config["cli_args"]["time_attr"]
             if pbt_unit == TRAINING_ITERATION:

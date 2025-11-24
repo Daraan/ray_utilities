@@ -34,8 +34,8 @@ from ray_utilities.callbacks.tuner.adv_wandb_callback import AdvWandbLoggerCallb
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
 from ray_utilities.callbacks.upload_helper import UploadHelperMixin
 from ray_utilities.callbacks.wandb import WandbUploaderMixin
-from ray_utilities.constants import FORK_FROM, get_run_id
-from ray_utilities.misc import ExperimentKey, make_experiment_key
+from ray_utilities.constants import FORK_DATA_KEYS, FORK_FROM, get_run_id
+from ray_utilities.misc import ExperimentKey, make_experiment_key, make_fork_from_csv_header
 from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.runfiles.run_tune import run_tune
 from ray_utilities.setup.experiment_base import ExperimentSetupBase
@@ -466,7 +466,8 @@ class TestLoggerIntegration(TestHelpers):
                     csv_file = base_path.parent / "wandb_fork_from.csv"
                     if not csv_file.exists():
                         with open(csv_file, "w") as f:
-                            f.write("trial_id, parent_id, parent_step, step_metric\n")
+                            f.write(make_fork_from_csv_header())
+                            # f.write(f"f{FORK_DATA_KEYS[0]}, {FORK_DATA_KEYS[1]}, parent_step, step_metric\n")
                     with open(csv_file, "a") as f:
                         f.write(track)
 
@@ -542,7 +543,8 @@ class TestLoggerIntegration(TestHelpers):
         exists = fork_file.exists()
         with fork_file.open("a" if exists else "w") as f:
             if not exists:
-                f.write("trial_id, parent_id, parent_step, step_metric\n")
+                # Could upgrade to make_fork_from_csv_header()
+                f.write(f"{FORK_DATA_KEYS[0]}, {FORK_DATA_KEYS[1]}, parent_step, step_metric\n")
             for trial_id, parent_id, parent_step in fork_data:
                 step_str = str(parent_step) if parent_step is not None else ""
                 f.write(f"{trial_id}, {parent_id}, {step_str}, _step\n")
@@ -1205,8 +1207,13 @@ class TestCometRestartExperiments(DisableLoggers, TestHelpers):
             mock_experiment.add_tags.assert_called_once_with(["test_tag", "forked"])
             # Verify both log_other calls: "Created from" and command line args
             mock_experiment.log_other.assert_any_call("Created from", "Ray")
+            expected_calls = 1
+            if callback._cli_args:
+                expected_calls += 1
+            if FORK_FROM in forked_trial.config:
+                expected_calls += 1
             # Will be called with sys args if present
-            self.assertEqual(mock_experiment.log_other.call_count, 2 if callback._cli_args else 1)
+            self.assertEqual(mock_experiment.log_other.call_count, expected_calls, mock_experiment.log_other.call_args)
             # The second call should be for CLI args if they exist
 
     def test_log_trial_start_non_forked_trial(self):

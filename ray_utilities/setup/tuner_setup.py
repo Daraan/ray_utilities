@@ -356,7 +356,8 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
                     scheduler = None
                 else:
                     raise
-            logger.info("Using PBT scheduler from parser: %s", type(scheduler).__name__)
+            else:
+                logger.info("Using PBT scheduler from parser: %s", type(scheduler).__name__)
         if scheduler is None and use_ray_median_scheduler_instead:
             ImportantLogger.important_info(
                 logger, "Using MedianStoppingRule as scheduler space does not require sampling"
@@ -546,7 +547,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             * (1.25 if self._setup.args.tune and "batch_size" in self._setup.args.tune else 1.0)
         )
         # If we are restoring operations could be more expensive
-        # add more memory to be save as checkpoint / state can be large
+        # add more memory to be safe as checkpoint / state can be large
         if self._setup.__restored__:
             bundles[0]["memory"] += int(2.5 * GB)
         if len(bundles) == 1:

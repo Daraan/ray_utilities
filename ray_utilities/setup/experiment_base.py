@@ -882,8 +882,6 @@ class ExperimentSetupBase(
             param_space.pop("env_seed", None)  # if not present will take seed if sequential or "same"
             if self.args.env_seeding_strategy not in ("same", "sequential"):
                 logger.warning("When using PBT grouped trials env_seeding_strategy should be 'same' or 'sequential'.")
-            # How does this influence Reseeding in PBT at perturbation points?
-            assert len(param_space["seed"]["grid_search"]) == 3
 
         # Other args not shown in the CLI
         # Log CLI args as hyperparameters
@@ -1517,7 +1515,7 @@ class ExperimentSetupBase(
         for cfg_file in self._config_files:
             src_path = Path(cfg_file)
             if src_path.exists() and src_path.is_file():
-                dest_path = working_dir_path / src_path.name
+                dest_path = working_dir_path / src_path
                 shutil.copy2(src_path, dest_path)
                 logger.debug("Copied config file %s to working_dir %s", src_path, dest_path)
             else:

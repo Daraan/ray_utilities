@@ -217,7 +217,22 @@ class GroupedTopPBTTrialScheduler(TopPBTTrialScheduler):
         """
         flat_mutations = flatten_dict(self._hyperparam_mutations)
         flat_config = flatten_dict(config)  # pyright: ignore[reportArgumentType]
-        chosen_values = {key: flat_config[key] for key in flat_mutations}
+        chosen_values = {}
+        for key in flat_mutations:
+            if key not in flat_config:
+                # if it is some iterable structure was was extended possibly: fcnet_hiddens=[8] -> fcnet_hiddens/0 : 8
+                if key in config:
+                    chosen_values[key] = config[key]
+                else:
+                    ImportantLogger.important_warning(
+                        logger,
+                        "'%s' is a hyperparam_mutation but the key is not present in the flattened config. ",
+                        "It likely was not added by the scheduler/searcher "
+                        "and could not be filled in by this class beforehand.",
+                        key,
+                    )
+                continue
+            chosen_values[key] = flat_config[key]
         parts = (f"{key}={value}" for key, value in sorted(chosen_values.items()))
         return "|".join(parts)
 

@@ -39,7 +39,7 @@ __default_seed_options = [42, 128, 0, 480, 798]
 def get_default_seed_options() -> list[int]:
     """Returns a mutable list of default seed options."""
     try:
-        from experiments.create_tune_parameters import seed_options  # noqa: PLC0415, cylclic import
+        from experiments.create_tune_parameters import seed_options  # noqa: PLC0415, cyclic import
     except ModuleNotFoundError:
         seed_options = __default_seed_options
     return seed_options
@@ -257,8 +257,8 @@ class PopulationBasedTrainingParser(GoalParser, to_tap_class(PopulationBasedTrai
                 GroupedTopPBTTrialScheduler,
             )
 
-            if "seed" not in self.hyperparam_mutations and num_samples > 1:
-                self.hyperparam_mutations["seed"] = {"grid_search": get_default_seed_options()[:num_samples]}
+            if "seed" not in self.hyperparam_mutations and self.group_size > 1:
+                self.hyperparam_mutations["seed"] = {"grid_search": self.get_seed_options()}
                 logger.warning(
                     "Using GroupedTopPBTTrialScheduler without 'seed' in hyperparam_mutations may lead to "
                     "identical configurations in multiple groups. Consider adding 'seed' to hyperparam_mutations. "
@@ -267,7 +267,7 @@ class PopulationBasedTrainingParser(GoalParser, to_tap_class(PopulationBasedTrai
                 )
                 # Important we need this in the parameter space, less in the mutations!
             if setup and "seed" not in setup.param_space:
-                setup.param_space["seed"] = {"grid_search": get_default_seed_options()[:num_samples]}
+                setup.param_space["seed"] = {"grid_search": self.get_seed_options()}
                 logger.debug(
                     "Adding 'seed' to experiment param_space with options: %s",
                     setup.param_space["seed"],

@@ -1270,10 +1270,10 @@ class TestPBTSchedulerSelection(InitRay, SetupDefaults, num_cpus=4):
             setup = AlgorithmSetup()
             scheduler = setup.args.command.to_scheduler()
 
-        self.assertIsInstance(scheduler, GroupedTopPBTTrialScheduler)
+        assert isinstance(scheduler, GroupedTopPBTTrialScheduler)
         self.assertEqual(scheduler._quantile_fraction, quantile_fraction)
         self.assertEqual(scheduler._num_samples, num_samples)
-        self.assertTrue(scheduler._recompute_groups is False)  # default value
+        self.assertIs(scheduler._recompute_groups, False)  # default value  # noqa: FBT003
 
 
 class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):

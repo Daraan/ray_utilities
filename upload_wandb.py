@@ -153,7 +153,6 @@ def patch_offline_history(
                 data = json.loads(line)
                 offline_iteration_data[data["training_iteration"]] = data
     run = cast("RunApi", run)
-    run_config = run.config
     online_history = run.history(samples=8000, pandas=False)
     online_iteration_data = {
         int(entry.get("training_iteration", entry.get("_step"))): unflatten_dict(entry) for entry in online_history
@@ -201,18 +200,6 @@ def patch_offline_history(
                 parent_runs.insert(0, parent_run)
         except Exception as e:
             logger.warning("Could not find parent run %s: %s", parent_run_ids[0], e)
-        # Merge data from parents
-        # We could also check offline data of parents
-        # for parent_run in parent_runs:
-        #    parent_offline_path = offline_path.parent / f"offline-{parent_run.id}.json"
-        #    if not parent_offline_path.exists():
-        #        logger.warning("Parent offline path %s does not exist.", parent_offline_path)
-        #        continue
-        #    with parent_offline_path.open("r") as f:
-        #        for line in f:
-        #            data = json.loads(line)
-        #            if data["training_iteration"] not in offline_iteration_data:
-        #                offline_iteration_data[data["training_iteration"]] = data
     parent_histories = {}
     if parent_runs:
         min_step = min(online_iteration_data.keys())
