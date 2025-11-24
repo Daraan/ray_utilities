@@ -13,7 +13,7 @@ os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
 
 if __name__ == "__main__":
     PPOMLPSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
-    PPOMLPSetup.group_name = "dynamic:rollout_buffer"  # pyright: ignore
+    PPOMLPSetup.GROUP = "dynamic-rollout_buffer"
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
         "--dynamic_buffer",

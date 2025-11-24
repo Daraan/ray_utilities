@@ -31,10 +31,6 @@ if __name__ == "__main__":
         SetupClass = DQNMLPSetup
     else:
         SetupClass = PPOMLPSetup
-
-    SetupClass.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
-    SetupClass.group_name = "default-training"  # pyright: ignore
-
     from experiments.create_tune_parameters import (
         default_distributions,
         load_distributions_from_json,
@@ -59,6 +55,8 @@ if __name__ == "__main__":
         "--comment", "Default training run",
     ):  # fmt: skip
         # Replace with your own setup class
-        setup = SetupClass(config_files=["experiments/default.cfg", "experiments/models/mlp/default.cfg"])
+        with SetupClass(config_files=["experiments/default.cfg", "experiments/models/mlp/default.cfg"]) as setup:
+            setup.project = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
+            setup.GROUP = "default-training-<tune>" if setup.args.tune else "defaul-training"
         with init_ray_with_setup(setup, runtime_env=get_runtime_env()):
             results = run_tune(setup)

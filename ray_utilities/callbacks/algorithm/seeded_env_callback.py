@@ -40,6 +40,12 @@ def _is_async(env: gym.Env | Any) -> TypeIs[gym.vector.AsyncVectorEnv | gym.vect
     return hasattr(env, "set_attr")
 
 
+def _to_tuple(seq):
+    if isinstance(seq, Sequence) and not isinstance(seq, str):
+        return tuple(_to_tuple(item) for item in seq)
+    return seq
+
+
 logger = logging.getLogger(__name__)
 _NestedIntSequence = tuple["int | _NestedIntSequence", ...]
 EnvSeedType = int | None | _NestedIntSequence
@@ -62,7 +68,7 @@ class _SeededEnvCallbackMeta(_CallbackMeta):  # pyright: ignore[reportGeneralTyp
 
     def __hash__(cls):  # pyright: ignore[reportSelfClsParameterName]
         if isinstance(cls.env_seed, Sequence):
-            return hash(RLlibCallback) + hash(tuple(cls.env_seed)) + hash(cls.__name__)
+            return hash(RLlibCallback) + hash(_to_tuple(cls.env_seed)) + hash(cls.__name__)
         return hash(RLlibCallback) + hash(cls.env_seed) + hash(cls.__name__)
 
     def __repr__(cls):  # pyright: ignore[reportSelfClsParameterName]

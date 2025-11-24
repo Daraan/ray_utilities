@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Callable, Final, Literal, Optional, TypeVar, cast
 
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
 from ray_utilities.callbacks.algorithm.eval_ema_metric_callback import make_eval_ema_metrics_callback
@@ -219,9 +219,10 @@ def create_algorithm_config(
     else:
         env_size = 1
     if args["num_env_runners"] == 0:
-        main_cpus = 1 + min(1, args["num_envs_per_env_runner"] // 16) if args["num_envs_per_env_runner"] > 8 else 1
-        if args["num_envs_per_env_runner"] > 2 and init_env.observation_space.shape:
-            main_cpus += env_size // 100
+        main_cpus = 1 + args["num_envs_per_env_runner"] // 8 * 0.5
+        # If we have asynchronous and large environments, scale up the cpus
+        if args["num_envs_per_env_runner"] > 2:
+            main_cpus += (env_size // 100) * 0.50
 
     config.resources(
         # num_gpus=1 if args["gpu"] else 0,4
@@ -409,7 +410,7 @@ def create_algorithm_config(
     # NOTE: Do not use add_callbacks_to_config(config, stateful_callbacks=...) as this overwrites
 
     # region Stateful callbacks
-    callbacks: list[type[DefaultCallbacks]] = []
+    callbacks: list[type[DefaultCallbacks] | Callable[[], DefaultCallbacks]] = []
     base_callbacks = None
     if base_config is not None and base_config.callbacks_class:
         if isinstance(base_config.callbacks_class, list):
@@ -434,7 +435,7 @@ def create_algorithm_config(
         callbacks.append(make_render_callback())
     # Add a callback to compute an exponential moving average (EMA) of evaluation metrics.
     # This helps smooth out fluctuations in evaluation results and provides a more stable metric for monitoring performance.
-    callbacks.append(make_eval_ema_metrics_callback(0.8, base_eval_interval=16))
+    callbacks.append(make_eval_ema_metrics_callback(0.05, base_eval_interval=16))
     if not args["no_dynamic_eval_interval"]:
         callbacks.append(DynamicEvalInterval)
     if base_callbacks:

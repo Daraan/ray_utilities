@@ -21,7 +21,6 @@ if __name__ == "__main__":
     )
 
     HYPERPARAMETERS = load_distributions_from_json(write_distributions_to_json(default_distributions))
-
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
         # --tune should use
@@ -38,12 +37,13 @@ if __name__ == "__main__":
         "--comet", "offline+upload",
         "--log_level", "INFO",
     ):  # fmt: skip
-        setup = PPOMLPSetup(
+        with PPOMLPSetup(
             config_files=["experiments/default.cfg", "experiments/models/mlp/default.cfg"],
             trial_name_creator=extend_trial_name(insert=["<batch_size>"], prepend="Tune_BatchSize"),
-        )
-        # Set hyperparameters to tune
-        assert setup.args.tune
+        ) as setup:
+            # Set hyperparameters to tune
+            assert setup.args.tune
+            setup.GROUP = "tune-" + "_".join(setup.args.tune)  # pyright: ignore
         hyperparameters = update_hyperparameters(
             setup.param_space,
             {k: HYPERPARAMETERS[k] for k in setup.args.tune},
@@ -53,6 +53,5 @@ if __name__ == "__main__":
         )
 
         # Update group name
-        PPOMLPSetup.group_name = "tune:" + "_".join(setup.args.tune)  # pyright: ignore
         with init_ray_with_setup(setup, runtime_env=get_runtime_env()):
             results = run_tune(setup)

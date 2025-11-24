@@ -24,6 +24,7 @@ from optuna.distributions import (
 from ray_utilities.config.parser.default_argument_parser import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
 from ray_utilities.setup.extensions import load_distributions_from_json
+import time
 
 __all__ = [
     "default_distributions",
@@ -82,9 +83,23 @@ def write_distributions_to_json(
     elif isinstance(output_file, str):
         output_file = Path(output_file)
 
-    with output_file.open("w") as f:
-        json.dump(json_distributions, f, indent=2)
-        f.write("\n")  # newline at end of file
+    lock_file = output_file.with_suffix(output_file.suffix + ".lock")
+    while lock_file.exists():
+        time.sleep(0.1)
+    while True:
+        try:
+            lock_file.touch(exist_ok=False)
+            break
+        except FileExistsError:
+            lock_file.unlink()
+            time.sleep(0.1)
+    try:
+        with output_file.open("w") as f:
+            json.dump(json_distributions, f, indent=2)
+            f.write("\n")  # newline at end of file
+    finally:
+        if lock_file.exists():
+            lock_file.unlink()
     return output_file
 
 

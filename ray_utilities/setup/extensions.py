@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, cast
 
@@ -146,8 +147,24 @@ def load_distributions_from_json(
     if isinstance(json_dict, str):
         json_dict = Path(json_dict)
     if isinstance(json_dict, Path):
-        with json_dict.open("r") as f:
-            json_dict = cast("dict[str, Any]", json.load(f))
+        json_path = json_dict
+        for attempt in range(5):
+            try:
+                with json_path.open("r") as f:
+                    json_dict = cast("dict[str, Any]", json.load(f))
+                break
+            except (json.JSONDecodeError, OSError) as e:
+                if attempt < 4:
+                    _logger.warning(
+                        "Failed to load JSON from %s (attempt %d/5): %s. Retrying in 1s...",
+                        json_path.resolve(),
+                        attempt + 1,
+                        e,
+                    )
+                    time.sleep(1)
+                else:
+                    raise
+        assert isinstance(json_dict, dict)
     return {k: dict_to_ray_distributions(v) for k, v in json_dict.items()}
 
 

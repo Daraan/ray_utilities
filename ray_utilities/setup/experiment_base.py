@@ -185,6 +185,9 @@ class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, Algor
     """Domain information for parameters to be tuned"""
     # TODO: rename? parameter_domains?
 
+    GROUP: NotRequired[str]
+    PROJECT: NotRequired[str]
+
 
 class ExperimentSetupBase(
     ABC, ExperimentUploader[ParserType_co], Generic[ParserType_co, ConfigType_co, AlgorithmType_co]
@@ -254,6 +257,13 @@ class ExperimentSetupBase(
     On instances use :attr:`project` property instead
     """
 
+    GROUP: str = "NO_GROUP_SET"
+    """
+    Similar to PROJECT allows for subcategories within a project, will be the prefix for the storage path.
+
+    For wandb/comet this is the group name.
+    """
+
     use_dev_project: bool = True
     """When True the `project_name` will be "dev-workspace" in test mode"""
 
@@ -268,8 +278,15 @@ class ExperimentSetupBase(
     _fixed_argv: ClassVar[list[str] | None] = None
     """When using remote (no sys.args available) and checkpoints fix the args to the time of creation"""
 
-    storage_path: str | Path = os.environ.get("RAY_UTILITIES_STORAGE_PATH", "./outputs/shared/experiments")
+    base_storage_path: str | Path = os.environ.get("RAY_UTILITIES_STORAGE_PATH", "./outputs/shared/experiments")
     """Base path where experiment outputs are stored by the tuner. Can point to S3 path"""
+
+    @property
+    def storage_path(self) -> str | Path:
+        """Path where experiment outputs are stored."""
+        if self.group_name:
+            return os.path.join(self.base_storage_path, self.project, self.group_name)
+        return os.path.join(self.base_storage_path, self.project)
 
     @property
     def project(self) -> str:
@@ -286,24 +303,43 @@ class ExperimentSetupBase(
         logger.warning("Setting project name to %s. Prefer creation of a new class", value)
         self.PROJECT: str = value
 
-    def _parse_project_name(self, project_name: str):
+    def _parse_project_name(self, project_name: str, join_list: Optional[str] = "_"):
         while "<" in project_name and ">" in project_name:
             start = project_name.index("<")
             end = project_name.index(">", start)
             tag = project_name[start : end + 1]
             substituted = self._substitute_tag(tag)
             if substituted is not None:
-                project_name = project_name.replace(tag, str(substituted), 1)
+                if join_list is None:
+                    project_name = project_name.replace(tag, str(substituted), 1)
+                elif isinstance(substituted, (list, tuple)):
+                    project_name = project_name.replace(tag, join_list.join(str(s) for s in substituted), 1)
+                else:
+                    project_name = project_name.replace(tag, str(substituted), 1)
         return project_name
 
     @property
-    @abstractmethod
-    def group_name(self) -> str:
+    def group_name(self) -> str | None:
         """
         Name of the group for logging. Will be used for:
             - wandb group
             - comet project
         """
+        if self.GROUP == "NO_GROUP_SET":
+            ImportantLogger.important_info(logger, "The setup %s has no GROUP set, will return `group_name` = None")
+            return None
+        try:
+            return self._parse_project_name(self.GROUP)
+        except AttributeError as e:
+            if "GROUP" in str(e):
+                logger.warning("GROUP not set. Create a new setup class or use setup.GROUP=...")
+            if self.args.command_str:
+                return f"{self.args.command_str}-{'_'.join(self.args.tune) if self.args.tune else ''}"
+            return "Ungrouped"
+
+    @group_name.setter
+    def group_name(self, value: str):
+        self.GROUP: str = value
 
     def __new__(cls, args: Optional[Sequence[str]] = None, *arguments, **kwargs) -> Self:  # noqa: ARG004
         instance = super().__new__(cls)
@@ -390,14 +426,14 @@ class ExperimentSetupBase(
             - self.create_parser(): Creates and assigns the argument parser.
             - self.setup(): Performs further setup based on initialization flags.
         """
-        if "_ray_pkg_" in str(self.storage_path):
+        if "_ray_pkg_" in str(self.base_storage_path):
             logger.error(
                 "RAY_UTILITIES_STORAGE_PATH points to a temporary Ray package directory (%s). "
                 "This will cause issues with checkpointing",
-                self.storage_path,
+                self.base_storage_path,
             )
         if "RAY_UTILITIES_STORAGE_PATH" not in os.environ:
-            os.environ["RAY_UTILITIES_STORAGE_PATH"] = str(self.storage_path)
+            os.environ["RAY_UTILITIES_STORAGE_PATH"] = str(self.base_storage_path)
         if "_ray_pkg_" in os.environ["RAY_UTILITIES_STORAGE_PATH"]:
             logger.error(
                 "RAY_UTILITIES_STORAGE_PATH points to a temporary Ray package directory (%s). "
@@ -635,11 +671,6 @@ class ExperimentSetupBase(
         self.args = self.postprocess_args(parsed)
         if self.args.restore_path:
             logger.info("restore_path is set. NOTE: Auto restore will only work with setup = Setup(parse_args=True)")
-        if self.args.test and (
-            test_storage_path := os.environ.get("RAY_UTILITIES_TEST_STORAGE_PATH", "./outputs/experiments/test")
-        ) not in ("", "0"):
-            logger.info("Test mode active, setting storage_path to %s", test_storage_path)
-            self.storage_path = test_storage_path
         return self.args
 
     # endregion
@@ -851,7 +882,8 @@ class ExperimentSetupBase(
         param_space["cli_args"] = self.clean_args_to_hparams(self.args)
         param_space["run_id"] = get_run_id()
         param_space["experiment_id"] = get_run_id()
-        param_space["experiment_name"] = self.project
+        # NOTE: If we set up project / group_name later *after* this will be wrong
+        param_space["project"] = self.project
         param_space["experiment_group"] = self.group_name
         self.param_space = param_space
         if hasattr(self, "_dynamic_parameters_to_tune"):
@@ -1362,7 +1394,10 @@ class ExperimentSetupBase(
         if os.environ.get("CI") or (str(self.storage_path).startswith("s3://") and self.args.test):
             # CI is env variable used by GitHub actions
             # Do not use remote when we are testing
-            self.storage_path = Path("./outputs/experiments/").absolute()
+            ImportantLogger.important_info(
+                logger, "Detected CI environment variable or S3 in test mode. Disabling remote storage."
+            )
+            self.base_storage_path = Path("./outputs/experiments/").absolute()
         tuner_setup = self.tuner_setup_class(
             setup=self,
             eval_metric=self.args.metric,
@@ -1517,6 +1552,8 @@ class ExperimentSetupBase(
             "param_space": getattr(self, "param_space", {"__params_not_created__": True}),
             "setup_class": type(self),
             "trial_name_creator": self._tune_trial_name_creator,
+            "PROJECT": self.PROJECT,
+            "GROUP": self.GROUP,
         }
         if not hasattr(data["args"], "_command_str"):
             data["args"]._command_str = self.args._command_str
@@ -1559,7 +1596,7 @@ class ExperimentSetupBase(
                 raise ValueError(
                     "Path points to a _ray_pkg_ directory, which is an UNWRITABLE and temporary working dir. "
                     "Check storage_path / RAY_UTILITIES_STORAGE_PATH setup.\n"
-                    f"Storage path: {self.storage_path} "
+                    f"Storage path: {self.base_storage_path} "
                     f"RAY_UTILITIES_STORAGE_PATH: {os.environ.get('RAY_UTILITIES_STORAGE_PATH')}"
                 )
             path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -1880,6 +1917,10 @@ class ExperimentSetupBase(
             new.config = config
         command_args = data["args"].__dict__.pop("COMMAND_ARGS", None)
         new.args = data["args"]  # might be just a simple namespace
+        new.GROUP = data.get("GROUP", new.GROUP)
+        new.PROJECT = data.get("PROJECT", new.PROJECT)
+        unchecked_keys.discard("GROUP")
+        unchecked_keys.discard("PROJECT")
         if isinstance(new.parser, Tap):
             try:
                 new.parser.from_dict(vars(new.args), skip_unsettable=True)

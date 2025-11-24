@@ -13,7 +13,7 @@ os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
 
 if __name__ == "__main__":
     PPOMLPSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
-    PPOMLPSetup.group_name = "dynamic:batch_size+rollout_size"  # pyright: ignore
+    PPOMLPSetup.GROUP = "dynamic-batch_size+rollout_size"
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
         "--dynamic_batch",

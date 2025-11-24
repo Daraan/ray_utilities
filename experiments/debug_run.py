@@ -71,6 +71,6 @@ if __name__ == "__main__":
                 config_files=["experiments/default.cfg", "experiments/models/mlp/default.cfg"]
             )
         os.environ["RAY_ENABLE_RECORD_ACTOR_TASK_LOGGING"] = "1"
-        setup.storage_path = "./outputs/experiments/TESTING/"
+        setup.base_storage_path = "./outputs/experiments/TESTING/"
         with init_ray_with_setup(setup, runtime_env=get_runtime_env()):
             results = run_tune(setup)

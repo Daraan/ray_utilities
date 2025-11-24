@@ -22,9 +22,6 @@ if __name__ == "__main__":
         SetupClass = DQNMLPSetup
     else:
         SetupClass = PPOMLPSetup
-
-    SetupClass.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
-    SetupClass.group_name = "dynamic:batch_size"  # pyright: ignore
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
         "--dynamic_batch",
@@ -42,9 +39,11 @@ if __name__ == "__main__":
         "--comet", "offline+upload",
         "--log_level", "INFO",
     ):  # fmt: skip
-        setup = SetupClass(
+        with SetupClass(
             config_files=["experiments/default.cfg", "experiments/models/mlp/default.cfg"],
             trial_name_creator=extend_trial_name(prepend="Dynamic_GradientAccumulation"),
-        )
+        ) as setup:
+            PPOMLPSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
+            PPOMLPSetup.GROUP = "dynamic-batch_size"
         with init_ray_with_setup(setup, runtime_env=get_runtime_env()):
             results = run_tune(setup)
