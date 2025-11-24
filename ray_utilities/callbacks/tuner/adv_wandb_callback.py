@@ -250,9 +250,13 @@ class AdvWandbLoggerCallback(
         # replace potential _ in trial_id
         # --- New Code --- : Remove nested keys
         for nested_key in filter(lambda x: "/" in x, self.excludes):
-            key, sub_key = nested_key.split("/")
+            key, *sub_keys = nested_key.split("/")
             if key in config:
-                config[key].pop(sub_key, None)
+                subconfig = config[key]
+                for subkey in sub_keys[:-1]:
+                    subconfig = subconfig[subkey]
+                if sub_keys:
+                    subconfig.pop(sub_keys[-1], None)
         fork_from = fork_id = fork_iteration = None  # new run
         if "cli_args" in config:
             assert "num_jobs" not in config["cli_args"]

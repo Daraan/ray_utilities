@@ -306,6 +306,14 @@ class UploadHelperMixin:
             process.terminate()
             error_occurred = True
             error_code = ExitCode.TERMINATED
+            logger.info(
+                "Send KeyboardInterrupt again in the next 2 seconds to stop. Else continue with other upload ..."
+            )
+            try:
+                time.sleep(2)
+            except KeyboardInterrupt:
+                ImportantLogger.important_info(logger, "Second KeyboardInterrupt received. Exiting now.")
+                raise
         except Exception:
             logger.exception(
                 "Exception occurred while waiting for upload process of trial %s",

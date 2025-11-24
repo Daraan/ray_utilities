@@ -11,9 +11,23 @@ import subprocess
 import threading
 import time
 import weakref
+from bdb import BdbQuit
+from enum import Enum
 from pathlib import Path
 from textwrap import indent
-from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping, NamedTuple, Optional, Sequence, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Iterable,
+    Literal,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Sequence,
+    TypeAlias,
+    cast,
+    overload,
+)
 
 import numpy as np
 import pandas as pd
@@ -37,19 +51,22 @@ from ray_utilities.misc import RE_GET_TRIAL_ID, ExperimentKey, close_process_pip
 from ray_utilities.nice_logger import ImportantLogger
 
 if TYPE_CHECKING:
+    import wandb  # noqa: TC004
     from ray import tune
     from ray.actor import ActorProxy
     from ray.tune import ResultGrid
     from wandb.apis.public.runs import Run, Runs
 
-    import wandb  # noqa: TC004
     from ray_utilities.callbacks._wandb_monitor.wandb_run_monitor import WandbRunMonitor as _WandbRunMonitor
+    from ray_utilities.typing import ForkFromData
 
 logger = logging.getLogger(__name__)
 
 _failed_upload_file_lock = threading.Lock()
 
 WANDB_SYNC_MARKER = ".wandb_synced"
+
+FailureDictType: TypeAlias = dict["Run | RunNotFound", list["_FailureTuple"] | Exception]
 
 
 def get_wandb_failed_upload_file() -> str:
@@ -245,7 +262,7 @@ class WandbUploaderMixin(UploadHelperMixin):
             return True, True
         return True, False
 
-    def _check_with_monitor_and_retry(self, process: AnyPopen, timeout=120) -> int:
+    def _check_with_monitor_and_retry(self, process: AnyPopen, timeout=30) -> int:
         logger.info("Process %s failed with returncode %s, checking parent with monitor", process, process.returncode)
 
         start = time.time()
@@ -264,13 +281,14 @@ class WandbUploaderMixin(UploadHelperMixin):
             _found_after, new_artifact_after = self._check_for_artifact(parent_id)
 
             # Wait for artifact with reduced timeout to avoid blocking
-            max_artifact_wait = min(timeout * 0.5, 60)
+            max_artifact_wait = min(timeout * 0.5, 30)
             artifact_wait_start = time.time()
             while (
                 not (artifact_is_new or new_artifact_after) and (time.time() - artifact_wait_start) < max_artifact_wait
             ):
                 time.sleep(5)
                 try:
+                    logger.info("Querying for artifact again for trial %s", parent_id)
                     _found_after, new_artifact_after = self._check_for_artifact(parent_id)
                 except Exception:
                     logger.exception("Error checking for artifact during retry wait")
@@ -772,6 +790,112 @@ class WandbUploaderMixin(UploadHelperMixin):
         return result_paths
 
     @staticmethod
+    def _parse_trial_id_history(
+        trial_id_history: dict[str, str], fork_relationships: dict[str, tuple[str | None, int | None]]
+    ) -> None:
+        original_trial_id = trial_id_history[
+            "original_experiment_key"
+        ]  # For wandb this is wrong as we just ust the trial id there
+        key_order = sorted(int(key) for key in trial_id_history.keys() if key.isdigit())
+        last_parent = None
+        fork_relationships.setdefault(original_trial_id, (None, None))
+        for key in key_order:
+            trial_id = trial_id_history[str(key)]
+            if trial_id == original_trial_id:
+                last_parent = original_trial_id
+                continue  # already added
+            # We do not know the parent step here, we likely do not need it, just add the key number
+            fork_relationships.setdefault(trial_id, (last_parent, None) if last_parent is None else (last_parent, key))
+            last_parent = trial_id
+
+    @staticmethod
+    def _update_dependencies_from_results_file(
+        results_file: Path,
+        fork_relationships: dict[str, tuple[str | None, int | None]] | None,
+    ) -> dict[str, tuple[str | None, int | None]]:
+        """Build fork relationship information from a given results file.
+
+        Args:
+            results_file: Path to the results CSV file.
+        Returns:
+            Dict mapping trial_id to (parent_id, parent_step) tuple.
+            Non-forked trials have (None, None).
+        """
+        if fork_relationships is None:
+            fork_relationships = {}
+        try:
+            with open(results_file, "r") as f:
+                for line in f:
+                    data = json.loads(line)  # results for this iteration
+                    config = data.get("config", None)
+                    if config is None:
+                        if FORK_FROM in data:
+                            config = data  # unexpected but as long as its there
+                        else:
+                            continue
+                    if FORK_FROM not in config:
+                        if "experiment_key" in config:
+                            if (
+                                ExperimentKey.FORK_SEPARATOR in config["experiment_key"]
+                                or ExperimentKey.FORK_SEPARATOR in results_file.name
+                            ):
+                                # can be a fork that has been continued -> check for parents
+                                if "trial_id_history" in config:
+                                    trial_history: dict[str, str] = config["trial_id_history"]
+                                    WandbUploaderMixin._parse_trial_id_history(trial_history, fork_relationships)
+                                # before we add a wrong None parent return
+                                continue
+                            fork_relationships.setdefault(config["experiment_key"], (None, None))
+                        # As it has no parent do not really need to bother adding it -> get ID from path?
+                        if results_file.name == "result.json":
+                            # likely a single result file from wandb upload dir
+                            match = RE_GET_TRIAL_ID.search(str(results_file.parent))
+                            if match:
+                                trial_id = match.group("trial_id")
+                                fork_relationships.setdefault(trial_id, (None, None))
+                        continue
+                    fork_data: ForkFromData = config[FORK_FROM]
+                    trial_id = config.get("experiment_key", config[FORK_FROM].get("fork_id_this_trial"))
+                    if "parent_fork_id" in fork_data:
+                        fork_relationships[trial_id] = (
+                            fork_data["parent_fork_id"],
+                            fork_data["parent_training_iteration"],
+                        )
+                    elif "trial_id_history" in config:
+                        # Check if there is a trial history
+                        trial_history: dict[str, str] = config["trial_id_history"]
+                        WandbUploaderMixin._parse_trial_id_history(
+                            trial_history,
+                            fork_relationships,
+                        )
+            trial_id_from_file = results_file.stem.split("-")[-1]
+            if ExperimentKey.FORK_SEPARATOR in trial_id_from_file and trial_id_from_file not in fork_relationships:
+                logger.warning(
+                    "Results file points to a forked trial but could not find fork information for it. "
+                    "Results file corrupted?: %s",
+                    results_file,
+                )
+                # As a best guess add the last found experiment key as parent
+                try:
+                    last_found = config["experiment_key"]  # pyright: ignore[reportPossiblyUnboundVariable]
+                except (NameError, KeyError):
+                    pass
+                else:
+                    if last_found == trial_id_from_file:
+                        # cannot do anything
+                        return fork_relationships
+                    if (
+                        ExperimentKey.FORK_SEPARATOR not in last_found
+                        and ExperimentKey.RIGHT_PAD_CHAR in last_found[-1]
+                    ):
+                        # for non fork parents wandb uses the normal id
+                        last_found = data.get("trial_id", last_found)  # pyright: ignore[reportPossiblyUnboundVariable]
+                    fork_relationships[trial_id_from_file] = (last_found, data.get("current_step", None))  # pyright: ignore[reportPossiblyUnboundVariable]
+        except Exception:
+            logger.exception("Failed to parse fork relationships from results file %s", results_file)
+        return fork_relationships
+
+    @staticmethod
     def _parse_wandb_fork_relationships(wandb_paths: Sequence[Path]) -> dict[str, tuple[str | None, int | None]]:
         """Parse fork relationship information from wandb directories.
 
@@ -782,6 +906,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         fork_relationships: dict[str, tuple[str | None, int | None]] = {}
 
         found_experiment_files: set[Path] = set()
+        checked_results_files: set[Path] = set()
         for wandb_dir in wandb_paths:
             # TODO: use experiment_info_file if available, ONLY on root, not on remote
             # can only use RUN_ID if we are in the same experiment, not some later upload
@@ -819,13 +944,34 @@ class WandbUploaderMixin(UploadHelperMixin):
                             "No fork relationship data found in info file %s - assuming an error happened.",
                             fork_info_file,
                         )
-                        return {}
                     # moved parent_id added parent_fork_id at position 1
-                    assert tuple(header[:2]) == tuple(FORK_DATA_KEYS[:2]) or (
-                        header[0] == FORK_DATA_KEYS[0]
-                        and header[1] == "parent_id"
-                        and FORK_DATA_KEYS[1] == "parent_fork_id"
-                    )
+                    if (
+                        len(lines) < 2
+                        or not tuple(header[:2]) == tuple(FORK_DATA_KEYS[:2])
+                        or (
+                            header[0] == FORK_DATA_KEYS[0]
+                            and header[1] == "parent_id"
+                            and FORK_DATA_KEYS[1] == "parent_fork_id"
+                        )
+                    ):
+                        logger.error(
+                            "Unexpected or missing header formatting in fork info file %s: %s", fork_info_file, header
+                        )
+                        # XXX fall back to slow different method, parse all results files
+                        if fork_info_file is experiment_info_file:
+                            # Overall experiment
+                            json_result_files = list(Path(wandb_dir.parent.parent).glob("**/result*.json"))
+                        else:
+                            # subdir
+                            json_result_files = list(Path(wandb_dir.parent).glob("result*.json"))
+                        for json_file in json_result_files:
+                            if json_file in checked_results_files:
+                                continue
+                            checked_results_files.add(json_file)
+                            fork_relationships = WandbUploaderMixin._update_dependencies_from_results_file(
+                                json_file, fork_relationships
+                            )
+                        continue
                     iteration_idx = None
                     if "parent_training_iteration" in header:
                         iteration_idx = header.index("parent_training_iteration")
@@ -853,7 +999,7 @@ class WandbUploaderMixin(UploadHelperMixin):
                             fork_relationships[trial_id] = (parent_id, parent_step)
                         else:
                             logger.error("Unexpected line formatting, expected trial_id, parent_id: %s", parts)
-            except AssertionError:
+            except (AssertionError, KeyboardInterrupt):
                 raise
             except Exception:
                 logger.exception("Failed to parse fork relationships from %s", fork_info_file)
@@ -1053,7 +1199,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         single_experiment: Optional[str] = None,
         verbose: int = 10,
         run_per_page: int = 32,
-    ) -> dict[Run | RunNotFound, list[_FailureTuple] | Exception]:
+    ) -> FailureDictType:
         if output_dir is None:
             # might be S3 bucket
             output_dir = os.environ.get("RAY_UTILITIES_STORAGE_PATH", "./outputs/experiments/")
@@ -1084,11 +1230,26 @@ class WandbUploaderMixin(UploadHelperMixin):
             WandbUploaderMixin.__del__(self)  # need to make sure we clean monitor, do not go back to self
 
 
+class VerificationFailure(str, Enum):
+    NOT_GIVEN = "error not specified"
+    EXCEPTION = "exception occurred"
+    METRIC_MISMATCH = "metric mismatch"
+    # History or not found
+    ONLINE_HISTORY_INCOMPLETE = "online history incomplete"
+    OFFLINE_HISTORY_BROKEN = "offline history broken"
+    NO_OFFLINE_HISTORY_FOUND = "no offline history found"
+    NO_ONLINE_RUN_FOUND = "no online run found"
+
+    def __str__(self) -> str:
+        return self.value
+
+
 class _FailureTuple(NamedTuple):
     metric: str
     offline_value: Any
     online_value: Any
     rel_difference: float = float("nan")
+    type: VerificationFailure = VerificationFailure.NOT_GIVEN
 
     @property
     def minor(self):
@@ -1096,11 +1257,17 @@ class _FailureTuple(NamedTuple):
 
 
 class RunNotFound:
-    def __init__(self, run_id: str):
+    def __init__(self, run_id: str, project: Optional[str] = None, group: Optional[str] = None):
         self.id = run_id
+        self.project = project
+        self.group = group
+
+    @property
+    def url(self):
+        return f"{self.project}/{self.id} - group {self.group}" if self.group else f"{self.project}/{self.id}"
 
     def __str__(self):
-        return f"RunNotFound(run_id={self.id})"
+        return f"RunNotFound(run_id={self.id}, project={self.project}, group={self.group})"
 
 
 def verify_wandb_runs(
@@ -1112,7 +1279,8 @@ def verify_wandb_runs(
     single_experiment: Optional[str] = None,
     verbose: int = 10,
     run_per_page: int = 32,
-) -> dict[Run | RunNotFound, list[_FailureTuple] | Exception]:
+    group_glob: str = "*",
+) -> FailureDictType:
     if output_dir is None:
         output_dir = os.environ.get("RAY_UTILITIES_STORAGE_PATH", "./outputs/experiments/")
     api = wandb_api()
@@ -1131,12 +1299,16 @@ def verify_wandb_runs(
                     entity,
                     single_experiment,
                 )
-                return {RunNotFound(single_experiment): Exception("No corresponding online wandb run found.")}
+                return {
+                    RunNotFound(
+                        single_experiment, project=project, group=group_glob if group_glob != "*" else None
+                    ): Exception("No corresponding online wandb run found.")
+                }
             raise
         runs = [run]
     else:
         runs = api.runs(f"{entity}/{project}", filters={"config.experiment_id": experiment_id}, per_page=run_per_page)
-    verify_results: dict[Run | RunNotFound, list[_FailureTuple] | Exception] = {}
+    verify_results: FailureDictType = {}
     logged_tb_once = False
     # Check offline data
     # Get runs in output_dir
@@ -1144,9 +1316,29 @@ def verify_wandb_runs(
     if output_dir is not None:
         # Supports tmpdir with driver_artifacts subdir
         offline_results = list(Path(output_dir).glob("*" + experiment_id + "/**/result*.json"))
+
         if len(offline_results) == 0 and not next(Path(output_dir).glob("*" + experiment_id), None):
             # output_dir could already be the experiment_dir, or the run has crashed very early then the parent dir exists.
-            offline_results = list(Path(output_dir).glob("**/result*.json"))
+            # TODO: With the introduction of project/group/subdir this does not work anymore
+            # NOTE: output_dir might be changed to backup dir!
+            output_dir, offline_results = find_experiment_dir(
+                output_dir, "*" + experiment_id + "/**/result*.json", project=project, group_glob=group_glob
+            )
+            if not offline_results:
+                logger.error(
+                    "No offline results found for experiment_id %s or project %s in %s or %s. "
+                    "Checking all subdirs, this can be very slow and might not be successful!",
+                    experiment_id,
+                    project,
+                    output_dir,
+                    os.environ.get("RAY_UTILITIES_BACKUP_STORAGE_PATH", "<no backup path set>"),
+                )
+                try:
+                    if input("check all subdirs? (y/n): ").lower() == "y":
+                        offline_results = list(Path(output_dir).glob("**/result*.json"))
+                except EOFError:
+                    # non-interactive
+                    logger.info("No input available, skipping full subdir search.")
         if not single_experiment and len(offline_results) != len(runs):
             logger.error("Offline results count %d does not match wandb runs %d", len(offline_results), len(runs))
         elif not single_experiment and verbose > 2:
@@ -1180,19 +1372,23 @@ def verify_wandb_runs(
                         logger.error("Could not extract trial_id from offline path %s", offline_path)
                         run_id = f"unknown-{unknown_count}"
                         unknown_count += 1
+                elif offline_path.name.endswith("patched.json"):
+                    continue  # assume there is a normal result file as well
                 else:
                     run_id = offline_path.stem.rsplit("-", 1)[-1]
                 offline_run_ids.add(run_id)
     else:
         logger.warning("No output_dir provided, cannot check for offline wandb data.")
 
-    for run in runs:
+    for run in tqdm(runs, desc=f"Verifying {experiment_id}", unit="runs"):
         if run.id not in offline_run_ids:
             logger.warning("Got unexpected online wandb run without offline data: %s", run.id)
         offline_run_ids.discard(run.id)
         try:
             failures = verify_wandb_run_history(run=run, output_dir=output_dir, verbose=verbose)
             verify_results[run] = failures
+        except BdbQuit:
+            raise
         except Exception as e:  # noqa: PERF203
             if not logged_tb_once:
                 logger.exception("Failed to verify wandb run %s", run.id)
@@ -1221,20 +1417,45 @@ def verify_wandb_runs(
             offline_run_ids,
         )
         verify_results.update(
-            {RunNotFound(run_id): Exception("No corresponding online wandb run found.") for run_id in offline_run_ids}
+            {
+                RunNotFound(run_id, project=project, group=group_glob if group_glob != "*" else None): Exception(
+                    "No corresponding online wandb run found."
+                )
+                for run_id in offline_run_ids
+            }
         )
     for run, failure in verify_results.items():
         if isinstance(failure, Exception):
-            logger.error("Verification for wandb run %s failed with exception: %s", run.id, str(failure))
+            logger.error("Verification for wandb run %s (%s) failed with exception: %s", run.id, run.url, str(failure))
         elif failure:
             if all(f.minor for f in failure):
-                logger.warning("Wandb run %s history has minor discrepancies: %s", run.id, failure)
+                logger.warning("Wandb run %s (%s) history has minor discrepancies: %s", run.id, run.url, failure)
             else:
-                logger.error("Wandb run %s history verification failed: %s", run.id, failure)
+                logger.error("Wandb run %s (%s) history verification failed: %s", run.id, run.url, failure)
         else:
-            ImportantLogger.important_info(logger, "Wandb run %s history verified successfully.", run.id)
+            ImportantLogger.important_info(logger, "Wandb run %s (%s) history verified successfully.", run.id, run.url)
 
     return verify_results
+
+
+def find_experiment_dir(
+    output_dir: str | Path, glob_pattern: str, *, project: str, group_glob: str = "*"
+) -> tuple[Path, list[Path]]:
+    """
+    Args:
+        glob_pattern: e.g. "*" + experiment_id
+    """
+    experiment_paths = list(Path(output_dir).glob(glob_pattern))
+    if not experiment_paths:
+        # check with project group pattern
+        experiment_paths = list(Path(output_dir).glob(f"{project}/{group_glob}/{glob_pattern}"))
+    if not experiment_paths and (backup_dir := os.environ.get("RAY_UTILITIES_BACKUP_STORAGE_PATH")):
+        experiment_paths = list(Path(backup_dir).glob(glob_pattern))
+        if not experiment_paths:
+            # check with project group pattern
+            experiment_paths = list(Path(backup_dir).glob(f"{project}/{group_glob}/{glob_pattern}"))
+        return Path(backup_dir), experiment_paths
+    return Path(output_dir), experiment_paths
 
 
 __logged_msg_for_path: set[tuple[str, str | Path]] = set()
@@ -1271,6 +1492,7 @@ def verify_wandb_run_history(
     output_dir: Optional[str | Path] = None,
     run: Optional[Run] = None,
     verbose: int = 10,
+    group_glob: str = "*",
 ) -> list[_FailureTuple]:
     """Verify the online wandb history against the offline JSON file.
 
@@ -1310,6 +1532,10 @@ def verify_wandb_run_history(
                 "does not match extracted experiment ID {extracted_experiment_id} from run config"
             )
         experiment_id = extracted_experiment_id
+        project = project or run.project
+        group_glob = run.group if run.group and group_glob == "*" else group_glob
+        # NOTE: We might change : -> - in group names or directories, replace with wildcard
+        group_glob = group_glob.replace(":", "?").replace("=", "?")
     else:
         if run_id is None or project is None:
             raise ValueError("Either run and/or run_id and project must be provided to verify wandb history.")
@@ -1327,7 +1553,10 @@ def verify_wandb_run_history(
                 )
             experiment_id = extracted_experiment_id
 
-    experiment_paths = list(Path(output_dir).glob("*" + experiment_id))
+    _found_dir, experiment_paths = find_experiment_dir(
+        output_dir, f"*{experiment_id}", project=project, group_glob=group_glob
+    )
+
     if not experiment_paths:
         # When using a local path we have already the correct dir
         if (experiment_id, output_dir) not in __logged_msg_for_path:
@@ -1349,6 +1578,7 @@ def verify_wandb_run_history(
         raise FileNotFoundError(str(experiment_path))
     # TODO: If the run_id a fork is created "from_checkpoint" this does fail
     if ExperimentKey.FORK_SEPARATOR in run_id or (run and FORK_FROM in run.config):
+        # TODO: Slow pattern!
         progress_files = list(experiment_path.glob(f"**/result*{run_id}.json"))
         if len(progress_files) == 0 and "artifacts" in experiment_path.parts:
             progress_files = list((experiment_path).glob(f"driver_artifacts/**/result*{run_id}.json"))
@@ -1359,7 +1589,8 @@ def verify_wandb_run_history(
             progress_files = list((experiment_path).glob(f"driver_artifacts/*id={run_id}*/result.json"))
     if len(progress_files) != 1:
         logger.error(
-            "Expected exactly one progress file for run ID %s in experiment path %s, found %d: %s",
+            "Expected exactly one progress file for run ID %s in experiment path %s, found %d: %s"
+            "\n- Was it moved to backup and restored from there?",
             run_id,
             experiment_path,
             len(progress_files),
@@ -1367,7 +1598,14 @@ def verify_wandb_run_history(
         )
         if not progress_files:
             logger.error("Cannot verify wandb history without offline progress file.")
-            return [_FailureTuple("Error: No offline history found", float("nan"), float("nan"))]
+            return [
+                _FailureTuple(
+                    "Error: No offline history found",
+                    float("nan"),
+                    float("nan"),
+                    type=VerificationFailure.NO_OFFLINE_HISTORY_FOUND,
+                )
+            ]
 
     with open(progress_files[0], "r") as f:
         records = [json.loads(line) for line in f]
@@ -1408,12 +1646,21 @@ def verify_wandb_run_history(
     if len(online_history) == 0:
         # data incomplete
         logger.error(
-            "No online wandb history data found for run %s. Last server step %s, offline step %s",
+            "No online wandb history data found for run %s/%s%s. Last server step %s, offline step %s",
+            project,
+            "" if group_glob in ("*", "", None) else group_glob + "/",
             run_id,
             run.lastHistoryStep,
             last_iteration,
         )
-        failures.append(_FailureTuple("No online history found", last_iteration, run.lastHistoryStep))
+        failures.append(
+            _FailureTuple(
+                "No online history found",
+                last_iteration,
+                run.lastHistoryStep,
+                type=VerificationFailure.NO_ONLINE_RUN_FOUND,
+            )
+        )
         # TODO: Could clean sync marker, could check local dir in /tmp
         return failures
     if len(online_history) != len(offline_data) and len(online_history) < 2000:
@@ -1423,17 +1670,25 @@ def verify_wandb_run_history(
             if len(online_history) != len(offline_data[offline_data["training_iteration"] > fork_point]):
                 logger.error(
                     "❌ Mismatch in number of history entries for forked run %s after fork at iteration %d: "
-                    "offline %d vs online %d",
+                    "offline %d vs online %d. %s",
                     run_id,
                     fork_point,
                     len(offline_data[offline_data["training_iteration"] > fork_point]),
                     len(online_history),
+                    "offline history broken"
+                    if len(online_history) > len(offline_data)
+                    else "online history incomplete",
                 )
                 failures.append(
                     _FailureTuple(
                         "num_history_entries_after_fork",
                         len(offline_data[offline_data["training_iteration"] > fork_point]),
                         len(online_history),
+                        type=(
+                            VerificationFailure.OFFLINE_HISTORY_BROKEN
+                            if len(online_history) > len(offline_data)
+                            else VerificationFailure.ONLINE_HISTORY_INCOMPLETE
+                        ),
                     )
                 )
         else:
@@ -1443,7 +1698,18 @@ def verify_wandb_run_history(
                 len(offline_data),
                 len(online_history),
             )
-            failures.append(_FailureTuple("num_history_entries", len(offline_data), len(online_history)))
+            failures.append(
+                _FailureTuple(
+                    "num_history_entries",
+                    len(offline_data),
+                    len(online_history),
+                    type=(
+                        VerificationFailure.OFFLINE_HISTORY_BROKEN
+                        if len(online_history) > len(offline_data)
+                        else VerificationFailure.ONLINE_HISTORY_INCOMPLETE
+                    ),
+                )
+            )
 
     last_log_step = online_history.iloc[-1]._step
     online_iterations = online_history.iloc[-1].training_iteration
@@ -1463,13 +1729,18 @@ def verify_wandb_run_history(
                 )
             except TypeError:
                 rel_diff = float("nan")
-            failures.append(_FailureTuple(metric_name, offline_value, online_value, rel_diff))
+            failures.append(
+                _FailureTuple(
+                    metric_name, offline_value, online_value, rel_diff, type=VerificationFailure.METRIC_MISMATCH
+                )
+            )
             if rel_diff > 0.5:
                 logger.error(
-                    "❌ Mismatch in %18s: offline last %8s vs online last %8s (%.1f %%)."
+                    "❌ Mismatch in %18s: offline last %8s %s online last %8s (%.1f %%)."
                     "On WandB only logged until %6d step total %3d entries. (run id: %s)",
                     metric_name,
                     offline_value,
+                    ">" if offline_value > online_value else "<",
                     online_value,
                     rel_diff,
                     last_log_step,

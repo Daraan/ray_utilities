@@ -189,6 +189,9 @@ class TrainableStateDict(TypedDict):
     git_sha: NotRequired[str]
     """SHA hash of the current git commit for reproducibility."""
 
+    buffer_steps_left: NotRequired[int | None]
+    """When training buffering is used, the number of steps left to buffer."""
+
 
 class PartialTrainableStateDict(TypedDict, total=False):
     """Partial state dictionary with all fields optional.
@@ -813,7 +816,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # Should be a divider of checkpoint frequency and has to be a divider of perturbation_interval if we are in PBT
         # Check for PBT
         if self.config["cli_args"].get("command_str") == "pbt":
-            # If we are in PBT mode, we need to adjust the max_iterations
+            # If we are in PBT mode, we need to adjust the max_iterations to not overshoot perturbation interval
             pbt_interval = self.config["cli_args"]["perturbation_interval"]
             pbt_unit = self.config["cli_args"]["time_attr"]
             if pbt_unit == TRAINING_ITERATION:
@@ -1457,6 +1460,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             "setup": setup_state,
             "current_step": self._current_step,
             "git_sha": self._git_repo_sha,
+            "buffer_steps_left": self._buffer_steps_left,
         }
         # Current step is
         # state["trainable"]["last_result"]["current_step"]
@@ -1507,6 +1511,9 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
         self._iteration = state["iteration"]
         keys_to_process.remove("iteration")
+
+        self._buffer_steps_left = state.get("buffer_steps_left") or 0
+        keys_to_process.discard("buffer_steps_left")
         # Setup
         # NOTE: setup.config can differ from new_algo_config when algorithm_overrides is used!
         # self._setup.config = new_algo_config  # TODO: Possible unset setup._config to not confuse configs

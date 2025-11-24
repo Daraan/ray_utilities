@@ -9,16 +9,17 @@ from typing import TYPE_CHECKING, Annotated, Any, Callable, Optional, TypeAlias,
 
 from ray.tune.schedulers import PopulationBasedTraining
 from tap import to_tap_class
+from random import Random
 
 from ray_utilities.config.parser._common import GoalParser
 from ray_utilities.config.parser.subcommand import SubcommandMixin
 from ray_utilities.constants import CURRENT_STEP, DEFAULT_EVAL_METRIC
-from ray_utilities.tune.scheduler.top_pbt_scheduler import TopPBTTrialScheduler
 
 if TYPE_CHECKING:
     from ray.tune.search.sample import Domain
 
     from ray_utilities.config.parser.default_argument_parser import DefaultResourceArgParser
+    from ray_utilities.setup.experiment_base import ExperimentSetupBase
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,17 @@ _T = TypeVar("_T")
 NotAModelParameter = Annotated[_T, "NotAModelParameter"]
 NeverRestore = Annotated[_T, "NeverRestore"]
 AlwaysRestore = Annotated[_T, "AlwaysRestore"]
+
+__default_seed_options = [42, 128, 0, 480, 798]
+
+
+def get_default_seed_options() -> list[int]:
+    """Returns a mutable list of default seed options."""
+    try:
+        from experiments.create_tune_parameters import seed_options  # noqa: PLC0415, cyclic import
+    except ModuleNotFoundError:
+        seed_options = __default_seed_options
+    return seed_options
 
 
 def _to_hyperparam_mutations(string: str) -> _HPMutationsType:
@@ -107,6 +119,9 @@ class PopulationBasedTrainingParser(GoalParser, to_tap_class(PopulationBasedTrai
             synced at the same time_attr every perturbation_interval.
             Defaults to False. See Appendix A.1 here
             https://arxiv.org/pdf/1711.09846.pdf.
+        grouped: If True, use GroupedTopPBTTrialScheduler which groups trials
+            by configuration and applies PBT quantile logic at the group level
+            rather than individual trials. Defaults to False.
     """
 
     hyperparam_mutations: Optional[_HPMutationsType] = None
@@ -121,6 +136,12 @@ class PopulationBasedTrainingParser(GoalParser, to_tap_class(PopulationBasedTrai
     # custom_args, remove before passing to PopulationBasedTraining
     use_native_pbt: NotAModelParameter[AlwaysRestore[bool]] = False
     """Do not use TopPBTTrialScheduler"""
+
+    grouped: NotAModelParameter[AlwaysRestore[bool]] = False
+    """Use GroupedTopPBTTrialScheduler for group-based PBT"""
+
+    group_size: NotAModelParameter[AlwaysRestore[int]] = 3
+    """Number of trials with same config (differing only in seed) per group. Used with grouped PBT."""
 
     def set_hyperparam_mutations(self, mutations: _HPMutationsType | None) -> None:
         if mutations is None:
@@ -188,7 +209,26 @@ class PopulationBasedTrainingParser(GoalParser, to_tap_class(PopulationBasedTrai
             f"got {action.default}"
         )
 
-    def to_scheduler(self) -> PopulationBasedTraining:
+    def get_seed_options(self, amount: Optional[int] = None) -> list[int]:
+        """
+        Returns a deterministic seed sequence for the given amount of seeds.
+        This function is used to generate seed options for grouped PBT.
+
+        Build from :func:`get_default_seed_options`.
+        """
+        amount = amount if amount is not None else self.group_size
+        seeds = get_default_seed_options()
+        if len(seeds) < amount:
+            rng = Random(seeds[-1])
+            while len(seeds) < amount:
+                new_seed = rng.randint(0, 2**16)
+                if new_seed not in seeds:
+                    seeds.append(new_seed)
+        elif len(seeds) > amount:
+            seeds = seeds[:amount]
+        return seeds
+
+    def to_scheduler(self, setup: Optional[ExperimentSetupBase] = None) -> PopulationBasedTraining:
         if not self._parsed:
             # When used as subparser we should not end up here
             args = self.parse_args(known_only=True).as_dict()
@@ -200,6 +240,8 @@ class PopulationBasedTrainingParser(GoalParser, to_tap_class(PopulationBasedTrai
         args["metric"] = None
         # non-scheduler args
         use_native = args.pop("use_native_pbt")
+        grouped = args.pop("grouped", False)
+
         if self.resample_probability >= 1.0 and self.hyperparam_mutations is None:
             raise ValueError("hyperparam_mutations must be set if resample_probability is 1.0")
         assert not TYPE_CHECKING or self.hyperparam_mutations is not None  # ray has implicit optional
@@ -209,6 +251,40 @@ class PopulationBasedTrainingParser(GoalParser, to_tap_class(PopulationBasedTrai
             return PopulationBasedTraining(**args, hyperparam_mutations=self.hyperparam_mutations)
 
         num_samples = self.parent.num_samples if self.parent else 1  # pyright: ignore[reportOptionalMemberAccess]
+
+        if grouped:
+            from ray_utilities.tune.scheduler.grouped_top_pbt_scheduler import (  # noqa: PLC0415
+                GroupedTopPBTTrialScheduler,
+            )
+
+            if "seed" not in self.hyperparam_mutations and self.group_size > 1:
+                self.hyperparam_mutations["seed"] = {"grid_search": self.get_seed_options()}
+                logger.warning(
+                    "Using GroupedTopPBTTrialScheduler without 'seed' in hyperparam_mutations may lead to "
+                    "identical configurations in multiple groups. Consider adding 'seed' to hyperparam_mutations. "
+                    "Forcing 'seed' mutation with options: %s",
+                    self.hyperparam_mutations["seed"],
+                )
+                # Important we need this in the parameter space, less in the mutations!
+            if setup and "seed" not in setup.param_space:
+                setup.param_space["seed"] = {"grid_search": self.get_seed_options()}
+                logger.debug(
+                    "Adding 'seed' to experiment param_space with options: %s",
+                    setup.param_space["seed"],
+                )
+
+            logger.info("Using GroupedTopPBTTrialScheduler for group-based PBT")
+            # TODO: Note: Grouped PBT is not compatible with *continuous* sampling, must be all grid_search
+            # Or a custom VariantGenerator must be implemented that repeats samples for the group_size
+            return GroupedTopPBTTrialScheduler(
+                **args,
+                hyperparam_mutations=self.hyperparam_mutations,
+                num_samples=num_samples,
+                group_size=self.group_size,
+                prune_late_trials=True,
+            )
+
+        from ray_utilities.tune.scheduler.top_pbt_scheduler import TopPBTTrialScheduler  # noqa: PLC0415
 
         return TopPBTTrialScheduler(
             **args, hyperparam_mutations=self.hyperparam_mutations, num_samples=num_samples, prune_late_trials=True

@@ -127,6 +127,37 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
             True if file was successfully copied, False otherwise
         """
         parent_local_file_path = Path(parent_trial.local_path, parent_file_name)  # pyright: ignore[reportArgumentType]
+        if local_file_path.parent.exists() and local_file_path.exists() and local_file_path.stat().st_size > 0:
+            logger.warning(
+                "Trial %s forked but log file %s already exists. "
+                "This is unexpected, expect when restoring an experiment. "
+                "Creating a .parent file and not modifying the existing file.",
+                trial.trial_id,
+                local_file_path,
+            )
+            local_parent_copy = local_file_path.with_suffix(".parent.json")
+            try:
+                shutil.copy2(parent_local_file_path, local_parent_copy)
+            except OSError as err:
+                logger.error("Error copying parent file to .parent file: %s", err)
+            else:
+                try:
+                    self._trim_history_back_to_fork_step(trial, local_parent_copy, fork_data)
+                except Exception:  # noqa: BLE001
+                    import traceback  # noqa: PLC0415
+
+                    logger.exception(
+                        "Error trimming copied parent file for trial %s from trial %s",
+                        trial.trial_id,
+                        parent_trial.trial_id,
+                    )
+                    with Path(local_file_path.parent, "ru_errors.log").open("a") as err_log:
+                        err_log.write(
+                            f"Error trimming copied parent file for trial {trial.trial_id} "
+                            f"from trial {parent_trial.trial_id}\n" + traceback.format_exc()
+                        )
+            # Did not really copy it but as it already exists, consider it done
+            return True
 
         # Same node - use local copy
         if parent_local_file_path.exists() and local_file_path.parent.exists():

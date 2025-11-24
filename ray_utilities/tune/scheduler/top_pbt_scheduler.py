@@ -31,6 +31,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    ClassVar,
     Container,
     Dict,
     Generic,
@@ -53,7 +54,7 @@ from ray.tune.schedulers.pbt import PopulationBasedTraining, _fill_config
 from ray.tune.utils import flatten_dict
 from typing_extensions import Sentinel
 
-from ray_utilities.constants import FORK_FROM, PERTURBED_HPARAMS, get_run_id
+from ray_utilities.constants import CURRENT_STEP, FORK_FROM, PERTURBED_HPARAMS, get_run_id
 from ray_utilities.misc import (
     build_nested_dict,
     deep_freeze,
@@ -88,6 +89,9 @@ _T = TypeVar("_T")
 
 
 MAX_SKIP_LIST_LENGTH = 10000
+
+PERTURBATION_EPOCH = "pbt_epoch"
+"""Config key tracking which perturbation round (epoch) a trial is in."""
 
 
 if TYPE_CHECKING:
@@ -377,6 +381,7 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
         - Grid search mutations for deterministic hyperparameter exploration
         - Custom exploration functions with mutation tracking
         - Enhanced logging and debugging capabilities
+        - Perturbation epoch tracking for grouping trials by training phase
 
     The scheduler maintains compatibility with the standard PBT interface while providing
     additional flexibility for advanced hyperparameter optimization strategies.
@@ -417,17 +422,20 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
           sampling functions that cycle through the provided values.
         - When the time attr is the default ``"current_step"`` the ``perturbation_interval`` should be divisible by all
           batch_size that appear in the search space to not overstep perturbation points.
+        - Each trial's config includes a ``pbt_epoch`` key indicating which perturbation round it's in.
+          Use this for grouping trials: ``df.groupby(['pbt_group_key', 'pbt_epoch'])``
 
     See Also:
         :class:`ray.tune.schedulers.pbt.PopulationBasedTraining`: Base PBT scheduler
         :func:`_grid_search_sample_function`: Grid search sampling utilities
     """
 
-    additional_config_keys = (
+    additional_config_keys: ClassVar[list[str]] = [
         FORK_FROM,
         "_top_pbt_is_in_upper_quantile",
         "_top_pbt_perturbed",
-    )
+        PERTURBATION_EPOCH,
+    ]
     """Keys inserted into the config of trials to track PBT state."""
 
     _trial_run_states_after_pkl: dict[str, str] | None = None
@@ -522,6 +530,9 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
 
         self.prune_late_trials = prune_late_trials
         """Whether to prune trials that are slow and perform bad"""
+
+        self._current_epoch = 0
+        """Current perturbation epoch counter, incremented after each perturbation round."""
 
     @classmethod
     def _deep_update_mutation(
@@ -737,6 +748,7 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
                     with self._fork_data_file.open("w") as f:
                         f.write(make_fork_from_csv_header())
 
+        trial.config[PERTURBATION_EPOCH] = self._current_epoch  # might have restored a value here
         if FORK_FROM in trial.config:
             fork_config: ForkFromData = trial.config[FORK_FROM]
             logger.info("Adding a forked trial %s with config: %s", trial, fork_config)
@@ -745,9 +757,19 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
             # NOTE: its both unsave to use parent_trial_id or None as a fallback
             self.current_trial_keys[trial] = make_experiment_key(trial, fork_config)
             self._fork_ids[trial, None] = fork_config.get("fork_id_this_trial", trial.trial_id)
+            # Restore epoch from fork data if available
+            if PERTURBATION_EPOCH in fork_config:
+                trial.config[PERTURBATION_EPOCH] = fork_config[PERTURBATION_EPOCH]
         else:
-            self._trial_state[trial].last_training_iteration = 0
-            self._trial_state[trial].current_env_steps = 0
+            # If the trial is restored, we might have a last_training_iteration saved already
+            if trial.last_result and TRAINING_ITERATION in trial.last_result:
+                self._trial_state[trial].last_training_iteration = trial.last_result[TRAINING_ITERATION]
+            else:
+                self._trial_state[trial].last_training_iteration = 0
+            if trial.last_result and CURRENT_STEP in trial.last_result:
+                self._trial_state[trial].current_env_steps = trial.last_result[CURRENT_STEP]
+            else:
+                self._trial_state[trial].current_env_steps = 0
             self.current_trial_keys[trial] = trial.trial_id
             self._fork_ids[trial, None] = trial.trial_id  # initial fork id is trial id
         self._trial_state[trial].last_update_timestamp = get_time()
@@ -950,6 +972,9 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
         for k in self.additional_config_keys:
             trial.config.pop(k, None)
 
+        # Set epoch for all trials before perturbation
+        trial.config[PERTURBATION_EPOCH] = self._current_epoch
+
         # Create exploitation assignments if needed
         self._current_assignments = self._distribute_exploitation(lower_quantile, upper_quantile)
         # Update any CyclicMutation skip lists based on current top trials, to not resample these values.
@@ -1020,6 +1045,7 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
                 if trial.config["minibatch_size"] > train_batch_size_per_learner:
                     # Cannot keep Mutation minibatch size value and satisfy the constraint, do not exploit this trial.
                     trial.config["_top_pbt_perturbed"] = False
+                    trial.config[PERTURBATION_EPOCH] = self._current_epoch
                     # Add current env step to seed data
                     if self._reseed and trial.config.get("env_seed") is not None:
                         # First _ReseedEnv can change seed to (initial, current_step)
@@ -1105,11 +1131,15 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
                 "parent_training_iteration": parent_iteration,
                 "parent_time": Forktime(self._time_attr, self._trial_state[trial_to_clone].last_train_time),
                 "controller": self.__class__.__name__,
+                PERTURBATION_EPOCH: self._current_epoch,
             }
             forked_trial_id = make_experiment_key(trial, fork_data)
             fork_data["fork_id_this_trial"] = forked_trial_id
             if (current_env_steps := self._trial_state[trial_to_clone].current_env_steps) is not None:
                 fork_data["parent_env_steps"] = current_env_steps
+            if "trial_id_history" not in trial.config and "experiment_key" in trial.config:
+                trial.config["trial_id_history"] = {}
+                trial.config["trial_id_history"]["original_experiment_key"] = trial.config["experiment_key"]
             # XXX: Does this reflect the correct parent fork id?
             # trial to clone is is in upper_quantile, meaning self.current_trial_keys is not updated
             # for the parent, as it will continue this is correct
@@ -1117,7 +1147,7 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
             fork_data["parent_fork_id"] = self.current_trial_keys[trial_to_clone]
             trial.config[FORK_FROM] = fork_data
             trial.config["experiment_key"] = forked_trial_id
-            trial.config.setdefault("original_experiment_key", trial.config["experiment_key"])
+            trial.config[PERTURBATION_EPOCH] = self._current_epoch
             trial.invalidate_json_state()
             # Update variables tracking the fork ids
             self._fork_ids[trial, (trial_to_clone, parent_iteration)] = forked_trial_id
@@ -1150,6 +1180,7 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
         else:
             trial.config["_top_pbt_perturbed"] = False
             # Add current env step to seed data
+            trial.config[PERTURBATION_EPOCH] = self._current_epoch
             if self._reseed and trial.config.get("env_seed") is not None:
                 # First _ReseedEnv can change seed to (initial, current_step)
                 reseeder = _ReseedEnv(
@@ -1256,7 +1287,7 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
     @warn_if_slow
     def _perturbation_sync_mode(self, tune_controller: TuneController, time: int):
         # Copied from PopulationBasedTraining
-        logger.info("PBT: Starting perturbation")
+        logger.info("PBT: Starting perturbation at epoch %d", self._current_epoch)
         lower_quantile, upper_quantile = self._quantiles()
         all_trials = tune_controller.get_trials()
         not_in_quantile = [t for t in all_trials if t not in lower_quantile and t not in upper_quantile]
@@ -1281,6 +1312,27 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
     def on_trial_result(self, tune_controller: TuneController, trial: Trial, result: dict) -> str:
         # TODO: Can buffered training affect this negatively?
         decision = super().on_trial_result(tune_controller, trial, result)
+
+        # Update epoch based on training progress
+        # This ensures epoch advances even if _perturbation_sync_mode isn't called
+        if self._time_attr in result:
+            current_time = result[self._time_attr]
+            if current_time >= self._burn_in_period:
+                # Calculate which epoch we should be in based on elapsed time
+                elapsed = current_time - self._burn_in_period
+                target_epoch = int(elapsed // self._perturbation_interval)
+
+                # Increment epoch if we've advanced to a new one
+                if target_epoch > self._current_epoch:
+                    logger.debug(
+                        "Advancing epoch from %d to %d based on trial %s time %s",
+                        self._current_epoch,
+                        target_epoch,
+                        trial.trial_id,
+                        current_time,
+                    )
+                    self._current_epoch = target_epoch
+
         if decision != self.CONTINUE:
             return decision
         # do not wait for a slow and bad last trial in synch mode
@@ -1427,6 +1479,7 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
                 "seen_config_hashes": list(self._seen_config_hashes),
                 "prune_late_trials": self.prune_late_trials,
                 "next_perturbation_sync": self._next_perturbation_sync,
+                "current_epoch": self._current_epoch,
             }
         )
         return state
@@ -1547,9 +1600,12 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
         self.prune_late_trials = state.get("prune_late_trials", False)
         self._next_perturbation_sync = max(self._next_perturbation_sync, state.get("next_perturbation_sync", 0))
 
+        self._current_epoch = state.get("current_epoch", 0)
+
         logger.info(
-            "Restored TopPBTTrialScheduler state: %d trial seeds, %d fork ids, %d seen configs",
+            "Restored TopPBTTrialScheduler state: %d trial seeds, %d fork ids, %d seen configs, epoch=%d",
             len(self._trial_initial_seeds),
             len(self._fork_ids),
             len(self._seen_config_hashes),
+            self._current_epoch,
         )

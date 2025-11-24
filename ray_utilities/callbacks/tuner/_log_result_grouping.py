@@ -8,7 +8,7 @@ from __future__ import annotations
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS, EVALUATION_RESULTS
 from typing_extensions import LiteralString
 
-from ray_utilities.constants import ENVIRONMENT_RESULTS, SEED, SEEDS, TRAINING
+from ray_utilities.constants import ENVIRONMENT_RESULTS, FORK_FROM, SEED, SEEDS, TRAINING
 
 non_metric_results: set[str | LiteralString] = {
     "comment",
@@ -18,6 +18,7 @@ non_metric_results: set[str | LiteralString] = {
     "experiment_group",
     "experiment_key",
     "trainable_name",
+    FORK_FROM,
     f"{ENV_RUNNER_RESULTS}/{ENVIRONMENT_RESULTS}/{SEEDS}",
     f"{ENV_RUNNER_RESULTS}/{ENVIRONMENT_RESULTS}/{SEEDS}/seed_sequence",
     f"{ENV_RUNNER_RESULTS}/{ENVIRONMENT_RESULTS}/{SEED}",
@@ -44,4 +45,7 @@ exclude_results: set[str] = {
     "node_ip",
     "pid",
     "evaluated_this_step",
+    # If we log the config
+    "config/fork_from/pbt_epoch",
+    "config/env_seed",
 }
