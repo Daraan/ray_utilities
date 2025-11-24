@@ -1918,6 +1918,9 @@ class ExperimentSetupBase(
         new.PROJECT = data.get("PROJECT", new.PROJECT)
         unchecked_keys.discard("GROUP")
         unchecked_keys.discard("PROJECT")
+        if "tune_parameters" in data:
+            new.tune_parameters = data["tune_parameters"]
+            unchecked_keys.discard("tune_parameters")
         if isinstance(new.parser, Tap):
             try:
                 new.parser.from_dict(vars(new.args), skip_unsettable=True)

@@ -1333,8 +1333,12 @@ def verify_wandb_runs(
                     output_dir,
                     os.environ.get("RAY_UTILITIES_BACKUP_STORAGE_PATH", "<no backup path set>"),
                 )
-                if input("check all subdirs? (y/n): ").lower() == "y":
-                    offline_results = list(Path(output_dir).glob("**/result*.json"))
+                try:
+                    if input("check all subdirs? (y/n): ").lower() == "y":
+                        offline_results = list(Path(output_dir).glob("**/result*.json"))
+                except EOFError:
+                    # non-interactive
+                    logger.info("No input available, skipping full subdir search.")
         if not single_experiment and len(offline_results) != len(runs):
             logger.error("Offline results count %d does not match wandb runs %d", len(offline_results), len(runs))
         elif not single_experiment and verbose > 2:
@@ -1383,7 +1387,7 @@ def verify_wandb_runs(
         try:
             failures = verify_wandb_run_history(run=run, output_dir=output_dir, verbose=verbose)
             verify_results[run] = failures
-        except (KeyboardInterrupt, BdbQuit):
+        except BdbQuit:
             raise
         except Exception as e:  # noqa: PERF203
             if not logged_tb_once:

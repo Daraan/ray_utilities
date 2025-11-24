@@ -121,11 +121,25 @@ def get_submissions(group: str, *, file) -> dict[str, dict]:
         if sub_key in pattern:
             if isinstance(sub_value, str):
                 pattern = pattern.replace(sub_key, sub_value)
+        else:
+            # Also replace keys with defaults, e.g. <NUM_ENVS:3>
+            for key_with_default in re.findall(r"<([^>:]+):[^>]*>", pattern):
+                sub_key_plain = f"<{key_with_default}>"
+                if sub_key_plain in resolved_substitutions:
+                    pattern = re.sub(
+                        rf"<{key_with_default}:[^>]*>",
+                        resolved_substitutions[sub_key_plain],
+                        pattern,
+                    )
 
     # Replace optional substitutions with their defaults if not already substituted
     for opt_key, default_val in optional_subs.items():
         if opt_key in pattern:
             pattern = pattern.replace(opt_key, default_val)
+    # TODO: This does not stay true to multiline strings
+    # Resolve all linebreaks in the pattern to be a single line
+    pattern = re.sub(r"\s*\n\s*", " ", pattern)
+    pattern = re.sub(r"\s+", " ", pattern).strip()
 
     # Find all replacement keys in the pattern (keys like <ENV_TYPE>)
     other_keys: dict[str, list[str]] = {

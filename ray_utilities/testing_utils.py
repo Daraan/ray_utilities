@@ -1572,7 +1572,11 @@ class TestHelpers(unittest.TestCase):
             value2 = param_space2[key]
             if isinstance(value1, Domain) or isinstance(value2, Domain):
                 # Domain is not hashable, so we cannot compare them directly
-                self.assertIs(type(value1), type(value2))
+                self.assertIs(
+                    type(value1),
+                    type(value2),
+                    f"Domain {key} type differs: {value1!r}{type(value1)}\n!=\n{value2!r}{type(value2)}",
+                )
                 if isinstance(value1, Categorical):
                     assert isinstance(value2, Categorical)
                     self.assertListEqual(value1.categories, value2.categories)

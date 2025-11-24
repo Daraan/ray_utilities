@@ -258,7 +258,6 @@ def _write_failures_to_submission_file(
 
     with open(file, "r") as f:
         data = yaml_load(f)
-    breakpoint()
     failure_count = defaultdict(int)
     for no_failed_experiment in no_failures or []:
         submission_group = group_mapping[no_failed_experiment]["submission_group"]
@@ -266,7 +265,7 @@ def _write_failures_to_submission_file(
         experiment_id = group_mapping[no_failed_experiment]["experiment_id"]
         group_data = data[submission_group]["run_ids"][f"({project})"][experiment_id]
         group_data["failures"] = ["none"]
-        experiment_failures.pop(no_failed_experiment, None)
+        experiment_failures.pop(no_failed_experiment, None)  # pyright: ignore[reportArgumentType, reportCallIssue]
     for run, failures in experiment_failures.items():
         try:
             if run.id not in group_mapping:
@@ -429,9 +428,13 @@ if __name__ == "__main__":
                         if last_experiment is None:
                             last_experiment = experiment_id
                         if last_experiment != experiment_id:
-                            print(
-                                f"Finished verification for project {group_name}/{project}/{last_experiment}. "
-                                f"Writing results and moving to next group {group_name}.\n"
+                            logger.info(
+                                "Finished verification for project {%s}/{%s}/{%s}. "
+                                "Writing results and moving to next group {%s}.\n",
+                                group_name,
+                                project,
+                                last_experiment,
+                                group_name,
                             )
                             _write_failures_to_submission_file(
                                 first_arg_path,

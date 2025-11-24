@@ -617,7 +617,7 @@ class TestGroupedTopPBTIntegration(InitRay, TestHelpers, DisableLoggers):
                         f"result={result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN]}"
                     )
 
-                time.sleep(2)  # Avoid race conditions
+                time.sleep(2)  # Simulate some work
                 return result
 
         ray_pbt_logger.setLevel(logging.DEBUG)
