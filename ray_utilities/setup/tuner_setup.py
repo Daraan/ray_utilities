@@ -345,7 +345,19 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             not isinstance(v, Domain) or (isinstance(v, Categorical) and (len(v.categories) == 1 or v.is_grid()))
             for v in self._setup.param_space.values()
         )
-        if use_ray_median_scheduler_instead:
+        scheduler = None
+        # Check if PBT scheduler is configured
+        if self._setup.args.command is not None:
+            # Use the scheduler from the PBT parser (TopPBT or GroupedTopPBT)
+            try:
+                scheduler = self._setup.args.command.to_scheduler()
+            except AttributeError as e:
+                if "to_scheduler" in str(e):
+                    scheduler = None
+                else:
+                    raise
+            logger.info("Using PBT scheduler from parser: %s", type(scheduler).__name__)
+        if scheduler is None and use_ray_median_scheduler_instead:
             ImportantLogger.important_info(
                 logger, "Using MedianStoppingRule as scheduler space does not require sampling"
             )
@@ -360,8 +372,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
                 # Instead of stopping bad trials, pause them and resume them at the very end
                 hard_stop=True,
             )
-        else:
-            scheduler = None  # FIFO as default
+        # if scheduler is none use FIFO as default
         if len(stoppers) == 0:
             self._stopper = None
         elif len(stoppers) == 1:
@@ -528,12 +539,16 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         # When tracking memory calculate RES - SHR
         # https://docs.ray.io/en/latest/ray-core/scheduling/memory-management.html
         bundles[0]["memory"] = int(
-            (bundles[0].get("memory", 1.25 * GB))  # base memory
+            (bundles[0].get("memory", 1.75 * GB))  # base memory
             # Scale also with batch_size, however when tuned argument is not available here
             * (1.0 + self._setup.config.train_batch_size_per_learner / 2024 // 10)
             # So when we tune it increase by a flat amount, mean need is about * 1.2
             * (1.25 if self._setup.args.tune and "batch_size" in self._setup.args.tune else 1.0)
         )
+        # If we are restoring operations could be more expensive
+        # add more memory to be save as checkpoint / state can be large
+        if self._setup.__restored__:
+            bundles[0]["memory"] += int(2.5 * GB)
         if len(bundles) == 1:
             # No env runners, reserve some extra memory as default need. But has less overhead
             bundles[0]["memory"] = int(

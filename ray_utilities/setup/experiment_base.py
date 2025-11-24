@@ -876,6 +876,14 @@ class ExperimentSetupBase(
         else:  # "sequential", sample from distribution
             param_space["env_seed"] = tune.randint(0, 2**16)
             # param_space["run_seed"] = tune.randint(0, 2**16)  # potential seed for config
+        if self.args.command_str == "pbt" and self.args.command.grouped:  # pyright: ignore[reportOptionalMemberAccess]
+            logger.info("Using grid search over seed for PBT grouped trials. Removing env_seed from param space.")
+            param_space["seed"] = {"grid_search": self.args.command.get_seed_options()}  # pyright: ignore[reportOptionalMemberAccess]
+            param_space.pop("env_seed", None)  # if not present will take seed if sequential or "same"
+            if self.args.env_seeding_strategy not in ("same", "sequential"):
+                logger.warning("When using PBT grouped trials env_seeding_strategy should be 'same' or 'sequential'.")
+            # How does this influence Reseeding in PBT at perturbation points?
+            assert len(param_space["seed"]["grid_search"]) == 3
 
         # Other args not shown in the CLI
         # Log CLI args as hyperparameters
@@ -1297,7 +1305,9 @@ class ExperimentSetupBase(
         self.config.freeze()
         if hasattr(self, "param_space") and self.param_space is not None:
             self.param_space["trainable_name"] = get_trainable_name(self.trainable)
-
+        # This is a special field use by tune to report metrics into the cli
+        if not hasattr(self.trainable, "_progress_metrics"):
+            self.trainable._progress_metrics = ["current_step", self.args.metric]  # pyright: ignore[reportAttributeAccessIssue, reportFunctionMemberAccess]
         return self.trainable
 
     def unset_trainable(self, *, copy_config=False):

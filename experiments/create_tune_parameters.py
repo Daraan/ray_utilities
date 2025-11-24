@@ -62,6 +62,8 @@ default_distributions: dict[str, DistributionDefinition] = {
     "num_envs_per_env_runner": {"grid_search": [1, 2, 4, 8, 16, 32]},
 }
 
+seed_options = [42, 128, 0, 480, 798]
+
 
 def write_distributions_to_json(
     distributions: dict[str, DistributionDefinition] | None,
