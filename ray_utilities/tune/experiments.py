@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 from ray_utilities.constants import FORK_FROM
 from ray_utilities.misc import make_experiment_key
 
-CONFIG_HASH_EXCLUDE_KEYS = ["experiment_key", "original_experiment_key", "trial_id_history"]
+CONFIG_HASH_EXCLUDE_KEYS = ["experiment_key", "original_experiment_key", "trial_id_history", "trial_id"]
 """
 When hashing the config for uniqueness, these keys should be excluded.
 

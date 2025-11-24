@@ -4,15 +4,18 @@ Uses the Ray Job Submission API to submit jobs, track their logs, and update the
 """
 
 from __future__ import annotations
-from pprint import pformat
-import time
-from typing import AsyncIterator, cast
-from ray.job_submission import JobSubmissionClient, JobStatus
-import os
+
+import sys
 import argparse
 import asyncio
-import re
 import itertools
+import os
+import re
+import time
+from pprint import pformat
+from typing import AsyncIterator, cast
+
+from ray.job_submission import JobStatus, JobSubmissionClient
 
 try:
     from ruamel.yaml import YAML
@@ -62,7 +65,7 @@ def resolve_substitution_value(value: str | list[str], yaml_data: dict) -> list[
     return [value] if isinstance(value, str) else value
 
 
-def get_submissions(group: str, *, file="experiments/submissions.yaml") -> dict[str, dict]:
+def get_submissions(group: str, *, file) -> dict[str, dict]:
     with open(file, "r") as f:
         data = yaml_load(f)
     group_data = data.get(group)
@@ -173,9 +176,7 @@ def get_submissions(group: str, *, file="experiments/submissions.yaml") -> dict[
     return submissions
 
 
-def write_back(
-    group: str, job_id: str, run_id: str | dict[str, str | dict[str, str]], *, file="experiments/submissions.yaml"
-):
+def write_back(group: str, job_id: str, run_id: str | dict[str, str | dict[str, str]], *, file):
     with open(file, "r") as f:
         data = yaml_load(f)
     job_id = job_id.removesuffix(RANDOM_SUFFIX)
@@ -220,8 +221,6 @@ def get_tmux_log_command(job_id: str) -> str:
 if __name__ == "__main__":
     if "RAY_UTILITIES_NO_TQDM" not in os.environ:
         if input("Warning: tqdm is not disabled. exit or continue (c)") != "c":
-            import sys
-
             sys.exit(0)
     os.environ["RAY_UTILITIES_NO_TQDM"] = "1"
     parser = argparse.ArgumentParser()
@@ -232,6 +231,9 @@ if __name__ == "__main__":
         default="http://" + os.environ.get("DASHBOARD_ADDRESS", "localhost:8265"),
     )
     parser.add_argument("group", help="The group key in the yaml file to run.", type=str)
+    parser.add_argument(
+        "submissions_file", nargs="?", default="experiments/submissions.yaml", help="The submissions yaml file."
+    )
     parser.add_argument("--test", action="store_true", help="If set, runs in test mode without submitting jobs.")
 
     args = parser.parse_args()
@@ -252,7 +254,7 @@ if __name__ == "__main__":
     jobs_tracked: dict[str, AsyncIterator[str]] = {}
     finished_jobs: dict[str, JobStatus] = {}
 
-    submissions = get_submissions(args.group).items()
+    submissions = get_submissions(args.group, file=args.submissions_file).items()
     for job_id, settings in submissions:
         print(f"Submitting job: {job_id}")
         if args.test:
@@ -266,7 +268,7 @@ if __name__ == "__main__":
                 runtime_env=settings.get("runtime_env", {"working_dir": "."}),
                 entrypoint_num_cpus=settings.get("entrypoint_num_cpus", 0.66),
                 entrypoint_num_gpus=settings.get("entrypoint_num_gpus", 0),
-                entrypoint_memory=int(settings.get("entrypoint_memory", 3 * 1000 * 1000 * 1000)),
+                entrypoint_memory=int(settings.get("entrypoint_memory", 5 * 1000 * 1000 * 1000)),
                 entrypoint_resources=settings.get("entrypoint_resources", {"persistent_node": 1}),
                 metadata=settings.get("metadata", None),
             )
@@ -318,7 +320,10 @@ if __name__ == "__main__":
                         if job_status in JOB_END_STATES:
                             if run_id := task_run_ids.get(job_id):
                                 write_back(
-                                    args.group, job_id, {run_id: {"status": job_status.name, "submission_id": job_id}}
+                                    args.group,
+                                    job_id,
+                                    {run_id: {"status": job_status.name, "submission_id": job_id}},
+                                    file=args.submissions_file,
                                 )
                             del tasks[job_id]
                             break
@@ -335,7 +340,10 @@ if __name__ == "__main__":
                                     run_id = run_id_match.group(1)
                                     task_run_ids[job_id] = run_id
                                     write_back(
-                                        args.group, job_id, {run_id: {"status": "RUNNING", "submission_id": job_id}}
+                                        args.group,
+                                        job_id,
+                                        {run_id: {"status": "RUNNING", "submission_id": job_id}},
+                                        file=args.submissions_file,
                                     )
                                     break
                     print(f"\n\n ============= Out: {job_id} =============\n\n")
@@ -405,7 +413,10 @@ if __name__ == "__main__":
                         final_states[job_id] = job_status
                         if run_id := task_run_ids.get(job_id):
                             write_back(
-                                args.group, job_id, {run_id: {"status": job_status.name, "submission_id": job_id}}
+                                args.group,
+                                job_id,
+                                {run_id: {"status": job_status.name, "submission_id": job_id}},
+                                file=args.submissions_file,
                             )
                         jobs_to_delete.append(job_id)
                 for job_id in jobs_to_delete:

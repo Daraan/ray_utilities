@@ -799,6 +799,7 @@ class TestHelpers(unittest.TestCase):
         self.TrainableClass: type[DefaultTrainable[DefaultArgumentParser, PPOConfig, PPO]] = DefaultTrainable.define(
             PPOMLPSetup.typed(), model_config=self._model_config
         )
+        self.TrainableClass.setup_class.PROJECT = "TESTING"  # pyright: ignore[reportGeneralTypeIssues]
         if self._model_config is not None:
             self.TrainableClass.cls_model_config = self._model_config
         if class_only:
