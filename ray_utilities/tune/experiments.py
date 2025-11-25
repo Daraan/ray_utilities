@@ -16,23 +16,28 @@ This list can be extended by other modules if needed.
 """
 
 
-def set_experiment_key_on_trial(trial: Trial):
+def set_experiment_key_on_trial(trial: Trial, pbt_epoch: int | None = None) -> None:
     """
-    Adds the folowing metakeys to the trial.config:
+    Adds the following metakeys to the trial.config:
         - experiment_key: Unique experiment key for the trial, generated via :func:`make_experiment_key`.
         - original_experiment_key: The original experiment key before any forking.
         - trial_id_history: A dict mapping integers to experiment keys representing the history of trial IDs
     """
     if FORK_FROM not in trial.config:
-        trial.config["experiment_key"] = make_experiment_key(trial)
+        # If the trial is a continued fork there is no FORK_FROM but we want to keep the current key.
+        if "experiment_key" not in trial.config:
+            trial.config["experiment_key"] = make_experiment_key(trial)
     elif fork_id := trial.config[FORK_FROM].get("fork_id_this_trial"):
         trial.config["experiment_key"] = fork_id
     else:
         trial.config["experiment_key"] = make_experiment_key(trial, trial.config[FORK_FROM])
-    i = 0
     trial_id_history = trial.config.setdefault("trial_id_history", {})
     if "original_experiment_key" not in trial_id_history:
         trial_id_history["original_experiment_key"] = trial.config["experiment_key"]
+    if pbt_epoch is not None:
+        trial_id_history[str(pbt_epoch)] = trial.config["experiment_key"]
+        return
+    i = 0
     while str(i) in trial_id_history:
         # Use str for json encoding
         if trial.config["experiment_key"] == trial_id_history[str(i)]:

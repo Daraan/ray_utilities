@@ -835,7 +835,7 @@ class DefaultResourceArgParser(Tap):
     object_store_memory: NotAModelParameter[NeverRestore[int | None]] = None
     """Amount of object store memory to allocate per worker in bytes."""
 
-    gpu: NeverRestore[bool] = False
+    gpu: NeverRestore[float] = 0
 
     # num_cpus_per_learner: NeverRestore[int | Literal["auto"]] = "auto"
     # """auto: 1 if num_gpus_per_learner == 0 else 0"""

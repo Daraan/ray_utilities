@@ -257,7 +257,7 @@ def create_algorithm_config(
         # for fractional GPUs, you should always set num_learners to 0 or 1
         num_learners=args["num_learners"],
         num_cpus_per_learner="auto",  # auto: 1 if no gpu else 0
-        num_gpus_per_learner=1 if args["gpu"] else 0,  # Can also use fraction to share GPU
+        num_gpus_per_learner=args["gpu"] if args["gpu"] else 0,  # Can also use fraction to share GPU
     )
     config.framework(framework)
     if learner_class is None:

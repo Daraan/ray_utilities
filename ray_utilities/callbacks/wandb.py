@@ -800,11 +800,19 @@ class WandbUploaderMixin(UploadHelperMixin):
         key_order = sorted(int(key) for key in trial_id_history.keys() if key.isdigit())
         last_parent = None
         fork_relationships.setdefault(original_trial_id, (None, None))
-        for key in key_order:
+        for i, key in enumerate(key_order):
             trial_id = trial_id_history[str(key)]
             if trial_id == original_trial_id:
                 last_parent = original_trial_id
                 continue  # already added
+            # Due to a bug a wrong parent might be inserted here, making an original trial dependent on a fork
+            if i != 0 and ExperimentKey.FORK_SEPARATOR not in trial_id:
+                logger.warning(
+                    "Unexpected non-forked trial in trial history: %s "
+                    "- skipping as we think this is a bug from a previous version",
+                    trial_id_history,
+                )
+                continue
             # We do not know the parent step here, we likely do not need it, just add the key number
             fork_relationships.setdefault(trial_id, (last_parent, None) if last_parent is None else (last_parent, key))
             last_parent = trial_id

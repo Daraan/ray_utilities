@@ -238,7 +238,25 @@ def patch_offline_history(
             )
             if i != "original_experiment_key" and run_id != run.id
         ]
-        for parent_run_id in parent_run_ids:
+        for i, parent_run_id in enumerate(parent_run_ids):
+            # TODO: There was a bug that inserted a wrong parent into the trial_id_history
+            # when a forked run was continued
+            if i != 0 and (
+                parent_run_id.endswith(ExperimentKey.RIGHT_PAD_CHAR)
+                or ExperimentKey.FORK_SEPARATOR not in parent_run_id
+            ):
+                logger.warning(
+                    "parent_run_id in slot %s seems might be wrong due to a bug. Check carefully. Skipping. All Ids: %s",
+                    i,
+                    parent_run_ids,
+                )
+                if sys.argv[0] == "":
+                    while (choice := input("Skip this parent? (y/n): ").lower()) not in ("y", "n"):
+                        pass
+                    if choice == "y":
+                        continue
+                else:
+                    continue
             try:
                 if entity:
                     parent_run = api.run(f"{entity}/{project}/{parent_run_id}")

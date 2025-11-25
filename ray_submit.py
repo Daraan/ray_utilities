@@ -13,9 +13,12 @@ import os
 import re
 import time
 from pprint import pformat
-from typing import AsyncIterator, cast
+from typing import AsyncIterator, cast, TYPE_CHECKING
 
 from ray.job_submission import JobStatus, JobSubmissionClient
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 try:
     from ruamel.yaml import YAML
@@ -38,8 +41,8 @@ CLIENT: JobSubmissionClient | None = None
 JOB_END_STATES = {JobStatus.SUCCEEDED, JobStatus.STOPPED, JobStatus.FAILED}
 IGNORE_KEYS = {"comment"}
 
-RANDOM_SUFFIX = str(int(time.time()))[-4:]
-"""Suffixed used for repetition of job IDs to avoid name clashes."""
+TIMESTAMP_SUFFIX = time.strftime("%Y-%m-%d_%H:%M:%S")
+"""Suffix used for repetition of job IDs to avoid name clashes."""
 
 
 def resolve_substitution_value(value: str | list[str], yaml_data: dict) -> list[str]:
@@ -207,14 +210,46 @@ def get_submissions(group: str, *, file, failed_only: bool = False) -> dict[str,
     return submissions
 
 
-def write_back(group: str, job_id: str, run_id: str | dict[str, str | dict[str, str]], *, file):
+def deep_update(original: dict, updates: dict) -> dict:
+    """
+    Recursively update a dictionary with another dictionary.
+    Nested dictionaries are merged, not replaced.
+
+    Args:
+        original: The dictionary to update.
+        updates: The dictionary with updates.
+
+    Returns:
+        The updated dictionary.
+    """
+    for key, value in updates.items():
+        if isinstance(value, dict):
+            original[key] = deep_update(original.get(key, {}), value)
+        else:
+            original[key] = value
+    return original
+
+
+def write_back(group: str, job_id: str, run_id: str | dict[str, str | dict[str, str]], *, file: str | Path):
     with open(file, "r") as f:
         data = yaml_load(f)
-    job_id = job_id.removesuffix(RANDOM_SUFFIX)
+    job_id = job_id.removesuffix(TIMESTAMP_SUFFIX)
     if "entrypoint_pattern" not in data[group]:
         data[group][job_id].setdefault("run_ids", {})
         if isinstance(run_id, dict):
-            data[group][job_id]["run_ids"].update(run_id)
+            for experiment_id, run_info in run_id.items():
+                if isinstance(run_info, dict):
+                    # if the current status is a custom written one do not overwrite it
+                    if (
+                        _current_status := data[group][job_id]["run_ids"]
+                        .get(experiment_id, {})
+                        .get("status", JobStatus.RUNNING)
+                    ) not in (JobStatus.RUNNING, JobStatus.PENDING, *JOB_END_STATES):
+                        # do not overwrite custom present value
+                        run_id = run_id.copy()
+                        run_id[experiment_id] = run_info = run_info.copy()  # noqa: PLW2901
+                        run_info.pop("status", None)
+            deep_update(data[group][job_id]["run_ids"], run_id)
         else:
             data[group][job_id]["run_ids"][run_id] = "RUNNING"
     else:
@@ -300,7 +335,7 @@ if __name__ == "__main__":
         try:
             job_id_out = CLIENT.submit_job(
                 entrypoint=settings["entrypoint"],
-                submission_id=settings.get("submission_id", args.group + "_" + job_id + "_" + RANDOM_SUFFIX),
+                submission_id=settings.get("submission_id", args.group + "_" + job_id + "_" + TIMESTAMP_SUFFIX),
                 runtime_env=settings.get("runtime_env", {"working_dir": "."}),
                 entrypoint_num_cpus=settings.get("entrypoint_num_cpus", 0.66),
                 entrypoint_num_gpus=settings.get("entrypoint_num_gpus", 0),
