@@ -18,9 +18,16 @@ from typing import TYPE_CHECKING, Iterable, Optional, cast
 import argcomplete
 import ray
 
-from ray_utilities.callbacks.wandb import FailureDictType, RunNotFound, VerificationFailure, wandb_api
+from ray_utilities.callbacks.wandb import (
+    FailureDictType,
+    RunNotFound,
+    VerificationFailure,
+    find_experiment_dir,
+    wandb_api,
+)
 from ray_utilities.callbacks.wandb import logger as ru_wandb_logger
 from ray_utilities.constants import FORK_FROM
+from ray_utilities.misc import ExperimentKey
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -47,8 +54,8 @@ def get_parser() -> argparse.ArgumentParser:
         subparser.add_argument(
             "--experiment_path",
             type=str,
-            default="./outputs/experiments",
-            help="Path to experiment outputs (default: ./outputs/experiments).",
+            default=os.environ.get("RAY_UTILITIES_STORAGE_PATH", "./outputs/experiments/shared"),
+            help="Path to experiment outputs (default: RAY_UTILITIES_STORAGE_PATH or ./outputs/experiments/shared).",
         )
         subparser.add_argument("--entity", type=str, default=None, help="WandB entity (optional).")
         subparser.add_argument(
@@ -66,11 +73,23 @@ def get_parser() -> argparse.ArgumentParser:
     # Verify subparser
     verify_parser = subparsers.add_parser("verify", help="Verify WandB run without uploading files.")
     add_common_arguments(verify_parser)
+    verify_parser.add_argument(
+        "--skip-checked", action="store_true", help="Skip runs in YAML that already have a 'failures' key set."
+    )
+
+    # Patch subparser
+    patch_parser = subparsers.add_parser(
+        "patch", help="Patch an incomplete offline history JSON file using WandB online data."
+    )
+    add_common_arguments(patch_parser)
+
     argcomplete.autocomplete(parser)
     return parser
 
 
-def experiment_ids_from_submissions_yaml(file: Path, experiments: list[str] | str | None = None):
+def experiment_ids_from_submissions_yaml(
+    file: Path, experiments: list[str] | str | None = None, *, skip_checked: bool = False
+):
     """
     Layout:
         group_name:
@@ -91,22 +110,35 @@ def experiment_ids_from_submissions_yaml(file: Path, experiments: list[str] | st
             groups_to_check[experiments] = data[experiments]["run_ids"]
         else:
             for group in experiments:
-                run_ids_to_add = {}
-                for run_id in data[group]["run_ids"]:
-                    # Skip if previously no failures were detected - and explicitly added as marker
-                    if "failures" in data[group]["run_ids"][run_id] and data[group]["run_ids"][run_id]["failures"] in (
-                        ["none"],
-                        "none",
-                    ):
-                        continue
-                    run_ids_to_add[run_id] = data[group]["run_ids"][run_id]
-                groups_to_check[group] = run_ids_to_add
+                runs_to_add = {}
+                for environment in data[group]["run_ids"]:
+                    entry = data[group]["run_ids"][environment]
+                    for run_id, run_status in entry.copy().items():
+                        # Skip if previously no failures were detected - and explicitly added as marker
+                        if "failures" in run_status and run_status["failures"] in (["none"], "none"):
+                            del entry[run_id]
+                        elif skip_checked and "failures" in run_status:
+                            del entry[run_id]
+                    if entry:
+                        runs_to_add[environment] = entry
+                if runs_to_add:
+                    groups_to_check[group] = runs_to_add
     else:
         # get all groups that have a run_ids section
         for group_name, group in data.items():
             if "run_ids" not in group:
                 continue
-            groups_to_check[group_name] = group["run_ids"]
+            runs_to_add = {}
+            for environment, entry in group["run_ids"].items():
+                for run_id, run_status in entry.copy().items():
+                    if "failures" in run_status and run_status["failures"] in (["none"], "none"):
+                        del entry[run_id]
+                    elif skip_checked and "failures" in run_status:
+                        del entry[run_id]
+                if entry:
+                    runs_to_add[environment] = entry
+            if runs_to_add:
+                groups_to_check[group_name] = runs_to_add
     for group_name, run_ids in groups_to_check.items():
         runs: dict[str, dict[str, str] | str]
         for env, runs in run_ids.items():
@@ -116,14 +148,46 @@ def experiment_ids_from_submissions_yaml(file: Path, experiments: list[str] | st
             yield from ((group_name, f"Default-mlp-{env.strip('()')}", exp_id) for exp_id in experiment_ids)
 
 
+def _filter_keys_from_config(config: dict) -> dict:
+    from ray_utilities.callbacks.tuner._log_result_grouping import exclude_results  # noqa: PLC0415
+
+    for key in (*exclude_results, "log_stats", "offline_loggers", "_config_files"):
+        if "/" in key and key not in config:
+            # Nested key
+            parts = key.split("/")
+            sub_dict = config
+            for part in parts[:-1]:
+                sub_dict = sub_dict.get(part, {})
+                if not isinstance(sub_dict, dict):
+                    break
+            else:
+                sub_dict.pop(parts[-1], None)
+        else:
+            config.pop(key, None)
+    return config
+
+
 def patch_offline_history(
     offline_path: Path | str,
     run: Optional[RunApi | str] = None,
     *,
     entity: Optional[str] = None,
     project: Optional[str] = None,
-    run_id: Optional[str] = None,
+    experiment_key: Optional[str] = None,
 ) -> None:
+    """
+    Patch an incomplete offline history JSON file with online WandB data.
+
+    Args:
+        offline_path: Path to the incomplete offline history JSON file.
+        run: Optional WandB run object or run ID.
+        entity: Optional WandB entity.
+        project: Optional WandB project name.
+        run_id: Optional WandB run ID.
+
+    Returns:
+        None
+    """
     import json  # noqa: PLC0415
 
     from ray.rllib.utils import unflatten_dict  # noqa: PLC0415
@@ -133,12 +197,12 @@ def patch_offline_history(
         if isinstance(run, str):
             run = api.run(run)
     else:
-        assert (project, run_id) != (None, None), "Either run or both project and run_id must be provided."
+        assert (project, experiment_key) != (None, None), "Either run or both project and run_id must be provided."
         api = wandb_api()
         if entity:
-            run = api.run(f"{entity}/{project}/{run_id}")
+            run = api.run(f"{entity}/{project}/{experiment_key}")
         else:
-            run = api.run(f"{project}/{run_id}")
+            run = api.run(f"{project}/{experiment_key}")
     # load or create offline_path
     offline_iteration_data = {}
     offline_path = Path(offline_path)
@@ -153,9 +217,11 @@ def patch_offline_history(
                 data = json.loads(line)
                 offline_iteration_data[data["training_iteration"]] = data
     run = cast("RunApi", run)
+    run_config = _filter_keys_from_config(run.config)
     online_history = run.history(samples=8000, pandas=False)
     online_iteration_data = {
-        int(entry.get("training_iteration", entry.get("_step"))): unflatten_dict(entry) for entry in online_history
+        int(entry.get("training_iteration", entry.get("_step"))): unflatten_dict(entry) | {"config": run_config}
+        for entry in online_history
     }
     # FIXME: Problem if a forked run is a top trial during perturbation it does lose its FORK_FROM info from the config
     # We might overwrite the config in the AdvWandbLogger loosing the config information.
@@ -217,9 +283,12 @@ def patch_offline_history(
             ]
             if parent_online_history.empty:  # we should always have some parent data if we iterate correctly.
                 continue
+            parent_config = _filter_keys_from_config(run.config)
             parent_histories.update(
                 {
-                    record["training_iteration"]: insert_parent_config(parent_run, unflatten_dict(cast("dict", record)))
+                    record["training_iteration"]: insert_parent_config(
+                        parent_run, unflatten_dict(cast("dict", record)) | {"config": parent_config}
+                    )
                     for record in parent_online_history.to_dict(orient="records")
                     if record["training_iteration"] < min_step
                 }
@@ -239,19 +308,25 @@ def _write_failures_to_submission_file(
     file: Path,
     experiment_failures: FailureDictType,
     group_mapping: dict[str, dict[str, str]],
-    no_failures: Optional[Iterable[str]] = (),
+    no_failures: Iterable[str] = (),
 ):
     from ray_submit import yaml_dump, yaml_load  # noqa: PLC0415
 
     with open(file, "r") as f:
         data = yaml_load(f)
     failure_count = defaultdict(int)
-    for no_failed_experiment in no_failures or []:
+    for no_failed_experiment in no_failures:
         submission_group = group_mapping[no_failed_experiment]["submission_group"]
         project = group_mapping[no_failed_experiment]["project"]
         experiment_id = group_mapping[no_failed_experiment]["experiment_id"]
         group_data = data[submission_group]["run_ids"][f"({project})"][experiment_id]
-        group_data["failures"] = ["none"]
+        if isinstance(group_data, str):
+            group_data = data[submission_group]["run_ids"][f"({project})"][experiment_id] = {
+                "value": group_data,
+                "failures": ["none"],
+            }
+        else:
+            group_data["failures"] = ["none"]
         experiment_failures.pop(no_failed_experiment, None)  # pyright: ignore[reportArgumentType, reportCallIssue]
     for run, failures in experiment_failures.items():
         try:
@@ -324,24 +399,6 @@ def _verify_one(group_name: str, project: str, experiment_id: str):
 
 parser = get_parser()
 if __name__ == "__main__":
-    _original_glob = Path.glob
-
-    def patch_glob(self, pattern: str):
-        start = time.time()
-        result = tuple(_original_glob(self, pattern))
-        end = time.time()
-        if end - start > 2.0:
-            logger.warning(
-                "Glob pattern %s in %s took %.2f seconds and returned %d results.",
-                pattern,
-                self,
-                end - start,
-                len(result),
-            )
-        yield from result
-
-    Path.glob = patch_glob
-
     logger.setLevel(logging.INFO)
     ru_wandb_logger.setLevel(logging.INFO)
     args = parser.parse_args()
@@ -351,6 +408,74 @@ if __name__ == "__main__":
     # If project is a path split it
     first_arg_path = Path(args.project)
     # fork_file_present
+    if args.command == "patch":
+        # Patch an incomplete offline history JSON file using WandB online data.
+
+        # do we have a json file
+        if first_arg_path.exists():
+            offline_json_path = first_arg_path
+            project = None
+        else:
+            # we got passed a project
+            project = args.project
+            assert args.run_id is not None, "run_id is required for patch command if no file is given."
+            # Find json file in experiment path
+            if ExperimentKey.RUN_ID_SEPARATOR in args.run_id:
+                args.experiment_key = args.experiment_key or args.run_id
+                args.run_id = args.run_id.split(ExperimentKey.RUN_ID_SEPARATOR, 1)[0]
+                single_experiment = args.experiment_key
+            else:
+                if not args.experiment_key:
+                    raise ValueError(
+                        "experiment_key is required if run_id does not contain a RUN_ID_SEPARATOR '%s', "
+                        "i.e. for forked runs. "
+                        "For non-forked runs pass the --experiment_key explicitly",
+                        ExperimentKey.RUN_ID_SEPARATOR,
+                    )
+                single_experiment = args.experiment_key
+            group_glob = "*"
+            output_dir, offline_results = find_experiment_dir(
+                args.experiment_path,
+                "*"
+                + args.run_id
+                + (
+                    f"/**/result*{single_experiment}.json"
+                    if ExperimentKey.FORK_SEPARATOR in single_experiment
+                    else "result.json"
+                ),
+                project=project,
+                group_glob=group_glob,
+            )
+            assert len(offline_results) == 1, (
+                f"Could not find unique offline results for run_id {args.run_id} "
+                f"and experiment_key {single_experiment} in {output_dir}."
+            )
+            offline_json_path = offline_results[0]
+
+        # Try to infer project and run_id from filename if not given
+        experiment_key = args.experiment_key
+        if project is None or experiment_key is None:
+            # Example filename: offline-run-<run_id>-<project>.json or similar
+            stem = offline_json_path.stem
+            # Try to extract run_id and project from filename
+            # Accepts: offline-run-<run_id>-<project>
+            if not experiment_key and offline_json_path.name != "results.json" and "-" in stem:
+                parts = stem.split("-")
+                experiment_key = parts[-1]
+            # If still not found, try parent directory
+            if project is None:
+                project = offline_json_path.parent.name.rsplit("-", 1)[0]
+            if experiment_key is None:
+                experiment_key = offline_json_path.parent.name.split("-")[-1]
+        patch_offline_history(
+            offline_path=offline_json_path,
+            entity=args.entity,
+            project=project,
+            experiment_key=experiment_key,
+        )
+        print(f"Patched offline history written to {offline_json_path.with_suffix('.patched.json')}")
+        sys.exit(0)
+
     if first_arg_path.is_dir() and first_arg_path.exists():
         args.project = first_arg_path.name.rsplit("-", 1)[0]
         if args.project == "driver_artifacts":
@@ -388,7 +513,13 @@ if __name__ == "__main__":
             group_mapping = {}
             last_experiment = None
 
-            jobs = list(experiment_ids_from_submissions_yaml(first_arg_path, args.run_id))
+            jobs = list(
+                experiment_ids_from_submissions_yaml(
+                    first_arg_path,
+                    args.run_id,
+                    skip_checked=args.skip_checked,
+                )
+            )
             batch_size = 4
             with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as executor:
                 future_to_job = {}
@@ -429,7 +560,7 @@ if __name__ == "__main__":
                                 {
                                     run_id: mapping
                                     for run_id, mapping in group_mapping.items()
-                                    if mapping["experiment_id"] == last_experiment
+                                    if mapping["experiment_id"] == experiment_id
                                 },
                                 no_failures=[
                                     exp_id
@@ -472,6 +603,9 @@ if __name__ == "__main__":
                     print(f"Verification failures for {group_mapping.get(run.id, {})} {run.id}: {failure}")
             _write_failures_to_submission_file(first_arg_path, failures, group_mapping)
         else:
+            if ExperimentKey.RUN_ID_SEPARATOR in args.run_id:
+                args.experiment_key = args.experiment_key or args.run_id
+                args.run_id = args.run_id.split(ExperimentKey.RUN_ID_SEPARATOR, 1)[0]
             failures = uploader.verify_wandb_uploads(
                 experiment_id=args.run_id, output_dir=args.experiment_path, single_experiment=args.experiment_key
             )

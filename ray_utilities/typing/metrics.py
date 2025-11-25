@@ -146,6 +146,12 @@ class _LogMetricsBase(TypedDict):
     config: NotRequired[dict[str, Any]]
     """Algorithm config used for this training step."""
 
+    episode_reward_mean: NotRequired[float]
+    """
+    This key can be picked up by the tune CLI reporter. "
+    Use the ENV_RUNNERS/evaluation/training to get a reliable value.
+    """
+
 
 class LogMetricsDict(_LogMetricsBase):
     """

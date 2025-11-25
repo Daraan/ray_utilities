@@ -76,6 +76,7 @@ from typing import (
 import numpy as np
 from ray.air.integrations.comet import CometLoggerCallback
 from ray.rllib.core import DEFAULT_AGENT_ID, DEFAULT_MODULE_ID
+from ray.tune.result import EPISODE_REWARD_MEAN
 from ray.rllib.utils.metrics import (
     ALL_MODULES,  # pyright: ignore[reportPrivateImportUsage]
     CONNECTOR_PIPELINE_TIMER,
@@ -381,24 +382,24 @@ def filter_metrics(
 
 
 @overload
-def remove_videos(metrics: _MetricDict) -> _MetricDict: ...
+def remove_videos(metrics: _MetricDict, *, is_copy: bool = False) -> _MetricDict: ...
 
 
 @overload
-def remove_videos(metrics: dict[Any, Any]) -> dict[Any, Any]: ...
+def remove_videos(metrics: dict[Any, Any], *, is_copy: bool = False) -> dict[Any, Any]: ...
 
 
 # Caching not needed yet, this is especially for the json logger
 # @cached(cache=FIFOCache(maxsize=1), key=cachetools.keys.methodkey, info=True)
 def remove_videos(
-    metrics: dict[str, Any] | AnyLogMetricsDict,
+    metrics: dict[str, Any] | AnyLogMetricsDict, *, is_copy: bool = False
 ) -> dict[str, Any] | AnyLogMetricsDict:
     """
     Removes video keys from the metrics
 
     This is especially for the json logger
     """
-    did_copy = False
+    did_copy = is_copy
     for keys in DEFAULT_VIDEO_DICT_KEYS:
         subdir = metrics
         for key in keys[:-1]:
@@ -607,16 +608,22 @@ def create_log_metrics(
         },
         "training_iteration": result["training_iteration"],
         "done": result["done"],
+        # NOTE: The first four entries here can show up as progress report
         CURRENT_STEP: current_step,
         "batch_size": result["config"]["_train_batch_size_per_learner"],
         "minibatch_size": result["config"]["minibatch_size"],
         # While this could be a config parameter, we can also just calculate it here
-        "minibatch_scale": result["config"]["minibatch_size"] / result["config"]["_train_batch_size_per_learner"],
         "effective_train_batch_size": (
             result["config"]["minibatch_size"]
             * result["config"]["learner_config_dict"].get("accumulate_gradients_every", 1)
         ),
+        # Not included in the CLI report by tune:
+        "minibatch_scale": result["config"]["minibatch_size"] / result["config"]["_train_batch_size_per_learner"],
         "num_environments": result["config"]["num_envs_per_env_runner"] * (result["config"]["num_env_runners"] or 1),
+        # Special keys that are picked up by tune, see ray.tune.experimental.output.DEFAULT_COLUMNS
+        # ['mean_accuracy', 'mean_loss', 'training_iteration', 'time_total_s', 'timesteps_total', 'episode_reward_mean']
+        # CLI Reporting:
+        EPISODE_REWARD_MEAN: eval_ema if not math.isnan(eval_ema) else eval_mean,
     }
     if (grad_accum := result["config"]["learner_config_dict"].get("accumulate_gradients_every", None)) is not None:
         metrics["accumulate_gradients_every"] = grad_accum

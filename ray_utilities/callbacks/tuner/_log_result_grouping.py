@@ -49,3 +49,8 @@ exclude_results: set[str] = {
     "config/fork_from/pbt_epoch",
     "config/env_seed",
 }
+
+# TODO: Not yet used
+exclude_from_config: set[str] = {
+    "offline_loggers",
+}

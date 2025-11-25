@@ -1321,9 +1321,23 @@ def verify_wandb_runs(
             # output_dir could already be the experiment_dir, or the run has crashed very early then the parent dir exists.
             # TODO: With the introduction of project/group/subdir this does not work anymore
             # NOTE: output_dir might be changed to backup dir!
-            output_dir, offline_results = find_experiment_dir(
-                output_dir, "*" + experiment_id + "/**/result*.json", project=project, group_glob=group_glob
-            )
+            if single_experiment:
+                output_dir, offline_results = find_experiment_dir(
+                    output_dir,
+                    "*"
+                    + experiment_id
+                    + (
+                        f"/**/result*{single_experiment}*.json"
+                        if ExperimentKey.FORK_SEPARATOR in single_experiment
+                        else "result.json"
+                    ),
+                    project=project,
+                    group_glob=group_glob,
+                )
+            else:
+                output_dir, offline_results = find_experiment_dir(
+                    output_dir, "*" + experiment_id + "/**/result*.json", project=project, group_glob=group_glob
+                )
             if not offline_results:
                 logger.error(
                     "No offline results found for experiment_id %s or project %s in %s or %s. "

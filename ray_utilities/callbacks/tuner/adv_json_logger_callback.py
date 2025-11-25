@@ -20,7 +20,8 @@ from ray.tune.logger import JsonLoggerCallback
 from ray.tune.utils.util import SafeFallbackEncoder  # pyright: ignore[reportPrivateImportUsage]
 
 from ray_utilities.callbacks.tuner._file_logger_fork_mixin import FileLoggerForkMixin
-from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback
+from ray_utilities.callbacks.tuner._log_result_grouping import exclude_results
+from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback, round_floats
 from ray_utilities.constants import EVALUATED_THIS_STEP, FORK_FROM
 from ray_utilities.misc import warn_if_slow
 from ray_utilities.postprocessing import remove_videos
@@ -138,11 +139,25 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, JsonLog
                 trial.get_ray_actor_ip(),
                 trial.node_ip,
             )
+        clean_results = remove_videos(round_floats(result), is_copy=True)
+        for key in exclude_results:
+            if "/" in key and key not in clean_results:
+                # Nested key
+                parts = key.split("/")
+                sub_dict = clean_results
+                for part in parts[:-1]:
+                    sub_dict = sub_dict.get(part, {})
+                    if not isinstance(sub_dict, dict):
+                        break
+                else:
+                    sub_dict.pop(parts[-1], None)
+            else:
+                clean_results.pop(key, None)
         try:
             super().log_trial_result(
                 iteration,
                 trial,
-                remove_videos(result),
+                clean_results,
             )
         except OSError as e:
             logger.error("Error logging trial result: %s", e)
