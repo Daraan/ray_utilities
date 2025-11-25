@@ -483,8 +483,8 @@ if __name__ == "__main__":
             args.run_id = first_arg_path.parent.name.split("-")[-1]
         else:
             args.run_id = first_arg_path.name.split("-")[-1]
-        assert args.experiment_path == "./outputs/experiments", (
-            "When project is a path, experiment_path must be default."
+        assert args.experiment_path == os.environ.get("RAY_UTILITIES_STORAGE_PATH", "./outputs/experiments"), (
+            "When project is a path, experiment_path must be in RAY_UTILITIES_STORAGE_PATH, ./outputs/experiments"
         )  # noqa: E501
         args.experiment_path = str(first_arg_path.parent)
         fork_file_present = bool(list(first_arg_path.glob("pbt_fork_data*")))

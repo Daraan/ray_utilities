@@ -15,6 +15,7 @@ import re
 import sys
 import time
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, cast, overload
 
 import base62
@@ -57,12 +58,14 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from ray import tune
+    from ray.tune import ExperimentAnalysis
     from ray.tune.experiment import Trial
 
     from ray_utilities.callbacks._wandb_monitor import WandbRunMonitor
     from ray_utilities.callbacks.upload_helper import AnyPopen
     from ray_utilities.typing import ForkFromData, StrictAlgorithmReturnData
     from ray_utilities.typing.metrics import LogMetricsDict
+
 
 if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
@@ -1072,3 +1075,38 @@ def calc_env_size(env: gym.Env | str | None):
     finally:
         if close_env:
             env.close()
+
+
+def load_experiment_analysis(path: str | Path) -> ExperimentAnalysis:
+    """Load a Ray Tune ExperimentAnalysis from a given path.
+
+    This function attempts to load an ExperimentAnalysis object from the specified
+    directory. It first tries to use Ray Tune's built-in loading mechanism. If that
+    fails (e.g., due to version incompatibilities), it falls back to manually
+    reconstructing the ExperimentAnalysis from the saved trial data.
+
+    Args:
+        path: uri or Path to the experiment directory or experiment_state file.
+
+    Returns:
+        An ExperimentAnalysis object.
+    """
+    import ray.tune.registry as reg  # noqa: PLC0415
+    from ray.tune import ExperimentAnalysis  # noqa: PLC0415
+    from ray.tune.error import TuneError  # noqa: PLC0415
+
+    try:
+        reg.get_trainable_cls("DefinedDefaultTrainable")
+    except (KeyError, TuneError):
+        _logger.info(
+            "DefinedDefaultTrainable not in tune.registry, adding a simple class for loading ExperimentAnalysis."
+        )
+        # Trainable likely not in registry
+        from ray_utilities.setup.algorithm_setup import AlgorithmSetup  # noqa: PLC0415
+        from ray_utilities.training.default_class import DefaultTrainable  # noqa: PLC0415
+
+        reg._global_registry.register(
+            reg.TRAINABLE_CLASS, "DefinedDefaultTrainable", DefaultTrainable.define(AlgorithmSetup)
+        )
+
+    return ExperimentAnalysis(path)
