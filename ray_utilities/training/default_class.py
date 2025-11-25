@@ -793,7 +793,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         )
         # Also check if we not overshoot total steps
         if (
-            current_step := get_current_step(self.algorithm.metrics)
+            current_step := get_current_step(self.algorithm.metrics)  # todo replace with _current_step
         ) + self.algorithm_config.train_batch_size_per_learner * max_iterations > budget["total_steps"]:
             # limit max_iterations so that we are not over the budget
             steps_left = budget["total_steps"] - current_step
@@ -802,6 +802,15 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 max_iterations = steps_left // self.algorithm_config.train_batch_size_per_learner + 1
             else:
                 max_iterations = steps_left // self.algorithm_config.train_batch_size_per_learner
+        # If we already overshooted do not train buffered for easier termination.
+        if self.config["cli_args"].get("test", False) and current_step != self._current_step:
+            _logger.warning(
+                "Expected _current_step to match get_current_step(self.algorithm.metrics) but they differ %s != %d",
+                self._current_step,
+                current_step,
+            )
+        if current_step >= budget["total_steps"]:
+            return super().train()
         # check checkpoint frequency
         checkpoint_freq = self.config["cli_args"]["checkpoint_frequency"]
         if checkpoint_freq:

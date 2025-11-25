@@ -13,7 +13,8 @@ import os
 import re
 import time
 from pprint import pformat
-from typing import AsyncIterator, cast, TYPE_CHECKING
+from typing import AsyncIterator, Collection, cast, TYPE_CHECKING
+import shlex
 
 from ray.job_submission import JobStatus, JobSubmissionClient
 
@@ -68,7 +69,14 @@ def resolve_substitution_value(value: str | list[str], yaml_data: dict) -> list[
     return [value] if isinstance(value, str) else value
 
 
-def get_submissions(group: str, *, file, failed_only: bool = False) -> dict[str, dict]:
+def get_submissions(
+    group: str,
+    *,
+    file,
+    failed_only: bool = False,
+    ignore_node_ids: Collection[str] = (),
+    ignore_hostnames: Collection[str] = (),
+) -> dict[str, dict]:
     with open(file, "r") as f:
         data = yaml_load(f)
     group_data = data.get(group)
@@ -96,6 +104,32 @@ def get_submissions(group: str, *, file, failed_only: bool = False) -> dict[str,
             pattern = data[pattern_key]
     else:
         raise TypeError(f"entrypoint_pattern must be either a string or dict, got {type(entrypoint_pattern_config)}")
+
+    parts = shlex.split(pattern)
+    env_ignore_nodes = os.environ.get("SUBMIT_IGNORE_NODES", "").split(",")
+    env_ignore_hostnames = os.environ.get("SUBMIT_IGNORE_HOSTNAMES", "").split(",")
+    ignore_nodes = set(ignore_node_ids).union({n for n in env_ignore_nodes if n})
+    ignore_hostnames = set(ignore_hostnames).union({h for h in env_ignore_hostnames if h})
+    try:
+        pbt_index = parts.index("pbt")
+    except ValueError:
+        pbt_index = -1
+    for arg, ignores in zip(["--node_id_selector", "--hostname_selector"], [ignore_nodes, ignore_hostnames]):
+        if not ignores:
+            continue
+        if arg not in parts:
+            parts[pbt_index:pbt_index] = [arg, "'!in(" + ",".join(ignores) + ")'"]
+        elif not (selector := parts[parts.index(arg) + 1]).startswith("!"):
+            raise ValueError("Cannot combine positive hostname selector with ignoring hostnames.", selector)
+        elif "!in(" in selector:
+            for label in ignores:
+                selector = selector.replace("in(", "in(" + label + ",")
+            parts[parts.index(arg) + 1] = selector
+        else:
+            # single hostname put with others into !in(...)
+            ignores.add(selector.lstrip("!"))
+            parts[parts.index(arg) + 1] = "'!in(" + ",".join(ignores) + ")'"
+    pattern = " ".join(parts)
 
     # Parse optional substitution keys with defaults (format: <KEY:default_value>)
     optional_subs = {}
@@ -304,6 +338,18 @@ if __name__ == "__main__":
     parser.add_argument(
         "--failed-only", action="store_true", help="If set, only submits jobs that have previously failed."
     )
+    parser.add_argument(
+        "--ignore_hostnames",
+        nargs="*",
+        default=[],
+        help="Hostnames to ignore when submitting jobs.",
+    )
+    parser.add_argument(
+        "--ignore_nodes",
+        nargs="*",
+        default=[],
+        help="Node IDs to ignore when submitting jobs.",
+    )
 
     args = parser.parse_args()
     assert args.address, (
@@ -323,7 +369,13 @@ if __name__ == "__main__":
     jobs_tracked: dict[str, AsyncIterator[str]] = {}
     finished_jobs: dict[str, JobStatus] = {}
 
-    submissions = get_submissions(args.group, file=args.submissions_file, failed_only=args.failed_only).items()
+    submissions = get_submissions(
+        args.group,
+        file=args.submissions_file,
+        failed_only=args.failed_only,
+        ignore_node_ids=args.ignore_nodes,
+        ignore_hostnames=args.ignore_hostnames,
+    ).items()
     for job_id, settings in submissions:
         if args.test:
             print(
