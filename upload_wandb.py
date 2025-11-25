@@ -382,8 +382,9 @@ def _verify_one(group_name: str, project: str, experiment_id: str):
         }
     }
     print("\nVerifying project:", f"{project}/{experiment_id}")
+    experiment_results = {experiment_id: {}}
     experiment_failures = uploader_local.verify_wandb_uploads(
-        experiment_id=experiment_id, output_dir=None, single_experiment=None
+        experiment_id=experiment_id, output_dir=None, single_experiment=None, experiment_results=experiment_results
     )
     for run in experiment_failures.keys():
         local_group_mapping[run.id] = {

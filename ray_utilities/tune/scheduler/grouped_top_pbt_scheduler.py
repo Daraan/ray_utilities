@@ -226,7 +226,7 @@ class GroupedTopPBTTrialScheduler(TopPBTTrialScheduler):
                 else:
                     ImportantLogger.important_warning(
                         logger,
-                        "'%s' is a hyperparam_mutation but the key is not present in the flattened config. ",
+                        "'%s' is a hyperparam_mutation but the key is not present in the flattened config. "
                         "It likely was not added by the scheduler/searcher "
                         "and could not be filled in by this class beforehand.",
                         key,

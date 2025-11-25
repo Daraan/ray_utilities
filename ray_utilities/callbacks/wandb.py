@@ -18,6 +18,7 @@ from textwrap import indent
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Iterable,
     Literal,
     Mapping,
@@ -66,7 +67,7 @@ _failed_upload_file_lock = threading.Lock()
 
 WANDB_SYNC_MARKER = ".wandb_synced"
 
-FailureDictType: TypeAlias = dict["Run | RunNotFound", list["_FailureTuple"] | Exception]
+FailureDictType: TypeAlias = dict["Run | RunWithVerificationFailures", list["_FailureTuple"] | Exception]
 
 
 def get_wandb_failed_upload_file() -> str:
@@ -1199,6 +1200,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         single_experiment: Optional[str] = None,
         verbose: int = 10,
         run_per_page: int = 32,
+        experiment_results: Optional[dict[str, dict[str, Any]]] = None,
     ) -> FailureDictType:
         if output_dir is None:
             # might be S3 bucket
@@ -1239,6 +1241,8 @@ class VerificationFailure(str, Enum):
     OFFLINE_HISTORY_BROKEN = "offline history broken"
     NO_OFFLINE_HISTORY_FOUND = "no offline history found"
     NO_ONLINE_RUN_FOUND = "no online run found"
+    # Experiment level, e.g. no run has enough steps
+    EXPERIMENT_INCOMPLETE = "experiment incomplete"
 
     def __str__(self) -> str:
         return self.value
@@ -1256,18 +1260,48 @@ class _FailureTuple(NamedTuple):
         return abs(self.rel_difference) < 0.05
 
 
-class RunNotFound:
-    def __init__(self, run_id: str, project: Optional[str] = None, group: Optional[str] = None):
+class RunWithVerificationFailures:
+    def __init__(
+        self,
+        run_id: str,
+        project: Optional[str] = None,
+        group: Optional[str] = None,
+        *,
+        name: str,
+        experiment_level: bool = False,
+    ):
         self.id = run_id
         self.project = project
         self.group = group
+        self._name = name
+        self._experiment_level = experiment_level
 
     @property
     def url(self):
         return f"{self.project}/{self.id} - group {self.group}" if self.group else f"{self.project}/{self.id}"
 
     def __str__(self):
-        return f"RunNotFound(run_id={self.id}, project={self.project}, group={self.group})"
+        if not self._experiment_level:
+            return f"{self._name}(run_id={self.id}, project={self.project}, group={self.group})"
+        return f"{self._name}[Experiment](run_id={self.id}, project={self.project}, group={self.group}, experiment_level=True)"  # noqa: E501
+
+
+class RunNotFound(RunWithVerificationFailures):
+    def __init__(
+        self, run_id: str, project: Optional[str] = None, group: Optional[str] = None, *, name: Optional[str] = None
+    ):
+        super().__init__(run_id, project=project, group=group, name=name or "RunNotFound")
+
+
+def default_experiment_validator(experiment_data: dict[str, Any]) -> None | _FailureTuple:
+    if any(exp["current_step"] > 1_000_000 for exp in experiment_data.values()):
+        return None
+    return _FailureTuple(
+        metric="No experiment with > 1M steps",
+        offline_value=max(exp["current_step"] for exp in experiment_data.values()),
+        online_value="max(offline, online) checked",
+        type=VerificationFailure.EXPERIMENT_INCOMPLETE,
+    )
 
 
 def verify_wandb_runs(
@@ -1280,6 +1314,8 @@ def verify_wandb_runs(
     verbose: int = 10,
     run_per_page: int = 32,
     group_glob: str = "*",
+    experiment_results: Optional[dict[str, dict[str, Any]]] = None,
+    experiment_validator: Optional[Callable[[dict[str, Any]], None | _FailureTuple]] = default_experiment_validator,
 ) -> FailureDictType:
     if output_dir is None:
         output_dir = os.environ.get("RAY_UTILITIES_STORAGE_PATH", "./outputs/experiments/")
@@ -1393,13 +1429,19 @@ def verify_wandb_runs(
                 offline_run_ids.add(run_id)
     else:
         logger.warning("No output_dir provided, cannot check for offline wandb data.")
+    all_experiment_results = experiment_results if experiment_results is not None else {}
 
     for run in tqdm(runs, desc=f"Verifying {experiment_id}", unit="runs"):
         if run.id not in offline_run_ids:
             logger.warning("Got unexpected online wandb run without offline data: %s", run.id)
         offline_run_ids.discard(run.id)
         try:
-            failures = verify_wandb_run_history(run=run, output_dir=output_dir, verbose=verbose)
+            failures = verify_wandb_run_history(
+                run=run,
+                output_dir=output_dir,
+                verbose=verbose,
+                experiment_data=all_experiment_results.setdefault(experiment_id, {}),
+            )
             verify_results[run] = failures
         except BdbQuit:
             raise
@@ -1417,6 +1459,11 @@ def verify_wandb_runs(
             entity,
             experiment_id,
         )
+        verify_results = {
+            RunWithVerificationFailures(experiment_id, project, experiment_level=True, name="NoRunsFound"): [
+                _FailureTuple("no offline/online runs found", 0, 0, type=VerificationFailure.NO_OFFLINE_HISTORY_FOUND)
+            ]
+        }  # noqa: E501
     if len(offline_run_ids) > 0:
         # If we check just a single run ignore
         try:
@@ -1448,7 +1495,23 @@ def verify_wandb_runs(
                 logger.error("Wandb run %s (%s) history verification failed: %s", run.id, run.url, failure)
         else:
             ImportantLogger.important_info(logger, "Wandb run %s (%s) history verified successfully.", run.id, run.url)
-
+    if not single_experiment and all_experiment_results and experiment_validator:
+        experiment_level_failure = experiment_validator(all_experiment_results[experiment_id])
+        if experiment_level_failure:
+            logger.error(
+                "Experiment-level validation for experiment_id %s failed: %s",
+                experiment_id,
+                experiment_level_failure,
+            )
+            verify_results[
+                RunWithVerificationFailures(experiment_id, project, name="ExperimentLevel", experiment_level=True)
+            ] = [experiment_level_failure]
+        else:
+            ImportantLogger.important_info(
+                logger,
+                "Experiment-level validation for experiment_id %s passed successfully.",
+                experiment_id,
+            )
     return verify_results
 
 
@@ -1481,6 +1544,7 @@ def verify_wandb_run_history(
     output_dir: Optional[str | Path] = None,
     run: Run,
     verbose: int = 10,
+    experiment_data: Optional[dict[str, dict[str, float]]] = None,
 ) -> list[_FailureTuple]: ...
 
 
@@ -1494,6 +1558,7 @@ def verify_wandb_run_history(
     output_dir: Optional[str | Path] = None,
     run: Optional[Run] = None,
     verbose: int = 10,
+    experiment_data: Optional[dict[str, dict[str, float]]] = None,
 ) -> list[_FailureTuple]: ...
 
 
@@ -1507,6 +1572,7 @@ def verify_wandb_run_history(
     run: Optional[Run] = None,
     verbose: int = 10,
     group_glob: str = "*",
+    experiment_data: Optional[dict[str, dict[str, float]]] = None,
 ) -> list[_FailureTuple]:
     """Verify the online wandb history against the offline JSON file.
 
@@ -1523,6 +1589,8 @@ def verify_wandb_run_history(
         experiment_id: The experiment ID will be extracted from the run_id if possible.
             If provided will be checked for equality. See :const:``RUN_ID``.
         run: Optional wandb Run object. If not provided, will fetch from Wandb API.
+        experiment_data: Gather key metrics of this run, when comparing multiple runs this can be used to
+            to e.g. detect failures in incomplete experiments, e.g. no run with steps > 1M.
     """
     if output_dir is None:
         output_dir = os.environ.get("RAY_UTILITIES_STORAGE_PATH", "./outputs/experiments/")
@@ -1779,4 +1847,6 @@ def verify_wandb_run_history(
                 metric_name,
                 online_value,
             )
+        if experiment_data is not None:
+            experiment_data.setdefault(run_id, {})[metric_name] = max(offline_value, online_value)
     return failures

@@ -113,18 +113,29 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, JsonLog
         fork_step = fork_data["parent_training_iteration"]
         # remove all lines after fork step
         temp_file = copied_file.with_suffix(".tmp")
-        with copied_file.open("r") as infile, temp_file.open("w") as outfile:
-            for line in infile:
+        try:
+            with copied_file.open("r") as infile, temp_file.open("w") as outfile:
+                for line in infile:
+                    try:
+                        data = json.loads(line)
+                        if data.get("training_iteration", 0) <= fork_step:
+                            outfile.write(line)
+                        else:
+                            break
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            "Skipped invalid JSON line for trial %s: %r",
+                            trial.trial_id,
+                            line,
+                        )
+                        continue
+            temp_file.replace(copied_file)
+        finally:
+            if temp_file.exists():
                 try:
-                    data = json.loads(line)
-                    if data.get("training_iteration", 0) <= fork_step:
-                        outfile.write(line)
-                    else:
-                        break
-                except json.JSONDecodeError:
-                    # skip invalid lines
-                    continue
-        temp_file.replace(copied_file)
+                    temp_file.unlink()
+                except Exception:  # noqa: BLE001
+                    pass
 
     @warn_if_slow
     def log_trial_result(self, iteration: int, trial: Trial, result: dict[str, Any] | AnyLogMetricsDict):

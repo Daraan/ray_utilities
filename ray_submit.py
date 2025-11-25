@@ -65,7 +65,7 @@ def resolve_substitution_value(value: str | list[str], yaml_data: dict) -> list[
     return [value] if isinstance(value, str) else value
 
 
-def get_submissions(group: str, *, file) -> dict[str, dict]:
+def get_submissions(group: str, *, file, failed_only: bool = False) -> dict[str, dict]:
     with open(file, "r") as f:
         data = yaml_load(f)
     group_data = data.get(group)
@@ -163,7 +163,24 @@ def get_submissions(group: str, *, file) -> dict[str, dict]:
         replace_values_lists.append(filtered_values)
 
     submissions = {}
-    for values in itertools.product(*replace_values_lists):
+    all_combinations = list(itertools.product(*replace_values_lists))
+
+    if failed_only:
+        run_ids_data = group_data.get("run_ids", {})
+        if not run_ids_data:
+            return {}
+
+        failed_combinations = set()
+        for combo in all_combinations:
+            run_key = "(" + ", ".join(combo).rstrip(", ") + ")"
+            if run_key in run_ids_data:
+                for run_info in run_ids_data[run_key].values():
+                    if isinstance(run_info, dict) and run_info.get("status") == "FAILED":
+                        failed_combinations.add(combo)
+                        break
+        all_combinations = [combo for combo in all_combinations if combo in failed_combinations]
+
+    for values in all_combinations:
         entry = dict(zip(replace_keys, values))
         entrypoint = pattern
         for k, v in entry.items():
@@ -249,6 +266,9 @@ if __name__ == "__main__":
         "submissions_file", nargs="?", default="experiments/submissions.yaml", help="The submissions yaml file."
     )
     parser.add_argument("--test", action="store_true", help="If set, runs in test mode without submitting jobs.")
+    parser.add_argument(
+        "--failed-only", action="store_true", help="If set, only submits jobs that have previously failed."
+    )
 
     args = parser.parse_args()
     assert args.address, (
@@ -268,12 +288,14 @@ if __name__ == "__main__":
     jobs_tracked: dict[str, AsyncIterator[str]] = {}
     finished_jobs: dict[str, JobStatus] = {}
 
-    submissions = get_submissions(args.group, file=args.submissions_file).items()
+    submissions = get_submissions(args.group, file=args.submissions_file, failed_only=args.failed_only).items()
     for job_id, settings in submissions:
-        print(f"Submitting job: {job_id}")
         if args.test:
-            print(f"Test mode: would submit job {job_id} with settings:\n{pformat(settings)}")
+            print(
+                f"\n-----------------------\nTest mode: would submit job {job_id} with settings:\n{pformat(settings)}"
+            )
             continue
+        print(f"Submitting job: {job_id}")
         assert CLIENT
         try:
             job_id_out = CLIENT.submit_job(
@@ -282,7 +304,7 @@ if __name__ == "__main__":
                 runtime_env=settings.get("runtime_env", {"working_dir": "."}),
                 entrypoint_num_cpus=settings.get("entrypoint_num_cpus", 0.66),
                 entrypoint_num_gpus=settings.get("entrypoint_num_gpus", 0),
-                entrypoint_memory=int(settings.get("entrypoint_memory", 5 * 1000 * 1000 * 1000)),
+                entrypoint_memory=int(settings.get("entrypoint_memory", 4 * 1000 * 1000 * 1000)),
                 entrypoint_resources=settings.get("entrypoint_resources", {"persistent_node": 1}),
                 metadata=settings.get("metadata", None),
             )
