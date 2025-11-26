@@ -193,7 +193,12 @@ def _remove_existing_seeded_envs(cb: Any) -> bool:
 
 
 def seed_environments_for_config(
-    config: AlgorithmConfig, env_seed: int | Sequence[int] | None, *, seed_env_directly=False, **kwargs
+    config: AlgorithmConfig,
+    env_seed: int | Sequence[int] | None,
+    *,
+    seed_env_directly=False,
+    every_eval: bool = True,
+    **kwargs,
 ):
     """
     Adds/replaces a common deterministic seeding that is used to seed all environments created
@@ -225,5 +230,7 @@ def seed_environments_for_config(
     if not (env_seed is None or isinstance(env_seed, (int, float, tuple, list))):
         # tuple, or list of int might be ok too
         raise TypeError(f"{type(env_seed)} is not a valid type for env_seed. If it is a Distribution sample first.")
-    seed_envs_cb = make_seeded_env_callback(env_seed, seed_env_directly=seed_env_directly, **kwargs)
+    seed_envs_cb = make_seeded_env_callback(
+        env_seed, seed_env_directly=seed_env_directly, every_eval=every_eval, **kwargs
+    )
     add_callbacks_to_config(config, on_environment_created=seed_envs_cb, remove_existing=_remove_existing_seeded_envs)
