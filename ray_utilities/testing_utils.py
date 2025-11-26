@@ -2209,6 +2209,7 @@ def mock_trainable_algorithm(
         if mock_learner or mock_env_runners
         else nullcontext()
     )
+    # NOTE: Learner does not return results then, possibly also mock Algorithm.training_step
     env_runner_group_mock = mock.patch.object(algorithm_module, "EnvRunnerGroup") if mock_env_runners else nullcontext()
     save_model_mock = (
         # use a lambda to allow comparision

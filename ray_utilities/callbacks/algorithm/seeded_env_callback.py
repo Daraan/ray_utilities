@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import logging
 from inspect import isclass
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Optional, Sequence, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NoReturn, Optional, Sequence, overload
 
 import numpy as np
 from ray.rllib.env.env_runner import EnvRunner
 from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 
+from ray_utilities.misc import get_current_step
+
 try:
     from ray.rllib.callbacks.callbacks import RLlibCallback
 except ImportError:
     from ray.rllib.algorithms.callbacks import DefaultCallbacks as RLlibCallback
+
+from ray.rllib.env.env_context import EnvContext
 
 from ray_utilities.constants import ENVIRONMENT_RESULTS, RAY_METRICS_V2, SEED, SEEDS
 
@@ -23,8 +27,9 @@ except ImportError:
 
 if TYPE_CHECKING:
     import gymnasium as gym
-    from ray.rllib.env.env_context import EnvContext
+    from ray.rllib.algorithms.algorithm import Algorithm
     from ray.rllib.env.env_runner import EnvRunner
+    from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
     from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
     from typing_extensions import TypeIs
 
@@ -330,20 +335,146 @@ class SeedEnvsCallback(ResetSeedEnvsCallback):
     """
 
 
+def _env_runner_get_context(env_runner: EnvRunner | SingleAgentEnvRunner, vector_index: int = 0) -> EnvContext:
+    """Get the EnvContext from the EnvRunner."""
+    return EnvContext(
+        env_config=env_runner.config.env_config,
+        worker_index=env_runner.worker_index,
+        num_workers=env_runner.num_workers,
+        vector_index=vector_index,  # old API?
+        # old API
+        # remote=getattr(env_runner.config, "remote_worker_envs", False),
+        # recreated_worker=getattr(env_runner, "recreated_worker", False),
+    )
+
+
+class AlwaysSeedEvaluationEnvsCallback(SeedEnvsCallback):
+    """
+    For reproducible and comparable environment results on evaluation.
+
+    This class extends :class:`SeedEnvsCallback` which seeds the initial environment reset
+    to also reset and re-seed the environment on every evaluation start.
+    For comparable results the current_step of the algorithm is included in the seed sequence.
+
+    Note:
+        Only supports evaluation through :meth:`on_evaluate_start`.
+        For training a reset is not easily portable and guaranteed to
+        work as the callback logic is different.
+    """
+
+    def _reset_env_on_evaluate(self, env_runner: EnvRunner | SingleAgentEnvRunner, current_step: int):
+        """
+        Reset and reseed the environment on the EnvRunner in the same way as :class:`SeedEnvsCallback`
+
+        This method is meant to be used on the callback that the EnvRunner.config holds, to
+        minimize object storage usage:
+
+        Example:
+            algorithm.eval_env_runner_group.foreach_env_runner(lambda er: _execute_callback_on_env_runner(er, current_step))
+
+            def _execute_callback_on_env_runner(env_runner: EnvRunner | SingleAgentEnvRunner, current_step: int):
+                # find callback on env_runner
+                for cb in env_runner._callbacks:  # pyright: ignore[reportAttributeAccessIssue]
+                    if isinstance(cb, AlwaysSeedEvaluationEnvsCallback):
+                        cb._reset_env_on_evaluate(env_runner, current_step)
+
+        Args:
+            env_runner: The :class:`EnvRunner` or :class:`SingleAgentEnvRunner` to reset and reseed.
+            current_step: The current training step, used as part of the seed sequence for reproducibility.
+        """
+        env_context = _env_runner_get_context(env_runner)
+        seed_sequence: np.random.SeedSequence = np.random.SeedSequence(
+            self.env_seed,
+            spawn_key=(
+                env_context.worker_index,
+                env_context.vector_index,
+                env_runner.config.in_evaluation,
+                current_step,
+            ),
+        )
+        logger.debug(
+            "Resetting and reseeding evaluation envs at step %s with sequence: %r", current_step, seed_sequence
+        )
+        env: gym.vector.VectorWrapper | gym.vector.VectorEnv = env_runner.env  # pyright: ignore[reportAssignmentType]
+        # In the super class we do not reset the env seed, need to set the runner's seed to None to apply ours
+        env_runner._seed = None
+        self.seed_environment(
+            seed_sequence=seed_sequence,
+            env=env.unwrapped,
+            env_context=env_context,
+            env_runner=env_runner,
+            # do not log seed change for every step
+            metrics_logger=None,
+        )
+
+    def on_evaluate_start(
+        self,
+        *,
+        algorithm: Algorithm,
+        metrics_logger: Optional[MetricsLogger] = None,
+        **kwargs,
+    ) -> None:
+        super().on_evaluate_start(algorithm=algorithm, metrics_logger=metrics_logger, **kwargs)
+        if algorithm.eval_env_runner_group is None:  # pyright: ignore[reportUnnecessaryComparison]
+            return
+        # This serializes self :/
+        # This callback is on the algorithm but it will also be present with a copy on the env_runner
+        # so we call the callback there
+        assert metrics_logger is not None
+        current_step = get_current_step(metrics_logger)
+        algorithm.eval_env_runner_group.foreach_env_runner(lambda er: _execute_callback_on_env_runner(er, current_step))
+
+
+def _execute_callback_on_env_runner(env_runner: EnvRunner | SingleAgentEnvRunner, current_step: int):
+    """
+    Execute a present :class:`AlwaysSeedEvaluationEnvsCallback` evaluation environment reset callback
+    on a given :class:`EnvRunner`.
+
+    This method is intended to be used with :meth:`EnvRunnerGroup.foreach_env_runner`.
+    To minimize object storage wrapping it in a lambda is recommended:
+
+    Example:
+        algorithm.eval_env_runner_group.foreach_env_runner(lambda er: _execute_callback_on_env_runner(er, current_step))
+
+    Args:
+        env_runner: The :class:`EnvRunner` or :class:`SingleAgentEnvRunner` instance to search for the callback.
+        current_step: The current training step, used as part of the seed sequence for environment reseeding.
+    """
+    # find callback on env_runner
+    for cb in env_runner._callbacks:  # pyright: ignore[reportAttributeAccessIssue]
+        if isinstance(cb, AlwaysSeedEvaluationEnvsCallback):
+            cb._reset_env_on_evaluate(env_runner, current_step)
+
+
 @overload
 def make_seeded_env_callback(
-    env_seed_: int | None | Sequence[int], *, seed_env_directly: Literal[False] = False
+    env_seed_: int | None | Sequence[int], *, seed_env_directly: Literal[False] = False, every_eval: Literal[False]
 ) -> type[SeedEnvsCallbackBase | ResetSeedEnvsCallback]: ...
 
 
 @overload
 def make_seeded_env_callback(
-    env_seed_: int | None | Sequence[int], *, seed_env_directly: Literal[True]
+    env_seed_: int | None | Sequence[int],
+    *,
+    seed_env_directly: Literal[False] = False,
+    every_eval: Literal[True] = True,
+) -> type[AlwaysSeedEvaluationEnvsCallback]: ...
+
+
+@overload
+def make_seeded_env_callback(
+    env_seed_: int | None | Sequence[int], *, seed_env_directly: Literal[True], every_eval: Literal[False]
 ) -> type[DirectRngSeedEnvsCallback]: ...
 
 
+@overload
 def make_seeded_env_callback(
-    env_seed_: int | None | Sequence[int], *, seed_env_directly: bool = False
+    env_seed_: int | None | Sequence[int], *, seed_env_directly: Literal[True], every_eval: Literal[True] = True
+) -> NoReturn: ...
+
+
+def make_seeded_env_callback(
+    env_seed_: int | None | Sequence[int], *, seed_env_directly: bool = False, every_eval: bool = True
 ) -> type[SeedEnvsCallbackBase | ResetSeedEnvsCallback | DirectRngSeedEnvsCallback]:
     """Create a callback that seeds the environment.
 
@@ -363,11 +494,20 @@ def make_seeded_env_callback(
         )
 
     if seed_env_directly:
+        if every_eval:
+            raise NotImplementedError("re-seeding on every eval is not implemented by default for direct env seeding")
 
         class FixedDirectSeedEnvsCallback(DirectRngSeedEnvsCallback, metaclass=_SeededEnvCallbackMeta):
             env_seed = env_seed_
 
         return FixedDirectSeedEnvsCallback
+
+    if every_eval:  # default option
+
+        class FixedAlwaysSeedEvaluationEnvsCallback(AlwaysSeedEvaluationEnvsCallback, metaclass=_SeededEnvCallbackMeta):
+            env_seed = env_seed_
+
+        return FixedAlwaysSeedEvaluationEnvsCallback
 
     class FixedSeedResetEnvsCallback(ResetSeedEnvsCallback, metaclass=_SeededEnvCallbackMeta):
         env_seed = env_seed_
