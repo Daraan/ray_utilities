@@ -38,6 +38,7 @@ from ray.tune.search.sample import Categorical, Domain
 from ray.tune.stopper import CombinedStopper, FunctionStopper
 from typing_extensions import TypeVar
 
+from ray_utilities.callbacks.tuner.add_experiment_key import AddExperimentKeyCallback
 from ray_utilities.callbacks.tuner.metric_checkpointer import StepCheckpointer
 from ray_utilities.config._tuner_callbacks_setup import TunerCallbackSetup
 from ray_utilities.constants import (
@@ -49,6 +50,7 @@ from ray_utilities.constants import (
 from ray_utilities.misc import calc_env_size, get_current_step, resolve_default_eval_metric
 from ray_utilities.misc import trial_name_creator as default_trial_name_creator
 from ray_utilities.nice_logger import ImportantLogger
+from ray_utilities.tune.scheduler.add_experiment_keys_mixin import AddExperimentKeysMixin
 from ray_utilities.tune.searcher.constrained_minibatch_search import constrained_minibatch_search
 from ray_utilities.tune.searcher.optuna_searcher import OptunaSearchWithPruner, create_optuna_searcher
 from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultIterationStopper
@@ -636,6 +638,9 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             run_config.name,
             run_config.storage_path,
         )
+        if isinstance(tune_config.scheduler, AddExperimentKeysMixin) and run_config.callbacks:
+            # remove AddExperimentKeyCallback
+            run_config.callbacks = [cb for cb in run_config.callbacks if not isinstance(cb, AddExperimentKeyCallback)]
         return tune.Tuner(
             trainable=trainable,  # Updated to use the modified trainable with resource requirements
             param_space=param_space,

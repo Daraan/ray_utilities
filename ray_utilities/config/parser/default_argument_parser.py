@@ -1408,6 +1408,7 @@ class OptunaArgumentParser(GoalParser, Tap):
                 "minibatch_size",
                 "minibatch_scale",
                 "num_envs_per_env_runner",
+                "test",
             ]
         ]
         | Literal[False]
@@ -1433,6 +1434,7 @@ class OptunaArgumentParser(GoalParser, Tap):
                 "minibatch_size",
                 "minibatch_scale",
                 "num_envs_per_env_runner",
+                "test",
             ],
             type=_parse_tune_choices,
         )

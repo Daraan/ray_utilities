@@ -54,6 +54,7 @@ from ray.tune.schedulers.pbt import PopulationBasedTraining, _fill_config
 from ray.tune.utils import flatten_dict
 from typing_extensions import Sentinel
 
+from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
 from ray_utilities.constants import CURRENT_STEP, FORK_FROM, PERTURBED_HPARAMS, get_run_id
 from ray_utilities.misc import (
     build_nested_dict,
@@ -67,7 +68,7 @@ from ray_utilities.misc import (
     warn_if_slow,
 )
 from ray_utilities.nice_logger import ImportantLogger
-from ray_utilities.tune.experiments import CONFIG_HASH_EXCLUDE_KEYS
+from ray_utilities.tune.experiments import CONFIG_HASH_EXCLUDE_KEYS, set_experiment_key_on_trial
 from ray_utilities.tune.scheduler.add_experiment_keys_mixin import AddExperimentKeysMixin
 from ray_utilities.tune.scheduler.run_slow_trials_first_mixin import RunSlowTrialsFirstMixin
 from ray_utilities.typing import ForkFromData, Forktime, ForktimeTuple
@@ -534,6 +535,9 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
         self._current_epoch = 0
         """Current perturbation epoch counter, incremented after each perturbation round."""
 
+        self._exploited_this_result: bool = False
+        """Whether the current result has already triggered an exploit."""
+
     @classmethod
     def _deep_update_mutation(
         cls,
@@ -963,6 +967,7 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
         For trials in the lower quantile, evenly distribute which top trial
         they exploit to ensure balanced exploitation.
         """
+        self._exploited_this_result = True
         self._block_resume_after_unpickle = False  # XXX: Remove after some testing, only relevant for synch restore
         # Note, is iterated in order: upper_quantile, not in quantiles, lower_quantile
         if trial.storage and trial.storage and "_ray_pkg_" in trial.storage.storage_fs_path:
@@ -1284,6 +1289,14 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
             contents += self._write_fork_data_csv_line(trial, parent_data, fork_id, parent_fork_id=parent_fork_id)
         return contents
 
+    def _end_epoch(self, tune_controller: TuneController):
+        """Hook called at the end of each epoch."""
+        for t in tune_controller.get_trials():
+            set_experiment_key_on_trial(t, pbt_epoch=self._current_epoch)
+        for cb in tune_controller._callbacks._callbacks:
+            if isinstance(cb, TrackForkedTrialsMixin):
+                ...
+
     @warn_if_slow
     def _perturbation_sync_mode(self, tune_controller: TuneController, time: int):
         # Copied from PopulationBasedTraining
@@ -1307,6 +1320,8 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
             max_last_train_time,
         )
         logger.debug("Next perturb at time %s", self._next_perturbation_sync)
+        self._exploited_this_result = False
+        self._end_epoch(tune_controller)
 
     @warn_if_slow
     def on_trial_result(self, tune_controller: TuneController, trial: Trial, result: dict) -> str:
@@ -1319,10 +1334,12 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
             current_time = result[self._time_attr]
             if current_time >= self._burn_in_period:
                 # Calculate which epoch we should be in based on elapsed time
+                # Likely not compatible with max_concurrency - but PBT isn't either
                 elapsed = current_time - self._burn_in_period
                 target_epoch = int(elapsed // self._perturbation_interval)
 
                 # Increment epoch if we've advanced to a new one
+                # - this advances the epoch for first trial that reaches the _perturbation_interval
                 if target_epoch > self._current_epoch:
                     logger.debug(
                         "Advancing epoch from %d to %d based on trial %s time %s",
@@ -1332,6 +1349,10 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
                         current_time,
                     )
                     self._current_epoch = target_epoch
+        if self._exploited_this_result:
+            self._exploited_this_result = False
+            self._end_epoch(tune_controller)
+            return decision
 
         if decision != self.CONTINUE:
             return decision

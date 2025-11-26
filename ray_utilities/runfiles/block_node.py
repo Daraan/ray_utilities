@@ -14,6 +14,7 @@ Arguments:
 if __name__ == "__main__":
     import ray
     import argparse
+    import atexit
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -36,4 +37,11 @@ if __name__ == "__main__":
             time.sleep(self.timeout)
 
     blockers = [BlockNode.remote() for _ in range(args.number or 50)]
+
+    def cleanup():
+        ray.kill(blockers, no_restart=True)
+
+    atexit.register(cleanup)
     ray.wait(blockers, num_returns=len(blockers), fetch_local=False)  # Block until all timed out
+
+    ray.shutdown()

@@ -60,6 +60,8 @@ default_distributions: dict[str, DistributionDefinition] = {
     "minibatch_scale": {"grid_search": [1 / 16, 1 / 8, 1 / 4, 1 / 2, 1.0]},
     # For high num_envs_per_env runner should adjust num_env_runners accordingly
     "num_envs_per_env_runner": {"grid_search": [1, 2, 4, 8, 16, 32]},
+    # Dummy value --tune test
+    "test": {"grid_search": [1, 2, 3]},
 }
 
 seed_options = [42, 128, 0, 480, 798]

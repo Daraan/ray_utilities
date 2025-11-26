@@ -5,7 +5,7 @@ global_pattern_1: >
   <OTHER_FLAGS:>
   --tag:core --tag:pbt
   --buffer_length auto
-  --comet offline+upload@end --wandb offline+upload@end --log_stats learners
+  --comet offline --wandb offline+upload@end --log_stats learners
   --hostname_selector '!in(dws-login-01,dws-login-02)'
   pbt --perturbation_interval 0.125 --quantile_fraction 0.1
 # NOTE: Use set +H when using hostname selector
@@ -20,6 +20,8 @@ submit_pattern: >
   --hostname_selector '!in(dws-login-01,dws-login-02)'
 # --- Envs --- #
 <mujoco_envs>:
+- HumanoidStandup-v5
+- Humanoid-v5
 - Ant-v5
 - Hopper-v5
 - Walker2d-v5
@@ -27,10 +29,8 @@ submit_pattern: >
 - Reacher-v5
 - Swimmer-v5
 - Pusher-v5
-- InvertedPendulum-v5
 - InvertedDoublePendulum-v5
-- Humanoid-v5
-- HumanoidStandup-v5
+- InvertedPendulum-v5
 <basic_envs>:
 - CartPole-v1
 - Acrobot-v1
@@ -440,7 +440,8 @@ pbt_num_envs:
     (Reacher-v5):
       tws47f25111613166c304:
         status: SUCCEEDED
-        comment: single env worked best, most envs worst. 2 envs at the start
+        comment: >
+          single env worked best, most envs worst. 2 envs at the start
           superior to all others. reducing to single env after first
           perturbation big boost. 2 & 4 envs were good as well. Strange drop at
           3rd perturbation, recovered at 4th
@@ -458,8 +459,65 @@ pbt_num_envs:
         failures:
         - none
 pbt_num_envs_large:
-  comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
-    scale
+  comment: OTHER_FLAGS did not apply
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: num_envs_per_env_runner
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+  # TODO all states are GONE
+  run_ids:
+    (Ant-v5):
+      tws47f25112502048d524:
+        status: RUNNING
+        submission_id: pbt_num_envs_large_Ant-v5_2635
+    (Hopper-v5):
+      tws47f251125020408744:
+        status: RUNNING
+        submission_id: pbt_num_envs_large_Hopper-v5_2635
+    (Walker2d-v5):
+      tws47f2511250204bf544:
+        status: FAILED
+        submission_id: pbt_num_envs_large_Walker2d-v5_2635
+    (HalfCheetah-v5):
+      tws47f25112502049d314:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_HalfCheetah-v5_2635
+    (Reacher-v5):
+      tws47f251125020480644:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Reacher-v5_2635
+    (Swimmer-v5):
+      tws47f2511250204cc544:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Swimmer-v5_2635
+    (Pusher-v5):
+      tws47f251125020408db4:
+        status: RUNNING
+        submission_id: pbt_num_envs_large_Pusher-v5_2635
+    (InvertedPendulum-v5):
+      tws47f2511250204414c4:
+        status: RUNNING
+        submission_id: pbt_num_envs_large_InvertedPendulum-v5_2635
+    (InvertedDoublePendulum-v5):
+      tws47f2511250204520f4:
+        status: RUNNING
+        submission_id: pbt_num_envs_large_InvertedDoublePendulum-v5_2635
+    (Humanoid-v5):
+      tws47f251125020460c04:
+        status: RUNNING
+        submission_id: pbt_num_envs_large_Humanoid-v5_2635
+    (HumanoidStandup-v5):
+      tws47f251125020405fd4:
+        status: RUNNING
+        submission_id: pbt_num_envs_large_HumanoidStandup-v5_2635
+pbt_num_envs_large_failed:
+  comment: OTHER_FLAGS did not apply
   entrypoint_resources:
     persistent_node: 1
   entrypoint_pattern:
@@ -867,8 +925,83 @@ pbt_lr:
         status: RUNNING
         submission_id: pbt_lr_HumanoidStandup-v5_9739
 pbt_lr_large:
-  comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
-    scale
+  comment: OTHER_FLAGS did not apply
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: lr
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+  run_ids:
+    (Ant-v5):
+      tws47f251125020738124:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_Ant-v5_2850
+        failures:
+        - none
+    (Hopper-v5):
+      tws47f2511250208a5d54:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_Hopper-v5_2850
+        failures:
+          31a2d_00010:
+          - offline history broken
+          tws47f2511250208a5d54X31a2dC07F31a2dC00S4KWG:
+          - offline history broken
+          tws47f2511250208a5d54X31a2dC10F31a2dC00S4KWG:
+          - offline history broken
+          tws47f2511250208a5d54X31a2dC09F31a2dC08S4KWG:
+          - offline history broken
+    (Walker2d-v5):
+      tws47f251125021655714:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_Walker2d-v5_2850
+        failures:
+        - none
+    (Pusher-v5):
+      tws47f251125022091df4:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_Pusher-v5_2850
+        failures:
+        - none
+    (HalfCheetah-v5):
+      tws47f25112502329d844:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_HalfCheetah-v5_2850
+        failures:
+          tws47f25112502329d844X91e15C10F91e15C03S4KWG:
+          - offline history broken
+          tws47f25112502329d844X91e15C08F91e15C03S4KWG:
+          - offline history broken
+          tws47f25112502329d844X91e15C09F91e15C01S4KWG:
+          - offline history broken
+    (InvertedPendulum-v5):
+      tws47f2511250232fa8c4:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_InvertedPendulum-v5_2850
+        failures:
+        - none
+    (InvertedDoublePendulum-v5):
+      tws47f251125023296c74:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_InvertedDoublePendulum-v5_2850
+        failures:
+        - none
+    (Humanoid-v5):
+      tws47f25112502323c954:
+        status: FAILED
+        submission_id: pbt_lr_large_Humanoid-v5_2850
+    (HumanoidStandup-v5):
+      tws47f25112502325dd94:
+        status: FAILED
+        commet: still might be interesting for first perturbation
+        submission_id: pbt_lr_large_HumanoidStandup-v5_2850
+pbt_lr_large_failed:
+  comment: OTHER_FLAGS did not apply
   entrypoint_resources:
     persistent_node: 1
   entrypoint_pattern:
@@ -958,6 +1091,53 @@ pbt_lr_large:
         failures:
         - none
 pbt_lr_base_large:
+  <ENV_TYPE>:
+  - CartPole-v1
+  - Acrobot-v1
+  - LunarLander-v3
+  #entrypoint_resources:
+  #  persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: lr
+      <ENV_TYPE>: <basic_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+  run_ids:
+    (CartPole-v1):
+      tws47f25112502167a764:
+        status: RUNNING
+        submission_id: pbt_lr_base_large_CartPole-v1_2903
+        failures:
+          tws47f25112502167a764:
+          - no offline history found
+    (Acrobot-v1):
+      tws47f2511250232af514:
+        status: SUCCEEDED
+        submission_id: pbt_lr_base_large_Acrobot-v1_2903
+        failures:
+          tws47f2511250232af514X9203aC09F9203aC03S4KWG:
+          - offline history broken
+          tws47f2511250232af514X9203aC10F9203aC07S4KWG:
+          - offline history broken
+    (LunarLander-v3):
+      tws47f2511250232e9764:
+        status: RUNNING
+        submission_id: pbt_lr_base_large_LunarLander-v3_2903
+        failures:
+          tws47f2511250232e9764X91ffaC08F91ffaC02S4KWG:
+          - offline history broken
+          tws47f2511250232e9764X91ffaC07F91ffaC02S4KWG:
+          - offline history broken
+          tws47f2511250232e9764X91ffaC10F91ffaC02S4KWG:
+          - offline history broken
+          tws47f2511250232e9764X91ffaC06F91ffaC00S4KWG:
+          - offline history broken
+          multiple: offline history broken
+pbt_lr_base_large_failed:
+  comment: OTHER_FLAGS did not apply, basically like pbt_large_base
   <ENV_TYPE>:
   - CartPole-v1
   - Acrobot-v1

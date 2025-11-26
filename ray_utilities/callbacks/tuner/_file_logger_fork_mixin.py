@@ -6,13 +6,14 @@ import logging
 import shutil
 from abc import abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, TextIO
+from typing import TYPE_CHECKING, Optional, TextIO
 
 import pyarrow.fs
 from ray.tune.experiment.trial import Trial
 
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
 from ray_utilities.constants import FORK_FROM
+from ray_utilities.misc import ExperimentKey
 
 if TYPE_CHECKING:
     from ray_utilities.typing import ForkFromData
@@ -98,7 +99,7 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
         fork_info = fork_data if isinstance(fork_data, str) else self.make_forked_trial_id(trial, fork_data)
         return f"{self._get_file_base_name()}-fork-{fork_info}.{self._get_file_extension()}"
 
-    def _get_parent_file_name(self, parent_trial: Trial) -> str:
+    def _get_parent_file_name(self, parent_trial: Trial, trial_id_history: Optional[dict[str, str]] = None) -> str:
         """Get the file name for the parent trial.
 
         Args:
@@ -107,7 +108,31 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
         Returns:
             File name of the parent trial (default or fork-specific)
         """
-        parent_fork_id = self._current_fork_ids.get(parent_trial, None)
+        # NOTE: When the parent_trial went ahead and is terminated we should not clean _current_fork_ids
+        # With access to trial.config["trial_id_history"] we also do not need it
+        if trial_id_history is not None:
+            hist_steps = sorted(int(k) for k in trial_id_history.keys() if k.isdigit())
+            if len(hist_steps) < 2:
+                logger.error(
+                    "trial_id_history should have at least two entries when it should is a fork. "
+                    "Using _current_fork_ids fallback"
+                )
+                parent_fork_id = self._current_fork_ids.get(parent_trial, None)
+            else:
+                parent_fork_id = trial_id_history[str(hist_steps[-2])]
+                parent_fork_id_alt = self._current_fork_ids.get(parent_trial, None)
+                if parent_fork_id_alt and parent_fork_id != parent_fork_id_alt:
+                    logger.warning(
+                        "Mismatch in parent fork_id from trial_id_history (%s) and current_fork_ids (%s) "
+                        "for trial %s. Using trial_id_history value.",
+                        parent_fork_id,
+                        parent_fork_id_alt,
+                        parent_trial.trial_id,
+                    )
+                if ExperimentKey.FORK_SEPARATOR not in parent_fork_id:
+                    return self._get_default_file_name()
+        else:
+            parent_fork_id = self._current_fork_ids.get(parent_trial, None)
         if parent_fork_id is None:
             return self._get_default_file_name()
         return self._make_forked_trial_file_name(parent_trial, parent_fork_id)
@@ -338,17 +363,26 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
             # Might exist if we are restoring from a previous experiment
             logger.warning(
                 "Trial %s forked but log file %s already exists. "
-                "This is unexpected, expect when restoring an experiment",
+                "This is unexpected, except when restoring an experiment",
                 trial.trial_id,
                 local_file_path,
             )
 
         # Try to sync from parent trial
-        file_copied = False
-        if (parent_trial := fork_data.get("parent_trial")) or isinstance(
-            parent_trial := self.parent_trial_lookup.get(trial), Trial
+        file_copied = None
+        if (parent_trial := (fork_data.get("parent_trial") or self.parent_trial_lookup.get(trial))) and isinstance(
+            parent_trial, Trial
         ):
-            parent_file_name = self._get_parent_file_name(parent_trial)
+            parent_file_name = self._get_parent_file_name(parent_trial, trial.config.get("trial_id_history"))
+            file_copied = self._sync_parent_file(trial, parent_trial, parent_file_name, local_file_path, fork_data)
+        if False and file_copied is None and (parent_fork_id := fork_data.get("parent_fork_id")):
+            # TODO:
+            # We do not have parent_trial here, we only need if for the path and could construct it
+            # locally from trial
+            if ExperimentKey.FORK_SEPARATOR not in parent_fork_id:
+                parent_file_name = self._get_default_file_name()
+            else:
+                parent_file_name = self._make_forked_trial_file_name(parent_trial, parent_fork_id)
             file_copied = self._sync_parent_file(trial, parent_trial, parent_file_name, local_file_path, fork_data)
 
         # Try to load from checkpoint if parent trial sync didn't work

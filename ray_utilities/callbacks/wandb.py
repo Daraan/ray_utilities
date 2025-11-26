@@ -8,6 +8,7 @@ import os
 import select
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import weakref
@@ -1324,6 +1325,7 @@ def verify_wandb_runs(
     group_glob: str = "*",
     experiment_results: Optional[dict[str, dict[str, Any]]] = None,
     experiment_validator: Optional[Callable[[dict[str, Any]], None | _FailureTuple]] = default_experiment_validator,
+    use_tqdm: bool | None = None,
 ) -> FailureDictType:
     if output_dir is None:
         output_dir = os.environ.get("RAY_UTILITIES_STORAGE_PATH", "./outputs/experiments/")
@@ -1391,12 +1393,13 @@ def verify_wandb_runs(
                     output_dir,
                     os.environ.get("RAY_UTILITIES_BACKUP_STORAGE_PATH", "<no backup path set>"),
                 )
-                try:
-                    if input("check all subdirs? (y/n): ").lower() == "y":
-                        offline_results = list(Path(output_dir).glob("**/result*.json"))
-                except EOFError:
-                    # non-interactive
-                    logger.info("No input available, skipping full subdir search.")
+                if sys.argv[0] in ("", "upload_wandb.py"):
+                    try:
+                        if input("check all subdirs? (y/n): ").lower() == "y":
+                            offline_results = list(Path(output_dir).glob("**/result*.json"))
+                    except EOFError:
+                        # non-interactive
+                        logger.info("No input available, skipping full subdir search.")
         if not single_experiment and len(offline_results) != len(runs):
             logger.error("Offline results count %d does not match wandb runs %d", len(offline_results), len(runs))
         elif not single_experiment and verbose > 2:
@@ -1438,8 +1441,9 @@ def verify_wandb_runs(
     else:
         logger.warning("No output_dir provided, cannot check for offline wandb data.")
     all_experiment_results = experiment_results if experiment_results is not None else {}
-
-    for run in tqdm(runs, desc=f"Verifying {experiment_id}", unit="runs"):
+    if use_tqdm is None:
+        use_tqdm = sys.argv[0] in ("", "upload_wandb.py")
+    for run in tqdm(runs, desc=f"Verifying {experiment_id}", unit="runs", disable=not use_tqdm):
         if run.id not in offline_run_ids:
             logger.warning("Got unexpected online wandb run without offline data: %s", run.id)
         offline_run_ids.discard(run.id)

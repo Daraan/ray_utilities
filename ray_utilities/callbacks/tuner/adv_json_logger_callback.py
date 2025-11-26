@@ -129,13 +129,11 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, JsonLog
                             line,
                         )
                         continue
+        except Exception:
+            # Keep tempfile in that for debugging
+            logger.exception("Exception while trimming forked trial log file.")
+        else:
             temp_file.replace(copied_file)
-        finally:
-            if temp_file.exists():
-                try:
-                    temp_file.unlink()
-                except Exception:  # noqa: BLE001
-                    pass
 
     @warn_if_slow
     def log_trial_result(self, iteration: int, trial: Trial, result: dict[str, Any] | AnyLogMetricsDict):

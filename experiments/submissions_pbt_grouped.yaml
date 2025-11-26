@@ -1,0 +1,204 @@
+global_pattern_1: >
+  python experiments/tune_with_scheduler.py
+  --env_type <ENV_TYPE>
+  --tune <TUNE_PARAM> --num_samples 1
+  <OTHER_FLAGS:>
+  --tag:core --tag:pbt  --tag:pbt-grouped
+  --buffer_length auto
+  --comet offline --wandb offline+upload@end --log_stats minimal
+  --hostname_selector '!in(dws-login-01,dws-login-02)'
+  pbt --grouped --group_size 3 --perturbation_interval 0.125 --quantile_fraction 0.1
+# NOTE: Use set +H when using hostname selector
+submit_pattern: >
+  ray job submit --working-dir "." --entrypoint-memory 3000000000  --entrypoint-num-cpus
+  0.66 --entrypoint-resources '{"persistent_node":1}'
+  --submission-id pbt_batch_size_mlp-xxxxxxxxx_restore -- \  python  experiments/tune_with_scheduler.py
+  --restore_path yyyyy  --hostname_selector '!in(dws-login-01,dws-login-02)'
+
+  --submission-id pbt_batch_size_InvertedDoublePendulum-v5_7435_restore -- python  experiments/tune_with_scheduler.py
+  --restore_path /home/dsperber/master/repos/ray_utilities/outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:batch_size/Default-mlp-InvertedPendulum-v5-tws47f25112200240e674
+  --hostname_selector '!in(dws-login-01,dws-login-02)'
+# --- Envs --- #
+<mujoco_envs>:
+- HumanoidStandup-v5
+- Humanoid-v5
+- Ant-v5
+- Hopper-v5
+- Walker2d-v5
+- HalfCheetah-v5
+- Reacher-v5
+- Swimmer-v5
+- Pusher-v5
+- InvertedDoublePendulum-v5
+- InvertedPendulum-v5
+<basic_envs>:
+- CartPole-v1
+- Acrobot-v1
+- LunarLander-v3
+# ---
+test_command:
+  test:id:
+    entrypoint: >
+      python
+      -c "print('Hello, World!')"
+# ---
+pbt_batch_size:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: batch_size
+      <ENV_TYPE>: <mujoco_envs>
+  entrypoint_resources:
+    # custom resource to not schedule on SLURM nodes that time out too early
+    persistent_node: 1
+pbt_num_envs:
+  # This is a comment
+  comment: small minibatch_size=256 and train_batch_size=2048
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: num_envs_per_env_runner
+      <ENV_TYPE>: <mujoco_envs>
+  entrypoint_resources:
+    persistent_node: 1
+pbt_num_envs_large:
+  comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
+    scale
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: num_envs_per_env_runner
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+  run_ids:
+    (Ant-v5):
+      tws47f25112513097c5c4:
+        status: STOPPED
+        submission_id: pbt_num_envs_large_Ant-v5_2541
+      tws47f25112518120e2b4:
+        status: RUNNING
+        submission_id: pbt_num_envs_large_Ant-v5_0712
+    (Hopper-v5):
+      tws47f25112513093ed34:
+        status: FAILED
+        submission_id: pbt_num_envs_large_Hopper-v5_2541
+      tws47f25112517536b8b4:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Hopper-v5_9580
+    (Walker2d-v5):
+      tws47f251125130987114:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Walker2d-v5_2541
+    (HalfCheetah-v5):
+      tws47f2511251309c6694:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_HalfCheetah-v5_2541
+    (Reacher-v5):
+      tws47f2511251309d6074:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Reacher-v5_2541
+    (Swimmer-v5):
+      tws47f2511251309fd194:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Swimmer-v5_2541
+    (Pusher-v5):
+      tws47f251125130965cf4:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Pusher-v5_2541
+    (InvertedPendulum-v5):
+      tws47f25112513098d154:
+        status: STOPPED
+        submission_id: pbt_num_envs_large_InvertedPendulum-v5_2541
+      tws47f2511251757a1194:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_InvertedPendulum-v5_9842
+    (InvertedDoublePendulum-v5):
+      tws47f25112513099dba4:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_InvertedDoublePendulum-v5_2541
+    (Humanoid-v5):
+      tws47f25112513096a5e4:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Humanoid-v5_2541
+    (HumanoidStandup-v5):
+      tws47f25112513090df44:
+        status: FAILED
+        submission_id: pbt_num_envs_large_HumanoidStandup-v5_2541
+      tws47f251125175392044:
+        status: RUNNING
+        submission_id: pbt_num_envs_large_HumanoidStandup-v5_9580
+pbt_lr_base:
+  <ENV_TYPE>:
+  - CartPole-v1
+  - Acrobot-v1
+  - LunarLander-v3
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: lr
+      <ENV_TYPE>: <basic_envs>
+pbt_lr:
+  comment: spread lr
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: lr
+      <ENV_TYPE>: <mujoco_envs>
+pbt_lr_large:
+  comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
+    scale
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: lr
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+pbt_lr_base_large:
+  <ENV_TYPE>:
+  - CartPole-v1
+  - Acrobot-v1
+  - LunarLander-v3
+  #entrypoint_resources:
+  #  persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: lr
+      <ENV_TYPE>: <basic_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+pbt_minibatch_size_2048:
+  comment: tune minibatch_size with fixed train_batch_size_per_learner=2048
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: minibatch_size
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |-
+        --train_batch_size_per_learner 2048
+pbt_minibatch_size_8192:
+  comment: tune minibatch_size with fixed train_batch_size_per_learner=8192
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: minibatch_size
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |-
+        --train_batch_size_per_learner 8192

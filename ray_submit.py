@@ -105,6 +105,7 @@ def get_submissions(
     else:
         raise TypeError(f"entrypoint_pattern must be either a string or dict, got {type(entrypoint_pattern_config)}")
 
+    # NOTE: For hostname/node_id selector removes the string wrapping
     parts = shlex.split(pattern)
     env_ignore_nodes = os.environ.get("SUBMIT_IGNORE_NODES", "").split(",")
     env_ignore_hostnames = os.environ.get("SUBMIT_IGNORE_HOSTNAMES", "").split(",")
@@ -116,6 +117,7 @@ def get_submissions(
         pbt_index = -1
     for arg, ignores in zip(["--node_id_selector", "--hostname_selector"], [ignore_nodes, ignore_hostnames]):
         if not ignores:
+            # still need to take care of ' removal
             continue
         if arg not in parts:
             parts[pbt_index:pbt_index] = [arg, "'!in(" + ",".join(ignores) + ")'"]
@@ -129,6 +131,16 @@ def get_submissions(
             # single hostname put with others into !in(...)
             ignores.add(selector.lstrip("!"))
             parts[parts.index(arg) + 1] = "'!in(" + ",".join(ignores) + ")'"
+    for arg in ("--node_id_selector", "--hostname_selector"):
+        if arg not in parts:
+            continue
+        selector_idx = parts.index(arg) + 1
+        selector = parts[selector_idx]
+        if selector[0] not in ("'", '"'):
+            selector = "'" + selector
+        if selector[-1] not in ("'", '"'):
+            selector += "'"
+        parts[selector_idx] = selector
     pattern = " ".join(parts)
 
     # Parse optional substitution keys with defaults (format: <KEY:default_value>)

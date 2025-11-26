@@ -890,10 +890,11 @@ class TestLoggerIntegration(TestHelpers):
 
         # Verify all data is cleaned up
         self.assertNotIn(trial, mixin._trial_ids)
-        self.assertNotIn(trial, mixin._current_fork_ids)
         self.assertNotIn(trial, mixin._forked_trials)
         self.assertNotIn(trial, mixin._currently_not_forked_trials)
         self.assertNotIn(trial, mixin.parent_trial_lookup)
+        # We still keep it around for childs that still might need it
+        self.assertIn(trial, mixin._current_fork_ids)
 
 
 @pytest.mark.basic
