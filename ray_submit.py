@@ -500,7 +500,7 @@ if __name__ == "__main__":
                     entrypoint=settings["entrypoint"],
                     submission_id=settings.get("submission_id", args.group + "_" + job_id + "_" + TIMESTAMP_SUFFIX),
                     runtime_env=settings.get("runtime_env", {"working_dir": "."}),
-                    entrypoint_num_cpus=settings.get("entrypoint_num_cpus", 0.66),
+                    entrypoint_num_cpus=settings.get("entrypoint_num_cpus", 0.33),
                     entrypoint_num_gpus=settings.get("entrypoint_num_gpus", 0),
                     entrypoint_memory=int(settings.get("entrypoint_memory", 4 * 1000 * 1000 * 1000)),
                     entrypoint_resources=settings.get("entrypoint_resources", {"persistent_node": 1}),

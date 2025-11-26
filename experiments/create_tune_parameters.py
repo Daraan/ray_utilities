@@ -95,8 +95,12 @@ def write_distributions_to_json(
             lock_file.touch(exist_ok=False)
             break
         except FileExistsError:
-            lock_file.unlink()
-            time.sleep(0.1)
+            try:
+                lock_file.unlink()
+            except FileNotFoundError:
+                pass
+            else:
+                time.sleep(0.1)
     try:
         with output_file.open("w") as f:
             json.dump(json_distributions, f, indent=2)

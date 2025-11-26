@@ -326,7 +326,9 @@ class ExperimentSetupBase(
             - comet project
         """
         if self.GROUP == "NO_GROUP_SET":
-            ImportantLogger.important_info(logger, "The setup %s has no GROUP set, will return `group_name` = None")
+            ImportantLogger.important_info(
+                logger, "The setup %s has no GROUP set, will return `group_name` = None", type(self)
+            )
             return None
         try:
             return self._parse_project_name(self.GROUP)
