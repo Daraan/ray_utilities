@@ -330,5 +330,25 @@ def get_dynamic_evaluation_intervals(
     steps_between_evaluations = eval_freq * batch_size
     iterations_between = np.divide(steps_between_evaluations, step_sizes)
     if take_root:
-        iterations_between = np.sqrt(iterations_between)
+        sqrt_iterations = np.sqrt(iterations_between)
+        # Ensure that the evaluation interval is a divisor of the common interval
+        # This ensures that evaluations happen at the same global steps
+        # We assume that step_sizes and batch_size are powers of 2
+        # We find the closest power of 2 divisor of the raw iterations
+        # Vectorized nearest power of 2
+        # We want integer powers of 2.
+        # log2 can be negative for values < 1.
+
+        # Ensure candidate divides raw (assuming raw is integer/power of 2 compatible)
+        # If raw is large power of 2, candidate (smaller power of 2) will divide it.
+        # Just to be safe, we can check divisibility or clamp.
+        # Since we want to be a divisor, and candidate <= raw (usually),
+        # and both are powers of 2, it should divide.
+        log_vals = np.log2(sqrt_iterations)
+        rounded_log = np.round(log_vals)
+        powers_of_2 = np.power(2, rounded_log)
+
+        # Convert to int, max 1
+        return [max(1, int(i)) for i in powers_of_2]
+
     return [max(1, int(i)) for i in iterations_between]

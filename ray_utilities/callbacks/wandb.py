@@ -1724,7 +1724,19 @@ def verify_wandb_run_history(
     offline_data = pd.DataFrame(flat_records)
 
     # Set MultiIndex columns
-    offline_data.columns = pd.MultiIndex.from_tuples(cast("list[tuple[str, ...]]", offline_data.columns))
+    try:
+        offline_data.columns = pd.MultiIndex.from_tuples(cast("list[tuple[str, ...]]", offline_data.columns))
+    except TypeError as e:
+        # likely empty list
+        return [
+            _FailureTuple(
+                str(e),
+                float("nan"),
+                float("nan"),
+                type=VerificationFailure.EXCEPTION,
+            )
+        ]
+
     last_step = offline_data["current_step"].iloc[-1]
     last_iteration = offline_data["training_iteration"].iloc[-1]
 

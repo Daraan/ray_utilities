@@ -223,6 +223,8 @@ class GroupedTopPBTTrialScheduler(TopPBTTrialScheduler):
                 # if it is some iterable structure was was extended possibly: fcnet_hiddens=[8] -> fcnet_hiddens/0 : 8
                 if key in config:
                     chosen_values[key] = config[key]
+                elif key in {*CONFIG_HASH_EXCLUDE_KEYS, "seed", "env_seed"}:
+                    pass
                 else:
                     ImportantLogger.important_warning(
                         logger,

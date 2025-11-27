@@ -131,7 +131,7 @@ class DynamicHyperparameterCallback(GetGlobalStepMixin, TrainableCallbackExtensi
             # Likely this is not the case and we call updater with 0
             logger.debug("Algorithm initialized with stats already present")
             # NOTE: # TODO: In initial version this used gs = 0 and called get_global_step below
-            gs = self._get_global_step(metrics_logger)
+            gs = self._get_global_step(metrics_logger, result=None)
         else:
             # stats is empty cannot retire global step
             # TODO: # Test on checkpoint load this should not be 0.

@@ -1958,6 +1958,8 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
     @pytest.mark.env_runner_cases
     @pytest.mark.length(speed="medium")
     @pytest.mark.timeout(method="thread")
+    # Sometimes fails on GitHub with Segmentation fault (core dumped)
+    @pytest.mark.flaky(max_runs=2, min_passes=1)
     def test_trainable_checkpointing(self, cases):
         """Test if trainable can be checkpointed and restored."""
         for num_env_runners_a, num_env_runners_b in iter_cases(cases):

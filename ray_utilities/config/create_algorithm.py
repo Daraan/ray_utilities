@@ -258,6 +258,34 @@ def create_algorithm_config(
         num_gpus_per_learner=args["gpu"] if args["gpu"] else 0,  # Can also use fraction to share GPU
     )
     config.framework(framework)
+    evaluation_duration = 30
+
+    # base interval is at most 32768 steps
+    # If we change the default train_batch_size_per_learner we need to adjust this base interval
+    base_evaluation_interval = min(32, 32768 // args["train_batch_size_per_learner"])
+    evaluation_interval = (
+        base_evaluation_interval
+        # Set to base if we do not use evaluate_every_n_steps_before_step or no_dynamic_eval_interval
+        if not args["evaluate_every_n_steps_before_step"] or args["no_dynamic_eval_interval"]
+        else 1
+    )
+    config.evaluation(
+        # if evaluate_every_n_steps_before_step is used always evaluate on step 1 to not miss initial performance
+        evaluation_interval=evaluation_interval,  # Note can be adjusted dynamically by DynamicEvalInterval
+        evaluation_duration=evaluation_duration,
+        evaluation_duration_unit="episodes",
+        evaluation_num_env_runners=(
+            2 if args["parallel"] and args["evaluation_num_env_runners"] < 2 else args["evaluation_num_env_runners"]
+        ),
+        # NOTE: Policy gradient algorithms are able to find the optimal
+        # policy, even if this is a stochastic one. Setting "explore=False" here
+        # results in the evaluation workers not using this optimal policy!
+        evaluation_config=PPOConfig.overrides(
+            explore=False,
+            num_envs_per_env_runner=min(5, args["num_envs_per_env_runner"]),
+            metrics_num_episodes_for_smoothing=evaluation_duration,  # take metrics over all eval episodes
+        ),
+    )
     if learner_class is None:
         if args["accumulate_gradients_every"] > 1 or args["dynamic_batch"]:
             # import lazy as currently not used elsewhere
@@ -281,6 +309,8 @@ def create_algorithm_config(
         "min_dynamic_buffer_size": args["min_step_size"],
         "max_dynamic_buffer_size": args["max_step_size"],
         "accumulate_gradients_every": args["accumulate_gradients_every"],
+        # used for dynamic eval interval to have a constant batch size should we tune it
+        "base_batch_size_per_learner": args["train_batch_size_per_learner"],
     }
     if len(learner_mix) > 1:
         mixed_learner_class = mix_learners(learner_mix)
@@ -347,26 +377,6 @@ def create_algorithm_config(
     if model_config is not None:
         config.rl_module(model_config=model_config)
     # https://docs.ray.io/en/latest/rllib/package_ref/doc/ray.rllib.algorithms.algorithm_config.AlgorithmConfig.evaluation.html
-    evaluation_duration = 30
-    config.evaluation(
-        # if evaluate_every_n_steps_before_step is used always evaluate on step 1 to not miss initial performance
-        evaluation_interval=(
-            16 if not args["evaluate_every_n_steps_before_step"] or args["no_dynamic_eval_interval"] else 1
-        ),  # Note can be adjusted dynamically by DynamicEvalInterval
-        evaluation_duration=evaluation_duration,
-        evaluation_duration_unit="episodes",
-        evaluation_num_env_runners=(
-            2 if args["parallel"] and args["evaluation_num_env_runners"] < 2 else args["evaluation_num_env_runners"]
-        ),
-        # NOTE: Policy gradient algorithms are able to find the optimal
-        # policy, even if this is a stochastic one. Setting "explore=False" here
-        # results in the evaluation workers not using this optimal policy!
-        evaluation_config=PPOConfig.overrides(
-            explore=False,
-            num_envs_per_env_runner=min(5, args["num_envs_per_env_runner"]),
-            metrics_num_episodes_for_smoothing=evaluation_duration,  # take metrics over all eval episodes
-        ),
-    )
     # Stateless callbacks
     if not args["no_exact_sampling"]:
         add_callbacks_to_config(config, on_sample_end=exact_sampling_callback)
@@ -401,7 +411,7 @@ def create_algorithm_config(
         callbacks.append(make_render_callback())
     # Add a callback to compute an exponential moving average (EMA) of evaluation metrics.
     # This helps smooth out fluctuations in evaluation results and provides a more stable metric for monitoring performance.
-    callbacks.append(make_eval_ema_metrics_callback(0.05, base_eval_interval=16))
+    callbacks.append(make_eval_ema_metrics_callback(0.05, base_eval_interval=base_evaluation_interval))
     if not args["no_dynamic_eval_interval"]:
         callbacks.append(DynamicEvalInterval)
     if base_callbacks:
