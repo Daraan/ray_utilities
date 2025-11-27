@@ -327,8 +327,8 @@ class AdvCometLoggerCallback(
     def _restart_experiment_for_forked_trial(
         self, trial: Trial, fork_data: Optional[ForkFromData] = None
     ) -> Experiment | OfflineExperiment:
+        # TODO: We might currently are in a restore situation, so there is nothing to "end"
         try:
-            # End the current logging process and with offline+upload also upload it
             self.log_trial_end(trial)
             _LOGGER.info("Ended and restarting experiment for forked trial %s", trial)
             assert self.is_trial_forked(trial)
@@ -337,9 +337,9 @@ class AdvCometLoggerCallback(
             assert _info
             if "parent_trial" in _info[-1]:
                 _LOGGER.warning(
-                    "found parent_trial in forked info trial but trial was not being logged. "
+                    "This is an expected error at the beginning of restore - otherwise not: "
+                    "Found parent_trial in forked info trial but trial was not being logged. "
                     "This is only expected when loading from checkpoint, but then no parent_trial should be set. "
-                    "This could possibly happen when restoring."
                 )
         experiment_kwargs = self.experiment_kwargs.copy()
         if fork_data is None:

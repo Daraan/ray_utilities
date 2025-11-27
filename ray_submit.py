@@ -37,7 +37,7 @@ else:
     yaml_dump = yaml.dump
 
 CLIENT: JobSubmissionClient | None = None
-JOB_END_STATES = {JobStatus.SUCCEEDED, JobStatus.STOPPED, JobStatus.FAILED}
+JOB_END_STATES = {JobStatus.SUCCEEDED, JobStatus.STOPPED, JobStatus.FAILED, "UNKNOWN (Deleted)"}
 IGNORE_KEYS = {"comment"}
 
 TIMESTAMP_SUFFIX = time.strftime("%Y-%m-%d_%H:%M:%S")
@@ -352,6 +352,31 @@ def get_tmux_log_command(job_id: str) -> str:
     return tmux_command
 
 
+def submit_single_job(job_id: str, settings: dict, args: argparse.Namespace) -> str | None:
+    if args.test:
+        print(f"\n-----------------------\nTest mode: would submit job {job_id} with settings:\n{pformat(settings)}")
+        return None
+
+    print(f"Submitting job: {job_id}")
+    assert CLIENT
+    try:
+        submission_id_out = CLIENT.submit_job(
+            entrypoint=settings["entrypoint"],
+            submission_id=settings.get("submission_id", args.group + "_" + job_id + "_" + TIMESTAMP_SUFFIX),
+            runtime_env=settings.get("runtime_env", {"working_dir": "."}),
+            entrypoint_num_cpus=settings.get("entrypoint_num_cpus", 0.33),
+            entrypoint_num_gpus=settings.get("entrypoint_num_gpus", 0),
+            entrypoint_memory=int(settings.get("entrypoint_memory", 4 * 1000 * 1000 * 1000)),
+            entrypoint_resources=settings.get("entrypoint_resources", {"persistent_node": 1}),
+            metadata=settings.get("metadata", None),
+        )
+        print(f"Submitted job {job_id} with job ID: {submission_id_out}")
+        return submission_id_out  # noqa: TRY300
+    except Exception as e:  # noqa: BLE001
+        print(f"Failed to submit job {job_id}: {e}, settings: {settings}")
+        return None
+
+
 async def monitor_job_statuses(
     jobs_tracked: dict[str, tuple[str, str]], task_run_ids: dict[str, str], args: argparse.Namespace
 ):
@@ -397,6 +422,34 @@ async def monitor_job_statuses(
         sys.exit(1)
 
 
+class AsyncInput:
+    def __init__(self, loop: asyncio.AbstractEventLoop):
+        self.loop = loop
+        self.queue = asyncio.Queue()
+        self.fd = sys.stdin.fileno()
+        self.future = None
+
+    def _on_input(self):
+        try:
+            line = sys.stdin.readline()
+            if line:
+                if self.future and not self.future.done():
+                    self.future.set_result(line)
+        except Exception as e:  # noqa: BLE001
+            if self.future and not self.future.done():
+                self.future.set_exception(e)
+
+    def start(self):
+        self.future = self.loop.create_future()
+        self.loop.add_reader(self.fd, self._on_input)
+        return self.future
+
+    def stop(self):
+        self.loop.remove_reader(self.fd)
+        if self.future and not self.future.done():
+            self.future.cancel()
+
+
 if __name__ == "__main__":
     os.environ["RAY_UTILITIES_NO_TQDM"] = "1"
     parser = argparse.ArgumentParser()
@@ -427,6 +480,12 @@ if __name__ == "__main__":
         default=[],
         help="Node IDs to ignore when submitting jobs.",
     )
+    parser.add_argument(
+        "--max-jobs",
+        type=int,
+        default=None,
+        help="Maximum number of concurrent jobs to run.",
+    )
 
     args = parser.parse_args()
     assert args.address, (
@@ -448,6 +507,7 @@ if __name__ == "__main__":
     # For submission mode, this will be dict[submission_id, tuple[group, original_job_id]]
     monitor_jobs_tracked: dict[str, tuple[str, str]] = {}
     task_run_ids = {}
+    pending_submissions: list[tuple[str, dict]] = []
 
     if args.group == "monitor":
         monitor_groups = set(args.monitor_group)
@@ -479,40 +539,25 @@ if __name__ == "__main__":
 
     else:
         assert args.group, "A group must be specified if not in monitor mode."
-        submissions = get_submissions(
+        submissions_dict = get_submissions(
             args.group,
             file=args.submissions_file,
             failed_only=args.failed_only,
             ignore_node_ids=args.ignore_nodes,
             ignore_hostnames=args.ignore_hostnames,
-        ).items()
+        )
+        submissions = list(submissions_dict.items())
+
+        if args.max_jobs is not None and args.max_jobs > 0:
+            pending_submissions = submissions[args.max_jobs :]
+            submissions = submissions[: args.max_jobs]
+
         for job_id, settings in submissions:
-            if args.test:
-                print(
-                    f"\n-----------------------\nTest mode: would submit job {job_id} with settings:\n"
-                    f"{pformat(settings)}"
-                )
-                continue
-            print(f"Submitting job: {job_id}")
-            assert CLIENT
-            try:
-                submission_id_out = CLIENT.submit_job(
-                    entrypoint=settings["entrypoint"],
-                    submission_id=settings.get("submission_id", args.group + "_" + job_id + "_" + TIMESTAMP_SUFFIX),
-                    runtime_env=settings.get("runtime_env", {"working_dir": "."}),
-                    entrypoint_num_cpus=settings.get("entrypoint_num_cpus", 0.33),
-                    entrypoint_num_gpus=settings.get("entrypoint_num_gpus", 0),
-                    entrypoint_memory=int(settings.get("entrypoint_memory", 4 * 1000 * 1000 * 1000)),
-                    entrypoint_resources=settings.get("entrypoint_resources", {"persistent_node": 1}),
-                    metadata=settings.get("metadata", None),
-                )
-            except Exception as e:
-                print(f"Failed to submit job {job_id}: {e}, settings: {settings}")
-                raise
-            jobs_tracked[submission_id_out] = CLIENT.tail_job_logs(submission_id_out)
-            monitor_jobs_tracked[submission_id_out] = (args.group, job_id)
-            print(f"Submitted job {job_id} with job ID: {submission_id_out}")
-            time.sleep(3)
+            submission_id_out = submit_single_job(job_id, settings, args)
+            if submission_id_out:
+                jobs_tracked[submission_id_out] = CLIENT.tail_job_logs(submission_id_out)  # pyright: ignore[reportOptionalMemberAccess]
+                monitor_jobs_tracked[submission_id_out] = (args.group, job_id)
+                time.sleep(10)
 
     if args.test:
         import sys
@@ -528,24 +573,67 @@ if __name__ == "__main__":
         asyncio.run(monitor_job_statuses(monitor_jobs_tracked, task_run_ids, args))
         sys.exit(0)
 
-    async def gather_and_print_job_outputs(jobs_tracked: dict[str, AsyncIterator[str]], interval: float = 5.0):
+    async def gather_and_print_job_outputs(
+        jobs_tracked: dict[str, AsyncIterator[str]],
+        interval: float = 5.0,
+        pending_submissions: list[tuple[str, dict]] | None = None,
+    ):
         assert CLIENT
 
         async def get_next(aiterator):
             return await aiterator.__anext__()
 
+        def submit_next():
+            assert CLIENT
+            while pending_submissions:
+                next_job_id, next_settings = pending_submissions.pop(0)
+                submission_id_out = submit_single_job(next_job_id, next_settings, args)
+                if submission_id_out:
+                    jobs_tracked[submission_id_out] = CLIENT.tail_job_logs(submission_id_out)
+                    monitor_jobs_tracked[submission_id_out] = (args.group, next_job_id)
+                    tasks[submission_id_out] = asyncio.create_task(get_next(jobs_tracked[submission_id_out]))
+                    last_outputs[submission_id_out] = []
+                    return True
+            return False
+
         last_outputs = {job_id: [] for job_id in jobs_tracked}
         tasks = {job_id: asyncio.create_task(get_next(aiterator)) for job_id, aiterator in jobs_tracked.items()}
+
+        loop = asyncio.get_running_loop()
+        user_input = AsyncInput(loop)
 
         last_tmux_print = time.time()
         while tasks:
             start = time.time()
             collected: dict[str, list[str]] = {job_id: [] for job_id in tasks}
+
+            # Start input wait
+            print("Submit next job? (y/n): ", end="", flush=True)
+            input_future = user_input.start()
+
             while time.time() - start < interval and tasks:
+                wait_tasks = [*tasks.values(), input_future]
                 done, _ = await asyncio.wait(
-                    tasks.values(), timeout=interval - (time.time() - start), return_when=asyncio.FIRST_COMPLETED
+                    wait_tasks, timeout=interval - (time.time() - start), return_when=asyncio.FIRST_COMPLETED
                 )
+
+                if input_future in done:
+                    try:
+                        result = input_future.result()
+                        if result and result.strip().lower() == "y":
+                            print("Submitting next job manually...")
+                            if not submit_next():
+                                print("No more pending jobs.")
+                        # Restart input wait
+                        print("Submit next job? (y/n): ", end="", flush=True)
+                        input_future = user_input.start()
+                    except Exception:  # noqa: BLE001
+                        pass
+
                 for task in done:
+                    if task == input_future:
+                        continue
+
                     for job_id, t in list(tasks.items()):
                         if t == task:
                             try:
@@ -557,7 +645,12 @@ if __name__ == "__main__":
                             except StopAsyncIteration:
                                 del tasks[job_id]
                             break
-                        job_status = CLIENT.get_job_status(job_id)
+                        try:
+                            job_status = CLIENT.get_job_status(job_id)
+                        except Exception as e:  # noqa: BLE001
+                            print(f"Failed to get status for job {job_id}: {e}")
+                            continue
+
                         if job_status in JOB_END_STATES:
                             if run_id := task_run_ids.get(job_id):
                                 try:
@@ -571,6 +664,8 @@ if __name__ == "__main__":
                                 except TimeoutError:
                                     continue
                             del tasks[job_id]
+
+                            submit_next()
                             break
             # Print outputs for all jobs after interval
             for job_id, lines in collected.items():
@@ -603,6 +698,10 @@ if __name__ == "__main__":
                 print("\n".join(tmux_commands))
                 last_tmux_print = time.time()
 
+            user_input.stop()
+            # Clear the prompt line
+            print("\r\033[K", end="", flush=True)
+
         # Final output after all jobs are done
         for job_id, lines in last_outputs.items():
             print(f"\n\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Final Out: {job_id} ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n\n")
@@ -616,7 +715,7 @@ if __name__ == "__main__":
 
     try:
         # Run the async loop to gather and print outputs
-        asyncio.run(gather_and_print_job_outputs(jobs_tracked))
+        asyncio.run(gather_and_print_job_outputs(jobs_tracked, pending_submissions=pending_submissions))
     except KeyboardInterrupt:
         print("\n\n\n\n########################## Keyboard Interrupt Detected #########################\n\n\n\n")
         choice = input(

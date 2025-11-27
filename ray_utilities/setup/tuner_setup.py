@@ -551,7 +551,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         # If we are restoring operations could be more expensive
         # add more memory to be safe as checkpoint / state can be large
         if self._setup.__restored__:
-            bundles[0]["memory"] += int(2.5 * GB)
+            bundles[0]["memory"] += int(2 * GB)
         if len(bundles) == 1:
             # No env runners, reserve some extra memory as default need. But has less overhead
             bundles[0]["memory"] = int(

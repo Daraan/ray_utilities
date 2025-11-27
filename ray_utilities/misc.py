@@ -228,6 +228,7 @@ def trial_name_creator(trial: Trial) -> str:
         # make name shorter
         trainable_name = ""
     experiment_tag = cast("str", trial.experiment_tag)
+    experiment_tag = experiment_tag.replace("train_batch_size_per_learner=", "batch_size=")
     if "_" in experiment_tag[:3]:
         _exp_number, experiment_tag = experiment_tag.split("_", 1)
         tag_list = experiment_tag.split("=")
