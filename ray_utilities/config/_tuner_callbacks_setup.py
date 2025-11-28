@@ -284,4 +284,9 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         else:
             logger.info("Not logging to Comet")
         callbacks.insert(0, AddExperimentKeyCallback())
+        if self._setup.args.command_str == "pbt":
+            # After perturbation and the save of the latest trial will trigger a TuneController checkpoint & sync
+            from ray_utilities.callbacks.tuner.save_tuner_state_callback import SaveTunerState  # noqa: PLC0415
+
+            callbacks.append(SaveTunerState())
         return callbacks

@@ -289,6 +289,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
     cls_model_config: ClassVar[Optional[dict[str, Any] | DefaultModelConfig]] = None
 
+    try:
+        # Checkpointable has metdata filename filename as "metadata.json"; but train ".metadata.json"
+        # NOTE: This conflicts if one uses Checkpoint.set_metadata
+        from ray.train._checkpoint import _METADATA_FILE_NAME as METADATA_FILE_NAME  # noqa: PLC0415
+    except ImportError:
+        pass
+
     @classmethod
     def define(
         cls,
@@ -820,7 +827,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             elif checkpoint_unit == CURRENT_STEP:
                 steps_per_iteration = self.algorithm_config.train_batch_size_per_learner
                 checkpoint_iterations = checkpoint_freq // steps_per_iteration
-                max_iterations = min(max_iterations, checkpoint_iterations)
+                steps_to_next_checkpoint = checkpoint_freq - (current_step % checkpoint_freq)
+                iterations_to_next_checkpoint = steps_to_next_checkpoint / steps_per_iteration
+                if not iterations_to_next_checkpoint.is_integer():
+                    iterations_to_next_checkpoint += 1
+                max_iterations = min(max_iterations, checkpoint_iterations, iterations_to_next_checkpoint)
             # else just train until checkpoint
         # Should be a divider of checkpoint frequency and has to be a divider of perturbation_interval if we are in PBT
         # Check for PBT
@@ -833,6 +844,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             elif pbt_unit == "current_step":
                 steps_per_iteration = self.algorithm_config.train_batch_size_per_learner
                 pbt_iterations = pbt_interval // steps_per_iteration
+                steps_to_next_perturbation = pbt_interval - (current_step % pbt_interval)
+                iterations_to_next_perturbation = steps_to_next_perturbation / steps_per_iteration
+                if not iterations_to_next_perturbation.is_integer():
+                    iterations_to_next_perturbation += 1
+                pbt_iterations = min(pbt_iterations, iterations_to_next_perturbation)
                 # Want the minimum BUT minimum must be a divisor
                 if max_iterations < pbt_iterations:
                     max_divisor = find_threshold_divisor(pbt_iterations, threshold=min(64, max_iterations))  # pyright: ignore[reportArgumentType]

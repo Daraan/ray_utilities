@@ -609,10 +609,14 @@ if __name__ == "__main__":
 
             # Start input wait
             print("Submit next job? (y/n): ", end="", flush=True)
-            input_future = user_input.start()
+            if pending_submissions:
+                input_future = user_input.start()
+            else:
+                input_future = asyncio.Future()
+                input_future.set_result("n")
 
             while time.time() - start < interval and tasks:
-                wait_tasks = [*tasks.values(), input_future]
+                wait_tasks = [*tasks.values(), input_future] if pending_submissions else [*tasks.values()]
                 done, _ = await asyncio.wait(
                     wait_tasks, timeout=interval - (time.time() - start), return_when=asyncio.FIRST_COMPLETED
                 )

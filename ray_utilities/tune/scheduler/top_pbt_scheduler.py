@@ -24,6 +24,7 @@ import random
 import shutil
 import time
 from collections.abc import Iterable
+from copy import deepcopy
 from functools import partial
 from itertools import cycle
 from pathlib import Path
@@ -41,22 +42,24 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
-    TypeVar,
     TypedDict,
+    TypeVar,
     cast,
     overload,
 )
 
+import cloudpickle
 import tree
 from ray.train._internal.session import _FutureTrainingResult, _TrainingResult
+from ray.tune import Checkpoint
 from ray.tune.execution.tune_controller import TuneController
 from ray.tune.experiment import Trial
-from ray.tune import Checkpoint
 from ray.tune.result import TIME_TOTAL_S, TRAINING_ITERATION  # pyright: ignore[reportPrivateImportUsage]
 from ray.tune.schedulers.pbt import PopulationBasedTraining, _fill_config
 from ray.tune.utils import flatten_dict
 from typing_extensions import Sentinel
 
+from ray_utilities.callbacks.tuner.save_tuner_state_callback import SaveTunerState
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
 from ray_utilities.constants import (
     CURRENT_STEP,
@@ -685,13 +688,17 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
             self._maybe_load_state_after_unpickle(trial)
 
             # This might pause the trial if needed
-            _trial_status_set = self._update_trial_states_after_unpickle(trial)
+            last_time = None
+            if trial.checkpoint and (metadata := trial.checkpoint.get_metadata()) and self._time_attr in metadata:
+                last_time = metadata[self._time_attr]
+            elif trial.last_result:
+                # NOTE: This result could be from BEFORE the perturbation update and be out of sync with the checkpoint
+                last_time = trial.last_result[self._time_attr]
+            _trial_status_set = self._update_trial_states_after_unpickle(trial, last_time=last_time)
             # CRITICAL - most trials do not load their perturbed checkpoint but the checkpoint BEFORE perturbation
             # -> save and load checkpoint paths after perturbation
-
-            if trial.last_result:
-                # NOTE: This result could be from BEFORE the perturbation update
-                last_time = trial.last_result[self._time_attr]
+            # We implemented a save of the checkpoint after
+            if last_time is not None:
                 min_time_after_restore = min(min_time_after_restore, last_time)  # TODO: use or remove
                 # if we loaded the state we should have the correct self._next_perturbation_sync and belows code should not do anything
                 # NOTE: Should also be able to find the next perturbation interval with parent_time in fork_data
@@ -718,6 +725,7 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
                 elif last_time > self._next_perturbation_sync:
                     # set to last multiple BELOW of this trial - might allow some stragglers to catch up
                     # In case all are PENDING chose_trial_to_run has to handle it
+                    # Its also likely that a newer result was reported but no newer checkpoint that matches the current_state
                     self._next_perturbation_sync = (
                         last_time // self._perturbation_interval
                     ) * self._perturbation_interval
@@ -1062,6 +1070,9 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
                     # Paused trial will always have an in-memory checkpoint.
                     logger.debug("Trial %s is paused. Use last available checkpoint %s.", trial, trial.checkpoint)
                     state.last_checkpoint = trial.checkpoint
+                    if state.last_checkpoint:
+                        # A Trainable should at best write the time attr into the metadata file as well
+                        state.last_checkpoint.update_metadata({self._time_attr: state.last_train_time})
             else:
                 logger.debug("Keeping checkpoint of trial %s for exploit.", trial)
 
@@ -1338,8 +1349,12 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
             contents += self._write_fork_data_csv_line(trial, parent_data, fork_id, parent_fork_id=parent_fork_id)
         return contents
 
-    def _end_epoch(self, tune_controller: TuneController):
-        """Hook called at the end of each epoch."""
+    def _end_epoch(self, tune_controller: TuneController, last_trial: Trial):
+        """
+        Hook called at the end of each epoch.
+
+        Will trigger a checkpoint of the experiment state.
+        """
         logger.info("Ending current epoch")
         trials = tune_controller.get_trials()
         for t in trials:
@@ -1347,20 +1362,42 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
                 continue
             set_experiment_key_on_trial(t, pbt_epoch=self._current_epoch)
         self._save_perturbation_state(trials)
-        try:
-            tune_controller.checkpoint(force=True, wait=False)
-            logger.info(
-                "Wrote the latest version of all result files and experiment state to %s",
-                tune_controller.experiment_path,
-            )
-        except Exception:
-            logger.exception(
-                "Experiment state snapshotting failed:",
-            )
+        if False:
+            for cb in tune_controller._callbacks._callbacks:
+                # update tracked forks but we make use of the case that they are not identical after perturbation
+                if isinstance(cb, TrackForkedTrialsMixin):
+                    ...
+
+        # NOTE: Currently we are before the last_result -> trial.last_result update, before any callbacks
+        # and also before the trials' checkpoint is saved.
+        # Its good to trigger a TuneController very soon, but right here is not the ideal location.
+
+        # As trials are saved asynchronously - we want to make the experiment state save dependant
+        # on the trials that are saved - save after all top quantile trials have saved their checkpoints
+        upper_quantile = [t for t in tune_controller.get_live_trials() if t.config.get("_top_pbt_is_in_upper_quantile")]
+        if last_trial in upper_quantile or last_trial.is_saving:
+            condition = last_trial
+        elif still_saving := [t for t in upper_quantile if t.is_saving]:
+            condition = still_saving
+        else:
+            # there will be no more trial save - save at step end
+            condition = None
+        # However, the upper_quantile might already be saved - then it will also not be triggered
         for cb in tune_controller._callbacks._callbacks:
             # update tracked forks but we make use of the case that they are not identical after perturbation
-            if isinstance(cb, TrackForkedTrialsMixin):
-                ...
+            if isinstance(cb, SaveTunerState):
+                saver = cb
+                break
+        else:
+            # NOTE: Despite being stateless it still adds a None value to the state of the callback
+            # This looks safe but is not ideal - if something goes wrong load the callback state file with pickle, write back with one less None entry.
+            logger.warning(
+                "No SaveTunerState callback found, Adding a SaveTunerState callback to the TuneController's callbacks."
+            )
+            tune_controller._callbacks._callbacks.append(saver := SaveTunerState())
+        saver.schedule_tuner_save(
+            tune_controller, condition, f"After end of PBT epoch {self._current_epoch - 1}", wait=bool(condition)
+        )
 
     @warn_if_slow
     def _perturbation_sync_mode(self, tune_controller: TuneController, time: int):
@@ -1386,7 +1423,6 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
         )
         logger.debug("Next perturb at time %s", self._next_perturbation_sync)
         self._exploited_this_result = False
-        self._end_epoch(tune_controller)
 
     @warn_if_slow
     def on_trial_result(self, tune_controller: TuneController, trial: Trial, result: dict) -> str:
@@ -1416,7 +1452,7 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
                     self._current_epoch = target_epoch
         if self._exploited_this_result:
             self._exploited_this_result = False
-            self._end_epoch(tune_controller)
+            self._end_epoch(tune_controller, last_trial=trial)
             return decision
 
         if decision != self.CONTINUE:
@@ -1508,6 +1544,9 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
         if still_active_trials == 0:
             logger.info("Last trial %s is a bad performing straggler. Starting early PBT perturbation.", trial)
             self._perturbation_sync_mode(tune_controller, perturbation_time)
+            self._exploited_this_result = False
+            self._end_epoch(tune_controller, last_trial=trial)
+
         else:
             logger.info(
                 "Last trial %s is a bad performing straggler. Pausing early and waiting for other slow trials", trial
@@ -1581,13 +1620,18 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
         """Save checkpoint mapping and new trial configs after perturbation."""
         checkpoint_mapping = {trial.trial_id: trial.checkpoint and trial.checkpoint.path for trial in trials}
         configs_after_perturbation = {trial.trial_id: trial.config for trial in trials}
+        # NOTE: forked trials have their parent trial in their "fork_from" - we do not want to pickle that
+        for config in configs_after_perturbation.values():
+            if FORK_FROM in config:
+                config[FORK_FROM] = config[FORK_FROM].copy()
+                config[FORK_FROM].pop("parent_trial", None)
         self._last_perturbation_state = {
             "checkpoint_mapping": checkpoint_mapping,
-            "configs_after_perturbation": configs_after_perturbation,
+            "configs_after_perturbation": deepcopy(configs_after_perturbation),
             PERTURBATION_EPOCH: self._current_epoch,
         }
 
-    def save_state(self, path, trial_run_states: dict[str, str] | None = None) -> Path:
+    def save_state(self, path, trial_run_states: dict[str, str] | None = None) -> Path | None:
         # TODO: This overwrites old files on restore that we might want to keep!
         state = self.get_state()
         if trial_run_states is not None:
@@ -1603,8 +1647,21 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
             save_file = (
                 Path(path) / f"top_pbt_scheduler_state-{time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime())}.pkl"
             )
-        with save_file.open("wb") as f:
-            pickle.dump(state, f)
+        try:
+            with save_file.open("wb") as f:
+                pickle.dump(state, f)
+        except (AttributeError, Exception) as e:
+            logger.warning(
+                "Failed to pickle TopPBTTrialScheduler state to %s because of %s. Falling back to cloudpickle",
+                save_file,
+                e,
+            )
+            try:
+                with save_file.open("wb") as f:
+                    cloudpickle.dump(state, f)
+            except Exception as e2:
+                logger.exception("Failed to cloudpickle TopPBTTrialScheduler state to %s because of %s.", save_file, e2)
+                return None
         return save_file
 
     def _set_state_file_path(self, path: Path | str) -> None:
@@ -1647,7 +1704,7 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
         file_name = f"top_pbt_scheduler_state-{timestamp}.pkl"
         return path / file_name if path.is_dir() or not path.exists() else path.parent / file_name
 
-    def _update_trial_states_after_unpickle(self, trial: Trial) -> str | bool:
+    def _update_trial_states_after_unpickle(self, trial: Trial, last_time: float | None) -> str | bool:
         """Returns False if unsure what state the trial should be in."""
         # Need to replace the trial_id keys with Trial objects after unpickling
         if self._state_loaded_after_pkl:
@@ -1703,6 +1760,8 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
 
                     if adjust_checkpoint:
                         assert trial.run_metadata.checkpoint_manager is not None
+                        # or as we are currently restoring can also use _restore_checkpoint_result
+                        # when tehre is not checkpoitn on the manger
                         trial.run_metadata.checkpoint_manager._latest_checkpoint_result = _TrainingResult(
                             checkpoint=stored_checkpoint,
                             metrics={},  # trial_to_clone new_state.last_result
@@ -1715,8 +1774,7 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
 
             if not self._trial_run_states_after_pkl:
                 # Dunno what state it should be in
-                if trial.last_result:
-                    last_time = trial.last_result[self._time_attr]
+                if last_time is not None:
                     if last_time >= self._next_perturbation_sync:
                         trial.set_status(trial.PAUSED)
                         logger.info(
@@ -1767,7 +1825,7 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
             logger.warning("No TopPBTTrialScheduler state file found at %s. Skipping load_state.", state_file)
             return False
         with open(state_file, "rb") as f:
-            state = pickle.load(f)
+            state = cloudpickle.load(f)
         self.set_state(state)
         self._state_loaded_after_pkl = True
         self._trial_run_states_after_pkl = state.get("trial_run_states", None)
@@ -1822,7 +1880,7 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
         self._last_perturbation_state = state.get("last_perturbation_state", None)
 
         # NOTE current_epoch will be the epoch of the highest trial
-        # as all trials are not there yet set it to last perturbation
+        # as all trials are not there yet set it to last perturbation - if it did happen
         self._current_epoch = (
             self._last_perturbation_state[PERTURBATION_EPOCH]
             if self._last_perturbation_state

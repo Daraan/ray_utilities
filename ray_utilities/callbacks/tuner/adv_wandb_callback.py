@@ -4,6 +4,7 @@ import logging
 import os
 import pickle
 import subprocess
+import sys
 import threading
 import time
 import traceback
@@ -1058,6 +1059,14 @@ class AdvWandbLoggerCallback(
         ImportantLogger.important_info(
             _logger, "Ending experiment and closing logger actors this can take a moment (timeout 1800s). Info %s", info
         )
+        # This function can also be called during an error in tune, sometimes the error is swallowed.
+        # So we log the exception here if any.
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        if exc_type is not None:
+            _logger.exception("Experiment ending due to exception: %s", exc_value)
+            with open("experiment.err", "a") as f:
+                f.write(f"Experiment ended due to exception: {exc_value}\n")
+                traceback.print_exception(exc_type, exc_value, exc_traceback, file=f)
 
         for queue in self._trial_queues.values():
             queue.put((_QueueItem.END, None))
