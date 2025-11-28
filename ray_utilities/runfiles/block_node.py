@@ -27,21 +27,24 @@ if __name__ == "__main__":
     parser.add_argument("--timeout", "-t", type=int, default=24 * 60 * 60)
     args = parser.parse_args()
 
-    @ray.remote(label_selector={args.label: args.value})
+    @ray.remote(label_selector={args.label: args.value}, num_cpus=1)
     class BlockNode:
         timeout = args.timeout
 
-        def __init__(self):
+        def wait(self):
             import time  # noqa: PLC0415
 
             time.sleep(self.timeout)
 
     blockers = [BlockNode.remote() for _ in range(args.number or 50)]
+    pings = [b.wait.remote() for b in blockers]  # pyright: ignore[reportAttributeAccessIssue]
+    print(f"Created {len(blockers)} blocking actors on nodes with {args.label}={args.value}")
 
     def cleanup():
-        ray.kill(blockers, no_restart=True)
+        for block in blockers:
+            ray.kill(block, no_restart=True)  # pyright: ignore[reportArgumentType]
 
     atexit.register(cleanup)
-    ray.wait(blockers, num_returns=len(blockers), fetch_local=False)  # Block until all timed out
+    ray.wait(pings, num_returns=len(pings), fetch_local=False)  # Block until all timed out
 
     ray.shutdown()

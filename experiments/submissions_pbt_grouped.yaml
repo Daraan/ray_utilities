@@ -5,10 +5,11 @@ global_pattern_1: >
   <OTHER_FLAGS:>
   --tag:core --tag:pbt  --tag:pbt-grouped
   --buffer_length auto
-  --comet offline --wandb offline+upload@end --log_stats minimal
+  --comet offline --wandb offline+upload@end --log_stats learners
   --hostname_selector '!in(dws-login-01,dws-login-02)'
-  pbt --grouped --group_size 3 --perturbation_interval 0.125 --quantile_fraction 0.1
+  pbt --grouped --group_size 3 --perturbation_interval 0.125 --quantile_fraction 0.05
 # NOTE: Use set +H when using hostname selector
+# TODO: lr as > 10 options and so quantile_fraction = 0.1 -> 2 top groups
 submit_pattern: >
   ray job submit --working-dir "." --entrypoint-memory 3000000000  --entrypoint-num-cpus
   0.66 --entrypoint-resources '{"persistent_node":1}'
@@ -66,7 +67,7 @@ pbt_batch_size:
         submission_id: pbt_batch_size_Ant-v5_2025-11-26_02:17:27
     (Hopper-v5):
       tws47f25112602188ab44:
-        status: RUNNING
+        status: FAILED
         submission_id: pbt_batch_size_Hopper-v5_2025-11-26_02:17:27
     (HalfCheetah-v5):
       tws47f25112602179a0a4:
@@ -74,11 +75,12 @@ pbt_batch_size:
         submission_id: pbt_batch_size_HalfCheetah-v5_2025-11-26_02:17:27
     (Reacher-v5):
       tws47f2511260217638a4:
-        status: RUNNING
+        status: FAILED
         submission_id: pbt_batch_size_Reacher-v5_2025-11-26_02:17:27
     (Swimmer-v5):
       tws47f25112602176dcf4:
-        status: RUNNING
+        status: SUCCEEDED
+        comment: local files possibly incomplete
         submission_id: pbt_batch_size_Swimmer-v5_2025-11-26_02:17:27
     (Pusher-v5):
       tws47f2511260218f2564:
@@ -86,7 +88,7 @@ pbt_batch_size:
         submission_id: pbt_batch_size_Pusher-v5_2025-11-26_02:17:27
     (Walker2d-v5):
       tws47f251126021834f14:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_batch_size_Walker2d-v5_2025-11-26_02:17:27
 pbt_num_envs:
   # This is a comment
@@ -180,6 +182,19 @@ pbt_lr_base:
     substitutions:
       <TUNE_PARAM>: lr
       <ENV_TYPE>: <basic_envs>
+  run_ids:
+    (CartPole-v1):
+      tws47f2511280342816f4:
+        status: SUCCEEDED
+        submission_id: pbt_lr_base_CartPole-v1_2025-11-28_03:42:21
+    (Acrobot-v1):
+      tws47f25112803424dbd4:
+        status: SUCCEEDED
+        submission_id: pbt_lr_base_Acrobot-v1_2025-11-28_03:42:21
+    (LunarLander-v3):
+      tws47f2511280342dc544:
+        status: SUCCEEDED
+        submission_id: pbt_lr_base_LunarLander-v3_2025-11-28_03:42:21
 pbt_lr:
   comment: spread lr
   entrypoint_resources:
@@ -190,14 +205,6 @@ pbt_lr:
       <TUNE_PARAM>: lr
       <ENV_TYPE>: <mujoco_envs>
   run_ids:
-    (HumanoidStandup-v5):
-      tws47f2511260217cbe24:
-        status: FAILED
-        submission_id: pbt_lr_HumanoidStandup-v5_2025-11-26_02:17:49
-    (Humanoid-v5):
-      tws47f2511260218349d4:
-        status: FAILED
-        submission_id: pbt_lr_Humanoid-v5_2025-11-26_02:17:49
     (Ant-v5):
       tws47f2511260218d8a04:
         status: FAILED
@@ -232,7 +239,7 @@ pbt_lr:
         submission_id: pbt_lr_InvertedDoublePendulum-v5_2025-11-26_02:17:49
     (InvertedPendulum-v5):
       tws47f25112602337a474:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_lr_InvertedPendulum-v5_2025-11-26_02:17:49
 pbt_lr_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
@@ -247,6 +254,72 @@ pbt_lr_large:
       <OTHER_FLAGS>: |
         --minibatch_size 1024
         --train_batch_size_per_learner 8192
+  run_ids:
+    (HumanoidStandup-v5):
+      tws47f251127024496a04:
+        status: FAILED ~600K
+        submission_id: pbt_lr_large_HumanoidStandup-v5_2025-11-27_02:43:35
+      tws47f25112711398aa84:
+        status: FAILED
+        comment: failed at ~800k
+        submission_id: pbt_lr_large_HumanoidStandup-v5_2025-11-27_11:38:54
+    (Humanoid-v5):
+      tws47f251127024401af4:
+        status: FAILED
+        submission_id: pbt_lr_large_Humanoid-v5_2025-11-27_02:43:35
+      tws47f2511271139a2954:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_Humanoid-v5_2025-11-27_11:38:54
+    (Ant-v5):
+      tws47f2511270244aad74:
+        status: FAILED  ~700k
+        submission_id: pbt_lr_large_Ant-v5_2025-11-27_02:43:35
+      tws47f2511271139f4344:
+        status: FAILED  ~1M
+        submission_id: pbt_lr_large_Ant-v5_2025-11-27_11:38:54
+    (Walker2d-v5):
+      tws47f2511270244e3ab4:
+        status: FAILED - ~800k
+        submission_id: pbt_lr_large_Walker2d-v5_2025-11-27_02:43:35
+      tws47f2511271139677d4:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_Walker2d-v5_2025-11-27_11:38:54
+    (HalfCheetah-v5):
+      tws47f2511270244b70b4:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_HalfCheetah-v5_2025-11-27_02:43:35
+    (Reacher-v5):
+      tws47f25112702444d7d4:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_Reacher-v5_2025-11-27_02:43:35
+    (Swimmer-v5):
+      tws47f251127024438e94:
+        status: FAILED
+        submission_id: pbt_lr_large_Swimmer-v5_2025-11-27_02:43:35
+      tws47f2511271139fdd34:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_Swimmer-v5_2025-11-27_11:38:54
+    (Pusher-v5):
+      tws47f2511270244a6b94:
+        status: FAILED
+        submission_id: pbt_lr_large_Pusher-v5_2025-11-27_02:43:35
+      tws47f2511271139cc2d4:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_Pusher-v5_2025-11-27_11:38:54
+    (InvertedDoublePendulum-v5):
+      tws47f251127024439964:
+        status: FAILED  ~800k
+        submission_id:
+          pbt_lr_large_InvertedDoublePendulum-v5_2025-11-27_02:43:35
+      tws47f25112711393d304:
+        status: FAILED
+        comment: failed at ~800k
+        submission_id:
+          pbt_lr_large_InvertedDoublePendulum-v5_2025-11-27_11:38:54
+    (InvertedPendulum-v5):
+      tws47f25112702448e7a4:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_InvertedPendulum-v5_2025-11-27_02:43:35
 pbt_lr_base_large:
   <ENV_TYPE>:
   - CartPole-v1
@@ -293,7 +366,7 @@ pbt_minibatch_size_2048:
         submission_id: pbt_minibatch_size_2048_Hopper-v5_2025-11-26_02:17:39
     (Walker2d-v5):
       tws47f251126021743e74:
-        status: RUNNING
+        status: STOPPED - complete?
         submission_id: pbt_minibatch_size_2048_Walker2d-v5_2025-11-26_02:17:39
     (HalfCheetah-v5):
       tws47f25112602186ec44:
@@ -310,7 +383,7 @@ pbt_minibatch_size_2048:
         submission_id: pbt_minibatch_size_2048_Reacher-v5_2025-11-26_02:17:39
     (Swimmer-v5):
       tws47f251126023390234:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_minibatch_size_2048_Swimmer-v5_2025-11-26_02:17:39
     (InvertedDoublePendulum-v5):
       tws47f2511260233016a4:
@@ -353,16 +426,19 @@ pbt_minibatch_size_8192:
         submission_id: pbt_minibatch_size_8192_Hopper-v5_2025-11-26_02:17:45
     (Walker2d-v5):
       tws47f2511260218d2154:
-        status: RUNNING
+        status: FAILED
         submission_id: pbt_minibatch_size_8192_Walker2d-v5_2025-11-26_02:17:45
     (HalfCheetah-v5):
       tws47f25112602337d114:
-        status: RUNNING
+        status: FAILED
         submission_id:
           pbt_minibatch_size_8192_HalfCheetah-v5_2025-11-26_02:17:45
     (Reacher-v5):
       tws47f25112602337fe74:
         status: FAILED
+        comment: |
+          did try to restore but overshoot the next perturbation interval
+          UNRECOVERABLE
         submission_id: pbt_minibatch_size_8192_Reacher-v5_2025-11-26_02:17:45
     (Swimmer-v5):
       tws47f251126023388cb4:

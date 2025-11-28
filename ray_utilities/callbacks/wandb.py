@@ -49,7 +49,13 @@ from tqdm import tqdm
 
 from ray_utilities.callbacks.upload_helper import AnyPopen, ExitCode, UploadHelperMixin
 from ray_utilities.constants import FORK_DATA_KEYS, FORK_FROM, get_run_id
-from ray_utilities.misc import RE_GET_TRIAL_ID, ExperimentKey, close_process_pipes, get_trials_from_tuner
+from ray_utilities.misc import (
+    RE_GET_TRIAL_ID,
+    ExperimentKey,
+    close_process_pipes,
+    get_available_memory_bytes,
+    get_trials_from_tuner,
+)
 from ray_utilities.nice_logger import ImportantLogger
 
 if TYPE_CHECKING:
@@ -95,6 +101,24 @@ def wandb_api() -> Api:
             logger.error("Failed to create wandb.Api(): %s", e)
             raise
     return _wandb_api
+
+
+def _amount_auto_uploads(upper_bound: int = 5) -> tuple[int, bool]:
+    """
+    When parallel uploads is set to "auto" checks the current memory usage and plans
+    3GB for each upload.
+    This function is SLURM aware and will check for memory limits in SLURM jobs.
+    """
+    available_mem = get_available_memory_bytes()
+    # Reserve at least 5G for other processes and limit to 75% of available memory
+    available_mem = min(available_mem - 5 * 1024 * 1024 * 1024, available_mem * 0.75)
+    # warn if smaller than 250 MB
+    safe = True
+    if available_mem < 500 * 1024 * 1024:
+        safe = False
+        ImportantLogger.important_warning(logger, "Less than 500MB calculated on memory left Wandb upload.")
+    uploads_based_on_mem = int(max(1, available_mem // (3 * 1024 * 1024 * 1024)))
+    return (min(uploads_based_on_mem, upper_bound), safe)
 
 
 class WandbUploaderMixin(UploadHelperMixin):
@@ -146,7 +170,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         tuner: Optional[tune.Tuner] = None,
         *,
         wait: bool = True,
-        parallel_uploads: int = 5,
+        parallel_uploads: int | Literal["auto"] = "auto",
         use_tqdm: bool = False,
         skip_synced: bool = True,
     ) -> list[subprocess.Popen] | None:
@@ -331,7 +355,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         trial_runs: Optional[list[tuple[str, Path]]] = None,
         *,
         wait: bool = True,
-        parallel_uploads: int = 5,
+        parallel_uploads: int | Literal["auto"] = "auto",
         use_tqdm: bool = False,
         skip_synced: bool = True,
     ):
@@ -440,6 +464,16 @@ class WandbUploaderMixin(UploadHelperMixin):
         outer_iter = tqdm(upload_groups, desc="WandB Upload Groups", leave=True) if use_tqdm else upload_groups
         unfinished_uploads = []
         group_idx = 0
+
+        def get_parallel_uploads(*, not_safe_to_zero: bool = False) -> int:
+            if parallel_uploads == "auto":
+                auto_uploads, safe = _amount_auto_uploads()
+                if not safe and not_safe_to_zero:
+                    auto_uploads = 0
+                logger.info("Auto-detected %d parallel uploads based on available memory", auto_uploads)
+                return auto_uploads
+            return parallel_uploads
+
         try:
             for group_idx, group in enumerate(outer_iter):
                 logger.info("Uploading group %d/%d with %d trials", group_idx + 1, len(upload_groups), len(group))
@@ -476,11 +510,11 @@ class WandbUploaderMixin(UploadHelperMixin):
                 inner_iter = tqdm(group, desc=f"Trials in Group {group_idx + 1}", leave=False) if use_tqdm else group
                 for trial_id, run_dirs in inner_iter:
                     # Manage parallel upload limit within group
-                    if len(uploads) >= parallel_uploads:
+                    if len(uploads) >= (n_uploads_now := get_parallel_uploads()):
                         logger.info(
                             "%d >= %d uploads already in progress waiting for some to finish before starting new ones...",
                             len(uploads),
-                            parallel_uploads,
+                            n_uploads_now,
                         )
                     # process uploads that are already finished:
                     for process in (p for p in uploads if p.poll() is not None):
@@ -499,7 +533,7 @@ class WandbUploaderMixin(UploadHelperMixin):
                         else:
                             failed_uploads.append(process)
                         uploads.remove(process)
-                    while len(uploads) >= parallel_uploads:
+                    while len(uploads) >= get_parallel_uploads():
                         finished_or_failed = set()
                         # Prioritize checking processes that have already finished else oldest first
                         for process in sorted(uploads, key=lambda p: p.poll() is None):
@@ -519,6 +553,15 @@ class WandbUploaderMixin(UploadHelperMixin):
                                 failed_uploads.append(process)
                             finished_or_failed.add(process)
                         uploads = [p for p in uploads if p not in finished_or_failed]
+                    waited = 0
+                    while get_parallel_uploads(not_safe_to_zero=True) == 0 and waited < 120:
+                        # we are close to he memory limit
+                        logger.warning(
+                            "Detected less memory left for wandb upload. "
+                            "Pausing 30s to check again and waiting up to 2 min"
+                        )
+                        time.sleep(30)
+                        waited += 30
 
                     # if the run has a parent we want to check it with the monitor first
                     logger.debug("Checking with monitor before uploading trial %s", trial_id)
@@ -1394,9 +1437,13 @@ def verify_wandb_runs(
                     os.environ.get("RAY_UTILITIES_BACKUP_STORAGE_PATH", "<no backup path set>"),
                 )
                 if sys.argv[0] in ("", "upload_wandb.py"):
+                    # TODO: input does not work with the parallel upload
                     try:
-                        if input("check all subdirs? (y/n): ").lower() == "y":
+                        choice = input(f"\ncheck all subdirs of {output_dir} for (y/n/path of {experiment_id}):\n")
+                        if choice.lower() == "y":
                             offline_results = list(Path(output_dir).glob("**/result*.json"))
+                        elif Path(choice).exists():
+                            offline_results = list(Path(choice).glob("**/result*.json"))
                     except EOFError:
                         # non-interactive
                         logger.info("No input available, skipping full subdir search.")
@@ -1538,11 +1585,21 @@ def find_experiment_dir(
     if not experiment_paths:
         # check with project group pattern
         experiment_paths = list(Path(output_dir).glob(f"{project}/{group_glob}/{glob_pattern}"))
-    if not experiment_paths and (backup_dir := os.environ.get("RAY_UTILITIES_BACKUP_STORAGE_PATH")):
+    if not experiment_paths:
+        # Maybe unsorted
+        experiment_paths = list(Path(output_dir).glob(f"{project}/{glob_pattern}"))
+    if (
+        not experiment_paths
+        and (backup_dir := os.environ.get("RAY_UTILITIES_BACKUP_STORAGE_PATH"))
+        and backup_dir != output_dir
+    ):
         experiment_paths = list(Path(backup_dir).glob(glob_pattern))
         if not experiment_paths:
             # check with project group pattern
             experiment_paths = list(Path(backup_dir).glob(f"{project}/{group_glob}/{glob_pattern}"))
+        if not experiment_paths:
+            # Maybe unsorted
+            experiment_paths = list(Path(backup_dir).glob(f"{project}/{glob_pattern}"))
         return Path(backup_dir), experiment_paths
     return Path(output_dir), experiment_paths
 

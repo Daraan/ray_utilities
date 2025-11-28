@@ -1650,7 +1650,10 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
         try:
             with save_file.open("wb") as f:
                 pickle.dump(state, f)
-        except (AttributeError, Exception) as e:
+        except OSError:
+            logger.exception("Failed to pickle TopPBTTrialScheduler state to %s due to OSError.", save_file)
+            return None
+        except (AttributeError, Exception) as e:  # noqa: BLE001
             logger.warning(
                 "Failed to pickle TopPBTTrialScheduler state to %s because of %s. Falling back to cloudpickle",
                 save_file,

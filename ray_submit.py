@@ -219,11 +219,20 @@ def get_submissions(
         failed_combinations = set()
         for combo in all_combinations:
             run_key = "(" + ", ".join(combo).rstrip(", ") + ")"
+            has_failed = False
             if run_key in run_ids_data:
                 for run_info in run_ids_data[run_key].values():
-                    if isinstance(run_info, dict) and run_info.get("status") == "FAILED":
-                        failed_combinations.add(combo)
-                        break
+                    if isinstance(run_info, dict):
+                        if run_info.get("status") == "FAILED":
+                            has_failed = True
+                        # If there is a success after a failure, do not consider it failed
+                        if has_failed and run_info.get("status") == JobStatus.SUCCEEDED.value:
+                            has_failed = False
+            else:
+                # decalre missing as failed as well
+                has_failed = True
+            if has_failed:
+                failed_combinations.add(combo)
         all_combinations = [combo for combo in all_combinations if combo in failed_combinations]
 
     for values in all_combinations:
@@ -354,6 +363,8 @@ def get_tmux_log_command(job_id: str) -> str:
 
 def submit_single_job(job_id: str, settings: dict, args: argparse.Namespace) -> str | None:
     if args.test:
+        settings = settings.copy()
+        settings.pop("run_ids")
         print(f"\n-----------------------\nTest mode: would submit job {job_id} with settings:\n{pformat(settings)}")
         return None
 
@@ -366,7 +377,9 @@ def submit_single_job(job_id: str, settings: dict, args: argparse.Namespace) -> 
             runtime_env=settings.get("runtime_env", {"working_dir": "."}),
             entrypoint_num_cpus=settings.get("entrypoint_num_cpus", 0.33),
             entrypoint_num_gpus=settings.get("entrypoint_num_gpus", 0),
-            entrypoint_memory=int(settings.get("entrypoint_memory", 4 * 1000 * 1000 * 1000)),
+            # While most of the time the jobs do not need that much memory there is a spike at the end
+            # possibly related to Wandb & Comet logging finalization.
+            entrypoint_memory=int(settings.get("entrypoint_memory", 4.5 * 1000 * 1000 * 1000)),
             entrypoint_resources=settings.get("entrypoint_resources", {"persistent_node": 1}),
             metadata=settings.get("metadata", None),
         )
@@ -454,9 +467,7 @@ if __name__ == "__main__":
     os.environ["RAY_UTILITIES_NO_TQDM"] = "1"
     parser = argparse.ArgumentParser()
     parser.add_argument("group", nargs="?", help="The group key in the yaml file to run, or 'monitor'.", type=str)
-    parser.add_argument(
-        "submissions_file", nargs="?", default="experiments/submissions.yaml", help="The submissions yaml file."
-    )
+    parser.add_argument("submissions_file", help="The submissions yaml file.")
     parser.add_argument("monitor_group", nargs="*")
     parser.add_argument(
         "--address",

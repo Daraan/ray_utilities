@@ -10,6 +10,7 @@ global_pattern_1: >
   pbt --perturbation_interval 0.125 --quantile_fraction 0.1
 # NOTE: Use set +H when using hostname selector
 submit_pattern: >
+  This is just an example
   ray job submit --working-dir "." --entrypoint-memory 3000000000  --entrypoint-num-cpus
   0.66 --entrypoint-resources '{"persistent_node":1}'
   --submission-id pbt_batch_size_mlp-xxxxxxxxx_restore -- \  python  experiments/tune_with_scheduler.py
@@ -172,8 +173,10 @@ pbt_batch_size:
         submission_id: pbt_batch_size_Ant-v5_4463
         failures:
           tws47f2511200307a0794Xb9420C00Fb9420C07S1Eie:
-          - metric mismatch
           - offline history broken
+          - metric mismatch
+          tws47f2511200307a0794:
+          - experiment incomplete
       tws47f2511220024084b4:
         status: RUNNING
         submission_id: pbt_batch_size_Ant-v5_7435
@@ -181,11 +184,11 @@ pbt_batch_size:
         - none
     (Hopper-v5):
       tws47f251120030841d44:
-        status: RUNNING
+        status: INCOMPLETE ~600K, Needs upload
         submission_id: pbt_batch_size_Hopper-v5_4463
         failures:
           c5dbd_00004:
-          - No corresponding online wandb run found.
+          - No corresponding online wandb run found
           multiple: see log
       tws47f2511220024c5ee4:
         status: DONE? > 1M
@@ -219,8 +222,8 @@ pbt_batch_size:
         submission_id: pbt_batch_size_HalfCheetah-v5_7435
         failures:
           tws47f2511220024c3c44X37765C00F37765C07S35nc:
-          - online history incomplete
           - metric mismatch
+          - online history incomplete
           tws47f2511220024c3c44X37765C00F37765C02S3i9w:
           - metric mismatch
           tws47f2511220024c3c44X37765C00F37765C06S4KWG:
@@ -384,6 +387,11 @@ pbt_num_envs:
         status: RESTORING
         failures:
           multiple: No corresponding online wandb run found.
+      tws47f251127021282004:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_Ant-v5_2025-11-27_02:11:56
+        failures:
+        - none
     (HalfCheetah-v5):
       tws47f251116131644cd4:
         value: RUNNING
@@ -399,12 +407,12 @@ pbt_num_envs:
           multiple: offline history broken
     (Hopper-v5):
       tws47f251116131696844:
-        status: SUCCEDED
+        status: SUCCEEDED
         failures:
         - none
     (Humanoid-v5):
       tws47f251116132047a84:
-        status: SUCCEDED
+        status: SUCCEEDED
         failures:
         - none
     (HumanoidStandup-v5):
@@ -421,7 +429,7 @@ pbt_num_envs:
           multiple: offline history broken
     (InvertedDoublePendulum-v5):
       tws47f251116155671db4:
-        status: SUCCEDED
+        status: SUCCEEDED
         failures:
         - none
     (InvertedPendulum-v5):
@@ -455,7 +463,7 @@ pbt_num_envs:
           multiple: offline history broken
     (Walker2d-v5):
       tws47f251116131630b04:
-        status: SUCCEDED
+        status: SUCCEEDED
         failures:
         - none
 pbt_num_envs_large:
@@ -542,7 +550,7 @@ pbt_num_envs_large_failed:
         - none
     (Humanoid-v5):
       tws47f251116132047a84:
-        status: SUCCEDED
+        status: SUCCEEDED
         failures:
         - none
       tws47f25112212572f804:
@@ -998,8 +1006,17 @@ pbt_lr_large:
     (HumanoidStandup-v5):
       tws47f25112502325dd94:
         status: FAILED
-        commet: still might be interesting for first perturbation
+        comment: still might be interesting for first perturbation
         submission_id: pbt_lr_large_HumanoidStandup-v5_2850
+    (Reacher-v5):
+      tws47f2511270215530d4:
+        comment: is there another run that is not logged here?
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_Reacher-v5_2025-11-27_02:13:41
+    (Swimmer-v5):
+      tws47f25112702156bb14:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_Swimmer-v5_2025-11-27_02:13:41
 pbt_lr_large_failed:
   comment: OTHER_FLAGS did not apply
   entrypoint_resources:
