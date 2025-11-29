@@ -21,6 +21,7 @@ import contextlib
 import io
 import logging
 import os
+import random
 import shutil
 import sys
 import warnings
@@ -326,7 +327,9 @@ class ExperimentSetupBase(
             - comet project
         """
         if self.GROUP == "NO_GROUP_SET":
-            ImportantLogger.important_info(logger, "The setup %s has no GROUP set, will return `group_name` = None")
+            ImportantLogger.important_info(
+                logger, "The setup %s has no GROUP set, will return `group_name` = None", type(self)
+            )
             return None
         try:
             return self._parse_project_name(self.GROUP)
@@ -806,7 +809,12 @@ class ExperimentSetupBase(
             :func:`ray.tune.search.sample.Domain.sample`: Domain sampling method
         """
         params = self.create_param_space()
-        return {k: v.sample() if isinstance(v, ray.tune.search.sample.Domain) else v for k, v in params.items()}
+        return {
+            k: v.sample()
+            if isinstance(v, ray.tune.search.sample.Domain)
+            else (random.choice(v["grid_search"]) if isinstance(v, dict) and "grid_search" in v else v)
+            for k, v in params.items()
+        }
 
     def _set_dynamic_parameters_to_tune(self):
         """Call before calling `super().create_param_space()` when making use of self.args.tune"""
@@ -876,6 +884,12 @@ class ExperimentSetupBase(
         else:  # "sequential", sample from distribution
             param_space["env_seed"] = tune.randint(0, 2**16)
             # param_space["run_seed"] = tune.randint(0, 2**16)  # potential seed for config
+        if self.args.command_str == "pbt" and self.args.command.grouped:  # pyright: ignore[reportOptionalMemberAccess]
+            logger.info("Using grid search over seed for PBT grouped trials. Removing env_seed from param space.")
+            param_space["seed"] = {"grid_search": self.args.command.get_seed_options()}  # pyright: ignore[reportOptionalMemberAccess]
+            param_space.pop("env_seed", None)  # if not present will take seed if sequential or "same"
+            if self.args.env_seeding_strategy not in ("same", "sequential"):
+                logger.warning("When using PBT grouped trials env_seeding_strategy should be 'same' or 'sequential'.")
 
         # Other args not shown in the CLI
         # Log CLI args as hyperparameters
@@ -1310,7 +1324,9 @@ class ExperimentSetupBase(
         self.config.freeze()
         if hasattr(self, "param_space") and self.param_space is not None:
             self.param_space["trainable_name"] = get_trainable_name(self.trainable)
-
+        # This is a special field use by tune to report metrics into the cli
+        if not hasattr(self.trainable, "_progress_metrics"):
+            self.trainable._progress_metrics = ["current_step", self.args.metric]  # pyright: ignore[reportAttributeAccessIssue, reportFunctionMemberAccess]
         return self.trainable
 
     def unset_trainable(self, *, copy_config=False):
@@ -1520,7 +1536,7 @@ class ExperimentSetupBase(
         for cfg_file in self._config_files:
             src_path = Path(cfg_file)
             if src_path.exists() and src_path.is_file():
-                dest_path = working_dir_path / src_path.name
+                dest_path = working_dir_path / src_path
                 shutil.copy2(src_path, dest_path)
                 logger.debug("Copied config file %s to working_dir %s", src_path, dest_path)
             else:
@@ -1921,6 +1937,9 @@ class ExperimentSetupBase(
         new.PROJECT = data.get("PROJECT", new.PROJECT)
         unchecked_keys.discard("GROUP")
         unchecked_keys.discard("PROJECT")
+        if "tune_parameters" in data:
+            new.tune_parameters = data["tune_parameters"]
+            unchecked_keys.discard("tune_parameters")
         if isinstance(new.parser, Tap):
             try:
                 new.parser.from_dict(vars(new.args), skip_unsettable=True)

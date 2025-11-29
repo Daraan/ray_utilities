@@ -6,13 +6,14 @@ import logging
 import shutil
 from abc import abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, TextIO
+from typing import TYPE_CHECKING, Optional, TextIO
 
 import pyarrow.fs
 from ray.tune.experiment.trial import Trial
 
 from ray_utilities.callbacks.tuner.track_forked_trials import TrackForkedTrialsMixin
 from ray_utilities.constants import FORK_FROM
+from ray_utilities.misc import ExperimentKey
 
 if TYPE_CHECKING:
     from ray_utilities.typing import ForkFromData
@@ -98,7 +99,7 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
         fork_info = fork_data if isinstance(fork_data, str) else self.make_forked_trial_id(trial, fork_data)
         return f"{self._get_file_base_name()}-fork-{fork_info}.{self._get_file_extension()}"
 
-    def _get_parent_file_name(self, parent_trial: Trial) -> str:
+    def _get_parent_file_name(self, parent_trial: Trial, trial_id_history: Optional[dict[str, str]] = None) -> str:
         """Get the file name for the parent trial.
 
         Args:
@@ -107,7 +108,38 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
         Returns:
             File name of the parent trial (default or fork-specific)
         """
-        parent_fork_id = self._current_fork_ids.get(parent_trial, None)
+        # NOTE: When the parent_trial went ahead and is terminated we should not clean _current_fork_ids
+        # With access to trial.config["trial_id_history"] we also do not need it
+        if trial_id_history is not None:
+            hist_steps = sorted(int(k) for k in trial_id_history.keys() if k.isdigit())
+            if len(hist_steps) < 2:
+                logger.error(
+                    "trial_id_history should have at least two entries when it should is a fork. "
+                    "Using _current_fork_ids fallback"
+                )
+                parent_fork_id = self._current_fork_ids.get(parent_trial, None)
+            else:
+                current_trial_id = trial_id_history[str(hist_steps[-1])]
+                parent_fork_id = trial_id_history[str(hist_steps[-2])]
+                # While the parent id should be at -2 a bug might duplicate the last id
+                # check last id that is not the trials id
+                for idx in reversed(hist_steps):
+                    if trial_id_history[str(idx)] != current_trial_id:
+                        parent_fork_id = trial_id_history[str(idx)]
+                        break
+                parent_fork_id_alt = self._current_fork_ids.get(parent_trial, None)
+                if parent_fork_id_alt and parent_fork_id != parent_fork_id_alt:
+                    logger.warning(
+                        "Mismatch in parent fork_id from trial_id_history (%s) and current_fork_ids (%s) "
+                        "for trial %s. Using trial_id_history value.",
+                        parent_fork_id,
+                        parent_fork_id_alt,
+                        parent_trial.trial_id,
+                    )
+                if ExperimentKey.FORK_SEPARATOR not in parent_fork_id:
+                    return self._get_default_file_name()
+        else:
+            parent_fork_id = self._current_fork_ids.get(parent_trial, None)
         if parent_fork_id is None:
             return self._get_default_file_name()
         return self._make_forked_trial_file_name(parent_trial, parent_fork_id)
@@ -127,11 +159,54 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
             True if file was successfully copied, False otherwise
         """
         parent_local_file_path = Path(parent_trial.local_path, parent_file_name)  # pyright: ignore[reportArgumentType]
-
-        # Same node - use local copy
-        if parent_local_file_path.exists() and local_file_path.parent.exists():
+        if local_file_path.parent.exists() and local_file_path.exists() and local_file_path.stat().st_size > 0:
+            logger.warning(
+                "Trial %s forked but log file %s already exists. "
+                "This is unexpected, expect when restoring an experiment. "
+                "Creating a .parent file and not modifying the existing file.",
+                trial.trial_id,
+                local_file_path,
+            )
+            local_parent_copy = local_file_path.with_suffix(".parent.json")
             try:
-                shutil.copy2(parent_local_file_path, local_file_path)
+                shutil.copy2(parent_local_file_path, local_parent_copy)
+            except OSError as err:
+                logger.error("Error copying parent file to .parent file: %s", err)
+            else:
+                try:
+                    self._trim_history_back_to_fork_step(trial, local_parent_copy, fork_data)
+                except Exception:  # noqa: BLE001
+                    import traceback  # noqa: PLC0415
+
+                    logger.exception(
+                        "Error trimming copied parent file for trial %s from trial %s",
+                        trial.trial_id,
+                        parent_trial.trial_id,
+                    )
+                    with Path(local_file_path.parent, "ru_errors.log").open("a") as err_log:
+                        err_log.write(
+                            f"Error trimming copied parent file for trial {trial.trial_id} "
+                            f"from trial {parent_trial.trial_id}\n" + traceback.format_exc()
+                        )
+            # Did not really copy it but as it already exists, consider it done
+            return True
+
+        # Same node - use local copy - when we restore there is no local copy and parent dir might not exist yet
+
+        parent_remote_file_path = Path(parent_trial.path) / parent_file_name  # pyright: ignore[reportArgumentType]
+
+        if parent_local_file_path.exists():
+            found_parent_path = parent_local_file_path
+        elif parent_remote_file_path and parent_remote_file_path.exists():
+            found_parent_path = parent_remote_file_path
+        else:
+            found_parent_path = None
+
+        # can sync with normal filesystem
+        if found_parent_path:
+            local_file_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.copy2(found_parent_path, local_file_path)
             except OSError as err:
                 logger.error("Error copying parent file locally: %s", err)
                 if err.errno and err.errno == 28:  # No space left on device
@@ -167,19 +242,22 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
                         )
             return True
 
-        # Different nodes - sync via remote storage
+        # TODO: do we not want to sync down?
+        # We can sync up if we have the file locally and are in a "normal" run without restoring currently
+
+        # Different nodes - sync via remote storage - first sync up then sync down
         if trial.storage and parent_trial.storage:
             try:
-                parent_remote_file_path = Path(parent_trial.path) / parent_file_name  # pyright: ignore[reportArgumentType]
                 logger.debug(
-                    "Syncing up parent %s file to %s", self._get_file_extension().upper(), parent_remote_file_path
+                    "Syncing down parent %s file to %s", self._get_file_extension().upper(), parent_remote_file_path
                 )
-                # prevent a pyarrow exception
+                # prevent a pyarrow exception on existing file
+                backup_old_file_path = parent_remote_file_path.parent / (parent_remote_file_path.name + ".old")
+                backup_old_file_path.unlink(missing_ok=True)
                 if parent_remote_file_path.exists():
-                    parent_remote_file_path.rename(
-                        parent_remote_file_path.parent / (parent_remote_file_path.name + ".old")
-                    )
+                    parent_remote_file_path.rename(backup_old_file_path)
                 try:
+                    # First sync up parent to remote so we can copy from there
                     try:
                         pyarrow.fs.copy_files(
                             parent_local_file_path.as_posix(),
@@ -204,15 +282,17 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
                         # Failed sync
                         shutil.rmtree(parent_remote_file_path.as_posix())
                     if not parent_remote_file_path.exists():
+                        # sync did fail restore old
                         logger.warning(
                             "file %s does not exist for trial %s. This can happen when restoring from a checkpoint.",
                             fnf_error.filename,
                             trial.trial_id,
                         )
                         # restore old
-                        Path(parent_remote_file_path.parent, parent_remote_file_path.name + ".old").resolve().rename(
-                            Path(parent_remote_file_path.parent, parent_remote_file_path.name).resolve()
-                        )
+                        if backup_old_file_path.exists():
+                            Path(backup_old_file_path).rename(
+                                Path(parent_remote_file_path.parent, parent_remote_file_path.name)
+                            )
 
                 logger.debug(
                     "Syncing down parent %s file to %s", self._get_file_extension().upper(), local_file_path.as_posix()
@@ -223,7 +303,7 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
                     exclude=["*/checkpoint_*", "*.pkl", "events.out.tfevents.*"],
                 )
                 trial.storage.syncer.wait()
-            except (RuntimeError, OSError, Exception):
+            except (RuntimeError, OSError, Exception, FileNotFoundError):
                 logger.exception(
                     "Trial %s forked from %s but could not copy parent %s data from remote storage.",
                     trial.trial_id,
@@ -305,19 +385,32 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
         local_file_path = Path(trial.local_path, file_name)  # pyright: ignore[reportArgumentType]
         if local_file_path.exists():
             # Might exist if we are restoring from a previous experiment
+            # NOTE: When we restore the local file might already be ahead of the checkpoint we are loading
+            # This might create duplicated lines
+            # TODO: We likely should trim them - need to know the current iteration
             logger.warning(
                 "Trial %s forked but log file %s already exists. "
-                "This is unexpected, expect when restoring an experiment",
+                "This is unexpected, except when restoring an experiment",
                 trial.trial_id,
                 local_file_path,
             )
 
         # Try to sync from parent trial
-        file_copied = False
-        if (parent_trial := fork_data.get("parent_trial")) or isinstance(
-            parent_trial := self.parent_trial_lookup.get(trial), Trial
+        file_copied = None
+        if (parent_trial := (fork_data.get("parent_trial") or self.parent_trial_lookup.get(trial))) and isinstance(
+            parent_trial, Trial
         ):
-            parent_file_name = self._get_parent_file_name(parent_trial)
+            # NOTE: When we restore the last entry in trial.config.get("trial_id_history") is the trial id itself
+            parent_file_name = self._get_parent_file_name(parent_trial, trial.config.get("trial_id_history"))
+            file_copied = self._sync_parent_file(trial, parent_trial, parent_file_name, local_file_path, fork_data)
+        if False and file_copied is None and (parent_fork_id := fork_data.get("parent_fork_id")):
+            # TODO:
+            # We do not have parent_trial here, we only need if for the path and could construct it
+            # locally from trial
+            if ExperimentKey.FORK_SEPARATOR not in parent_fork_id:
+                parent_file_name = self._get_default_file_name()
+            else:
+                parent_file_name = self._make_forked_trial_file_name(parent_trial, parent_fork_id)
             file_copied = self._sync_parent_file(trial, parent_trial, parent_file_name, local_file_path, fork_data)
 
         # Try to load from checkpoint if parent trial sync didn't work
@@ -325,7 +418,7 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
             file_copied = self._handle_checkpoint_loading(trial, local_file_path)
 
         # Handle missing parent file
-        if not file_copied or not local_file_path.exists():
+        if not file_copied or (not local_file_path.exists() or local_file_path.stat().st_size == 0):
             self._handle_missing_parent_file(trial, local_file_path)
 
         # Set up the file handle

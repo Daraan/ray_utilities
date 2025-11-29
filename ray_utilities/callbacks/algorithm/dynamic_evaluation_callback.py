@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from ray_utilities.callbacks.algorithm.callback_mixins import BudgetMixin, StepCounterMixin
 from ray_utilities.callbacks.algorithm.dynamic_hyperparameter import DynamicHyperparameterCallback, UpdateFunction
-from ray_utilities.dynamic_config.dynamic_buffer_update import get_dynamic_evaluation_intervals
+from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE, get_dynamic_evaluation_intervals
 from ray_utilities.misc import AutoInt
 
 if TYPE_CHECKING:
@@ -64,16 +64,35 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
         else:
             new_eval_interval = self._evaluation_intervals.get(env_steps, None)
         if new_eval_interval is None:
-            logger.warning(
-                "No evaluation interval for current step %s in %s. "
-                "Expected a value in the dictionary for global step %s. Not changing it, stays: %d",
-                env_steps,
-                self._evaluation_intervals,
-                global_step,
-                algorithm.config.evaluation_interval,
-            )
-            # do not change it
-            return
+            # search if it fits between two keys and take the average of both values
+            intervals = sorted(self._evaluation_intervals.items())
+            for i in range(len(intervals) - 1):
+                step_size_a, interval_a = intervals[i]
+                step_size_b, interval_b = intervals[i + 1]
+                if step_size_a < env_steps < step_size_b:
+                    new_eval_interval = (interval_a + interval_b) // 2
+                    logger.info(
+                        "Inferred evaluation interval %s for env steps %s between %s:%s and %s:%s",
+                        new_eval_interval,
+                        env_steps,
+                        step_size_a,
+                        interval_a,
+                        step_size_b,
+                        interval_b,
+                    )
+                    self._evaluation_intervals[env_steps] = new_eval_interval
+                    break
+            else:
+                logger.warning(
+                    "No evaluation interval for current step %s in %s. "
+                    "Expected a value in the dictionary for global step %s. Not changing it, stays: %d",
+                    env_steps,
+                    self._evaluation_intervals,
+                    global_step,
+                    algorithm.config.evaluation_interval,
+                )
+                # do not change it
+                return
         if algorithm.config.evaluation_interval == new_eval_interval:
             return
         # Change evaluation interval
@@ -97,7 +116,9 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
     def _set_evaluation_intervals(self, algorithm: Algorithm) -> None:
         """Sets: self._evaluation_intervals"""
         # Add intervals that are also used during tuning
-        step_sizes = list({*self._budget["step_sizes"], *(3072, 4096, 2048 * 3)})
+        step_sizes = sorted(set(self._budget["step_sizes"]))
+        # FIXME: When we tune batch_size below train_batch_size_per_learner is not constant
+        assert algorithm.config
         self._evaluation_intervals: dict[int, int] = dict(
             zip(
                 step_sizes,
@@ -105,7 +126,9 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
                     get_dynamic_evaluation_intervals(
                         step_sizes,
                         eval_freq=self._original_interval,  # 16. Does this hold on restore? Algorithm.eval_interval will be the restored value in __init__
-                        batch_size=algorithm.config.train_batch_size_per_learner,  # pyright: ignore[reportOptionalMemberAccess]
+                        batch_size=algorithm.config.learner_config_dict.get(
+                            "base_batch_size_per_learner", algorithm.config.train_batch_size_per_learner
+                        ),
                         take_root=True,
                     )
                     # 0 for no evaluation
@@ -114,8 +137,11 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
                 ),
             )
         )
+        self._evaluation_intervals = dict(sorted(self._evaluation_intervals.items()))
         for step_size, iterations in zip(self._budget["step_sizes"], self._budget["iterations_per_step_size"]):
-            if iterations <= 2 and self._evaluation_intervals[step_size] > 1:
+            if step_size >= MAX_DYNAMIC_BATCH_SIZE:
+                self._evaluation_intervals[step_size] = max(1, self._evaluation_intervals[step_size] // 2)
+            if iterations <= 2 and self._evaluation_intervals[step_size] >= 1:
                 # when doing not many iterations between step changes, assure that the evaluation interval is at least 1
                 logger.debug(
                     "Setting evaluation interval for %s steps to 1, because iterations are %s",
@@ -123,6 +149,24 @@ class DynamicEvalInterval(StepCounterMixin, BudgetMixin, DynamicHyperparameterCa
                     iterations,
                 )
                 self._evaluation_intervals[step_size] = 1
+                try:
+                    self._evaluation_intervals[step_size // 2] = min(self._evaluation_intervals[step_size // 2], 2)
+                except KeyError:
+                    pass
+
+            # with above logic we end up with 8192 every but 4096 every 4, we want to align this as well -> 4096 every 2
+        # Lastly assure that we want to avoid a situation of:  {8192: 2, 16384: 2} or {1024: 4, 2048: 4}
+        # With smaller batch sizes they may be more frequent but not less frequent than larger ones
+        sorted_items = sorted(self._evaluation_intervals.items(), reverse=True)
+        for (step_size_a, interval_a), (step_size_b, interval_b) in zip(sorted_items, sorted_items[1:]):
+            if step_size_a * interval_a < step_size_b * interval_b:
+                logger.warning(
+                    "Evaluation intervals are not consistent: %s -> %s",
+                    (step_size_a, interval_a),
+                    (step_size_b, interval_b),
+                )
+                self._evaluation_intervals[step_size_b] = max(1, (step_size_a * interval_a) // step_size_b)
+        self._evaluation_intervals[4096] = 2  # XXX
 
     def get_state(self) -> dict[str, Any]:
         return {

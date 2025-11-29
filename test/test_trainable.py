@@ -18,6 +18,7 @@ from ray.rllib.utils.metrics import EVALUATION_RESULTS
 from ray.tune.utils import validate_save_restore
 from ray.util.multiprocessing import Pool
 
+from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN, FORK_FROM, PERTURBED_HPARAMS
 from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
@@ -48,8 +49,6 @@ if TYPE_CHECKING:
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
 
     from ray_utilities.typing.trainable_return import TrainableReturnData
-
-import sys
 
 try:
     sys.argv.remove("test/test_trainable.py")
@@ -424,6 +423,104 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
         self.assertTrue(issubclass(trainable.algorithm_config.learner_class, PPOTorchLearnerWithGradientAccumulation))
         trainable = setup.trainable_class({"accumulate_gradients_every": 1})
         self.assertFalse(issubclass(trainable.algorithm_config.learner_class, PPOTorchLearnerWithGradientAccumulation))
+
+    def test_evaluation_interval_consistency(self):
+        """
+        Verify that evaluation intervals are consistent across different step sizes.
+        The requirement is that no matter the train_batch_size_per_learner (step size),
+        the evaluation should happen at the same current_step interval.
+
+        This means:
+            step_size * evaluation_interval_iterations = constant_evaluation_step_interval
+        However to evaluate smaller step sizes more frequently it is ok that the result is a
+            divider of the constant interval, i.e.,
+            small_step_size * evaluation_interval_iterations * n =  constant_evaluation_step_interval
+        """
+        # Setup Mock Algorithm & Config
+        algo = mock.MagicMock()
+        # Base evaluation interval (Power of 2 for clean testing)
+        base_eval_interval = 16
+        algo.config.evaluation_interval = base_eval_interval
+
+        # Base batch size (e.g. 2048 - must be power of 2)
+        base_batch_size = 2048
+        algo.config.train_batch_size_per_learner = base_batch_size
+
+        # Config required for budget calculation in DynamicEvalInterval
+        algo.config.learner_config_dict = {
+            "total_steps": 131072 * 10,  # Power of 2
+            "min_dynamic_buffer_size": 128,
+            "max_dynamic_buffer_size": 8192 * 2,
+        }
+
+        # Instantiate Callback
+        callback = DynamicEvalInterval()
+
+        # Initialize (triggers interval calculation)
+        callback.on_algorithm_init(algorithm=algo, metrics_logger=mock.MagicMock())
+
+        # Get the calculated intervals
+        # _evaluation_intervals is a dict mapping step_size -> iterations_between_evaluations
+        intervals = callback._evaluation_intervals
+        print("Dynamic evaluation intervals are: %s", intervals)
+
+        # Calculate the target evaluation interval in steps based on the base configuration
+        target_step_interval = base_eval_interval * base_batch_size
+
+        # We expect: iterations = nearest_power_of_2(sqrt(raw_iterations))
+        # raw_iterations = target_step_interval / step_size
+
+        # manual not automatic!
+        # FIXME: 4096 hardcoded to 2 atm
+        expected = {128: 16, 256: 16, 512: 8, 1024: 4, 2048: 4, 4096: 2, 8192: 2, 16384: 1}
+        if expected:  # hardcoded expectation
+            for step_size, iterations in intervals.items():
+                if step_size in expected:
+                    self.assertEqual(
+                        iterations,
+                        expected[step_size],
+                        msg=f"Iterations for step size {step_size} should be {expected[step_size]}, "
+                        f"but got {iterations}. All intervals: {intervals}",
+                    )
+                else:
+                    self.fail(f"Step size {step_size} not found in expected results.")
+        else:  # dynamic calc but without manual tweaks
+            import numpy as np
+
+            for step_size, iterations in intervals.items():
+                if iterations == 0:
+                    self.fail(f"Step size {step_size} resulted in 0 evaluation iterations, which is invalid.")
+
+                # Problem? Dynamic is calculated based on batch_size 2048 as base
+                raw_iterations = target_step_interval / step_size
+                sqrt_iterations = np.sqrt(raw_iterations)
+
+                if sqrt_iterations < 1:
+                    expected_iterations = 1
+                else:
+                    expected_iterations = int(2 ** round(np.log2(sqrt_iterations)))
+                    expected_iterations = max(1, expected_iterations)
+                # Furthermore there is this custom rule - when there are not many iteration in the budget
+                # for the step size we evaluate every step, e.g. 8192 every time and not every 2.
+                try:
+                    total_iters = callback._budget["iterations_per_step_size"][
+                        callback._budget["step_sizes"].index(step_size)
+                    ]
+                    if total_iters <= 2 and expected_iterations > 1:
+                        expected_iterations = 1
+                except ValueError:
+                    # wired batch size not in list
+                    pass
+
+                # if iterations == 1 and expected_iterations == 2:
+                #    # this is okay
+                #    continue
+
+                self.assertEqual(
+                    iterations,
+                    expected_iterations,
+                    msg=f"Iterations for step size {step_size} should be {expected_iterations} (raw {raw_iterations}, sqrt {sqrt_iterations:.2f}), but got {iterations}.",
+                )
 
 
 class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):

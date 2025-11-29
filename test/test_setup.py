@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Optional, cast
 
 import cloudpickle
+import numpy as np
 import pyarrow.fs as pyfs
 import pytest
 import tree
@@ -34,7 +35,11 @@ from ray.rllib.utils.metrics import (
 )
 
 from ray_utilities.callbacks.algorithm.exact_sampling_callback import exact_sampling_callback
-from ray_utilities.callbacks.algorithm.seeded_env_callback import NUM_ENV_RUNNERS_0_1_EQUAL, DirectRngSeedEnvsCallback
+from ray_utilities.callbacks.algorithm.seeded_env_callback import (
+    NUM_ENV_RUNNERS_0_1_EQUAL,
+    AlwaysSeedEvaluationEnvsCallback,
+    DirectRngSeedEnvsCallback,
+)
 from ray_utilities.config import DefaultArgumentParser, add_callbacks_to_config, seed_environments_for_config
 from ray_utilities.config import logger as parser_logger
 from ray_utilities.config.parser.mlp_argument_parser import SimpleMLPParser
@@ -51,7 +56,7 @@ from ray_utilities.constants import (
     SEEDS,
 )
 from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
-from ray_utilities.misc import is_pbar, raise_tune_errors
+from ray_utilities.misc import get_current_step, is_pbar, raise_tune_errors
 from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.random import seed_everything
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
@@ -75,7 +80,7 @@ from ray_utilities.training.helpers import make_divisible
 from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultIterationStopper
 
 if TYPE_CHECKING:
-    import numpy as np
+    import gymnasium as gym
     import torch.optim
     from ray.rllib.algorithms.ppo.torch.default_ppo_torch_rl_module import DefaultPPOTorchRLModule
     from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
@@ -637,12 +642,12 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
     def test_seeding_env(self, cases):
         for num_env_runners in iter_cases(cases):
             with (
-                patch_args("--seed", "1234", "--num_env_runners", num_env_runners),
-                AlgorithmSetup(init_trainable=False) as setup,
+                patch_args("--seed", "1234", "--num_env_runners", num_env_runners, "--fcnet_hiddens", "[4]"),
+                MLPSetup(init_trainable=False) as setup,
             ):
                 # NOTE: if async the np_random generator is changed by gymnasium
                 setup.config.env_runners(gym_env_vectorize_mode="SYNC")
-                seed_environments_for_config(setup.config, env_seed=123, seed_env_directly=False)
+                seed_environments_for_config(setup.config, env_seed=123, seed_env_directly=False, every_eval=False)
 
             trainable = setup.trainable_class({"env_seed": 2222})
             assert trainable.algorithm_config.num_envs_per_env_runner is not None
@@ -717,11 +722,16 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
 
             # Exchange callback class
             trainable.algorithm_config._is_frozen = False
-            seed_environments_for_config(trainable.algorithm_config, env_seed=2222, seed_env_directly=True)
+            seed_environments_for_config(
+                trainable.algorithm_config, env_seed=2222, seed_env_directly=True, every_eval=False
+            )
             if trainable.algorithm.evaluation_config is not None:
                 trainable.algorithm.evaluation_config._is_frozen = False
                 seed_environments_for_config(
-                    trainable.algorithm.evaluation_config, env_seed=None, seed_env_directly=True
+                    trainable.algorithm.evaluation_config,
+                    env_seed=None,
+                    seed_env_directly=True,
+                    every_eval=False,
                 )
 
             callbacks = trainable.algorithm_config.callbacks_on_environment_created
@@ -872,6 +882,120 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             [(4, 32, 32 // 4)],
         )
         trainable3.stop()
+
+    # Maybe can be mocked for efficiency, we do not really need the learner update
+    # @mock_trainable_algorithm(mock_env_runners=False, mock_learner=True, parallel_envs=1)
+    # @unittest.mock.patch.object(PPO, "training_step")
+    def test_always_seed_evaluation_envs(self, _ppo_train_step_mock=None):
+        if _ppo_train_step_mock:
+            _ppo_train_step_mock.return_value = None
+
+        class TestCallback(AlwaysSeedEvaluationEnvsCallback):
+            env_seed = 42
+
+        num_env_runners = 1
+
+        algos = []
+
+        def clean_up():
+            for algo in algos:
+                algo.stop()
+
+        self.addCleanup(clean_up)
+
+        def train_and_get_algo(batch_size, iterations):
+            # Use a fresh setup for each algo to avoid sharing state if any
+            with patch_args(
+                "--train_batch_size_per_learner",
+                batch_size,
+                "--minibatch_size",
+                batch_size,
+                "--num_envs_per_env_runner",
+                num_env_runners,
+                "--env_seeding_strategy",
+                "constant",  # Just to be safe, though we override callback
+                "--no_dynamic_eval_interval",
+                # Use non-discrete action space to unlikely sample the same steps
+                "--fcnet_hiddens", "[16, 16]",
+            ):  # fmt: skip
+                with MLPSetup(init_trainable=False) as setup:
+                    setup.config.evaluation(evaluation_interval=1)
+                    setup.config.callbacks(TestCallback)
+                    setup.config.env_runners(num_cpus_per_env_runner=0, num_envs_per_env_runner=num_env_runners)
+                    setup.config.learners(num_cpus_per_learner=0)
+                    setup.config.resources(num_cpus_for_main_process=0)
+                logger.debug("------- Creating algo -------")
+                algo = setup.build_algo()
+                algos.append(algo)
+                for _ in range(iterations):
+                    result = algo.train()
+                    self.assertIn(EVALUATION_RESULTS, result)
+                return algo
+
+        def get_next_env_results(algo: Algorithm):
+            # We want to check the state of the environment in the evaluation workers
+            # CartPole env has a 'state' attribute.
+            # do not return info
+            results = algo.eval_env_runner_group.foreach_env_runner(
+                lambda er: cast("gym.vector.VectorEnv", er.env).step([1] * er.env.num_envs)[0]  # pyright: ignore[reportAttributeAccessIssue]
+            )
+            # list of length num_env_runners
+            return np.array(results).squeeze()
+
+        def trigger_env_reset(algorithm: Algorithm):
+            # Trigger an evaluation to reset the envs
+            assert algorithm.callbacks
+            next(cb for cb in algorithm.callbacks if isinstance(cb, TestCallback)).on_evaluate_start(
+                algorithm=algorithm, metrics_logger=algorithm.metrics
+            )
+
+        n = 64
+        algo1 = train_and_get_algo(n, 2)
+        algo2 = train_and_get_algo(3 * n, 1)
+        assert algo1.metrics and algo2.metrics
+        self.assertEqual(get_current_step(algo1.metrics), n * 2)
+        self.assertEqual(get_current_step(algo2.metrics), n * 3)
+
+        result_a_2n = get_next_env_results(algo1)
+        result_b_3n = get_next_env_results(algo2)
+
+        with self.subTest("check 2n vs 3n after train without env reset"):
+            # should not be equal after 256 vs 384 env steps
+            with self.assertRaises(
+                AssertionError, msg=f"Before env reset {result_a_2n} and {result_b_3n} should not be equal"
+            ):
+                np.testing.assert_array_almost_equal(result_a_2n, result_b_3n)
+        logger.debug("\n ---- Manual env reset 1 ----")
+        trigger_env_reset(algo1)
+        trigger_env_reset(algo2)
+        result_a_2n_r = get_next_env_results(algo1)
+        result_b_3n_r = get_next_env_results(algo2)
+        # should still not be equal after calling reset
+        with self.assertRaises(
+            AssertionError, msg=f"After env reset {result_a_2n_r} and {result_b_3n_r} should not be equal"
+        ):
+            np.testing.assert_array_almost_equal(result_a_2n_r, result_b_3n_r)
+
+        # steps match after one more train
+        logger.debug("Train algo 1 to 3n")
+        algo1.train()
+
+        logger.debug("\n ---- Manual env reset 2 ----")
+        # Trigger callback manually
+        trigger_env_reset(algo1)
+        trigger_env_reset(algo2)
+        # The callback instance is in algo.callbacks
+        result_a_3n = get_next_env_results(algo1)
+        result_b_3n = get_next_env_results(algo2)
+        # can be (n_envs, obs) or (n_runners, n_envs, obs)
+        self.assertEqual(result_a_3n.shape, result_b_3n.shape)
+        # for just a single env this will be 1D with length of the obs
+        self.assertEqual(result_b_3n.shape[-2] if num_env_runners > 1 else 1, num_env_runners)
+
+        np.testing.assert_array_equal(result_a_3n, result_b_3n)
+
+        algo1.stop()
+        algo2.stop()
 
 
 class TestPPOMLPSetup(InitRay, num_cpus=4):
@@ -1183,6 +1307,97 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
         self.assertIn("in_features=12, out_features=13", data["architecture"]["summary_str"])
         # Value Function:
         self.assertIn("in_features=13, out_features=1", data["architecture"]["summary_str"])
+
+
+class TestPBTSchedulerSelection(InitRay, SetupDefaults, num_cpus=4):
+    """Test that the correct PBT scheduler is selected based on CLI arguments."""
+
+    def test_default_top_pbt_scheduler(self):
+        """Test that TopPBTTrialScheduler is used by default (without --grouped flag)."""
+        from ray_utilities.tune.scheduler.grouped_top_pbt_scheduler import GroupedTopPBTTrialScheduler
+        from ray_utilities.tune.scheduler.top_pbt_scheduler import TopPBTTrialScheduler
+
+        with patch_args(
+            "--num_samples",
+            "3",
+            "pbt",
+            "--hyperparam_mutations",
+            "{'lr': [0.001, 0.0001]}",
+        ):
+            setup = AlgorithmSetup()
+            scheduler = setup.args.command.to_scheduler()
+
+        self.assertIsInstance(scheduler, TopPBTTrialScheduler)
+        self.assertNotIsInstance(
+            scheduler,
+            GroupedTopPBTTrialScheduler,
+        )
+
+    def test_grouped_top_pbt_scheduler(self):
+        """Test that GroupedTopPBTTrialScheduler is used when --grouped flag is set."""
+        from ray_utilities.tune.scheduler.grouped_top_pbt_scheduler import GroupedTopPBTTrialScheduler
+
+        with patch_args(
+            "--num_samples",
+            "3",
+            "pbt",
+            "--grouped",
+            "--hyperparam_mutations",
+            "{'lr': [0.001, 0.0001]}",
+        ):
+            setup = AlgorithmSetup()
+            scheduler = setup.args.command.to_scheduler()
+
+        self.assertIsInstance(scheduler, GroupedTopPBTTrialScheduler)
+
+    def test_grouped_scheduler_with_tuner(self):
+        """Test that GroupedTopPBTTrialScheduler is correctly used in the tuner setup."""
+        from ray_utilities.tune.scheduler.grouped_top_pbt_scheduler import GroupedTopPBTTrialScheduler
+
+        with patch_args(
+            "--num_samples",
+            "3",
+            "--iterations",
+            "10",
+            "pbt",
+            "--grouped",
+            "--hyperparam_mutations",
+            "{'lr': [0.001, 0.0001]}",
+            "--quantile_fraction",
+            "0.2",
+        ):
+            setup = AlgorithmSetup()
+            tuner = setup.create_tuner()
+
+        # Access the scheduler from the tune config
+        tune_config = tuner._local_tuner._tune_config if hasattr(tuner, "_local_tuner") else None
+        if tune_config:
+            self.assertIsInstance(tune_config.scheduler, GroupedTopPBTTrialScheduler, f"Found: {tune_config.scheduler}")
+
+    def test_scheduler_parameters_passed_correctly(self):
+        """Test that scheduler parameters are correctly passed to GroupedTopPBTTrialScheduler."""
+        from ray_utilities.tune.scheduler.grouped_top_pbt_scheduler import GroupedTopPBTTrialScheduler
+
+        quantile_fraction = 0.15
+        num_samples = 5
+
+        with patch_args(
+            "--num_samples",
+            str(num_samples),
+            "pbt",
+            "--grouped",
+            "--hyperparam_mutations",
+            "{'lr': [0.001, 0.0001]}",
+            "--quantile_fraction",
+            str(quantile_fraction),
+        ):
+            setup = AlgorithmSetup()
+            scheduler = setup.args.command.to_scheduler()
+
+        assert isinstance(scheduler, GroupedTopPBTTrialScheduler)
+        self.assertEqual(scheduler._quantile_fraction, quantile_fraction)
+        self.assertEqual(scheduler._num_samples, num_samples)
+        self.assertIs(scheduler._recompute_groups, False)  # default value  # noqa: FBT003
 
 
 class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
@@ -1743,6 +1958,8 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
     @pytest.mark.env_runner_cases
     @pytest.mark.length(speed="medium")
     @pytest.mark.timeout(method="thread")
+    # Sometimes fails on GitHub with Segmentation fault (core dumped)
+    @pytest.mark.flaky(max_runs=2, min_passes=1)
     def test_trainable_checkpointing(self, cases):
         """Test if trainable can be checkpointed and restored."""
         for num_env_runners_a, num_env_runners_b in iter_cases(cases):

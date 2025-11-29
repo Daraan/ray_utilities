@@ -60,7 +60,23 @@ default_distributions: dict[str, DistributionDefinition] = {
     "minibatch_scale": {"grid_search": [1 / 16, 1 / 8, 1 / 4, 1 / 2, 1.0]},
     # For high num_envs_per_env runner should adjust num_env_runners accordingly
     "num_envs_per_env_runner": {"grid_search": [1, 2, 4, 8, 16, 32]},
+    # PPO
+    # clip_param - default 0.3 - possibly change to uniform distribution later
+    "clip_param": {"grid_search": [0.1, 0.2, 0.3, 0.4, 0.5, 0.8, 1.0]},
+    # NOTE: Formula is vf_loss_coeff * vf_loss - entropy_coeff * entropy
+    # Default: vf_loss_coeff = 1.0, entropy_coeff = 0.00
+    "entropy_coeff": {
+        "grid_search": sorted([*np.round(np.logspace(np.log2(1e-4), np.log2(0.1), num=10, base=2), 8), 0.2, 0.0])
+    },
+    "vf_loss_coeff": {"grid_search": np.linspace(0.1, 1.0, num=7).tolist()},
+    # vf_clip_param - default 10 - clips in [0, vf_clip_param] - should be tuned for each env
+    "vf_clip_param": {"grid_search": [5, 10, 20, 25, 50, 75, 100, 500, 1000]},
+    # vf_loss_coeff
+    # Dummy value --tune test
+    "test": {"grid_search": [1, 2, 3]},
 }
+
+seed_options = [42, 128, 0, 480, 798]
 
 
 def write_distributions_to_json(
@@ -91,8 +107,12 @@ def write_distributions_to_json(
             lock_file.touch(exist_ok=False)
             break
         except FileExistsError:
-            lock_file.unlink()
-            time.sleep(0.1)
+            try:
+                lock_file.unlink()
+            except FileNotFoundError:
+                pass
+            else:
+                time.sleep(0.1)
     try:
         with output_file.open("w") as f:
             json.dump(json_distributions, f, indent=2)

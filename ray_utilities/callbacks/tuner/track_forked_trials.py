@@ -264,11 +264,12 @@ class TrackForkedTrialsMixin(LoggerCallback):
     def on_trial_complete(self, iteration: int, trials: list[Trial], trial: Trial, **info):
         super().on_trial_complete(iteration, trials, trial, **info)
         # Clean up all tracking data for completed trial
-        self._current_fork_ids.pop(trial, None)
         self._trial_ids.pop(trial, None)
         self._forked_trials.pop(trial, None)
         self._currently_not_forked_trials.discard(trial)
         self.parent_trial_lookup.pop(trial, None)
+        # NOTE: When the parent_trial went ahead and is terminated we should not clean _current_fork_ids
+        # for parent lookup
 
     def get_state(self) -> dict:
         """Get the state of the callback for checkpointing.

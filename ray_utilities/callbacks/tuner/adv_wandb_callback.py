@@ -4,6 +4,7 @@ import logging
 import os
 import pickle
 import subprocess
+import sys
 import threading
 import time
 import traceback
@@ -250,9 +251,13 @@ class AdvWandbLoggerCallback(
         # replace potential _ in trial_id
         # --- New Code --- : Remove nested keys
         for nested_key in filter(lambda x: "/" in x, self.excludes):
-            key, sub_key = nested_key.split("/")
+            key, *sub_keys = nested_key.split("/")
             if key in config:
-                config[key].pop(sub_key, None)
+                subconfig = config[key]
+                for subkey in sub_keys[:-1]:
+                    subconfig = subconfig[subkey]
+                if sub_keys:
+                    subconfig.pop(sub_keys[-1], None)
         fork_from = fork_id = fork_iteration = None  # new run
         if "cli_args" in config:
             assert "num_jobs" not in config["cli_args"]
@@ -1054,6 +1059,14 @@ class AdvWandbLoggerCallback(
         ImportantLogger.important_info(
             _logger, "Ending experiment and closing logger actors this can take a moment (timeout 1800s). Info %s", info
         )
+        # This function can also be called during an error in tune, sometimes the error is swallowed.
+        # So we log the exception here if any.
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        if exc_type is not None:
+            _logger.exception("Experiment ending due to exception: %s", exc_value)
+            with open("experiment.err", "a") as f:
+                f.write(f"Experiment ended due to exception: {exc_value}\n")
+                traceback.print_exception(exc_type, exc_value, exc_traceback, file=f)
 
         for queue in self._trial_queues.values():
             queue.put((_QueueItem.END, None))

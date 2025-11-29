@@ -12,6 +12,7 @@ import logging
 import math
 import os
 import re
+import subprocess
 import sys
 import time
 from enum import Enum
@@ -20,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, cast, overloa
 import base62
 import gymnasium as gym
 import numpy as np
+import psutil
 import pyarrow.fs as pyfs
 import ray
 import ray.exceptions
@@ -55,14 +57,18 @@ from ray_utilities.constants import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+    from pathlib import Path
 
     from ray import tune
+    from ray.actor import ActorProxy
+    from ray.tune import ExperimentAnalysis
     from ray.tune.experiment import Trial
 
     from ray_utilities.callbacks._wandb_monitor import WandbRunMonitor
     from ray_utilities.callbacks.upload_helper import AnyPopen
     from ray_utilities.typing import ForkFromData, StrictAlgorithmReturnData
     from ray_utilities.typing.metrics import LogMetricsDict
+
 
 if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
@@ -225,6 +231,7 @@ def trial_name_creator(trial: Trial) -> str:
         # make name shorter
         trainable_name = ""
     experiment_tag = cast("str", trial.experiment_tag)
+    experiment_tag = experiment_tag.replace("train_batch_size_per_learner=", "batch_size=")
     if "_" in experiment_tag[:3]:
         _exp_number, experiment_tag = experiment_tag.split("_", 1)
         tag_list = experiment_tag.split("=")
@@ -888,7 +895,7 @@ def shutdown_monitor() -> None:
             try:
                 if not ray.is_initialized():
                     return None
-                monitor: WandbRunMonitor = ray.get_actor(name=WANDB_MONITOR_ACTOR_NAME)
+                monitor: ActorProxy[WandbRunMonitor] = ray.get_actor(name=WANDB_MONITOR_ACTOR_NAME)
             except (ValueError, ray.exceptions.RayActorError):
                 return None
             else:
@@ -1072,3 +1079,108 @@ def calc_env_size(env: gym.Env | str | None):
     finally:
         if close_env:
             env.close()
+
+
+def load_experiment_analysis(path: str | Path) -> ExperimentAnalysis:
+    """Load a Ray Tune ExperimentAnalysis from a given path.
+
+    This function attempts to load an ExperimentAnalysis object from the specified
+    directory. It first tries to use Ray Tune's built-in loading mechanism. If that
+    fails (e.g., due to version incompatibilities), it falls back to manually
+    reconstructing the ExperimentAnalysis from the saved trial data.
+
+    Args:
+        path: uri or Path to the experiment directory or experiment_state file.
+
+    Returns:
+        An ExperimentAnalysis object.
+    """
+    import ray.tune.registry as reg  # noqa: PLC0415
+    from ray.tune import ExperimentAnalysis  # noqa: PLC0415
+    from ray.tune.error import TuneError  # noqa: PLC0415
+
+    try:
+        reg.get_trainable_cls("DefinedDefaultTrainable")
+    except (KeyError, TuneError):
+        _logger.info(
+            "DefinedDefaultTrainable not in tune.registry, adding a simple class for loading ExperimentAnalysis."
+        )
+        # Trainable likely not in registry
+        from ray_utilities.setup.algorithm_setup import AlgorithmSetup  # noqa: PLC0415
+        from ray_utilities.training.default_class import DefaultTrainable  # noqa: PLC0415
+
+        reg._global_registry.register(
+            reg.TRAINABLE_CLASS, "DefinedDefaultTrainable", DefaultTrainable.define(AlgorithmSetup)
+        )
+
+    return ExperimentAnalysis(path)
+
+
+_slurm_job_info_cache: str | None = None
+
+
+def get_slurm_job_info() -> str | None:
+    """
+    Safely get SLURM job info using scontrol.
+
+    Returns:
+        The output of 'scontrol show job $SLURM_JOB_ID' as a string, or None if not available.
+    """
+    global _slurm_job_info_cache  # noqa: PLW0603
+    if _slurm_job_info_cache is not None:
+        return _slurm_job_info_cache
+    import subprocess  # noqa: PLC0415
+
+    job_id = os.environ.get("SLURM_JOB_ID")
+    if not job_id:
+        # Not running inside a SLURM job allocation
+        return None
+    try:
+        result = subprocess.run(
+            ["scontrol", "show", "job", job_id],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+        # Handle errors: command failed, timed out, or scontrol not found
+        _logger.error("Failed to get SLURM job info: %s", e)
+        return None
+    else:
+        _slurm_job_info_cache = result.stdout
+        return _slurm_job_info_cache
+
+
+def get_available_memory_bytes() -> int:
+    """
+    Get a rough estimate of available memory in bytes.
+    This function is SLURM aware and will check for memory limits in SLURM jobs and
+    running user processes on this node.
+
+    Attention:
+        It is assumed that at most one user process is running on a node in a SLURM job.
+        Otherwise the memory calculation will take all user processes into account.
+    """
+    mem = psutil.virtual_memory()
+    # ray starts to kill processes at 95% we do not want to go near there
+    available_mem = min(mem.available, mem.total * 0.92)
+    # Check for SLURM memory limits
+    slurm_info: str | None = get_slurm_job_info()
+    if slurm_info:
+        match = re.search(r"AllocTRES=(?:,|\w|=)*mem=(?P<mem>[0-9]+)(?P<unit>[GM])", slurm_info)
+        my_kB_mem_usage = int(
+            subprocess.check_output("ps -u $USER -o rss= | awk '{sum += $1} END {print sum}'", shell=True, text=True)
+        )
+        my_mem_usage = my_kB_mem_usage * 1024
+        if not match:
+            match = re.search(r"TRES=(?:,|\w|=)*mem=(?P<mem>[0-9]+)(?P<unit>[GM])", slurm_info)
+        if match:
+            slurm_mem_limit = int(match.group("mem")) * 1024 * 1024
+            if match.group("unit") == "G":
+                slurm_mem_limit *= 1024
+            available_mem = min(
+                available_mem, slurm_mem_limit - (mem.total - mem.available), slurm_mem_limit - my_mem_usage
+            )
+    return int(available_mem)

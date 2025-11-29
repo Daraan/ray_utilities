@@ -16,7 +16,8 @@ on:
       - '.github/*.md'
       - '**/*.sh'
       - '*.py'
-      - experiments/submissions.yaml
+      - experiments/submission*.yaml
+      - ray_submit.py
   pull_request:
     branches: [ "main" ]
     paths-ignore:
@@ -29,7 +30,8 @@ on:
       - '.github/*.md'
       - '**/*.sh'
       - '*.py'
-      - experiments/submissions.yaml
+      - experiments/submission*.yaml
+      - ray_submit.py
 
   workflow_dispatch:
 

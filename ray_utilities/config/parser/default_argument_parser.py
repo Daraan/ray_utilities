@@ -48,6 +48,7 @@ from ray_utilities.warn import (
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from typing import ClassVar  # noqa: F401
 
 
 logger = logging.getLogger(__name__)
@@ -777,6 +778,26 @@ class _BaseRLlibArgumentParser(_EnvRunnerParser):
     lr: float | list[tuple[int, float]] = 1e-4
     """Learning rate or schedule: float or list of (timestep, lr) tuples"""
 
+    use_kl_loss: bool = False
+    """Whether to use KL divergence loss in the PPO objective."""
+
+    entropy_coeff: float = 0.01
+    """Coefficient for the entropy regularization term in the PPO objective."""
+
+    vf_loss_coeff: float = 1.0
+    """Coefficient for the value function loss in the PPO objective."""
+
+    clip_param: float = 0.2
+    """Clipping parameter for the PPO objective."""
+
+    vf_clip_param: float = 10.0
+    """
+    Clipping parameter for the value function loss in PPO
+
+    Note:
+        For higher rewards this should also be higher
+    """
+
     def configure(self) -> None:
         super().configure()
         self.add_argument(
@@ -935,7 +956,7 @@ class DefaultResourceArgParser(Tap):
     object_store_memory: NotAModelParameter[NeverRestore[int | None]] = None
     """Amount of object store memory to allocate per worker in bytes."""
 
-    gpu: NeverRestore[bool] = False
+    gpu: NeverRestore[float] = 0
 
     # num_cpus_per_learner: NeverRestore[int | Literal["auto"]] = "auto"
     # """auto: 1 if num_gpus_per_learner == 0 else 0"""
@@ -1498,20 +1519,25 @@ class OptunaArgumentParser(GoalParser, Tap):
     )
     # FIXME: Change to use keys from create_tune_parameters.
     # NOTE: Need to be defined in add_argument below as well
-    tune: NeverRestore[
-        list[
-            Literal[
-                "all",
-                "accumulate_gradients_every",
-                "batch_size",
-                "lr",
-                "minibatch_size",
-                "minibatch_scale",
-                "num_envs_per_env_runner",
-            ]
-        ]
-        | Literal[False]
-    ] = False
+    # NOTE: Tune parameter currently also need to be attributes/arguments of the respective parser
+    _valid_tune_choices = [  # noqa: RUF012
+        "all",
+        "accumulate_gradients_every",
+        "batch_size",
+        "lr",
+        "minibatch_size",
+        "minibatch_scale",
+        "num_envs_per_env_runner",
+        # PPO specific
+        # NOTE vf_clip_param should be larger for large rewards
+        "entropy_coeff",
+        "clip_param",
+        "vf_clip_param",
+        "vf_loss_coeff",
+        "test",
+    ]  # type: ClassVar[list[str]]
+
+    tune: NeverRestore[list[str] | Literal[False]] = False
     """List of dynamic parameters to be tuned"""
 
     pruner_min_trials: NotAModelParameter[NeverRestore[int]] = 3
@@ -1525,15 +1551,7 @@ class OptunaArgumentParser(GoalParser, Tap):
             "--tune",
             nargs="+",
             default=False,
-            choices=[
-                "all",
-                "accumulate_gradients_every",
-                "batch_size",
-                "lr",
-                "minibatch_size",
-                "minibatch_scale",
-                "num_envs_per_env_runner",
-            ],
+            choices=self._valid_tune_choices,
             type=_parse_tune_choices,
         )
 

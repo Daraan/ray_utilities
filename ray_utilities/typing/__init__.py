@@ -151,3 +151,6 @@ class ForkFromData(TypedDict):
 
     parent_env_steps: NotRequired[int]
     """If available, the exact amount of env steps the parent had sampled at forking time."""
+
+    pbt_epoch: NotRequired[int]
+    """If available, the perturbation epoch of the parent trial at forking time."""

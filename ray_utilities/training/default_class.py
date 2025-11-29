@@ -189,6 +189,9 @@ class TrainableStateDict(TypedDict):
     git_sha: NotRequired[str]
     """SHA hash of the current git commit for reproducibility."""
 
+    buffer_steps_left: NotRequired[int | None]
+    """When training buffering is used, the number of steps left to buffer."""
+
 
 class PartialTrainableStateDict(TypedDict, total=False):
     """Partial state dictionary with all fields optional.
@@ -285,6 +288,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     _log_level: str | int | None = None
 
     cls_model_config: ClassVar[Optional[dict[str, Any] | DefaultModelConfig]] = None
+
+    try:
+        # Checkpointable has metdata filename filename as "metadata.json"; but train ".metadata.json"
+        # NOTE: This conflicts if one uses Checkpoint.set_metadata
+        from ray.train._checkpoint import _METADATA_FILE_NAME as METADATA_FILE_NAME  # noqa: PLC0415
+    except ImportError:
+        pass
 
     @classmethod
     def define(
@@ -790,7 +800,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         )
         # Also check if we not overshoot total steps
         if (
-            current_step := get_current_step(self.algorithm.metrics)
+            current_step := get_current_step(self.algorithm.metrics)  # todo replace with _current_step
         ) + self.algorithm_config.train_batch_size_per_learner * max_iterations > budget["total_steps"]:
             # limit max_iterations so that we are not over the budget
             steps_left = budget["total_steps"] - current_step
@@ -799,6 +809,15 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 max_iterations = steps_left // self.algorithm_config.train_batch_size_per_learner + 1
             else:
                 max_iterations = steps_left // self.algorithm_config.train_batch_size_per_learner
+        # If we already overshooted do not train buffered for easier termination.
+        if self.config["cli_args"].get("test", False) and current_step != self._current_step:
+            _logger.warning(
+                "Expected _current_step to match get_current_step(self.algorithm.metrics) but they differ %s != %d",
+                self._current_step,
+                current_step,
+            )
+        if current_step >= budget["total_steps"]:
+            return super().train()
         # check checkpoint frequency
         checkpoint_freq = self.config["cli_args"]["checkpoint_frequency"]
         if checkpoint_freq:
@@ -808,12 +827,16 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             elif checkpoint_unit == CURRENT_STEP:
                 steps_per_iteration = self.algorithm_config.train_batch_size_per_learner
                 checkpoint_iterations = checkpoint_freq // steps_per_iteration
-                max_iterations = min(max_iterations, checkpoint_iterations)
+                steps_to_next_checkpoint = checkpoint_freq - (current_step % checkpoint_freq)
+                iterations_to_next_checkpoint = steps_to_next_checkpoint / steps_per_iteration
+                if not iterations_to_next_checkpoint.is_integer():
+                    iterations_to_next_checkpoint += 1
+                max_iterations = min(max_iterations, checkpoint_iterations, iterations_to_next_checkpoint)
             # else just train until checkpoint
         # Should be a divider of checkpoint frequency and has to be a divider of perturbation_interval if we are in PBT
         # Check for PBT
         if self.config["cli_args"].get("command_str") == "pbt":
-            # If we are in PBT mode, we need to adjust the max_iterations
+            # If we are in PBT mode, we need to adjust the max_iterations to not overshoot perturbation interval
             pbt_interval = self.config["cli_args"]["perturbation_interval"]
             pbt_unit = self.config["cli_args"]["time_attr"]
             if pbt_unit == TRAINING_ITERATION:
@@ -821,6 +844,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             elif pbt_unit == "current_step":
                 steps_per_iteration = self.algorithm_config.train_batch_size_per_learner
                 pbt_iterations = pbt_interval // steps_per_iteration
+                steps_to_next_perturbation = pbt_interval - (current_step % pbt_interval)
+                iterations_to_next_perturbation = steps_to_next_perturbation / steps_per_iteration
+                if not iterations_to_next_perturbation.is_integer():
+                    iterations_to_next_perturbation += 1
+                pbt_iterations = min(pbt_iterations, iterations_to_next_perturbation)
                 # Want the minimum BUT minimum must be a divisor
                 if max_iterations < pbt_iterations:
                     max_divisor = find_threshold_divisor(pbt_iterations, threshold=min(64, max_iterations))  # pyright: ignore[reportArgumentType]
@@ -1457,6 +1485,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             "setup": setup_state,
             "current_step": self._current_step,
             "git_sha": self._git_repo_sha,
+            "buffer_steps_left": self._buffer_steps_left,
         }
         # Current step is
         # state["trainable"]["last_result"]["current_step"]
@@ -1507,6 +1536,9 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
         self._iteration = state["iteration"]
         keys_to_process.remove("iteration")
+
+        self._buffer_steps_left = state.get("buffer_steps_left") or 0
+        keys_to_process.discard("buffer_steps_left")
         # Setup
         # NOTE: setup.config can differ from new_algo_config when algorithm_overrides is used!
         # self._setup.config = new_algo_config  # TODO: Possible unset setup._config to not confuse configs

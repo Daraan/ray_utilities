@@ -48,8 +48,7 @@ if __name__ == "__main__":
         "--log_level", "INFO",
         "--log_stats", "learners",
         # PBT arguments at the end
-        "pbt",
-        "--perturbation_interval", 1/8,
+        "pbt", "--perturbation_interval", 1/8,
         config_files=["experiments/pbt.cfg"]
     ):  # fmt: skip
         with PPOMLPWithPBTSetup(

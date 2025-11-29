@@ -277,7 +277,7 @@ def _post_patch_config_with_param_space(
                     )  # pyright: ignore[reportCallIssue]
                 )
     # Seeded environments - sequential seeds have to be set here, env_seed comes from Tuner
-    if args.get("env_seeding_strategy", DefaultArgumentParser.env_seeding_strategy) == "sequential":
+    if args.get("env_seeding_strategy", "sequential") == "sequential":
         # Warn if a seed is set but no env_seed is present
         if (env_seed is None or env_seed is _NOT_FOUND) and "cli_args" in args and args["cli_args"]["seed"] is not None:
             logger.warning(

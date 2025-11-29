@@ -17,9 +17,10 @@ from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 from ray.runtime_env import RuntimeEnv
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import (
+    AlwaysSeedEvaluationEnvsCallback,
     DirectRngSeedEnvsCallback,
-    make_seeded_env_callback,
     ResetSeedEnvsCallback,
+    make_seeded_env_callback,
 )
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.constants import (
@@ -383,13 +384,15 @@ class TestMisc(TestCase):
 
     @pytest.mark.basic
     def test_env_seed_eq(self):
-        direct_env = make_seeded_env_callback(0, seed_env_directly=True)
-        other_direct_env = make_seeded_env_callback(0, seed_env_directly=True)
-        direct_env2 = make_seeded_env_callback(None, seed_env_directly=True)
+        direct_env = make_seeded_env_callback(0, seed_env_directly=True, every_eval=False)
+        other_direct_env = make_seeded_env_callback(0, seed_env_directly=True, every_eval=False)
+        direct_env2 = make_seeded_env_callback(None, seed_env_directly=True, every_eval=False)
 
-        reset_env = make_seeded_env_callback(0, seed_env_directly=False)
-        other_reset_env = make_seeded_env_callback(0, seed_env_directly=False)
-        reset_env2 = make_seeded_env_callback(None, seed_env_directly=False)
+        reset_env = make_seeded_env_callback(0, seed_env_directly=False, every_eval=False)
+        other_reset_env = make_seeded_env_callback(0, seed_env_directly=False, every_eval=False)
+        reset_env2 = make_seeded_env_callback(None, seed_env_directly=False, every_eval=False)
+        reset_env_every = make_seeded_env_callback(0, seed_env_directly=False, every_eval=True)
+        reset_env_every2 = make_seeded_env_callback(0, seed_env_directly=False, every_eval=True)
 
         self.assertNotEqual(direct_env, reset_env)
         self.assertNotEqual(direct_env, direct_env2)
@@ -404,3 +407,6 @@ class TestMisc(TestCase):
         self.assertEqual(reset_env, other_reset_env)
         self.assertNotEqual(reset_env, DirectRngSeedEnvsCallback)
         self.assertEqual(reset_env, ResetSeedEnvsCallback)
+        self.assertEqual(reset_env_every, AlwaysSeedEvaluationEnvsCallback)
+        self.assertNotEqual(reset_env, reset_env_every)
+        self.assertEqual(reset_env_every, reset_env_every2)

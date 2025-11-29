@@ -1595,6 +1595,9 @@ class TestTopTrialSchedulerSlowTrials(DisableLoggers, TestHelpers):
         self.mock_controller.get_trials.return_value = []
         self.mock_controller.get_live_trials.return_value = []
         self.mock_controller._queued_trial_decisions = {}
+        from ray.tune.callback import CallbackList
+
+        self.mock_controller._callbacks = CallbackList([])
 
         # Create 20 trials with varying performance, need 20 for 5% hurdle
         self.trials = []

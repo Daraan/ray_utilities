@@ -4,15 +4,20 @@ Uses the Ray Job Submission API to submit jobs, track their logs, and update the
 """
 
 from __future__ import annotations
-from pprint import pformat
-import time
-from typing import AsyncIterator, cast
-from ray.job_submission import JobSubmissionClient, JobStatus
-import os
+
 import argparse
 import asyncio
-import re
 import itertools
+import os
+import re
+import shlex
+import sys
+import time
+from pathlib import Path
+from pprint import pformat
+from typing import AsyncIterator, Collection, cast
+
+from ray.job_submission import JobStatus, JobSubmissionClient
 
 try:
     from ruamel.yaml import YAML
@@ -32,11 +37,15 @@ else:
     yaml_dump = yaml.dump
 
 CLIENT: JobSubmissionClient | None = None
-JOB_END_STATES = {JobStatus.SUCCEEDED, JobStatus.STOPPED, JobStatus.FAILED}
+JOB_END_STATES = {JobStatus.SUCCEEDED, JobStatus.STOPPED, JobStatus.FAILED, "UNKNOWN (Deleted)"}
 IGNORE_KEYS = {"comment"}
 
-RANDOM_SUFFIX = str(int(time.time()))[-4:]
-"""Suffixed used for repetition of job IDs to avoid name clashes."""
+TIMESTAMP_SUFFIX = time.strftime("%Y-%m-%d_%H:%M:%S")
+"""Suffix used for repetition of job IDs to avoid name clashes."""
+
+AUTOSCALER_WARNING_PATTERN = re.compile(
+    r"\(autoscaler [^\)]*\) Warning: The following resource request cannot be scheduled right now: .*? This is likely due to all cluster resources being claimed by actors\.\s*Consider creating fewer actors or adding more nodes to this Ray cluster\.\s*"  # noqa: E501
+)
 
 
 def resolve_substitution_value(value: str | list[str], yaml_data: dict) -> list[str]:
@@ -62,7 +71,14 @@ def resolve_substitution_value(value: str | list[str], yaml_data: dict) -> list[
     return [value] if isinstance(value, str) else value
 
 
-def get_submissions(group: str, *, file="experiments/submissions.yaml") -> dict[str, dict]:
+def get_submissions(
+    group: str,
+    *,
+    file,
+    failed_only: bool = False,
+    ignore_node_ids: Collection[str] = (),
+    ignore_hostnames: Collection[str] = (),
+) -> dict[str, dict]:
     with open(file, "r") as f:
         data = yaml_load(f)
     group_data = data.get(group)
@@ -91,6 +107,44 @@ def get_submissions(group: str, *, file="experiments/submissions.yaml") -> dict[
     else:
         raise TypeError(f"entrypoint_pattern must be either a string or dict, got {type(entrypoint_pattern_config)}")
 
+    # NOTE: For hostname/node_id selector removes the string wrapping
+    parts = shlex.split(pattern)
+    env_ignore_nodes = os.environ.get("SUBMIT_IGNORE_NODES", "").split(",")
+    env_ignore_hostnames = os.environ.get("SUBMIT_IGNORE_HOSTNAMES", "").split(",")
+    ignore_nodes = set(ignore_node_ids).union({n for n in env_ignore_nodes if n})
+    ignore_hostnames = set(ignore_hostnames).union({h for h in env_ignore_hostnames if h})
+    try:
+        pbt_index = parts.index("pbt")
+    except ValueError:
+        pbt_index = -1
+    for arg, ignores in zip(["--node_id_selector", "--hostname_selector"], [ignore_nodes, ignore_hostnames]):
+        if not ignores:
+            # still need to take care of ' removal
+            continue
+        if arg not in parts:
+            parts[pbt_index:pbt_index] = [arg, "'!in(" + ",".join(ignores) + ")'"]
+        elif not (selector := parts[parts.index(arg) + 1]).startswith("!"):
+            raise ValueError("Cannot combine positive hostname selector with ignoring hostnames.", selector)
+        elif "!in(" in selector:
+            for label in ignores:
+                selector = selector.replace("in(", "in(" + label + ",")
+            parts[parts.index(arg) + 1] = selector
+        else:
+            # single hostname put with others into !in(...)
+            ignores.add(selector.lstrip("!"))
+            parts[parts.index(arg) + 1] = "'!in(" + ",".join(ignores) + ")'"
+    for arg in ("--node_id_selector", "--hostname_selector"):
+        if arg not in parts:
+            continue
+        selector_idx = parts.index(arg) + 1
+        selector = parts[selector_idx]
+        if selector[0] not in ("'", '"'):
+            selector = "'" + selector
+        if selector[-1] not in ("'", '"'):
+            selector += "'"
+        parts[selector_idx] = selector
+    pattern = " ".join(parts)
+
     # Parse optional substitution keys with defaults (format: <KEY:default_value>)
     optional_subs = {}
     for match in re.finditer(r"<([^>:]+):([^>]*)>", pattern):
@@ -118,11 +172,24 @@ def get_submissions(group: str, *, file="experiments/submissions.yaml") -> dict[
         if sub_key in pattern:
             if isinstance(sub_value, str):
                 pattern = pattern.replace(sub_key, sub_value)
+        else:
+            # Also replace keys with defaults, e.g. <NUM_ENVS:3>
+            for key_with_default in re.findall(r"<([^>:]+):[^>]*>", pattern):
+                sub_key_plain = f"<{key_with_default}>"
+                if sub_key_plain in resolved_substitutions:
+                    pattern = re.sub(
+                        rf"<{key_with_default}:[^>]*>",
+                        resolved_substitutions[sub_key_plain],
+                        pattern,
+                    )
 
     # Replace optional substitutions with their defaults if not already substituted
     for opt_key, default_val in optional_subs.items():
         if opt_key in pattern:
             pattern = pattern.replace(opt_key, default_val)
+    # Resolve all linebreaks in the pattern to be a single line
+    pattern = re.sub(r"\s*\n\s*", " ", pattern)
+    pattern = re.sub(r"\s+", " ", pattern).strip()
 
     # Find all replacement keys in the pattern (keys like <ENV_TYPE>)
     other_keys: dict[str, list[str]] = {
@@ -146,7 +213,33 @@ def get_submissions(group: str, *, file="experiments/submissions.yaml") -> dict[
         replace_values_lists.append(filtered_values)
 
     submissions = {}
-    for values in itertools.product(*replace_values_lists):
+    all_combinations = list(itertools.product(*replace_values_lists))
+
+    if failed_only:
+        run_ids_data = group_data.get("run_ids", {})
+        if not run_ids_data:
+            return {}
+
+        failed_combinations = set()
+        for combo in all_combinations:
+            run_key = "(" + ", ".join(combo).rstrip(", ") + ")"
+            has_failed = False
+            if run_key in run_ids_data:
+                for run_info in run_ids_data[run_key].values():
+                    if isinstance(run_info, dict):
+                        if run_info.get("status") == "FAILED":
+                            has_failed = True
+                        # If there is a success after a failure, do not consider it failed
+                        if has_failed and run_info.get("status") == JobStatus.SUCCEEDED.value:
+                            has_failed = False
+            else:
+                # declare missing as failed as well
+                has_failed = True
+            if has_failed:
+                failed_combinations.add(combo)
+        all_combinations = [combo for combo in all_combinations if combo in failed_combinations]
+
+    for values in all_combinations:
         entry = dict(zip(replace_keys, values))
         entrypoint = pattern
         for k, v in entry.items():
@@ -173,29 +266,81 @@ def get_submissions(group: str, *, file="experiments/submissions.yaml") -> dict[
     return submissions
 
 
-def write_back(
-    group: str, job_id: str, run_id: str | dict[str, str | dict[str, str]], *, file="experiments/submissions.yaml"
-):
-    with open(file, "r") as f:
-        data = yaml_load(f)
-    job_id = job_id.removesuffix(RANDOM_SUFFIX)
-    if "entrypoint_pattern" not in data[group]:
-        data[group][job_id].setdefault("run_ids", {})
-        if isinstance(run_id, dict):
-            data[group][job_id]["run_ids"].update(run_id)
+def deep_update(original: dict, updates: dict) -> dict:
+    """
+    Recursively update a dictionary with another dictionary.
+    Nested dictionaries are merged, not replaced.
+
+    Args:
+        original: The dictionary to update.
+        updates: The dictionary with updates.
+
+    Returns:
+        The updated dictionary.
+    """
+    for key, value in updates.items():
+        if isinstance(value, dict):
+            original[key] = deep_update(original.get(key, {}), value)
         else:
-            data[group][job_id]["run_ids"][run_id] = "RUNNING"
-    else:
-        # Add a list of lists to a run_id list with the replace_keys as keys
-        data[group].setdefault("run_ids", {})
-        replacement_parts = job_id.removeprefix(group + "_").split("_")
-        run_key = "(" + ", ".join(replacement_parts).rstrip(", ") + ")"
-        if isinstance(run_id, dict):
-            data[group]["run_ids"].setdefault(run_key, {}).update(run_id)
+            original[key] = value
+    return original
+
+
+def write_back(group: str, job_id: str, run_id: str | dict[str, str | dict[str, str]], *, file: str | Path):
+    file_path = Path(file)
+    lock_file = file_path.with_suffix(file_path.suffix + ".lock")
+
+    # Wait for lock to be released
+    timeout = 60  # seconds
+    start_time = time.time()
+    while lock_file.exists():
+        if time.time() - start_time > timeout:
+            raise TimeoutError(
+                f"Could not acquire lock on {file_path} after {timeout} seconds. Lock file {lock_file} still exists."
+            )
+        print(f"Waiting for lock file {lock_file} to be released...")
+        time.sleep(1)
+
+    try:
+        # Acquire lock
+        lock_file.touch()
+
+        with open(file_path, "r") as f:
+            data = yaml_load(f)
+        job_id = job_id.removesuffix(TIMESTAMP_SUFFIX)
+        if "entrypoint_pattern" not in data[group]:
+            data[group][job_id].setdefault("run_ids", {})
+            if isinstance(run_id, dict):
+                for experiment_id, run_info in run_id.items():
+                    if isinstance(run_info, dict):
+                        # if the current status is a custom written one do not overwrite it
+                        if (
+                            _current_status := data[group][job_id]["run_ids"]
+                            .get(experiment_id, {})
+                            .get("status", JobStatus.RUNNING)
+                        ) not in (JobStatus.RUNNING, JobStatus.PENDING, *JOB_END_STATES):
+                            # do not overwrite custom present value
+                            run_id = run_id.copy()
+                            run_id[experiment_id] = run_info = run_info.copy()  # noqa: PLW2901
+                            run_info.pop("status", None)
+                deep_update(data[group][job_id]["run_ids"], run_id)
+            else:
+                data[group][job_id]["run_ids"][run_id] = "RUNNING"
         else:
-            data[group]["run_ids"].setdefault(run_key, {})[run_id] = "RUNNING"
-    with open(file, "w") as f:
-        yaml_dump(data, f)
+            # Add a list of lists to a run_id list with the replace_keys as keys
+            data[group].setdefault("run_ids", {})
+            replacement_parts = job_id.removeprefix(group + "_").split("_")
+            run_key = "(" + ", ".join(replacement_parts).rstrip(", ") + ")"
+            if isinstance(run_id, dict):
+                data[group]["run_ids"].setdefault(run_key, {}).update(run_id)
+            else:
+                data[group]["run_ids"].setdefault(run_key, {})[run_id] = "RUNNING"
+        with open(file_path, "w") as f:
+            yaml_dump(data, f)
+    finally:
+        # Release lock
+        if lock_file.exists():
+            os.remove(lock_file)
 
 
 def wait_until_status(job_id, status_to_wait_for, timeout_seconds=5, client: JobSubmissionClient | None = None):
@@ -213,26 +358,191 @@ def wait_until_status(job_id, status_to_wait_for, timeout_seconds=5, client: Job
 
 def get_tmux_log_command(job_id: str) -> str:
     ray_command = f"ray job logs {job_id} -f"
-    tmux_command = f'tmux new-session -s "{job_id}" -n "{job_id}" -d "bash -c \'source ../env/bin/activate && {ray_command}; exec bash\'"'
+    tmux_command = (
+        f'tmux new-session -s "{job_id}" -n "{job_id}" -d '
+        f"\"bash -c 'source ../env/bin/activate && {ray_command}; exec bash'\""
+    )
     return tmux_command
 
 
-if __name__ == "__main__":
-    if "RAY_UTILITIES_NO_TQDM" not in os.environ:
-        if input("Warning: tqdm is not disabled. exit or continue (c)") != "c":
-            import sys
+def submit_single_job(job_id: str, settings: dict, args: argparse.Namespace) -> str | None:
+    if args.test:
+        settings = settings.copy()
+        settings.pop("run_ids")
+        print(f"\n-----------------------\nTest mode: would submit job {job_id} with settings:\n{pformat(settings)}")
+        return None
 
-            sys.exit(0)
+    print(f"Submitting job: {job_id}")
+    assert CLIENT
+    try:
+        submission_id_out = CLIENT.submit_job(
+            entrypoint=settings["entrypoint"],
+            submission_id=settings.get("submission_id", args.group + "_" + job_id + "_" + TIMESTAMP_SUFFIX),
+            runtime_env=settings.get("runtime_env", {"working_dir": "."}),
+            entrypoint_num_cpus=settings.get("entrypoint_num_cpus", 0.33),
+            entrypoint_num_gpus=settings.get("entrypoint_num_gpus", 0),
+            # While most of the time the jobs do not need that much memory there is a spike at the end
+            # possibly related to Wandb & Comet logging finalization.
+            entrypoint_memory=int(settings.get("entrypoint_memory", 4.5 * 1000 * 1000 * 1000)),
+            entrypoint_resources=settings.get("entrypoint_resources", {"persistent_node": 1}),
+            metadata=settings.get("metadata", None),
+        )
+        print(f"Submitted job {job_id} with job ID: {submission_id_out}")
+        return submission_id_out  # noqa: TRY300
+    except Exception as e:  # noqa: BLE001
+        print(f"Failed to submit job {job_id}: {e}, settings: {settings}")
+        return None
+
+
+async def monitor_job_statuses(
+    jobs_tracked: dict[str, tuple[str, str]],
+    task_run_ids: dict[str, str],
+    args: argparse.Namespace,
+    pending_submissions: list[tuple[str, dict]] | None = None,
+):
+    """Monitors the statuses of jobs and writes back the final status."""
+    assert CLIENT
+    print("Performing only monitoring of job statuses...")
+    loop = asyncio.get_running_loop()
+    user_input = AsyncInput(loop)
+    try:
+        jobs_tracked_left = jobs_tracked.copy()
+        final_states: dict[str, JobStatus] = {}
+        while jobs_tracked_left or (pending_submissions and len(pending_submissions) > 0):
+            print("-" * 80)
+            jobs_to_delete = []
+            for job_id, group_and_job_id in jobs_tracked_left.items():
+                try:
+                    job_status = CLIENT.get_job_status(job_id)
+                except RuntimeError as e:
+                    # If we delete a job it does not show up anymore
+                    if "does not exist" not in str(e):
+                        raise
+                    job_status = final_states.get(job_id, "UNKNOWN (Deleted)")
+                current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+                print(f"[{current_time}] Job {job_id} status: {job_status}.")
+                if job_status in JOB_END_STATES:
+                    job_status = cast("JobStatus", job_status)
+                    final_states[job_id] = job_status
+                    if run_id := task_run_ids.get(job_id):
+                        group, original_job_id = group_and_job_id
+                        write_back(
+                            group,
+                            original_job_id,
+                            {run_id: {"status": job_status.name, "submission_id": job_id}},
+                            file=args.submissions_file,
+                        )
+                    jobs_to_delete.append(job_id)
+            for job_id in jobs_to_delete:
+                jobs_tracked_left.pop(job_id, None)
+
+            if not jobs_tracked_left and pending_submissions:
+                submission_id_out = None
+                while pending_submissions and submission_id_out is None:
+                    next_job_id, next_settings = pending_submissions.pop(0)
+                    print("No running jobs left. Automatically submitting next pending job:", next_job_id)
+                    submission_id_out = submit_single_job(next_job_id, next_settings, args)
+                    if submission_id_out:
+                        jobs_tracked_left[submission_id_out] = (args.group, next_job_id)
+
+            if not jobs_tracked_left and not pending_submissions:
+                break
+
+            interval = 180
+            if pending_submissions:
+                print(
+                    f"Pending submissions: {len(pending_submissions)} / Running {len(jobs_tracked_left)}. "
+                    "Submit next job? (y/n): ",
+                    end="",
+                    flush=True,
+                )
+                input_future = user_input.start()
+                try:
+                    done, _ = await asyncio.wait([input_future], timeout=interval, return_when=asyncio.FIRST_COMPLETED)
+                    if input_future in done:
+                        result = input_future.result()
+                        if result and result.strip().lower() == "y":
+                            print("Submitting next job manually...")
+                            next_job_id, next_settings = pending_submissions.pop(0)
+                            submission_id_out = submit_single_job(next_job_id, next_settings, args)
+                            if submission_id_out:
+                                jobs_tracked_left[submission_id_out] = (args.group, next_job_id)
+                        print("\r\033[K", end="", flush=True)
+                    else:
+                        input_future.cancel()
+                        print()
+                finally:
+                    user_input.stop()
+            else:
+                await asyncio.sleep(interval)
+    except KeyboardInterrupt:
+        print("\n\n\n\n########################## Second Keyboard Interrupt Detected #########################\n\n\n\n")
+        print("Exiting monitoring.")
+        sys.exit(1)
+
+
+class AsyncInput:
+    def __init__(self, loop: asyncio.AbstractEventLoop):
+        self.loop = loop
+        self.queue = asyncio.Queue()
+        self.fd = sys.stdin.fileno()
+        self.future = None
+
+    def _on_input(self):
+        try:
+            line = sys.stdin.readline()
+            if line:
+                if self.future and not self.future.done():
+                    self.future.set_result(line)
+        except Exception as e:  # noqa: BLE001
+            if self.future and not self.future.done():
+                self.future.set_exception(e)
+
+    def start(self):
+        self.future = self.loop.create_future()
+        self.loop.add_reader(self.fd, self._on_input)
+        return self.future
+
+    def stop(self):
+        self.loop.remove_reader(self.fd)
+        if self.future and not self.future.done():
+            self.future.cancel()
+
+
+if __name__ == "__main__":
     os.environ["RAY_UTILITIES_NO_TQDM"] = "1"
     parser = argparse.ArgumentParser()
+    parser.add_argument("group", nargs="?", help="The group key in the yaml file to run, or 'monitor'.", type=str)
+    parser.add_argument("submissions_file", help="The submissions yaml file.")
+    parser.add_argument("monitor_group", nargs="*")
     parser.add_argument(
         "--address",
         type=str,
         help="The address of the Ray cluster.",
         default="http://" + os.environ.get("DASHBOARD_ADDRESS", "localhost:8265"),
     )
-    parser.add_argument("group", help="The group key in the yaml file to run.", type=str)
     parser.add_argument("--test", action="store_true", help="If set, runs in test mode without submitting jobs.")
+    parser.add_argument(
+        "--failed-only", action="store_true", help="If set, only submits jobs that have previously failed."
+    )
+    parser.add_argument(
+        "--ignore_hostnames",
+        nargs="*",
+        default=[],
+        help="Hostnames to ignore when submitting jobs.",
+    )
+    parser.add_argument(
+        "--ignore_nodes",
+        nargs="*",
+        default=[],
+        help="Node IDs to ignore when submitting jobs.",
+    )
+    parser.add_argument(
+        "--max-jobs",
+        type=int,
+        default=5,
+        help="Maximum number of concurrent jobs to run.",
+    )
 
     args = parser.parse_args()
     assert args.address, (
@@ -250,32 +560,61 @@ if __name__ == "__main__":
         CLIENT = None
 
     jobs_tracked: dict[str, AsyncIterator[str]] = {}
-    finished_jobs: dict[str, JobStatus] = {}
+    # For monitor mode, this will be dict[submission_id, tuple[group, original_job_id]]
+    # For submission mode, this will be dict[submission_id, tuple[group, original_job_id]]
+    monitor_jobs_tracked: dict[str, tuple[str, str]] = {}
+    task_run_ids = {}
+    pending_submissions: list[tuple[str, dict]] = []
 
-    submissions = get_submissions(args.group).items()
-    for job_id, settings in submissions:
-        print(f"Submitting job: {job_id}")
-        if args.test:
-            print(f"Test mode: would submit job {job_id} with settings:\n{pformat(settings)}")
-            continue
-        assert CLIENT
-        try:
-            job_id_out = CLIENT.submit_job(
-                entrypoint=settings["entrypoint"],
-                submission_id=settings.get("submission_id", args.group + "_" + job_id + "_" + RANDOM_SUFFIX),
-                runtime_env=settings.get("runtime_env", {"working_dir": "."}),
-                entrypoint_num_cpus=settings.get("entrypoint_num_cpus", 0.66),
-                entrypoint_num_gpus=settings.get("entrypoint_num_gpus", 0),
-                entrypoint_memory=int(settings.get("entrypoint_memory", 3 * 1000 * 1000 * 1000)),
-                entrypoint_resources=settings.get("entrypoint_resources", {"persistent_node": 1}),
-                metadata=settings.get("metadata", None),
-            )
-        except Exception as e:
-            print(f"Failed to submit job {job_id}: {e}, settings: {settings}")
-            raise
-        jobs_tracked[job_id_out] = CLIENT.tail_job_logs(job_id_out)
-        print(f"Submitted job {job_id} with job ID: {job_id_out}")
-        time.sleep(3)
+    if args.group == "monitor":
+        monitor_groups = set(args.monitor_group)
+        print("Monitor mode: Scanning for running jobs...")
+        with open(args.submissions_file, "r") as f:
+            data = yaml_load(f)
+        for group_name, group_data in data.items():
+            if monitor_groups and group_name not in monitor_groups:
+                continue
+            if not isinstance(group_data, dict) or "run_ids" not in group_data:
+                continue
+            run_ids_data = group_data.get("run_ids", {})
+            for run_key, runs in run_ids_data.items():
+                for run_id, run_info in runs.items():
+                    if isinstance(run_info, dict) and run_info.get("status") == "RUNNING":
+                        submission_id = run_info.get("submission_id")
+                        if not submission_id:
+                            continue
+                        print(f"Found running job: group={group_name}, run_id={run_id}, submission_id={submission_id}")
+                        # Reconstruct original job_id for write_back
+                        # run_key is like '(<val1>, <val2>)'
+                        replacement_parts = [p.strip() for p in run_key.strip("()").split(",") if p.strip()]
+                        original_job_id = "_".join(replacement_parts)
+                        monitor_jobs_tracked[submission_id] = (group_name, original_job_id)
+                        task_run_ids[submission_id] = run_id
+        if not monitor_jobs_tracked:
+            print("No running jobs found to monitor.")
+            sys.exit(0)
+
+    else:
+        assert args.group, "A group must be specified if not in monitor mode."
+        submissions_dict = get_submissions(
+            args.group,
+            file=args.submissions_file,
+            failed_only=args.failed_only,
+            ignore_node_ids=args.ignore_nodes,
+            ignore_hostnames=args.ignore_hostnames,
+        )
+        submissions = list(submissions_dict.items())
+
+        if args.max_jobs is not None and args.max_jobs > 0:
+            pending_submissions = submissions[args.max_jobs :]
+            submissions = submissions[: args.max_jobs]
+
+        for job_id, settings in submissions:
+            submission_id_out = submit_single_job(job_id, settings, args)
+            if submission_id_out:
+                jobs_tracked[submission_id_out] = CLIENT.tail_job_logs(submission_id_out)  # pyright: ignore[reportOptionalMemberAccess]
+                monitor_jobs_tracked[submission_id_out] = (args.group, job_id)
+                time.sleep(10)
 
     if args.test:
         import sys
@@ -283,48 +622,142 @@ if __name__ == "__main__":
         sys.exit(0)
     assert CLIENT
 
-    task_run_ids = {}
+    if not jobs_tracked and not monitor_jobs_tracked:
+        print("No jobs to track or monitor.")
+        sys.exit(0)
 
-    async def gather_and_print_job_outputs(jobs_tracked: dict[str, AsyncIterator[str]], interval: float = 5.0):
+    if args.group == "monitor":
+        asyncio.run(monitor_job_statuses(monitor_jobs_tracked, task_run_ids, args))
+        sys.exit(0)
+
+    async def gather_and_print_job_outputs(
+        jobs_tracked: dict[str, AsyncIterator[str]],
+        interval: float = 5.0,
+        pending_submissions: list[tuple[str, dict]] | None = None,
+    ):
         assert CLIENT
 
         async def get_next(aiterator):
             return await aiterator.__anext__()
 
+        def submit_next():
+            assert CLIENT
+            while pending_submissions:
+                next_job_id, next_settings = pending_submissions.pop(0)
+                submission_id_out = submit_single_job(next_job_id, next_settings, args)
+                if submission_id_out:
+                    jobs_tracked[submission_id_out] = CLIENT.tail_job_logs(submission_id_out)
+                    monitor_jobs_tracked[submission_id_out] = (args.group, next_job_id)
+                    async_read_tasks[submission_id_out] = asyncio.create_task(get_next(jobs_tracked[submission_id_out]))
+                    last_outputs[submission_id_out] = []
+                    return True
+            return False
+
         last_outputs = {job_id: [] for job_id in jobs_tracked}
-        tasks = {job_id: asyncio.create_task(get_next(aiterator)) for job_id, aiterator in jobs_tracked.items()}
+        async_read_tasks = {
+            job_id: asyncio.create_task(get_next(aiterator)) for job_id, aiterator in jobs_tracked.items()
+        }
+
+        loop = asyncio.get_running_loop()
+        user_input = AsyncInput(loop)
 
         last_tmux_print = time.time()
-        while tasks:
+        while async_read_tasks:
             start = time.time()
-            collected: dict[str, list[str]] = {job_id: [] for job_id in tasks}
-            while time.time() - start < interval and tasks:
-                done, _ = await asyncio.wait(
-                    tasks.values(), timeout=interval - (time.time() - start), return_when=asyncio.FIRST_COMPLETED
+            collected: dict[str, list[str]] = {job_id: [] for job_id in async_read_tasks}
+
+            # Start input wait
+            if pending_submissions:
+                print(
+                    f"Pending submissions: {len(pending_submissions)} / Running {len(async_read_tasks)}. "
+                    "Submit next job? (y/n): ",
+                    end="",
+                    flush=True,
                 )
-                for task in done:
-                    for job_id, t in list(tasks.items()):
-                        if t == task:
+                input_future = user_input.start()
+            else:
+                input_future = asyncio.Future()
+                input_future.set_result("n")
+
+            while time.time() - start < interval and async_read_tasks:
+                wait_tasks = (
+                    [*async_read_tasks.values(), input_future] if pending_submissions else [*async_read_tasks.values()]
+                )
+                done, _ = await asyncio.wait(
+                    wait_tasks, timeout=interval - (time.time() - start), return_when=asyncio.FIRST_COMPLETED
+                )
+
+                if input_future in done:
+                    try:
+                        result = input_future.result()
+                        if result and result.strip().lower() == "y":
+                            print("Submitting next job manually...")
+                            if not submit_next():
+                                print("No more pending jobs.")
+                        # Restart input wait
+                        print(
+                            f"Pending submissions: {len(pending_submissions or [])} / Running {len(async_read_tasks)}. "
+                            "Submit next job? (y/n): ",
+                            end="",
+                            flush=True,
+                        )
+                        input_future = user_input.start()
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                for done_task in done:
+                    if done_task == input_future:
+                        continue
+
+                    # Get job_id of the done task
+                    for job_id, t in list(async_read_tasks.items()):
+                        if t == done_task:
                             try:
-                                output = task.result()
+                                output = done_task.result()
                                 collected[job_id].append(output)
                                 # save last 1000 lines
                                 last_outputs[job_id] = [*last_outputs[job_id][-1000:], output]
-                                tasks[job_id] = asyncio.create_task(get_next(jobs_tracked[job_id]))
+                                async_read_tasks[job_id] = asyncio.create_task(get_next(jobs_tracked[job_id]))
                             except StopAsyncIteration:
-                                del tasks[job_id]
-                            break
-                        job_status = CLIENT.get_job_status(job_id)
-                        if job_status in JOB_END_STATES:
-                            if run_id := task_run_ids.get(job_id):
-                                write_back(
-                                    args.group, job_id, {run_id: {"status": job_status.name, "submission_id": job_id}}
-                                )
-                            del tasks[job_id]
+                                async_read_tasks.pop(job_id, None)
+
+                            try:
+                                job_status = CLIENT.get_job_status(job_id)
+                            except Exception as e:  # noqa: BLE001
+                                print(f"Failed to get status for job {job_id}: {e}")
+                                break
+
+                            if job_status in JOB_END_STATES:
+                                if run_id := task_run_ids.get(job_id):
+                                    try:
+                                        group, original_job_id = monitor_jobs_tracked[job_id]
+                                        write_back(
+                                            group,
+                                            original_job_id,
+                                            {run_id: {"status": job_status.name, "submission_id": job_id}},
+                                            file=args.submissions_file,
+                                        )
+                                    except TimeoutError:
+                                        pass
+                                async_read_tasks.pop(job_id, None)
+
+                                submit_next()
                             break
             # Print outputs for all jobs after interval
             for job_id, lines in collected.items():
                 if lines:
+                    filtered_lines = []
+                    for line in lines:
+                        if AUTOSCALER_WARNING_PATTERN.search(line):
+                            line = AUTOSCALER_WARNING_PATTERN.sub("", line)  # noqa: PLW2901
+                            if not line.strip():
+                                continue
+                        filtered_lines.append(line)
+                    lines = filtered_lines  # noqa: PLW2901
+
+                    if not lines:
+                        continue
+
                     if job_id not in task_run_ids:
                         # Check line for Run ID: <run_id>
                         for line in lines:
@@ -334,9 +767,16 @@ if __name__ == "__main__":
                                 if run_id_match:
                                     run_id = run_id_match.group(1)
                                     task_run_ids[job_id] = run_id
-                                    write_back(
-                                        args.group, job_id, {run_id: {"status": "RUNNING", "submission_id": job_id}}
-                                    )
+                                    group, original_job_id = monitor_jobs_tracked[job_id]
+                                    try:
+                                        write_back(
+                                            group,
+                                            original_job_id,
+                                            {run_id: {"status": "RUNNING", "submission_id": job_id}},
+                                            file=args.submissions_file,
+                                        )
+                                    except TimeoutError:
+                                        continue
                                     break
                     print(f"\n\n ============= Out: {job_id} =============\n\n")
                     print("".join(lines))
@@ -345,6 +785,10 @@ if __name__ == "__main__":
                 tmux_commands = [get_tmux_log_command(job_id) for job_id in jobs_tracked]
                 print("\n".join(tmux_commands))
                 last_tmux_print = time.time()
+
+            user_input.stop()
+            # Clear the prompt line
+            print("\r\033[K", end="", flush=True)
 
         # Final output after all jobs are done
         for job_id, lines in last_outputs.items():
@@ -359,13 +803,14 @@ if __name__ == "__main__":
 
     try:
         # Run the async loop to gather and print outputs
-        asyncio.run(gather_and_print_job_outputs(jobs_tracked))
+        asyncio.run(gather_and_print_job_outputs(jobs_tracked, pending_submissions=pending_submissions))
     except KeyboardInterrupt:
         print("\n\n\n\n########################## Keyboard Interrupt Detected #########################\n\n\n\n")
         choice = input(
             "Stop all runs or exit log streaming only? "
             "Ctrl+C to exit streaming, "
-            "Press any key to monitor statuses only. "
+            "Press any key to monitor statuses and submit next job when ready. "
+            "'clear' to monitor but to not submit new jobs. "
             "'end' to stop all runs. "
             "'x2' to send two interrupts: "
         )
@@ -383,37 +828,8 @@ if __name__ == "__main__":
                 print(f"Stopping job: {job_id}")
                 CLIENT.stop_job(job_id)
             sys.exit(1)
-        print("Performing only monitoring of job statuses...")
-        try:
-            jobs_tracked_left = jobs_tracked.copy()
-            final_states: dict[str, JobStatus] = {}
-            while jobs_tracked_left:
-                print("-" * 80)
-                jobs_to_delete = []
-                for job_id in jobs_tracked.keys():
-                    try:
-                        job_status = CLIENT.get_job_status(job_id)
-                    except RuntimeError as e:
-                        # If we delete a job it does not show up anymore
-                        if "does not exist" not in str(e):
-                            raise
-                        job_status = final_states.get(job_id, "UNKNOWN (Deleted)")
-                    current_time = time.strftime("%Y-%m-%d %H:%M:%S")
-                    print(f"[{current_time}] Job {job_id} status: {job_status}.")
-                    if job_status in JOB_END_STATES:
-                        job_status = cast("JobStatus", job_status)
-                        final_states[job_id] = job_status
-                        if run_id := task_run_ids.get(job_id):
-                            write_back(
-                                args.group, job_id, {run_id: {"status": job_status.name, "submission_id": job_id}}
-                            )
-                        jobs_to_delete.append(job_id)
-                for job_id in jobs_to_delete:
-                    jobs_tracked_left.pop(job_id, None)
-                time.sleep(180)
-        except KeyboardInterrupt:
-            print(
-                "\n\n\n\n########################## Second Keyboard Interrupt Detected #########################\n\n\n\n"
-            )
-            print("Exiting monitoring.")
-            sys.exit(1)
+        if choice == "clear":
+            pending_submissions = []
+        asyncio.run(
+            monitor_job_statuses(monitor_jobs_tracked, task_run_ids, args, pending_submissions=pending_submissions)
+        )

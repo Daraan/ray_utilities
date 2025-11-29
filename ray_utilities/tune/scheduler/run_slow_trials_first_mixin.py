@@ -63,7 +63,8 @@ class RunSlowTrialsFirstMixin(PopulationBasedTraining):
                 # wait until more trials were added
                 logger.info("All trials are paused after unpickling. Waiting to assure all trials are added...")
                 if self.__last_candidate__scheduled is not None:
-                    self.__last_candidate__scheduled -= 1  # we execute this function up to 10/s
+                    # speed up the wait time a bit, only small step as execute this function up to 10/s
+                    self.__last_candidate__scheduled -= 1
             if self.__last_candidate__scheduled is not None and time.time() - self.__last_candidate__scheduled > 90:
                 trials = tune_controller.get_trials()
                 trial_states = [trial.status for trial in trials]
@@ -78,25 +79,27 @@ class RunSlowTrialsFirstMixin(PopulationBasedTraining):
                     )
                 # we still update this because else this would be very frequent
                 self.__last_candidate__scheduled = time.time() + 60
-                if all(t.status == Trial.PAUSED for t in trials):
+                if all(t.status == Trial.PAUSED for t in trials if t.status not in (Trial.ERROR, Trial.TERMINATED)):
                     # self._next_perturbation_sync is likely the initial value, need to increase it
-                    max_last_time = max(self._trial_state[trial].last_train_time for trial in trials)
-                    self._next_perturbation_sync = (
-                        math.floor(max_last_time / self._perturbation_interval) + 1
-                    ) * self._perturbation_interval
-                    logger.info(
-                        "All trials are paused. Increasing _next_perturbation_sync to %d to unpause trials.",
-                        self._next_perturbation_sync,
-                    )
-                elif sum(t.status in (Trial.ERROR, Trial.TERMINATED) for t in trials) == len(trials) - 1:
-                    # if there is one last paused trial return int, something must have gotten mixed up somewhere
-                    # NOTE: Might create an issue if another new trial should be added - but as we already waited 90s
-                    # this might be unlikely.
-                    logger.warning(
-                        "Only one trial is not terminated - but was not selected as a candidate. "
-                        "Scheduling the paused trial to continue progress."
-                    )
-                    return next((t for t in trials if t.status in (Trial.PAUSED, Trial.PENDING)), None) or None
+                    if all(
+                        self._trial_state[trial].last_train_time >= self._next_perturbation_sync
+                        for trial in trials
+                        if trial.status == Trial.PAUSED
+                    ):
+                        max_last_time = max(self._trial_state[trial].last_train_time for trial in trials)
+                        self._next_perturbation_sync = (
+                            math.floor(max_last_time / self._perturbation_interval) + 1
+                        ) * self._perturbation_interval
+                        logger.info(
+                            "All trials are paused. Increasing _next_perturbation_sync to %d to unpause trials.",
+                            self._next_perturbation_sync,
+                        )
+                    else:
+                        # this should not happen as we then had candidates and all([]) is also true
+                        logger.error(
+                            "All trials are paused but some still have last_train_time < _next_perturbation_sync"
+                            " - this should not happen."
+                        )
             return None
         candidates.sort(
             key=lambda trial: (

@@ -388,6 +388,21 @@ if ! ping -c 1 -W 5 "${HEAD_IP}" &>/dev/null; then
     echo "This may be normal if ICMP is blocked, continuing anyway..."
 fi
 
+# Calculate RAY_memory_usage_threshold for SLURM
+# RAY_memory_usage_threshold is the fraction of memory usage before Ray kills actors
+# As we use SLURM the actual memory limit is not the total free memory but the SLURM limit
+# need to scale down the fraction accordingly.
+# Calculate the fraction based on SLURM memory / system memory
+SYSTEM_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+SLURM_MEM_KB=$((SLURM_MEM_PER_NODE * 1024 ))
+MEMORY_FRACTION=$(awk "BEGIN {printf \"%.4f\", ${SLURM_MEM_KB} / ${SYSTEM_MEM_KB}}")
+RAY_memory_usage_threshold=$(awk "BEGIN {printf \"%.4f\", 0.95 * ${MEMORY_FRACTION}}")
+export RAY_memory_usage_threshold
+echo "Calculated RAY_memory_usage_threshold: ${RAY_memory_usage_threshold} (SLURM memory: $(awk "BEGIN {printf \"%.1f\", ${SLURM_MEM_KB} / 1024 / 1024}")GB, System memory: $(awk "BEGIN {printf \"%.1f\", ${SYSTEM_MEM_KB} / 1024 / 1024}")GB)"
+# example 700GB total
+# SLURM_MEM_PER_NODE=100GB -> 0.142857
+# SLURM_MEM_PER_NODE=50GB  -> 0.0714
+
 # Connect this node to the Ray cluster as a worker
 echo "Connecting as Ray worker..."
 if [ "${RUN_PYTHON_SCRIPT}" = "false" ]; then
@@ -461,8 +476,8 @@ else
     # No upload on slurm we can do that later.
     # Replace "offline+upload" and "offline+upload@end" with "offline" in PYTHON_ARGS
     for i in "${!PYTHON_ARGS[@]}"; do
-        PYTHON_ARGS[$i]="${PYTHON_ARGS[$i]//offline+upload@end/offline}"
-        PYTHON_ARGS[$i]="${PYTHON_ARGS[$i]//offline+upload/offline}"
+        PYTHON_ARGS[i]="${PYTHON_ARGS[$i]//offline+upload@end/offline}"
+        PYTHON_ARGS[i]="${PYTHON_ARGS[$i]//offline+upload/offline}"
     done
 
     # ============================================================================
@@ -523,4 +538,4 @@ fi
 echo "Backup dump:    ${BACKUP_DUMP_DIR:-none}"
 echo "========================================================================"
 
-exit ${EXIT_CODE:-0}
+exit "${EXIT_CODE:-0}"

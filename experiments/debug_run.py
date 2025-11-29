@@ -47,6 +47,7 @@ if __name__ == "__main__":
         "--wandb", "0",
         "--comet", "0",
         "--comment", "Debug - delete me",
+        "--log_level", "DEBUG",
         "--offline_loggers", "0",
     ):  # fmt: skip
         if "pbt" in sys.argv:

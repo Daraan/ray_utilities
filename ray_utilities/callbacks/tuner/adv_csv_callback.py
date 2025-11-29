@@ -13,7 +13,7 @@ from ray.air.constants import EXPR_PROGRESS_FILE
 from ray.tune.logger import CSVLoggerCallback
 
 from ray_utilities.callbacks.tuner._file_logger_fork_mixin import FileLoggerForkMixin
-from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback
+from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback, round_floats
 from ray_utilities.constants import DEFAULT_EVAL_METRIC
 from ray_utilities.misc import resolve_default_eval_metric
 from ray_utilities.postprocessing import remove_videos
@@ -21,9 +21,9 @@ from ray_utilities.postprocessing import remove_videos
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from ray_utilities.typing import ForkFromData
     from ray.tune.experiment.trial import Trial
 
+    from ray_utilities.typing import ForkFromData
     from ray_utilities.typing.metrics import AnyLogMetricsDict
 
 
@@ -121,7 +121,7 @@ class AdvCSVLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, CSVLogge
         if trial not in self._trial_csv:
             # Keys are permanently set; remove videos from the first iteration.
             # Therefore also need eval metric in first iteration
-            result = remove_videos(result)
+            remove_videos(round_floats(result), is_copy=True)
 
         super().log_trial_result(
             iteration,
