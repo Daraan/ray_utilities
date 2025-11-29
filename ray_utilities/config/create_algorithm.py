@@ -403,7 +403,7 @@ def create_algorithm_config(
                     "as expected as the keys are NOT update for the RLModule",
                     default_dqn_config.model_config.keys() & model_config.keys(),
                 )
-            model_config = {**config.model_config, **model_config}
+            # model_config = {**config.model_config, **model_config}
         # Needed for DefaultDQNRLModule
         # NOTE: When we set them on model_config then changes on the config are NOT longer respected
         # as config.model_config -> config._from_settings | user_provided_model_config
@@ -420,7 +420,7 @@ def create_algorithm_config(
         module_class=module_class,
         observation_space=init_env.observation_space,
         action_space=init_env.action_space,
-        model_config=cast("dict[str, Any]", model_config),
+        # NOTE: Do not set the model_config; it will be taken from config.model_config
         catalog_class=catalog_class,
     )
     init_env.close()
@@ -430,6 +430,10 @@ def create_algorithm_config(
     )
     if model_config is not None:
         config.rl_module(model_config=model_config)
+    if algorithm_type == "dqn":
+        assert not config._rl_module_spec or config._rl_module_spec.model_config is None, (
+            "When using DQNConfig do not set model_config in RLModuleSpec, as it will be taken from config.model_config"
+        )
     # https://docs.ray.io/en/latest/rllib/package_ref/doc/ray.rllib.algorithms.algorithm_config.AlgorithmConfig.evaluation.html
     # Stateless callbacks
     if not args["no_exact_sampling"]:

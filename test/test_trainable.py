@@ -719,6 +719,15 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 with tempfile.TemporaryDirectory() as tmpdir1:
                     trainable.save_to_path(tmpdir1)
                     trainable_from_path = self.TrainableClass()
+                    module = trainable_from_path.algorithm.get_module()
+                    assert module
+                    # FIXME: model_config is partially based on cls_model_config!
+                    self.assertEqual(
+                        module.model_config["fcnet_hiddens"],  # pyright: ignore
+                        [self._model_config["fcnet_hiddens"][0]]  # pyright: ignore
+                        if isinstance(self._model_config["fcnet_hiddens"], int)  # pyright: ignore
+                        else self._model_config["fcnet_hiddens"],  # pyright: ignore
+                    )
                     trainable_from_path.restore_from_path(tmpdir1)
                 self.on_checkpoint_loaded_callbacks(trainable_from_path)
                 self.compare_trainables(

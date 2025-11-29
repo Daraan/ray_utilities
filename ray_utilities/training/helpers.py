@@ -24,7 +24,7 @@ from ray.rllib.utils.metrics import (
 from typing_extensions import Sentinel, TypeAliasType
 
 from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallback
-from ray_utilities.config import seed_environments_for_config, DefaultArgumentParser
+from ray_utilities.config import DefaultArgumentParser, seed_environments_for_config
 from ray_utilities.constants import ENVIRONMENT_RESULTS, RAY_METRICS_V2, RAY_VERSION, SEED, SEEDS
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, calculate_steps
 from ray_utilities.learners import mix_learners
@@ -106,8 +106,8 @@ def patch_model_config(config: AlgorithmConfig, model_config: dict[str, Any] | D
     else:
         config._model_config = model_config
     if config._rl_module_spec:
-        if config._rl_module_spec.model_config is None:
-            config._rl_module_spec.model_config = config._model_config
+        if not config._rl_module_spec.model_config:
+            pass  # will get updated from config automatically - as long as it stays falsy
         elif isinstance(config._rl_module_spec.model_config, dict):
             config._rl_module_spec.model_config.update(model_config)
         else:
@@ -360,9 +360,27 @@ def get_args_and_config(
         config = setup_class.config_from_args(SimpleNamespace(**args))
     else:
         raise ValueError("Either setup or setup_class must be provided.")
-    if model_config is not None:
-        patch_model_config(config, model_config)
-    args, config = patch_config_with_param_space(args, config, hparams=hparams)
+    completed_model_config = config.model_config
+    model_config_matching_keys = completed_model_config.keys() & hparams.keys()
+    if dataclasses.is_dataclass(model_config):
+        model_config = dataclasses.asdict(model_config)
+    if model_config_matching_keys:
+        # heuristic remove config attributes - we assume config would propagate these, but keep them if they are in the model config
+        model_config_matching_keys -= config.to_dict().keys() - (model_config or {}).keys()
+    if model_config or model_config_matching_keys:
+        # NOTE: Normally should put model parameters in hparams["model_config"]
+        if model_config_matching_keys:
+            logger.info(
+                "hparams contains keys that belong to the AlgorithmConfig.model_config. "
+                "It is recommended to put these into a subdict hparams['model_config']"
+            )
+        patch_model_config(config, (model_config or {}) | {k: hparams[k] for k in model_config_matching_keys})
+
+    args, config = patch_config_with_param_space(
+        args,
+        config,
+        hparams=hparams,
+    )
 
     return args, config
 

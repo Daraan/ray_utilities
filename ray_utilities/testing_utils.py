@@ -852,6 +852,15 @@ class TestHelpers(unittest.TestCase):
         self.assertEqual(trainable._setup.args.iterations, 5)
         self.assertEqual(trainable._setup.args.total_steps, 320)
         self.assertEqual(trainable._setup.args.train_batch_size_per_learner, 64)  # not overwritten
+        # check that module has correct fcnet_hiddens
+        module = trainable.algorithm.get_module()
+        assert module.model_config
+        self.assertEqual(
+            module.model_config["fcnet_hiddens"],  # pyright: ignore
+            [self._model_config["fcnet_hiddens"][0]]  # pyright: ignore
+            if isinstance(self._model_config["fcnet_hiddens"], int)  # pyright: ignore
+            else self._model_config["fcnet_hiddens"],  # pyright: ignore
+        )
 
         if not train:
             return trainable, None
