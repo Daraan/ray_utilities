@@ -43,6 +43,10 @@ IGNORE_KEYS = {"comment"}
 TIMESTAMP_SUFFIX = time.strftime("%Y-%m-%d_%H:%M:%S")
 """Suffix used for repetition of job IDs to avoid name clashes."""
 
+AUTOSCALER_WARNING_PATTERN = re.compile(
+    r"\(autoscaler [^\)]*\) Warning: The following resource request cannot be scheduled right now: .*? This is likely due to all cluster resources being claimed by actors\.\s*Consider creating fewer actors or adding more nodes to this Ray cluster\.\s*"  # noqa: E501
+)
+
 
 def resolve_substitution_value(value: str | list[str], yaml_data: dict) -> list[str]:
     """
@@ -229,7 +233,7 @@ def get_submissions(
                         if has_failed and run_info.get("status") == JobStatus.SUCCEEDED.value:
                             has_failed = False
             else:
-                # decalre missing as failed as well
+                # declare missing as failed as well
                 has_failed = True
             if has_failed:
                 failed_combinations.add(combo)
@@ -391,15 +395,20 @@ def submit_single_job(job_id: str, settings: dict, args: argparse.Namespace) -> 
 
 
 async def monitor_job_statuses(
-    jobs_tracked: dict[str, tuple[str, str]], task_run_ids: dict[str, str], args: argparse.Namespace
+    jobs_tracked: dict[str, tuple[str, str]],
+    task_run_ids: dict[str, str],
+    args: argparse.Namespace,
+    pending_submissions: list[tuple[str, dict]] | None = None,
 ):
     """Monitors the statuses of jobs and writes back the final status."""
     assert CLIENT
     print("Performing only monitoring of job statuses...")
+    loop = asyncio.get_running_loop()
+    user_input = AsyncInput(loop)
     try:
         jobs_tracked_left = jobs_tracked.copy()
         final_states: dict[str, JobStatus] = {}
-        while jobs_tracked_left:
+        while jobs_tracked_left or (pending_submissions and len(pending_submissions) > 0):
             print("-" * 80)
             jobs_to_delete = []
             for job_id, group_and_job_id in jobs_tracked_left.items():
@@ -426,9 +435,46 @@ async def monitor_job_statuses(
                     jobs_to_delete.append(job_id)
             for job_id in jobs_to_delete:
                 jobs_tracked_left.pop(job_id, None)
-            if not jobs_tracked_left:
+
+            if not jobs_tracked_left and pending_submissions:
+                submission_id_out = None
+                while pending_submissions and submission_id_out is None:
+                    next_job_id, next_settings = pending_submissions.pop(0)
+                    print("No running jobs left. Automatically submitting next pending job:", next_job_id)
+                    submission_id_out = submit_single_job(next_job_id, next_settings, args)
+                    if submission_id_out:
+                        jobs_tracked_left[submission_id_out] = (args.group, next_job_id)
+
+            if not jobs_tracked_left and not pending_submissions:
                 break
-            time.sleep(180)
+
+            interval = 180
+            if pending_submissions:
+                print(
+                    f"Pending submissions: {len(pending_submissions)} / Running {len(jobs_tracked_left)}. "
+                    "Submit next job? (y/n): ",
+                    end="",
+                    flush=True,
+                )
+                input_future = user_input.start()
+                try:
+                    done, _ = await asyncio.wait([input_future], timeout=interval, return_when=asyncio.FIRST_COMPLETED)
+                    if input_future in done:
+                        result = input_future.result()
+                        if result and result.strip().lower() == "y":
+                            print("Submitting next job manually...")
+                            next_job_id, next_settings = pending_submissions.pop(0)
+                            submission_id_out = submit_single_job(next_job_id, next_settings, args)
+                            if submission_id_out:
+                                jobs_tracked_left[submission_id_out] = (args.group, next_job_id)
+                        print("\r\033[K", end="", flush=True)
+                    else:
+                        input_future.cancel()
+                        print()
+                finally:
+                    user_input.stop()
+            else:
+                await asyncio.sleep(interval)
     except KeyboardInterrupt:
         print("\n\n\n\n########################## Second Keyboard Interrupt Detected #########################\n\n\n\n")
         print("Exiting monitoring.")
@@ -494,7 +540,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max-jobs",
         type=int,
-        default=None,
+        default=5,
         help="Maximum number of concurrent jobs to run.",
     )
 
@@ -602,32 +648,41 @@ if __name__ == "__main__":
                 if submission_id_out:
                     jobs_tracked[submission_id_out] = CLIENT.tail_job_logs(submission_id_out)
                     monitor_jobs_tracked[submission_id_out] = (args.group, next_job_id)
-                    tasks[submission_id_out] = asyncio.create_task(get_next(jobs_tracked[submission_id_out]))
+                    async_read_tasks[submission_id_out] = asyncio.create_task(get_next(jobs_tracked[submission_id_out]))
                     last_outputs[submission_id_out] = []
                     return True
             return False
 
         last_outputs = {job_id: [] for job_id in jobs_tracked}
-        tasks = {job_id: asyncio.create_task(get_next(aiterator)) for job_id, aiterator in jobs_tracked.items()}
+        async_read_tasks = {
+            job_id: asyncio.create_task(get_next(aiterator)) for job_id, aiterator in jobs_tracked.items()
+        }
 
         loop = asyncio.get_running_loop()
         user_input = AsyncInput(loop)
 
         last_tmux_print = time.time()
-        while tasks:
+        while async_read_tasks:
             start = time.time()
-            collected: dict[str, list[str]] = {job_id: [] for job_id in tasks}
+            collected: dict[str, list[str]] = {job_id: [] for job_id in async_read_tasks}
 
             # Start input wait
-            print("Submit next job? (y/n): ", end="", flush=True)
             if pending_submissions:
+                print(
+                    f"Pending submissions: {len(pending_submissions)} / Running {len(async_read_tasks)}. "
+                    "Submit next job? (y/n): ",
+                    end="",
+                    flush=True,
+                )
                 input_future = user_input.start()
             else:
                 input_future = asyncio.Future()
                 input_future.set_result("n")
 
-            while time.time() - start < interval and tasks:
-                wait_tasks = [*tasks.values(), input_future] if pending_submissions else [*tasks.values()]
+            while time.time() - start < interval and async_read_tasks:
+                wait_tasks = (
+                    [*async_read_tasks.values(), input_future] if pending_submissions else [*async_read_tasks.values()]
+                )
                 done, _ = await asyncio.wait(
                     wait_tasks, timeout=interval - (time.time() - start), return_when=asyncio.FIRST_COMPLETED
                 )
@@ -640,51 +695,69 @@ if __name__ == "__main__":
                             if not submit_next():
                                 print("No more pending jobs.")
                         # Restart input wait
-                        print("Submit next job? (y/n): ", end="", flush=True)
+                        print(
+                            f"Pending submissions: {len(pending_submissions or [])} / Running {len(async_read_tasks)}. "
+                            "Submit next job? (y/n): ",
+                            end="",
+                            flush=True,
+                        )
                         input_future = user_input.start()
                     except Exception:  # noqa: BLE001
                         pass
 
-                for task in done:
-                    if task == input_future:
+                for done_task in done:
+                    if done_task == input_future:
                         continue
 
-                    for job_id, t in list(tasks.items()):
-                        if t == task:
+                    # Get job_id of the done task
+                    for job_id, t in list(async_read_tasks.items()):
+                        if t == done_task:
                             try:
-                                output = task.result()
+                                output = done_task.result()
                                 collected[job_id].append(output)
                                 # save last 1000 lines
                                 last_outputs[job_id] = [*last_outputs[job_id][-1000:], output]
-                                tasks[job_id] = asyncio.create_task(get_next(jobs_tracked[job_id]))
+                                async_read_tasks[job_id] = asyncio.create_task(get_next(jobs_tracked[job_id]))
                             except StopAsyncIteration:
-                                del tasks[job_id]
-                            break
-                        try:
-                            job_status = CLIENT.get_job_status(job_id)
-                        except Exception as e:  # noqa: BLE001
-                            print(f"Failed to get status for job {job_id}: {e}")
-                            continue
+                                async_read_tasks.pop(job_id, None)
 
-                        if job_status in JOB_END_STATES:
-                            if run_id := task_run_ids.get(job_id):
-                                try:
-                                    group, original_job_id = monitor_jobs_tracked[job_id]
-                                    write_back(
-                                        group,
-                                        original_job_id,
-                                        {run_id: {"status": job_status.name, "submission_id": job_id}},
-                                        file=args.submissions_file,
-                                    )
-                                except TimeoutError:
-                                    continue
-                            del tasks[job_id]
+                            try:
+                                job_status = CLIENT.get_job_status(job_id)
+                            except Exception as e:  # noqa: BLE001
+                                print(f"Failed to get status for job {job_id}: {e}")
+                                break
 
-                            submit_next()
+                            if job_status in JOB_END_STATES:
+                                if run_id := task_run_ids.get(job_id):
+                                    try:
+                                        group, original_job_id = monitor_jobs_tracked[job_id]
+                                        write_back(
+                                            group,
+                                            original_job_id,
+                                            {run_id: {"status": job_status.name, "submission_id": job_id}},
+                                            file=args.submissions_file,
+                                        )
+                                    except TimeoutError:
+                                        pass
+                                async_read_tasks.pop(job_id, None)
+
+                                submit_next()
                             break
             # Print outputs for all jobs after interval
             for job_id, lines in collected.items():
                 if lines:
+                    filtered_lines = []
+                    for line in lines:
+                        if AUTOSCALER_WARNING_PATTERN.search(line):
+                            line = AUTOSCALER_WARNING_PATTERN.sub("", line)  # noqa: PLW2901
+                            if not line.strip():
+                                continue
+                        filtered_lines.append(line)
+                    lines = filtered_lines  # noqa: PLW2901
+
+                    if not lines:
+                        continue
+
                     if job_id not in task_run_ids:
                         # Check line for Run ID: <run_id>
                         for line in lines:
@@ -736,7 +809,8 @@ if __name__ == "__main__":
         choice = input(
             "Stop all runs or exit log streaming only? "
             "Ctrl+C to exit streaming, "
-            "Press any key to monitor statuses only. "
+            "Press any key to monitor statuses and submit next job when ready. "
+            "'clear' to monitor but to not submit new jobs. "
             "'end' to stop all runs. "
             "'x2' to send two interrupts: "
         )
@@ -754,4 +828,8 @@ if __name__ == "__main__":
                 print(f"Stopping job: {job_id}")
                 CLIENT.stop_job(job_id)
             sys.exit(1)
-        asyncio.run(monitor_job_statuses(monitor_jobs_tracked, task_run_ids, args))
+        if choice == "clear":
+            pending_submissions = []
+        asyncio.run(
+            monitor_job_statuses(monitor_jobs_tracked, task_run_ids, args, pending_submissions=pending_submissions)
+        )

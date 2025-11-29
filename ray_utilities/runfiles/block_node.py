@@ -5,7 +5,7 @@ Usage:
     ray_utilities/runfiles/block_nody.py <label> <value> [--number N] [--timeout T]
 
 Arguments:
-    <label>        The node label to select nodes (e.g., 'gpu_type').
+    <label>        The node label to select nodes (e.g., 'gpu_type' or 'ray.io/node-id').
     <value>       The value of the label to select nodes (e.g., 'A100').
     --number N    Number of dummy actors to create (default: 50).
     --timeout T   Time in seconds for which each actor will run (default: 86400 seconds = 24 hours).
