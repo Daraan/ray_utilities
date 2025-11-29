@@ -13,6 +13,7 @@ from inspect import isclass
 import pytest
 from typing_extensions import TYPE_CHECKING, get_args
 
+from experiments.create_tune_parameters import default_distributions, write_distributions_to_json
 from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradientAccumulation
 from ray_utilities.callbacks.algorithm.dynamic_buffer_callback import DynamicBufferUpdate
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
@@ -270,6 +271,10 @@ class TestExtensionsAdded(SetupWithEnv, SetupLowRes, DisableLoggers):
 
 
 class TestProcessing(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        write_distributions_to_json(default_distributions, AlgorithmSetup.TUNE_PARAMETER_FILE)
+
     @patch_args("--batch_size", "64", "--minibatch_size", "128")
     def test_to_large_minibatch_size(self):
         """minibatch_size cannot be larger than train_batch_size_per_learner"""
@@ -533,6 +538,26 @@ class TestProcessing(unittest.TestCase):
             self.assertIs(args.use_exact_total_steps, False)
             self.assertIs(args.wandb, False)
             self.assertIs(args.tune, False)
+
+    @mock_trainable_algorithm
+    def test_ppo_args(self):
+        params = "clip_param", "vf_clip_param", "entropy_coeff", "vf_loss_coeff"
+        with patch_args("--tune", *params):
+            setup = AlgorithmSetup()
+            self.assertListEqual(setup.args.tune, list(params))
+            for param in params:
+                self.assertIn(param, setup.param_space, msg=f"Expected {param} to be in param_space")
+            sampled = setup.sample_params()
+            for param in params:
+                self.assertIn(param, sampled, msg=f"Expected {param} to be in sampled params")
+        trainable = setup.trainable_class(sampled)
+        for param in params:
+            self.assertEqual(
+                getattr(trainable.algorithm_config, param),
+                sampled[param],
+                msg=f"Expected {param} in trainable.algorithm_config to be equal to sampled parameter {sampled[param]}",
+            )
+        trainable.stop()
 
 
 class TestTagArgumentProcessing(unittest.TestCase):

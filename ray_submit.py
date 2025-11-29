@@ -734,7 +734,14 @@ if __name__ == "__main__":
                                         write_back(
                                             group,
                                             original_job_id,
-                                            {run_id: {"status": job_status.name, "submission_id": job_id}},
+                                            {
+                                                run_id: {
+                                                    "status": (
+                                                        job_status.name if hasattr(job_status, "name") else job_status
+                                                    ),
+                                                    "submission_id": job_id,
+                                                }
+                                            },
                                             file=args.submissions_file,
                                         )
                                     except TimeoutError:
