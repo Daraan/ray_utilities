@@ -36,11 +36,11 @@ class MLPSetup(AlgorithmSetup[ParserType_co, ConfigType_co, AlgorithmType_co]):
         }
 
 
-class PPOMLPSetup(PPOSetup[ParserType_co], MLPSetup[ParserType_co, "PPOConfig", "PPO"]):
+class PPOMLPSetup(MLPSetup[ParserType_co, "PPOConfig", "PPO"], PPOSetup[ParserType_co]):
     """Setup for MLP-based PPO algorithms."""
 
 
-class DQNMLPSetup(DQNSetup[ParserType_co], MLPSetup[ParserType_co, "DQNConfig", "DQN"]):
+class DQNMLPSetup(MLPSetup[ParserType_co, "DQNConfig", "DQN"], DQNSetup[ParserType_co]):
     """Setup for MLP-based DQN algorithms."""
 
 

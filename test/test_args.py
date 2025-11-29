@@ -274,6 +274,7 @@ class TestProcessing(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         write_distributions_to_json(default_distributions, AlgorithmSetup.TUNE_PARAMETER_FILE)
+        AlgorithmSetup.PROJECT = "TESTING"
 
     @patch_args("--batch_size", "64", "--minibatch_size", "128")
     def test_to_large_minibatch_size(self):

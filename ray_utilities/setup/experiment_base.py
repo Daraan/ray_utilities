@@ -648,9 +648,9 @@ class ExperimentSetupBase(
             known_only = self.parse_known_only
         if not self.parser:
             self.parser = self.create_parser()
+        # If Tap parser or compatible
+        self.parser = cast("ParserType_co", self.parser)
         try:
-            # If Tap parser or compatible
-            self.parser = cast("ParserType_co", self.parser)
             parsed = self.parser.parse_args(self._remove_testing_args_from_argv(args), known_only=known_only)
             extra_args = self.parser.extra_args
         except TypeError as e:
@@ -2083,6 +2083,8 @@ class ExperimentSetupBase(
             init_trainable=True,
             parse_args=False,
         )
+
+    # endregion
 
     # Currently cannot use TypeForm[type[TypedDict]] as it is not included in the typing spec.
     # @property

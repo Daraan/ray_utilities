@@ -97,13 +97,13 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
 
     def setup(self) -> None:
         """Initialize the DQN module networks and states.
-        
+
         Note:
             This is currently a placeholder implementation for testing without Ray.
             For production use with Ray RLlib, this should call super().setup() to
             build real models via the catalog, then initialize JAX states similar
             to how JaxPPOModule does it:
-            
+
                 super().setup()  # Builds encoder, af, vf via catalog
                 # Initialize JAX states from models
                 module_key = jax.random.PRNGKey(seed)
@@ -119,12 +119,12 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
         # Placeholder implementation: Dummy encoder and heads
         # These are lambda functions that don't accept parameters
         self.encoder = lambda x: x
-        
+
         # Only support Discrete action spaces for DQN
         if not isinstance(self.action_space, gym.spaces.Discrete):
             raise TypeError("JaxDQNModule only supports Discrete action spaces.")
         n_actions = self.action_space.n
-        
+
         # Set uses_dueling from model config
         config = self._temp_model_config_dict or {}
         self.uses_dueling = config.get("dueling", False)
@@ -132,7 +132,7 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
         self.v_min = config.get("v_min", -10.0)
         self.v_max = config.get("v_max", 10.0)
         num_atoms = self.num_atoms
-        
+
         if self.uses_dueling:
             self.af = (
                 lambda x: jnp.zeros((x.shape[0], n_actions, num_atoms))
@@ -147,7 +147,7 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
                 else jnp.zeros((x.shape[0], n_actions))
             )
             self.vf = None
-        
+
         # Placeholder states (empty dicts instead of real TrainState objects)
         # In production, these should be actual TrainState objects with .params
         self.states = JaxDQNStateDict(
@@ -209,13 +209,13 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
                 - "qf_logits": Logits (for distributional DQN)
                 - "qf_probs": Probabilities (for distributional DQN)
                 - "atoms": Support atoms (for distributional DQN)
-        
+
         Note:
             The parameters argument extends the parent DefaultDQNRLModule interface
             (which only has `batch`). This is a common pattern in JAX implementations
             (see JaxPPOModule.compute_values) because JAX requires explicit parameter
             passing for gradient computation.
-            
+
             The parameter is keyword-only with a default value, so it maintains
             backward compatibility with code that calls `compute_q_values(batch)`.
         """
@@ -243,7 +243,7 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
 
         Returns:
             Dictionary with target Q-value predictions
-        
+
         Note:
             This method is not part of the parent DefaultDQNRLModule interface,
             which uses `forward_target(batch)` instead. The JAX implementation
@@ -275,12 +275,12 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
 
         Returns:
             Dictionary with Q-value predictions and optionally logits/probs/atoms
-        
+
         Warning:
             This is a placeholder implementation. The `parameters` argument is
             accepted for API consistency but currently ignored because encoder and
             head are lambda functions, not real Flax models.
-            
+
             When real Flax models are integrated (via catalog in setup()), this
             method will pass parameters to model calls:
             `encoder(obs, parameters=params)` instead of `encoder(obs)`.
@@ -292,7 +292,7 @@ class JaxDQNModule(DefaultDQNRLModule, JaxModule):
         expected_shape = self.observation_space.shape
         if obs.shape[1:] != expected_shape:
             raise ValueError(f"Observation shape mismatch: got {obs.shape[1:]}, expected {expected_shape}")
-        
+
         # TODO: Once real Flax models are integrated, pass parameters:
         # encoder_out = encoder(obs, parameters=parameters["encoder"])
         # For now, lambdas don't accept parameters - parameters argument is kept for

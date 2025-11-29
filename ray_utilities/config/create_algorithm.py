@@ -326,6 +326,18 @@ def create_algorithm_config(
 
     # Get algorithm type from args
     algorithm_type = args.get("algorithm", "ppo")
+    if algorithm_type == "default":
+        if isinstance(config, PPOConfig):
+            algorithm_type = "ppo"
+        elif isinstance(config, DQNConfig):
+            algorithm_type = "dqn"
+        else:
+            ImportantLogger.important_info(
+                logger,
+                "'algorithm' is set as 'default' "
+                "but could not infer type from config %s. Assuming outer functions handles algorithm specific settings",
+                type(config),
+            )
 
     # Common training configuration for all algorithms
     config.training(
@@ -367,26 +379,34 @@ def create_algorithm_config(
         )
     elif algorithm_type == "dqn":
         assert isinstance(config, DQNConfig)
+        default_dqn_config = type(config)()
         config.training(
             # DQN Specific
             # TODO: verify if correct defaults and present.
-            target_network_update_freq=args.get("target_network_update_freq", 500),
-            num_steps_sampled_before_learning_starts=args.get("num_steps_sampled_before_learning_starts", 1000),
-            tau=args.get("tau", 1.0),
-            epsilon=args.get("epsilon", [(0, 1.0), (10000, 0.05)]),
-            double_q=args.get("double_q", True),
-            dueling=args.get("dueling", True),
-            num_atoms=args.get("num_atoms", 1),  # FIXME: hardcoded 0 - has no num_atoms parameter
+            target_network_update_freq=args.get(
+                "target_network_update_freq", default_dqn_config.target_network_update_freq
+            ),
+            num_steps_sampled_before_learning_starts=args.get(
+                "num_steps_sampled_before_learning_starts", default_dqn_config.num_steps_sampled_before_learning_starts
+            ),
+            tau=args.get("tau", default_dqn_config.tau),
+            epsilon=args.get("epsilon", default_dqn_config.epsilon),
+            double_q=args.get("double_q", default_dqn_config.double_q),
+            dueling=args.get("dueling", default_dqn_config.dueling),
+            num_atoms=args.get("num_atoms", default_dqn_config.num_atoms),
         )
-        if model_config is None:
-            model_config = {}
+        if model_config is not None:
+            if default_dqn_config.model_config.keys() & model_config.keys():
+                logger.warning(
+                    "model_config contains dqn keys %s; changing the config parameters, "
+                    "e.g. with tune or pbt, will not work "
+                    "as expected as the keys are NOT update for the RLModule",
+                    default_dqn_config.model_config.keys() & model_config.keys(),
+                )
+            model_config = {**config.model_config, **model_config}
         # Needed for DefaultDQNRLModule
-        model_config["dueling"] = args.get("dueling", True)
-        model_config["double_q"] = args.get("double_q", True)
-        model_config["num_atoms"] = args.get("num_atoms", 1)
-        model_config["v_min"] = args.get("v_min", -10)
-        model_config["v_max"] = args.get("v_max", 10)
-        model_config["epsilon"] = args.get("epsilon", [(0, 1.0), (10000, 0.05)])
+        # NOTE: When we set them on model_config then changes on the config are NOT longer respected
+        # as config.model_config -> config._from_settings | user_provided_model_config
     else:
         logger.warning("No specific training configuration for algorithm type '%s'", algorithm_type)
     if model_config is not None and "vf_share_layers" not in model_config:

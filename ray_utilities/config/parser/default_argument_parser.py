@@ -639,8 +639,11 @@ class SubcommandHandlerBase(Tap, Generic[Subparsers]):
 
 
 class _DefaultSetupArgumentParser(GoalParser, Tap):
-    algorithm: AlwaysRestore[Literal["ppo", "dqn"]] = "ppo"
-    """Algorithm to use: 'ppo' (Proximal Policy Optimization) or 'dqn' (Deep Q-Network)"""
+    algorithm: AlwaysRestore[Literal["ppo", "dqn", "default"]] = "default"
+    """
+    Algorithm to use: 'ppo' (Proximal Policy Optimization) or 'dqn' (Deep Q-Network)
+    'default' will leave it to the Setup class and if not defined chooses PPO.
+    """
 
     agent_type: AlwaysRestore[str] = "mlp"
     """Agent Architecture"""
@@ -684,7 +687,7 @@ class _DefaultSetupArgumentParser(GoalParser, Tap):
     def configure(self) -> None:
         # Short hand args
         super().configure()
-        self.add_argument("--algorithm", "-algo", choices=["ppo", "dqn"], default="ppo")
+        self.add_argument("--algorithm", "-algo")
         self.add_argument("-a", "--agent_type")
         self.add_argument("-env", "--env_type")
         self.add_argument("--seed", default=None, type=int)
@@ -853,7 +856,7 @@ class PPOArgumentParser(_BaseRLlibArgumentParser):
         # Only run PPO-specific validations if algorithm is ppo
         # Check if algorithm attribute exists (it comes from _DefaultSetupArgumentParser in the MRO)
         algorithm = getattr(self, "algorithm", None)
-        if algorithm != "ppo":
+        if algorithm not in ("ppo", "default"):
             return
 
         if self.minibatch_size > self.train_batch_size_per_learner:

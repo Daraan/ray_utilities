@@ -3,9 +3,10 @@ from __future__ import annotations
 from collections import Counter
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, NamedTuple
+from unittest import mock
 
 import torch
-from unittest import mock
+from ray.rllib.algorithms import DQNConfig
 
 from ray_utilities.callbacks.algorithm.dynamic_batch_size import DynamicGradientAccumulation
 from ray_utilities.config import DefaultArgumentParser
@@ -15,8 +16,7 @@ from ray_utilities.learners.dqn_torch_learner_with_gradient_accumulation import 
 )
 from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import PPOTorchLearnerWithGradientAccumulation
 from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
-from ray_utilities.setup.ppo_mlp_setup import DQNMLPSetup
-from ray_utilities.setup.ppo_mlp_setup import MLPSetup
+from ray_utilities.setup.ppo_mlp_setup import DQNMLPSetup, MLPSetup
 from ray_utilities.testing_utils import DisableLoggers, InitRay, TestHelpers, no_parallel_envs, patch_args
 from ray_utilities.training.helpers import is_algorithm_callback_added, make_divisible
 
@@ -533,7 +533,7 @@ class TestDQNGradientAccumulation(InitRay, TestHelpers, DisableLoggers, num_cpus
         accumulate_every = 2
         mock_rr.return_value = [1, 1]
         with patch_args(
-            "--algorithm", "dqn",
+            #"--algorithm", "dqn",
             "-a", "mlp",
             "--accumulate_gradients_every", accumulate_every,
             "--batch_size", batch_size,
@@ -551,7 +551,8 @@ class TestDQNGradientAccumulation(InitRay, TestHelpers, DisableLoggers, num_cpus
                 setup.config.env_runners(
                     rollout_fragment_length=batch_size,
                 )
-        algorithm = setup.config.build_algo()
+        self.assertIsInstance(setup.config, DQNConfig)
+        algorithm = setup.build_algo()
         learner: DQNTorchLearnerWithGradientAccumulation = (
             algorithm.learner_group._learner  # pyright: ignore[reportAssignmentType, reportOptionalMemberAccess]
         )

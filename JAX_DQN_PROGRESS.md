@@ -27,10 +27,11 @@
 3. Distributional (C51): Adds logits, probs, and atoms for value distribution
 
 **State Structure:**
+
 ```python
 JaxDQNStateDict = {
     "qf": {...},           # Current Q-function state
-    "qf_target": {...},    # Target Q-function state  
+    "qf_target": {...},    # Target Q-function state
     "module_key": ...,     # JAX PRNG key
 }
 ```
@@ -192,7 +193,7 @@ def compute_dqn_loss(
 ) -> tuple[jax.Array, dict[str, Any]]:
     """
     Compute DQN TD-error loss.
-    
+
     Returns:
         loss: Scalar loss value
         metrics: Dictionary with td_error, q_values, target_q_values, etc.

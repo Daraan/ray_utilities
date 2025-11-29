@@ -29,11 +29,11 @@ Successfully added DQN (Deep Q-Network) support alongside existing PPO implement
 - **Created `_get_algorithm_classes()` classmethod**:
   - Returns `(DQNConfig, DQN)` when `args.algorithm == "dqn"`
   - Returns `(PPOConfig, PPO)` otherwise
-  
+
 - **Updated `_config_from_args()`**:
   - Dynamically selects config class based on algorithm
   - Only applies gradient accumulation learner for PPO
-  
+
 - **Created `DQNSetup` class**:
   - Similar structure to `PPOSetup`
   - Type-safe with `DQNConfig` and `DQN` classes
@@ -126,7 +126,7 @@ setup = AlgorithmSetup()  # Uses args.algorithm to choose
 ## Key Design Decisions
 
 1. **Single parser with both parameter sets**: Rather than creating separate parsers, we include all parameters in `RLlibArgumentParser` and only use relevant ones per algorithm.
-   
+
 2. **Dynamic algorithm selection**: Config and algorithm classes are determined at runtime based on `args.algorithm`, not at import time.
 
 3. **Backward compatibility**: Default behavior (PPO) unchanged, DQN opt-in via `--algorithm dqn`.

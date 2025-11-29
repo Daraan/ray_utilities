@@ -12,7 +12,9 @@ from __future__ import annotations
 
 from ray.rllib.algorithms.dqn.torch.dqn_torch_learner import DQNTorchLearner
 
-from ray_utilities.learners.torch_learner_with_gradient_accumulation_base import TorchLearnerWithGradientAccumulationBase  # noqa: E501
+from ray_utilities.learners.torch_learner_with_gradient_accumulation_base import (
+    TorchLearnerWithGradientAccumulationBase,
+)
 
 
 class DQNTorchLearnerWithGradientAccumulation(TorchLearnerWithGradientAccumulationBase, DQNTorchLearner):

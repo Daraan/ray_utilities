@@ -71,4 +71,3 @@ def calculate_area(circle: Circle) -> float:
 - Prioritize and focus on the actual use case first, then add edge cases as needed.
 - Run the tests
 - When creating a new shell, prompt the user to activate the correct virtual environment.
-

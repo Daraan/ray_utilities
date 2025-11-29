@@ -41,6 +41,7 @@ from ray_utilities.setup.extensions import SetupWithDynamicBatchSize, SetupWithD
 from ray_utilities.training.default_class import DefaultTrainable
 
 if TYPE_CHECKING:
+    from ray.rllib.algorithms import AlgorithmConfig
     from ray.rllib.callbacks.callbacks import RLlibCallback
 
     from ray_utilities.typing import TrainableReturnData
@@ -135,10 +136,14 @@ class AlgorithmSetup(
         Returns:
             Tuple of (config_class, algo_class)
         """
-        algorithm = getattr(args, "algorithm", "ppo")
+        algorithm = getattr(args, "algorithm", "default")
+        if algorithm == "default":
+            return cls.config_class, cls.algo_class
         if algorithm == "dqn":
             return DQNConfig, DQN
-        return PPOConfig, PPO
+        if algorithm == "ppo":
+            return PPOConfig, PPO
+        return cls.config_class, cls.algo_class
 
     @classmethod
     def _config_from_args(cls, args, base: Optional[ConfigType_co] = None) -> ConfigType_co:
@@ -154,14 +159,18 @@ class AlgorithmSetup(
 
         learner_class = None
         # Use gradient accumulation learner for both PPO and DQN
-        if args.algorithm == "ppo" and (args.accumulate_gradients_every > 1 or args.dynamic_batch):
+        if (args.algorithm == "ppo" or (args.algorithm == "default" and issubclass(cls.config_class, PPOConfig))) and (
+            args.accumulate_gradients_every > 1 or args.dynamic_batch
+        ):
             # import lazy as currently not used elsewhere
             from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
                 PPOTorchLearnerWithGradientAccumulation,
             )
 
             learner_class = PPOTorchLearnerWithGradientAccumulation
-        elif args.algorithm == "dqn" and (args.accumulate_gradients_every > 1 or args.dynamic_batch):
+        elif (
+            args.algorithm == "dqn" or (args.algorithm == "default" and issubclass(cls.config_class, DQNConfig))
+        ) and (args.accumulate_gradients_every > 1 or args.dynamic_batch):
             from ray_utilities.learners.dqn_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
                 DQNTorchLearnerWithGradientAccumulation,
             )
@@ -234,8 +243,10 @@ class PPOSetup(AlgorithmSetup[ParserType_co, "PPOConfig", "PPO"]):
         self, args: list[str] | None = None, *, known_only: bool | None = None, checkpoint: str | None = None
     ):
         namespace = super().parse_args(args, known_only=known_only, checkpoint=checkpoint)
-        if "ppo" not in namespace.algorithm.lower():
-            raise ValueError(f"PPOSetup can only be used with the PPO algorithm, got {namespace.algorithm}")
+        if namespace.algorithm != "default" and "ppo" not in namespace.algorithm.lower():
+            raise ValueError(
+                f"PPOSetup can only be used with the PPO algorithm (or algorithm='default'), got {namespace.algorithm}"
+            )
         return namespace
 
     def _create_config(self, base: PPOConfig | None = None):
@@ -294,8 +305,10 @@ class DQNSetup(AlgorithmSetup[ParserType_co, "DQNConfig", "DQN"]):
         self, args: list[str] | None = None, *, known_only: bool | None = None, checkpoint: str | None = None
     ):
         namespace = super().parse_args(args, known_only=known_only, checkpoint=checkpoint)
-        if "dqn" not in namespace.algorithm.lower():
-            raise ValueError(f"DQNSetup can only be used with the DQN algorithm, got {namespace.algorithm}")
+        if namespace.algorithm != "default" and "dqn" not in namespace.algorithm.lower():
+            raise ValueError(
+                f"DQNSetup can only be used with the DQN algorithm (or algorithm='default'), got {namespace.algorithm}"
+            )
         return namespace
 
     def _create_config(self, base: DQNConfig | None = None):
