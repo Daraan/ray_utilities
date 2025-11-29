@@ -814,6 +814,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                         )
             trainable.stop()
 
+    @mock_trainable_algorithm(mock_env_runners=False)
     def test_cfg_loading(self):
         with tempfile.NamedTemporaryFile("w+") as f, patch_args("-cfg", f.name):
             f.write(
@@ -827,8 +828,22 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             f.flush()
             setup = MLPSetup(init_param_space=False)
             self.assertEqual(setup.args.fcnet_hiddens, [8, 8])
-            module = str(setup.config.rl_module_spec.build())
-            self.assertIn("in_features=8, out_features=8", module)
+
+            # Test on algo
+            algo = setup.build_algo()
+            module = algo.get_module()
+            assert module
+            assert module.model_config
+            self.assertEqual(module.model_config["fcnet_hiddens"], [8, 8])  # pyright: ignore[reportIndexIssue]
+            self.assertIn("in_features=8, out_features=8", str(module))
+
+            # Test pure module - might not propagate the config this way
+            # NOTE: just using config.rl_module_spec will not patch with config.model_config
+            # Only get_rl_module_spec does that as long as it is None!
+            spec = setup.config.get_rl_module_spec()
+            spec_module = spec.build()
+            self.assertEqual(spec_module.model_config["fcnet_hiddens"], [8, 8])  # pyright: ignore[reportIndexIssue]
+            self.assertIn("in_features=8, out_features=8", str(spec_module))
 
     @mock_trainable_algorithm(mock_learner=False, mock_env_runners=False)
     def test_lr_loading(self):

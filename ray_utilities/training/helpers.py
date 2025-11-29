@@ -106,11 +106,18 @@ def patch_model_config(config: AlgorithmConfig, model_config: dict[str, Any] | D
     else:
         config._model_config = model_config
     if config._rl_module_spec:
-        if not config._rl_module_spec.model_config:
-            pass  # will get updated from config automatically - as long as it stays falsy
-        elif isinstance(config._rl_module_spec.model_config, dict):
-            config._rl_module_spec.model_config.update(model_config)
-        else:
+        if isinstance(config._rl_module_spec.model_config, dict):
+            if len(config._rl_module_spec.model_config) == 0:
+                ImportantLogger.important_warning(
+                    logger,
+                    "Having an empty rl_module_spec.model_config is unexpected and is not updated by the config. "
+                    "Setting it to None to allow config propagation during build. ",
+                    stacklevel=2,
+                )
+                config._rl_module_spec.model_config = None
+            else:
+                config._rl_module_spec.model_config.update(model_config)
+        elif config._rl_module_spec.model_config:
             config._rl_module_spec.model_config = dataclasses.asdict(config._rl_module_spec.model_config) | model_config
 
 
@@ -374,7 +381,7 @@ def get_args_and_config(
                 "hparams contains keys that belong to the AlgorithmConfig.model_config. "
                 "It is recommended to put these into a subdict hparams['model_config']"
             )
-        patch_model_config(config, (model_config or {}) | {k: hparams[k] for k in model_config_matching_keys})
+        patch_model_config(config, dict(model_config or {}, **{k: hparams[k] for k in model_config_matching_keys}))
 
     args, config = patch_config_with_param_space(
         args,

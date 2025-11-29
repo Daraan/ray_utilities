@@ -560,6 +560,45 @@ class TestProcessing(unittest.TestCase):
             )
         trainable.stop()
 
+    def test_invalid_tune_choice(self):
+        with patch_args("--algorithm", "dqn", "--tune", "minibatch_size"):
+            with self.assertRaises(ValueError) as context:
+                DefaultArgumentParser().parse_args()
+            self.assertIn(
+                "PPO-specific tune parameters were provided, but the selected algorithm is not PPO.",
+                str(context.exception),
+            )
+            with self.assertRaises(ValueError) as context:
+                AlgorithmSetup(init_trainable=False)
+            self.assertIn(
+                "PPO-specific tune parameters were provided, but the selected algorithm is not PPO.",
+                str(context.exception),
+            )
+
+        # TODO: For DQN we have no tuneable parameters yet, add test when we have some.
+        # NOTE: We need to pass ppo otherwise it is default and the setup must check it
+        with patch_args("--algorithm", "ppo", "--tune", "tau"):
+            with self.assertRaises(ValueError) as context:
+                DefaultArgumentParser().parse_args()
+            self.assertIn(
+                "DQN-specific tune parameters were provided, but the selected algorithm is not DQN.",
+                str(context.exception),
+            )
+            with self.assertRaises(ValueError) as context:
+                AlgorithmSetup(init_trainable=False)
+            self.assertIn(
+                "DQN-specific tune parameters were provided, but the selected algorithm is not DQN.",
+                str(context.exception),
+            )
+        # use algorithm="default" -> ppo
+        with patch_args("--tune", "epsilon"):
+            with self.assertRaises(ValueError) as context:
+                AlgorithmSetup(init_trainable=False)
+            self.assertIn(
+                "DQN-specific tune parameters were provided, but the selected algorithm is not DQN.",
+                str(context.exception),
+            )
+
 
 class TestTagArgumentProcessing(unittest.TestCase):
     @patch_args("--tag:foo")

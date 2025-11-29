@@ -41,7 +41,6 @@ from ray_utilities.setup.extensions import SetupWithDynamicBatchSize, SetupWithD
 from ray_utilities.training.default_class import DefaultTrainable
 
 if TYPE_CHECKING:
-    from ray.rllib.algorithms import AlgorithmConfig
     from ray.rllib.callbacks.callbacks import RLlibCallback
 
     from ray_utilities.typing import TrainableReturnData

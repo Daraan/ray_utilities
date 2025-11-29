@@ -533,7 +533,6 @@ class TestDQNGradientAccumulation(InitRay, TestHelpers, DisableLoggers, num_cpus
         accumulate_every = 2
         mock_rr.return_value = [1, 1]
         with patch_args(
-            #"--algorithm", "dqn",
             "-a", "mlp",
             "--accumulate_gradients_every", accumulate_every,
             "--batch_size", batch_size,
