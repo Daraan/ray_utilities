@@ -1015,6 +1015,48 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         algo2.stop()
 
 
+        result_a_2n = get_next_env_results(algo1)
+        result_b_3n = get_next_env_results(algo2)
+
+        with self.subTest("check 2n vs 3n after train without env reset"):
+            # should not be equal after 256 vs 384 env steps
+            with self.assertRaises(
+                AssertionError, msg=f"Before env reset {result_a_2n} and {result_b_3n} should not be equal"
+            ):
+                np.testing.assert_array_almost_equal(result_a_2n, result_b_3n)
+        logger.debug("\n ---- Manual env reset 1 ----")
+        trigger_env_reset(algo1)
+        trigger_env_reset(algo2)
+        result_a_2n_r = get_next_env_results(algo1)
+        result_b_3n_r = get_next_env_results(algo2)
+        # should still not be equal after calling reset
+        with self.assertRaises(
+            AssertionError, msg=f"After env reset {result_a_2n_r} and {result_b_3n_r} should not be equal"
+        ):
+            np.testing.assert_array_almost_equal(result_a_2n_r, result_b_3n_r)
+
+        # steps match after one more train
+        logger.debug("Train algo 1 to 3n")
+        algo1.train()
+
+        logger.debug("\n ---- Manual env reset 2 ----")
+        # Trigger callback manually
+        trigger_env_reset(algo1)
+        trigger_env_reset(algo2)
+        # The callback instance is in algo.callbacks
+        result_a_3n = get_next_env_results(algo1)
+        result_b_3n = get_next_env_results(algo2)
+        # can be (n_envs, obs) or (n_runners, n_envs, obs)
+        self.assertEqual(result_a_3n.shape, result_b_3n.shape)
+        # for just a single env this will be 1D with length of the obs
+        self.assertEqual(result_b_3n.shape[-2] if num_env_runners > 1 else 1, num_env_runners)
+
+        np.testing.assert_array_equal(result_a_3n, result_b_3n)
+
+        algo1.stop()
+        algo2.stop()
+
+
 class TestMLPSetup(InitRay, num_cpus=4):
     def test_basic(self):
         with patch_args():
@@ -1420,6 +1462,97 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
         # Value Function:
         self.assertIn("in_features=13, out_features=1", data["architecture"]["summary_str"])
         os.remove(out_path)
+
+
+class TestPBTSchedulerSelection(InitRay, SetupDefaults, num_cpus=4):
+    """Test that the correct PBT scheduler is selected based on CLI arguments."""
+
+    def test_default_top_pbt_scheduler(self):
+        """Test that TopPBTTrialScheduler is used by default (without --grouped flag)."""
+        from ray_utilities.tune.scheduler.grouped_top_pbt_scheduler import GroupedTopPBTTrialScheduler
+        from ray_utilities.tune.scheduler.top_pbt_scheduler import TopPBTTrialScheduler
+
+        with patch_args(
+            "--num_samples",
+            "3",
+            "pbt",
+            "--hyperparam_mutations",
+            "{'lr': [0.001, 0.0001]}",
+        ):
+            setup = AlgorithmSetup()
+            scheduler = setup.args.command.to_scheduler()
+
+        self.assertIsInstance(scheduler, TopPBTTrialScheduler)
+        self.assertNotIsInstance(
+            scheduler,
+            GroupedTopPBTTrialScheduler,
+        )
+
+    def test_grouped_top_pbt_scheduler(self):
+        """Test that GroupedTopPBTTrialScheduler is used when --grouped flag is set."""
+        from ray_utilities.tune.scheduler.grouped_top_pbt_scheduler import GroupedTopPBTTrialScheduler
+
+        with patch_args(
+            "--num_samples",
+            "3",
+            "pbt",
+            "--grouped",
+            "--hyperparam_mutations",
+            "{'lr': [0.001, 0.0001]}",
+        ):
+            setup = AlgorithmSetup()
+            scheduler = setup.args.command.to_scheduler()
+
+        self.assertIsInstance(scheduler, GroupedTopPBTTrialScheduler)
+
+    def test_grouped_scheduler_with_tuner(self):
+        """Test that GroupedTopPBTTrialScheduler is correctly used in the tuner setup."""
+        from ray_utilities.tune.scheduler.grouped_top_pbt_scheduler import GroupedTopPBTTrialScheduler
+
+        with patch_args(
+            "--num_samples",
+            "3",
+            "--iterations",
+            "10",
+            "pbt",
+            "--grouped",
+            "--hyperparam_mutations",
+            "{'lr': [0.001, 0.0001]}",
+            "--quantile_fraction",
+            "0.2",
+        ):
+            setup = AlgorithmSetup()
+            tuner = setup.create_tuner()
+
+        # Access the scheduler from the tune config
+        tune_config = tuner._local_tuner._tune_config if hasattr(tuner, "_local_tuner") else None
+        if tune_config:
+            self.assertIsInstance(tune_config.scheduler, GroupedTopPBTTrialScheduler, f"Found: {tune_config.scheduler}")
+
+    def test_scheduler_parameters_passed_correctly(self):
+        """Test that scheduler parameters are correctly passed to GroupedTopPBTTrialScheduler."""
+        from ray_utilities.tune.scheduler.grouped_top_pbt_scheduler import GroupedTopPBTTrialScheduler
+
+        quantile_fraction = 0.15
+        num_samples = 5
+
+        with patch_args(
+            "--num_samples",
+            str(num_samples),
+            "pbt",
+            "--grouped",
+            "--hyperparam_mutations",
+            "{'lr': [0.001, 0.0001]}",
+            "--quantile_fraction",
+            str(quantile_fraction),
+        ):
+            setup = AlgorithmSetup()
+            scheduler = setup.args.command.to_scheduler()
+
+        assert isinstance(scheduler, GroupedTopPBTTrialScheduler)
+        self.assertEqual(scheduler._quantile_fraction, quantile_fraction)
+        self.assertEqual(scheduler._num_samples, num_samples)
+        self.assertIs(scheduler._recompute_groups, False)  # default value  # noqa: FBT003
 
 
 class TestPBTSchedulerSelection(InitRay, SetupDefaults, num_cpus=4):
