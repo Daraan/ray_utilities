@@ -348,9 +348,11 @@ def create_algorithm_config(
         config.training(
             # PPO Specific
             use_critic=True,
-            clip_param=0.2,
+            clip_param=args.get("clip_param", 0.2),  # rllib default is 0.3
             # grad_clip_by="norm",
-            entropy_coeff=0.01,
+            entropy_coeff=args.get("entropy_coeff", 0.01),  # rllib default is 0.0
+            vf_loss_coeff=args.get("vf_loss_coeff", 1.0),  # rllib default is 1.0
+            vf_clip_param=args.get("vf_clip_param", 10),  # rllib default is 10
             # vf_clip_param=10,
             use_kl_loss=False,
             use_gae=True,  # Must be true to use "truncate_episodes"

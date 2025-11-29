@@ -21,6 +21,7 @@ import contextlib
 import io
 import logging
 import os
+import random
 import shutil
 import sys
 import warnings
@@ -808,7 +809,12 @@ class ExperimentSetupBase(
             :func:`ray.tune.search.sample.Domain.sample`: Domain sampling method
         """
         params = self.create_param_space()
-        return {k: v.sample() if isinstance(v, ray.tune.search.sample.Domain) else v for k, v in params.items()}
+        return {
+            k: v.sample()
+            if isinstance(v, ray.tune.search.sample.Domain)
+            else (random.choice(v["grid_search"]) if isinstance(v, dict) and "grid_search" in v else v)
+            for k, v in params.items()
+        }
 
     def _set_dynamic_parameters_to_tune(self):
         """Call before calling `super().create_param_space()` when making use of self.args.tune"""
