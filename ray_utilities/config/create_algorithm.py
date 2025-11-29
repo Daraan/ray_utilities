@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Callable, Final, Literal, Optional, TypeV
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
 from ray_utilities.callbacks.algorithm.eval_ema_metric_callback import make_eval_ema_metrics_callback
 from ray_utilities.callbacks.algorithm.model_config_saver_callback import save_model_config_and_architecture
+from ray_utilities.config.parser.default_argument_parser import DQNArgumentParser, PPOArgumentParser
 from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.warn import (
     warn_about_larger_minibatch_size,
@@ -338,6 +339,24 @@ def create_algorithm_config(
                 "but could not infer type from config %s. Assuming outer functions handles algorithm specific settings",
                 type(config),
             )
+    if (
+        algorithm_type != "dqn"
+        and args["tune"]
+        and any(param in DQNArgumentParser._dqn_specific_tune_choices for param in args["tune"])
+    ):
+        raise ValueError(
+            "DQN-specific tune parameters were provided, but the selected algorithm is not DQN. "
+            "Please remove DQN-specific parameters from --tune or select --algorithm dqn."
+        )
+    if (
+        algorithm_type != "ppo"
+        and args["tune"]
+        and any(param in PPOArgumentParser._ppo_specific_tune_choices for param in args["tune"])
+    ):
+        raise ValueError(
+            "PPO-specific tune parameters were provided, but the selected algorithm is not PPO. "
+            "Please remove PPO-specific parameters from --tune or select --algorithm ppo."
+        )
 
     # Common training configuration for all algorithms
     config.training(
@@ -399,8 +418,7 @@ def create_algorithm_config(
             if default_dqn_config.model_config.keys() & model_config.keys():
                 logger.warning(
                     "model_config contains dqn keys %s; changing the config parameters, "
-                    "e.g. with tune or pbt, will not work "
-                    "as expected as the keys are NOT update for the RLModule",
+                    "e.g. with tune or pbt, will not work as expected as the keys are NOT updated for the RLModule",
                     default_dqn_config.model_config.keys() & model_config.keys(),
                 )
             # model_config = {**config.model_config, **model_config}

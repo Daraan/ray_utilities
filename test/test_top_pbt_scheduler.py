@@ -491,7 +491,7 @@ class TestGroupedTopPBTIntegration(InitRay, TestHelpers, DisableLoggers):
         )
         from ray_utilities.misc import is_pbar, raise_tune_errors
         from ray_utilities.runfiles import run_tune
-        from ray_utilities.setup.scheduled_tuner_setup import PPOMLPWithPBTSetup
+        from ray_utilities.setup.scheduled_tuner_setup import MLPPBTSetup
         from ray_utilities.testing_utils import (
             SetupWithCheck,
             TrainableWithChecks,
@@ -647,7 +647,7 @@ class TestGroupedTopPBTIntegration(InitRay, TestHelpers, DisableLoggers):
             "--quantile_fraction", "0.34",  # Top 1/3 of groups (1 out of 3)
             "--perturbation_interval", perturbation_interval,
         ):  # fmt: skip
-            Setup = SetupWithCheck(CheckTrainableForGroupedPBT, PPOMLPWithPBTSetup)
+            Setup = SetupWithCheck(CheckTrainableForGroupedPBT, MLPPBTSetup)
             setup = Setup(config_files=["experiments/models/mlp/default.cfg"])
 
             # Use grid search for learning rate

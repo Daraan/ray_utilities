@@ -63,7 +63,7 @@ from ray_utilities.misc import is_pbar, raise_tune_errors
 from ray_utilities.runfiles import run_tune
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup
-from ray_utilities.setup.scheduled_tuner_setup import PPOMLPWithPBTSetup
+from ray_utilities.setup.scheduled_tuner_setup import MLPPBTSetup
 from ray_utilities.testing_utils import (
     ENV_RUNNER_CASES,
     Cases,
@@ -1426,7 +1426,7 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             "--quantile_fraction", "0.1",
             "--perturbation_interval", perturbation_interval,
         ):  # fmt: skip
-            Setup = SetupWithCheck(CheckTrainableForTop, PPOMLPWithPBTSetup)
+            Setup = SetupWithCheck(CheckTrainableForTop, MLPPBTSetup)
             setup = Setup(
                 config_files=["experiments/models/mlp/default.cfg"],
                 # TODO: Trials are reused, trial name might be wrong then

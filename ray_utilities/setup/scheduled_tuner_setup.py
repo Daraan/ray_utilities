@@ -10,7 +10,7 @@ from ray.tune.stopper import CombinedStopper, MaximumIterationStopper, Stopper
 
 from ray_utilities.callbacks.tuner.sync_config_files_callback import SyncConfigFilesCallback
 from ray_utilities.nice_logger import ImportantLogger
-from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
+from ray_utilities.setup.ppo_mlp_setup import MLPSetup, PPOMLPSetup
 from ray_utilities.setup.tuner_setup import SetupType_co, TunerSetup
 from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
 from ray_utilities.tune.searcher.constrained_minibatch_search import constrained_minibatch_search
@@ -27,8 +27,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "MLPPBTSetup",
     "PBTTunerSetup",
-    "PPOMLPWithPBTSetup",
     "PPOMLPWithReTuneSetup",
     "ReTunerSetup",
     "ScheduledTunerSetup",
@@ -114,7 +114,7 @@ class PPOMLPWithReTuneSetup(PPOMLPSetup["MLPArgumentParser[PopulationBasedTraini
 # region PBT
 
 
-class PBTTunerSetup(ScheduledTunerSetup["PPOMLPWithPBTSetup"]):
+class PBTTunerSetup(ScheduledTunerSetup["MLPPBTSetup"]):
     def create_searcher(self, stoppers: list[Stopper]):  # noqa: ARG002
         return constrained_minibatch_search(self._setup)
 
@@ -128,7 +128,7 @@ class PBTTunerSetup(ScheduledTunerSetup["PPOMLPWithPBTSetup"]):
         return callbacks
 
 
-class PPOMLPWithPBTSetup(PPOMLPSetup["MLPArgumentParser[PopulationBasedTrainingParser]"]):
+class MLPPBTSetup(MLPSetup["MLPArgumentParser[PopulationBasedTrainingParser]"]):
     _tuner_setup_cls = PBTTunerSetup
 
     def _tuner_add_iteration_stopper(self):
@@ -137,7 +137,7 @@ class PPOMLPWithPBTSetup(PPOMLPSetup["MLPArgumentParser[PopulationBasedTrainingP
 
     def create_tuner(self, *, adv_loggers: bool | None = None) -> tune.Tuner:
         if self.args.command_str != "pbt":
-            raise RuntimeError(f"PPOMLPWithPBTSetup requires 'pbt' command, got '{self.args.command_str}'")
+            raise RuntimeError(f"{type(self)} requires 'pbt' command, got '{self.args.command_str}'")
         # Save trial state every 15 minutes as PBT can be long running, can take ~1 min to save
         if os.environ.get("RAY_UTILITIES_NO_PBT_CHECKPOINT_CHANGE") != "1":
             os.environ["TUNE_GLOBAL_CHECKPOINT_S"] = str(60 * 15)

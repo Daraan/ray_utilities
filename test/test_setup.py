@@ -25,7 +25,8 @@ import tree
 import typing_extensions as te
 from ray import tune
 from ray.rllib.algorithms import Algorithm, AlgorithmConfig
-from ray.rllib.algorithms.ppo import PPOConfig
+from ray.rllib.algorithms.dqn import DQN, DQNConfig
+from ray.rllib.algorithms.ppo import PPO, PPOConfig
 from ray.rllib.core import ALL_MODULES
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
@@ -1014,10 +1015,10 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         algo2.stop()
 
 
-class TestPPOMLPSetup(InitRay, num_cpus=4):
+class TestMLPSetup(InitRay, num_cpus=4):
     def test_basic(self):
         with patch_args():
-            setup = PPOMLPSetup()
+            setup = MLPSetup()
         self.assertIsNotNone(setup.config)
         self.assertIsNotNone(setup.args)
         self.assertIsNotNone(setup.create_tuner())
@@ -1029,7 +1030,7 @@ class TestPPOMLPSetup(InitRay, num_cpus=4):
 
     def test_model_config_dict(self):
         with patch_args():
-            setup = PPOMLPSetup()
+            setup = MLPSetup()
         model_config = setup._model_config_from_args(setup.args)
         assert model_config, f"Not truthy {model_config}"
         for k, v in SimpleMLPParser().parse_args([]).as_dict().items():
@@ -1042,7 +1043,7 @@ class TestPPOMLPSetup(InitRay, num_cpus=4):
 
         for args in iter_cases(cases):
             with patch_args(*args):
-                setup = PPOMLPSetup()
+                setup = MLPSetup()
             algo = setup.build_algo()
             module: DefaultPPOTorchRLModule = algo.get_module()  # pyright: ignore[reportAssignmentType]
             mlp_encoder: torch.nn.Sequential = module.encoder.encoder.net.mlp
@@ -1057,7 +1058,7 @@ class TestPPOMLPSetup(InitRay, num_cpus=4):
     @mock_trainable_algorithm(mock_env_runners=False)
     def test_model_config_update(self):
         with patch_args("--fcnet_hiddens", "[8, 8]"):
-            setup = PPOMLPSetup()
+            setup = MLPSetup()
         trainable = setup.trainable_class()
         self.assertEqual(trainable.algorithm_config.model_config["fcnet_hiddens"], [8, 8])
         module = trainable.algorithm.get_module()
@@ -1083,6 +1084,22 @@ class TestPPOMLPSetup(InitRay, num_cpus=4):
             ),
             [16],
         )
+
+    def test_algorithm_selection(self):
+        with patch_args():
+            setup = MLPSetup(init_trainable=False, init_param_space=False)
+        self.assertEqual(setup.get_algorithm_classes(setup.args), (PPOConfig, PPO))
+        self.assertIsInstance(setup.config, PPOConfig)
+
+        with patch_args("--algorithm", "ppo"):
+            setup = MLPSetup(init_trainable=False, init_param_space=False)
+        self.assertEqual(setup.get_algorithm_classes(setup.args), (PPOConfig, PPO))
+        self.assertIsInstance(setup.config, PPOConfig)
+
+        with patch_args("--algorithm", "dqn"):
+            setup = MLPSetup(init_trainable=False, init_param_space=False)
+        self.assertEqual(setup.get_algorithm_classes(setup.args), (DQNConfig, DQN))
+        self.assertIsInstance(setup.config, DQNConfig)
 
 
 class TestDQNSetup(InitRay, num_cpus=4):

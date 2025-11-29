@@ -549,6 +549,7 @@ def setup_trainable(
             algo = checkpoint_loader.algorithm_from_checkpoint(
                 args["from_checkpoint"],
                 config=config,  # pyright: ignore[reportArgumentType]
+                args=args,
             )
             sync_env_runner_states_after_reload(algo)
             if config.algo_class is not None and not isinstance(algo, config.algo_class):

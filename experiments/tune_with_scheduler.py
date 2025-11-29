@@ -3,14 +3,13 @@ import os
 
 import exceptiongroup  # noqa: F401
 
-
 import default_arguments.PYTHON_ARGCOMPLETE_OK  # fmt: skip
 from experiments.ray_init_helper import init_ray_with_setup
 from ray_utilities import get_runtime_env, run_tune
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
 from ray_utilities.misc import extend_trial_name
-from ray_utilities.setup.scheduled_tuner_setup import PPOMLPWithPBTSetup
+from ray_utilities.setup.scheduled_tuner_setup import MLPPBTSetup
 from ray_utilities.tune.scheduler.top_pbt_scheduler import KeepMutation
 
 os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
@@ -27,7 +26,7 @@ if __name__ == "__main__":
     )
 
     HYPERPARAMETERS = load_distributions_from_json(
-        write_distributions_to_json(default_distributions, PPOMLPWithPBTSetup.TUNE_PARAMETER_FILE)
+        write_distributions_to_json(default_distributions, MLPPBTSetup.TUNE_PARAMETER_FILE)
     )
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
@@ -51,7 +50,7 @@ if __name__ == "__main__":
         "pbt", "--perturbation_interval", 1/8,
         config_files=["experiments/pbt.cfg"]
     ):  # fmt: skip
-        with PPOMLPWithPBTSetup(
+        with MLPPBTSetup(
             config_files=["experiments/pbt.cfg", "experiments/default.cfg", "experiments/models/mlp/default.cfg"],
         ) as setup:
             setup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB, parent directory

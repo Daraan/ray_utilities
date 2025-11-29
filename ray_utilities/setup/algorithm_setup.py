@@ -124,7 +124,7 @@ class AlgorithmSetup(
         return None
 
     @classmethod
-    def _get_algorithm_classes(
+    def get_algorithm_classes(
         cls, args: NamespaceType[ParserType_co]
     ) -> tuple[type[ConfigType_co], type[AlgorithmType_co] | None]:
         """Get algorithm config and class based on args.algorithm selection.
@@ -137,7 +137,7 @@ class AlgorithmSetup(
         """
         algorithm = getattr(args, "algorithm", "default")
         if algorithm == "default":
-            return cls.config_class, cls.algo_class
+            return cls.config_class or PPOConfig, cls.algo_class or PPO
         if algorithm == "dqn":
             return DQNConfig, DQN
         if algorithm == "ppo":
@@ -147,7 +147,7 @@ class AlgorithmSetup(
     @classmethod
     def _config_from_args(cls, args, base: Optional[ConfigType_co] = None) -> ConfigType_co:
         # Determine algorithm classes dynamically
-        config_class, _ = cls._get_algorithm_classes(args)
+        config_class, _ = cls.get_algorithm_classes(args)
         if config_class != cls.config_class:
             logger.warning(
                 "The selected algorithm config returned by _get_algorithm_classes "
@@ -254,6 +254,10 @@ class PPOSetup(AlgorithmSetup[ParserType_co, "PPOConfig", "PPO"]):
             raise TypeError(f"Expected config to be of type PPOConfig, got {type(config)}")
         return config
 
+    @classmethod
+    def get_algorithm_classes(cls, args: Any):  # noqa: ARG003
+        return cls.config_class, cls.algo_class
+
 
 class DQNSetup(AlgorithmSetup[ParserType_co, "DQNConfig", "DQN"]):
     """Specialized setup class for Deep Q-Networks (DQN) experiments.
@@ -315,6 +319,10 @@ class DQNSetup(AlgorithmSetup[ParserType_co, "DQNConfig", "DQN"]):
         if not isinstance(config, DQNConfig):
             raise TypeError(f"Expected config to be of type DQNConfig, got {type(config)}")
         return config
+
+    @classmethod
+    def get_algorithm_classes(cls, args: Any):  # noqa: ARG003
+        return cls.config_class, cls.algo_class
 
 
 if TYPE_CHECKING:  # check ABC

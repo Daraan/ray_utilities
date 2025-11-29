@@ -43,7 +43,7 @@ if __name__ == "__main__":
             config_files=["experiments/default.cfg", "experiments/models/mlp/default.cfg"],
             trial_name_creator=extend_trial_name(prepend="Dynamic_GradientAccumulation"),
         ) as setup:
-            PPOMLPSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
-            PPOMLPSetup.GROUP = "dynamic-batch_size"
+            setup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
+            setup.GROUP = "dynamic-batch_size"
         with init_ray_with_setup(setup, runtime_env=get_runtime_env()):
             results = run_tune(setup)

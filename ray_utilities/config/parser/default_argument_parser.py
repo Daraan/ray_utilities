@@ -11,6 +11,7 @@ functionality specific to machine learning experiments and checkpointing workflo
 from __future__ import annotations
 
 # pyright: enableExperimentalFeatures=true
+from abc import abstractmethod
 import argparse
 import logging
 import math
@@ -762,7 +763,26 @@ def _literal_tuple_or_none(value: str) -> tuple[int, int] | None:
         raise argparse.ArgumentTypeError(f"Invalid format: Could not parse '{value}'") from e
 
 
-class _BaseRLlibArgumentParser(_EnvRunnerParser):
+class TuneableParameters(Tap):
+    # FIXME: Change to use keys from create_tune_parameters.
+    # NOTE: Tune parameter currently also need to be attributes/arguments of the respective parser
+    _valid_tune_choices = set()  # type: ClassVar[set[str]]  # noqa: RUF012
+    """Valid choices for --tune"""
+
+    tune: NeverRestore[list[str] | Literal[False]] = False
+    """List of dynamic parameters to be tuned"""
+
+    @classmethod
+    @abstractmethod
+    def _add_tune_parameters(cls) -> None:
+        """Add tunable parameter arguments to the parser. This method should extend _valid_tune_choices"""
+
+    def configure(self) -> None:
+        self._add_tune_parameters()
+        super().configure()
+
+
+class _BaseRLlibArgumentParser(TuneableParameters, _EnvRunnerParser):
     """Base parser for common RLlib algorithm configurations.
 
     Contains parameters shared across all RLlib algorithms (PPO, DQN, etc.).
@@ -780,26 +800,6 @@ class _BaseRLlibArgumentParser(_EnvRunnerParser):
 
     lr: float | list[tuple[int, float]] = 1e-4
     """Learning rate or schedule: float or list of (timestep, lr) tuples"""
-
-    use_kl_loss: bool = False
-    """Whether to use KL divergence loss in the PPO objective."""
-
-    entropy_coeff: float = 0.01
-    """Coefficient for the entropy regularization term in the PPO objective."""
-
-    vf_loss_coeff: float = 1.0
-    """Coefficient for the value function loss in the PPO objective."""
-
-    clip_param: float = 0.2
-    """Clipping parameter for the PPO objective."""
-
-    vf_clip_param: float = 10.0
-    """
-    Clipping parameter for the value function loss in PPO
-
-    Note:
-        For higher rewards this should also be higher
-    """
 
     def configure(self) -> None:
         super().configure()
@@ -846,6 +846,48 @@ class PPOArgumentParser(_BaseRLlibArgumentParser):
     num_epochs: int = 30
     """Number of SGD epochs to run per training batch"""
 
+    use_kl_loss: bool = False
+    """Whether to use KL divergence loss in the PPO objective."""
+
+    entropy_coeff: float = 0.01
+    """Coefficient for the entropy regularization term in the PPO objective."""
+
+    vf_loss_coeff: float = 1.0
+    """Coefficient for the value function loss in the PPO objective."""
+
+    clip_param: float = 0.2
+    """Clipping parameter for the PPO objective."""
+
+    vf_clip_param: float = 10.0
+    """
+    Clipping parameter for the value function loss in PPO
+
+    Note:
+        For higher rewards this should also be higher
+    """
+
+    _ppo_specific_tune_choices = (
+        "minibatch_size",
+        "num_epochs",
+        "use_kl_loss",
+        "entropy_coeff",
+        "clip_param",
+        "vf_clip_param",
+        "vf_loss_coeff",
+    )  # type: ClassVar
+
+    @classmethod
+    def _add_tune_parameters(cls) -> None:
+        cls._valid_tune_choices.update(
+            {
+                "entropy_coeff",
+                "clip_param",
+                "vf_clip_param",
+                "vf_loss_coeff",
+            }
+        )
+        super()._add_tune_parameters()
+
     def configure(self) -> None:
         super().configure()
         self.add_argument("--minibatch_size", type=int, required=False)
@@ -857,6 +899,11 @@ class PPOArgumentParser(_BaseRLlibArgumentParser):
         # Check if algorithm attribute exists (it comes from _DefaultSetupArgumentParser in the MRO)
         algorithm = getattr(self, "algorithm", None)
         if algorithm not in ("ppo", "default"):
+            if self.tune and any(param in self._ppo_specific_tune_choices for param in self.tune):
+                raise ValueError(
+                    "PPO-specific tune parameters were provided, but the selected algorithm is not PPO. "
+                    "Please remove PPO-specific parameters from --tune or select --algorithm ppo."
+                )
             return
 
         if self.minibatch_size > self.train_batch_size_per_learner:
@@ -899,6 +946,31 @@ class DQNArgumentParser(_BaseRLlibArgumentParser):
     num_atoms: int = 1
     """Number of atoms for distributional DQN. Default: 1 (standard DQN)."""
 
+    _dqn_specific_tune_choices = (
+        "target_network_update_freq",
+        "num_steps_sampled_before_learning_starts",
+        "tau",
+        "epsilon",
+        "double_q",
+        "dueling",
+        "num_atoms",
+    )  # type: ClassVar
+
+    @classmethod
+    def _add_tune_parameters(cls) -> None:
+        cls._valid_tune_choices.update(
+            {
+                "target_network_update_freq",
+                "num_steps_sampled_before_learning_starts",
+                "tau",
+                "epsilon",
+                "double_q",
+                "dueling",
+                "num_atoms",
+            }
+        )
+        super()._add_tune_parameters()
+
     def configure(self) -> None:
         super().configure()
         self.add_argument("--target_network_update_freq", type=int, required=False)
@@ -909,6 +981,19 @@ class DQNArgumentParser(_BaseRLlibArgumentParser):
         self.add_argument("--no_double_q", action="store_false", dest="double_q", required=False)
         self.add_argument("--dueling", action="store_true", default=None, required=False)
         self.add_argument("--no_dueling", action="store_false", dest="dueling", required=False)
+
+    def process_args(self):
+        super().process_args()
+        # Only run PPO-specific validations if algorithm is ppo
+        # Check if algorithm attribute exists (it comes from _DefaultSetupArgumentParser in the MRO)
+        algorithm = getattr(self, "algorithm", None)
+        if algorithm not in ("dqn", "default"):
+            if self.tune and any(param in self._dqn_specific_tune_choices for param in self.tune):
+                raise ValueError(
+                    "DQN-specific tune parameters were provided, but the selected algorithm is not DQN. "
+                    "Please remove DQN-specific parameters from --tune or select --algorithm dqn."
+                )
+            return
 
 
 class RLlibArgumentParser(PPOArgumentParser, DQNArgumentParser):
@@ -1516,37 +1601,38 @@ def _parse_tune_choices(
     return value
 
 
-class OptunaArgumentParser(GoalParser, Tap):
+class OptunaArgumentParser(TuneableParameters, GoalParser, Tap):
     optimize_config: NotAModelParameter[NeverRestore[bool]] = (
         False  # legacy argument name; possible replace with --tune later
     )
     # FIXME: Change to use keys from create_tune_parameters.
-    # NOTE: Need to be defined in add_argument below as well
     # NOTE: Tune parameter currently also need to be attributes/arguments of the respective parser
-    _valid_tune_choices = [  # noqa: RUF012
-        "all",
-        "accumulate_gradients_every",
-        "batch_size",
-        "lr",
-        "minibatch_size",
-        "minibatch_scale",
-        "num_envs_per_env_runner",
-        # PPO specific
-        # NOTE vf_clip_param should be larger for large rewards
-        "entropy_coeff",
-        "clip_param",
-        "vf_clip_param",
-        "vf_loss_coeff",
-        "test",
-    ]  # type: ClassVar[list[str]]
-
-    tune: NeverRestore[list[str] | Literal[False]] = False
-    """List of dynamic parameters to be tuned"""
 
     pruner_min_trials: NotAModelParameter[NeverRestore[int]] = 3
     """When optimizing with Optuna, minimum number of trials before pruning is started."""
+
     pruner_warmup_steps: NotAModelParameter[NeverRestore[int]] = 40
     """When optimizing with Optuna, number of steps to wait before pruning is started."""
+
+    @classmethod
+    def _add_tune_parameters(cls) -> None:
+        """
+        Add tuneable parameter arguments to the parser.
+        This method should extend _valid_tune_choices
+        """
+        cls._valid_tune_choices.update(
+            [
+                "all",
+                "accumulate_gradients_every",
+                "batch_size",
+                "lr",
+                "minibatch_size",
+                "minibatch_scale",
+                "num_envs_per_env_runner",
+                "test",
+            ]
+        )
+        super()._add_tune_parameters()
 
     def configure(self) -> None:
         super().configure()
