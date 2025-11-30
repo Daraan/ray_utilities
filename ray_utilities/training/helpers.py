@@ -177,6 +177,19 @@ def _patch_config_with_param_space(
     args["__overwritten_keys__"] = {}
     if "model_config" in hparams:
         patch_model_config(config, hparams["model_config"])
+
+    completed_model_config = config.model_config
+    if completed_model_config:
+        if dataclasses.is_dataclass(completed_model_config):
+            completed_model_config_keys = dataclasses.asdict(completed_model_config).keys()
+        else:
+            completed_model_config_keys = completed_model_config.keys()
+
+        model_config_matching_keys = completed_model_config_keys & hparams.keys()
+
+        if model_config_matching_keys:
+            patch_model_config(config, {k: hparams[k] for k in model_config_matching_keys})
+
     _patch_learner_config_with_param_space(config=config, args=args, hparams=hparams, config_inplace=config_inplace)
     if not same_keys and (not args["__overwritten_keys__"] or config_inplace):
         return args, config

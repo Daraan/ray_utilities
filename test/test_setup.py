@@ -1015,48 +1015,6 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         algo2.stop()
 
 
-        result_a_2n = get_next_env_results(algo1)
-        result_b_3n = get_next_env_results(algo2)
-
-        with self.subTest("check 2n vs 3n after train without env reset"):
-            # should not be equal after 256 vs 384 env steps
-            with self.assertRaises(
-                AssertionError, msg=f"Before env reset {result_a_2n} and {result_b_3n} should not be equal"
-            ):
-                np.testing.assert_array_almost_equal(result_a_2n, result_b_3n)
-        logger.debug("\n ---- Manual env reset 1 ----")
-        trigger_env_reset(algo1)
-        trigger_env_reset(algo2)
-        result_a_2n_r = get_next_env_results(algo1)
-        result_b_3n_r = get_next_env_results(algo2)
-        # should still not be equal after calling reset
-        with self.assertRaises(
-            AssertionError, msg=f"After env reset {result_a_2n_r} and {result_b_3n_r} should not be equal"
-        ):
-            np.testing.assert_array_almost_equal(result_a_2n_r, result_b_3n_r)
-
-        # steps match after one more train
-        logger.debug("Train algo 1 to 3n")
-        algo1.train()
-
-        logger.debug("\n ---- Manual env reset 2 ----")
-        # Trigger callback manually
-        trigger_env_reset(algo1)
-        trigger_env_reset(algo2)
-        # The callback instance is in algo.callbacks
-        result_a_3n = get_next_env_results(algo1)
-        result_b_3n = get_next_env_results(algo2)
-        # can be (n_envs, obs) or (n_runners, n_envs, obs)
-        self.assertEqual(result_a_3n.shape, result_b_3n.shape)
-        # for just a single env this will be 1D with length of the obs
-        self.assertEqual(result_b_3n.shape[-2] if num_env_runners > 1 else 1, num_env_runners)
-
-        np.testing.assert_array_equal(result_a_3n, result_b_3n)
-
-        algo1.stop()
-        algo2.stop()
-
-
 class TestMLPSetup(InitRay, num_cpus=4):
     def test_basic(self):
         with patch_args():
