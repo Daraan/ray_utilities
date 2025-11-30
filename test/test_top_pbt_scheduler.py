@@ -471,7 +471,7 @@ class TestGroupedTopPBTIntegration(InitRay, TestHelpers, DisableLoggers):
     @pytest.mark.length(speed="medium")
     @mock.patch("wandb.Api", new=MagicMock())
     @mock.patch("ray_utilities.callbacks.wandb.wandb_api", new=MagicMock())
-    @pytest.mark.timeout(500)
+    @pytest.mark.timeout(320)
     def test_run_tune_with_grouped_top_pbt_scheduler(self):
         """Test GroupedTopPBTTrialScheduler with run_tune using grouped trials."""
         # Need to import here to avoid circular imports
@@ -492,7 +492,7 @@ class TestGroupedTopPBTIntegration(InitRay, TestHelpers, DisableLoggers):
         )
         from ray_utilities.misc import is_pbar, raise_tune_errors
         from ray_utilities.runfiles import run_tune
-        from ray_utilities.setup.scheduled_tuner_setup import PPOMLPWithPBTSetup
+        from ray_utilities.setup.scheduled_tuner_setup import MLPPBTSetup
         from ray_utilities.testing_utils import (
             SetupWithCheck,
             TrainableWithChecks,
@@ -648,7 +648,7 @@ class TestGroupedTopPBTIntegration(InitRay, TestHelpers, DisableLoggers):
             "--quantile_fraction", "0.34",  # Top 1/3 of groups (1 out of 3)
             "--perturbation_interval", perturbation_interval,
         ):  # fmt: skip
-            Setup = SetupWithCheck(CheckTrainableForGroupedPBT, PPOMLPWithPBTSetup)
+            Setup = SetupWithCheck(CheckTrainableForGroupedPBT, MLPPBTSetup)
             with Setup(config_files=["experiments/models/mlp/default.cfg"]) as setup:
                 setup.config.training(num_epochs=1)
                 setup.config.reporting(min_sample_timesteps_per_iteration=10)

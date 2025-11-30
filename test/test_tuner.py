@@ -63,7 +63,7 @@ from ray_utilities.misc import is_pbar, raise_tune_errors
 from ray_utilities.runfiles import run_tune
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup
-from ray_utilities.setup.scheduled_tuner_setup import PPOMLPWithPBTSetup
+from ray_utilities.setup.scheduled_tuner_setup import MLPPBTSetup
 from ray_utilities.testing_utils import (
     ENV_RUNNER_CASES,
     Cases,
@@ -88,7 +88,7 @@ from ray_utilities.tune.searcher.optuna_searcher import OptunaSearchWithPruner
 from ray_utilities.tune.searcher.optuna_searcher import _logger as optuna_logger
 
 if TYPE_CHECKING:
-    from ray.rllib.algorithms import AlgorithmConfig
+    from ray.rllib.algorithms import DQN, AlgorithmConfig, DQNConfig
     from ray.tune.result_grid import ResultGrid
     from ray.tune.search.sample import Integer
 
@@ -471,7 +471,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             try:
                 self.assertLess(best_result.metrics[TRAINING_ITERATION], ITERATIONS)  # pyright: ignore[reportOptionalSubscript]
             except AssertionError as e2:
-                raise XFailException(
+                raise XFailException(  # noqa: TRY003
                     f"Best result already completed all iterations: "
                     f"{best_result.metrics[TRAINING_ITERATION]} >= {ITERATIONS}"  # pyright: ignore[reportOptionalSubscript]
                 ) from e2
@@ -1281,7 +1281,11 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
     @pytest.mark.length(speed="medium")
     @mock.patch("wandb.Api", new=MagicMock())
     @mock.patch("ray_utilities.callbacks.wandb.wandb_api", new=MagicMock())
-    def test_run_tune_with_top_trial_scheduler(self):
+    @mock.patch("ray.rllib.algorithms.dqn.dqn.calculate_rr_weights")
+    @pytest.mark.timeout(320)
+    def test_run_tune_with_top_trial_scheduler(self, mock_rr):
+        # FIXME: slowdown because of DQN use
+        mock_rr.return_value = [1, 1]
         original_exploit = TopPBTTrialScheduler._exploit
         perturbation_interval = 100
         best_step_size_idx = 0
@@ -1371,6 +1375,21 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             use_pbar = False
 
             def step(self) -> LogMetricsDict:
+                self.algorithm: DQN
+                self.algorithm.config = cast("DQNConfig", self.algorithm.config)
+                assert self.algorithm.config.model_config
+                assert self.algorithm.config.model_config["fcnet_hiddens"] == [2], (
+                    f"fcnet_hiddens not set correctly: {self.algorithm.config.model_config['fcnet_hiddens']}"
+                )
+                assert (eps := self.algorithm.config.epsilon) in eps_choices, f"epsilon not set correctly: {eps}"
+                # Check that config.epsilon -> config.model_config['epsilon']
+                assert self.algorithm.config.model_config["epsilon"] == eps, (
+                    "epsilon on model_config does not match that of the config"
+                )
+
+                assert self.algorithm.config.model_config["v_max"] == 13.13, (
+                    f"model_config vmax not set correctly: {self.algorithm.config.model_config['v_max']}"
+                )
                 self._current_step += self.algorithm_config.train_batch_size_per_learner
                 result = {ENV_RUNNER_RESULTS: {}, EVALUATION_RESULTS: {ENV_RUNNER_RESULTS: {}}}
                 result[ENV_RUNNER_RESULTS][NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME] = self._current_step
@@ -1404,7 +1423,8 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
         ray_pbt_logger.setLevel(logging.DEBUG)
         with patch_args(
             # main args for this experiment
-            "--tune", "batch_size",
+            "--algorithm", "dqn",
+            "--tune", "batch_size", "epsilon",
             # Meta / less influential arguments for the experiment.
             # NOTE: Num samples is multiplides by grid_search values. So effectively num_samples=3
             "--num_samples", 1,
@@ -1427,17 +1447,24 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             "--quantile_fraction", "0.1",
             "--perturbation_interval", perturbation_interval,
         ):  # fmt: skip
-            Setup = SetupWithCheck(CheckTrainableForTop, PPOMLPWithPBTSetup)
-            setup = Setup(
+            Setup = SetupWithCheck(CheckTrainableForTop, MLPPBTSetup)
+            with Setup(
                 config_files=["experiments/models/mlp/default.cfg"],
                 # TODO: Trials are reused, trial name might be wrong then
-            )
+            ) as setup:
+                setup.config.reporting(min_sample_timesteps_per_iteration=min(batch_sizes))
+                setup.config.training(training_intensity=None, num_epochs=1)  # pyright: ignore[reportAttributeAccessIssue]
             setup.param_space["train_batch_size_per_learner"] = tune.grid_search(batch_sizes)
             assert setup.args.command
+            eps_choices = [0.8333, 0.4222]
             setup.args.command.set_hyperparam_mutations(
                 {
                     "train_batch_size_per_learner": CyclicMutation(batch_sizes),
-                    "fcnet_hiddens": KeepMutation([2]),
+                    # TODO: This does NOT propagate to results.config
+                    "epsilon": CyclicMutation(eps_choices),
+                    # NOTE: Model config_keys should go into a subdict
+                    # This propagates to result.config["mode"]
+                    "model_config": {"fcnet_hiddens": KeepMutation([2]), "v_max": KeepMutation(13.13)},
                 }
             )
             results = run_tune(setup)
@@ -1448,7 +1475,10 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             self.assertEqual(num_exploits, max(batch_sizes) * (3 - 1) // perturbation_interval * 2)
             # Check that at most one race condition happened
             self.assertLessEqual(race_conditions, 1)
-            self.assertTrue(all(r.config["fcnet_hiddens"] == [2] for r in results))  # pyright: ignore[reportAttributeAccessIssue, reportOptionalSubscript]
+            self.assertTrue(all(r.config["train_batch_size_per_learner"] in batch_sizes for r in results))  # pyright: ignore[reportAttributeAccessIssue, reportOptionalSubscript]
+            self.assertTrue(all(r.config["model_config"]["fcnet_hiddens"] == [2] for r in results))  # pyright: ignore[reportAttributeAccessIssue, reportOptionalSubscript]
+            self.assertTrue(all(r.config["model_config"]["v_max"] == 13.13 for r in results))  # pyright: ignore[reportAttributeAccessIssue, reportOptionalSubscript]
+            self.assertTrue(all(r.config["epsilon"] in eps_choices for r in results))  # pyright: ignore[reportAttributeAccessIssue, reportOptionalSubscript]
 
 
 class DummyTrial:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import os
 import shutil
 import sys
@@ -520,7 +521,8 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
                 self.assertEqual(
                     iterations,
                     expected_iterations,
-                    msg=f"Iterations for step size {step_size} should be {expected_iterations} (raw {raw_iterations}, sqrt {sqrt_iterations:.2f}), but got {iterations}.",
+                    msg=f"Iterations for step size {step_size} should be {expected_iterations} (raw {raw_iterations}, "
+                    f"sqrt {sqrt_iterations:.2f}), but got {iterations}.",
                 )
 
 
@@ -720,6 +722,23 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 with tempfile.TemporaryDirectory() as tmpdir1:
                     trainable.save_to_path(tmpdir1)
                     trainable_from_path = self.TrainableClass()
+                    module = trainable_from_path.algorithm.get_module()
+                    assert module
+                    assert self._model_config is not None
+                    assert module.model_config is not None
+                    # FIXME: model_config is partially based on cls_model_config!
+                    self.assertEqual(
+                        first=(
+                            module.model_config.fcnet_hiddens
+                            if dataclasses.is_dataclass(module.model_config)
+                            else module.model_config["fcnet_hiddens"]
+                        ),
+                        second=(
+                            [self._model_config["fcnet_hiddens"]]
+                            if isinstance(self._model_config["fcnet_hiddens"], int)
+                            else self._model_config["fcnet_hiddens"]
+                        ),
+                    )
                     trainable_from_path.restore_from_path(tmpdir1)
                 self.on_checkpoint_loaded_callbacks(trainable_from_path)
                 self.compare_trainables(

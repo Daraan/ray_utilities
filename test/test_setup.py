@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import math
 import os
@@ -24,8 +25,8 @@ import tree
 import typing_extensions as te
 from ray import tune
 from ray.rllib.algorithms import Algorithm, AlgorithmConfig
-from ray.rllib.algorithms.ppo import PPOConfig
-from ray.rllib.callbacks.callbacks import RLlibCallback
+from ray.rllib.algorithms.dqn import DQN, DQNConfig
+from ray.rllib.algorithms.ppo import PPO, PPOConfig
 from ray.rllib.core import ALL_MODULES
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
@@ -40,7 +41,6 @@ from ray_utilities.callbacks.algorithm.seeded_env_callback import (
     NUM_ENV_RUNNERS_0_1_EQUAL,
     AlwaysSeedEvaluationEnvsCallback,
     DirectRngSeedEnvsCallback,
-    SeedEnvsCallbackBase,
 )
 from ray_utilities.config import DefaultArgumentParser, add_callbacks_to_config, seed_environments_for_config
 from ray_utilities.config import logger as parser_logger
@@ -63,7 +63,7 @@ from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.random import seed_everything
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger
-from ray_utilities.setup.ppo_mlp_setup import MLPSetup, PPOMLPSetup
+from ray_utilities.setup.ppo_mlp_setup import DQNMLPSetup, MLPSetup
 from ray_utilities.testing_utils import (
     ENV_RUNNER_CASES,
     TWO_ENV_RUNNER_CASES,
@@ -435,12 +435,12 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
 
         self.set_max_diff(15000)
         self.assertIsNot(trainable.algorithm_config, setup.config)
-        # ignore callbacks that are created on Trainable.setup, this includes FixedAlwaysSeedEvaluationEnvsCallback
         self.compare_configs(
             trainable.algorithm_config,
             setup.config,
             ignore=[
-                # ignore callbacks that are created on Trainable.setup, this includes FixedAlwaysSeedEvaluationEnvsCallback
+                # ignore callbacks that are created on Trainable.setup
+                # this includes FixedAlwaysSeedEvaluationEnvsCallback
                 "callbacks_on_environment_created",
             ],
         )
@@ -823,6 +823,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                         )
             trainable.stop()
 
+    @mock_trainable_algorithm(mock_env_runners=False)
     def test_cfg_loading(self):
         with tempfile.NamedTemporaryFile("w+") as f, patch_args("-cfg", f.name):
             f.write(
@@ -836,8 +837,22 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
             f.flush()
             setup = MLPSetup(init_param_space=False)
             self.assertEqual(setup.args.fcnet_hiddens, [8, 8])
-            module = str(setup.config.rl_module_spec.build())
-            self.assertIn("in_features=8, out_features=8", module)
+
+            # Test on algo
+            algo = setup.build_algo()
+            module = algo.get_module()
+            assert module
+            assert module.model_config
+            self.assertEqual(module.model_config["fcnet_hiddens"], [8, 8])  # pyright: ignore[reportIndexIssue]
+            self.assertIn("in_features=8, out_features=8", str(module))
+
+            # Test pure module - might not propagate the config this way
+            # NOTE: just using config.rl_module_spec will not patch with config.model_config
+            # Only get_rl_module_spec does that as long as it is None!
+            spec = setup.config.get_rl_module_spec()
+            spec_module = spec.build()
+            self.assertEqual(spec_module.model_config["fcnet_hiddens"], [8, 8])  # pyright: ignore[reportIndexIssue]
+            self.assertIn("in_features=8, out_features=8", str(spec_module))
 
     @mock_trainable_algorithm(mock_learner=False, mock_env_runners=False)
     def test_lr_loading(self):
@@ -1008,10 +1023,10 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
         algo2.stop()
 
 
-class TestPPOMLPSetup(InitRay, num_cpus=4):
+class TestMLPSetup(InitRay, num_cpus=4):
     def test_basic(self):
         with patch_args():
-            setup = PPOMLPSetup()
+            setup = MLPSetup()
         self.assertIsNotNone(setup.config)
         self.assertIsNotNone(setup.args)
         self.assertIsNotNone(setup.create_tuner())
@@ -1023,7 +1038,7 @@ class TestPPOMLPSetup(InitRay, num_cpus=4):
 
     def test_model_config_dict(self):
         with patch_args():
-            setup = PPOMLPSetup()
+            setup = MLPSetup()
         model_config = setup._model_config_from_args(setup.args)
         assert model_config, f"Not truthy {model_config}"
         for k, v in SimpleMLPParser().parse_args([]).as_dict().items():
@@ -1036,7 +1051,7 @@ class TestPPOMLPSetup(InitRay, num_cpus=4):
 
         for args in iter_cases(cases):
             with patch_args(*args):
-                setup = PPOMLPSetup()
+                setup = MLPSetup()
             algo = setup.build_algo()
             module: DefaultPPOTorchRLModule = algo.get_module()  # pyright: ignore[reportAssignmentType]
             mlp_encoder: torch.nn.Sequential = module.encoder.encoder.net.mlp
@@ -1047,6 +1062,101 @@ class TestPPOMLPSetup(InitRay, num_cpus=4):
             for layer in mlp_encoder:
                 if isinstance(layer, torch.nn.Linear):
                     self.assertEqual(layer.out_features, next(size_iter))
+
+    @mock_trainable_algorithm(mock_env_runners=False)
+    def test_model_config_update(self):
+        with patch_args("--fcnet_hiddens", "[8, 8]"):
+            setup = MLPSetup()
+        trainable = setup.trainable_class()
+        self.assertEqual(trainable.algorithm_config.model_config["fcnet_hiddens"], [8, 8])
+        module = trainable.algorithm.get_module()
+        assert module and module.model_config
+        self.assertEqual(
+            module.model_config["fcnet_hiddens"]
+            if isinstance(module.model_config, dict)
+            else module.model_config.fcnet_hiddens,
+            [8, 8],
+        )
+        trainable.stop()
+
+        # Change input via param
+        trainable = setup.trainable_class({"fcnet_hiddens": [16]})
+        self.assertEqual(trainable.algorithm_config.model_config["fcnet_hiddens"], [16])
+        module = trainable.algorithm.get_module()
+        assert module and module.model_config
+        self.assertEqual(
+            (
+                module.model_config["fcnet_hiddens"]
+                if isinstance(module.model_config, dict)
+                else module.model_config.fcnet_hiddens
+            ),
+            [16],
+        )
+
+    def test_algorithm_selection(self):
+        with patch_args():
+            setup = MLPSetup(init_trainable=False, init_param_space=False)
+        self.assertEqual(setup.get_algorithm_classes(setup.args), (PPOConfig, PPO))
+        self.assertIsInstance(setup.config, PPOConfig)
+
+        with patch_args("--algorithm", "ppo"):
+            setup = MLPSetup(init_trainable=False, init_param_space=False)
+        self.assertEqual(setup.get_algorithm_classes(setup.args), (PPOConfig, PPO))
+        self.assertIsInstance(setup.config, PPOConfig)
+
+        with patch_args("--algorithm", "dqn"):
+            setup = MLPSetup(init_trainable=False, init_param_space=False)
+        self.assertEqual(setup.get_algorithm_classes(setup.args), (DQNConfig, DQN))
+        self.assertIsInstance(setup.config, DQNConfig)
+
+
+class TestDQNSetup(InitRay, num_cpus=4):
+    @mock_trainable_algorithm(mock_env_runners=False)
+    def test_dqn_args(self):
+        with DQNMLPSetup() as setup:
+            settings1 = {
+                "dueling": False,
+                "double_q": False,
+                "num_atoms": 53,
+                "v_min": -132,
+                "epsilon": 5,
+            }
+            # After this model_config needs update
+            setup.config.training(**settings1)
+        model_config1 = setup.config.model_config
+        # assert settings is subdict
+        self.maxDiff = None
+        self.assertDictEqual(model_config1, setup.config.model_config | settings1)
+        settings2 = {
+            "dueling": True,
+            "double_q": True,
+            "num_atoms": 1,
+            "v_min": -17,
+            "epsilon": 7,
+        }
+        with setup:
+            setup.config.training(**settings2)
+            # NOTE: need to reupdate model_config after changing training parameters
+            # setup.config.rl_module(model_config=setup.config.model_config)
+        model_config2 = setup.config.model_config
+        # assert settings is subdict
+        assert setup.config.rl_module_spec
+        assert setup.config.rl_module_spec.model_config
+        self.assertDictEqual(model_config2, setup.config.model_config | settings2)
+        # the rl_module_spec.model_config is
+        spec_config = setup.config.rl_module_spec.model_config
+        self.assertDictEqual(
+            model_config2,
+            (dataclasses.asdict(spec_config) if dataclasses.is_dataclass(spec_config) else spec_config),
+        )
+        algo = setup.build_algo()
+        module = algo.get_module()
+        assert module.model_config
+        modules_config = module.model_config
+        modules_config = (
+            dataclasses.asdict(modules_config) if dataclasses.is_dataclass(modules_config) else modules_config
+        )
+        self.assertDictEqual(modules_config, modules_config | model_config2)
 
 
 ENV_STEPS_PER_ITERATION = 20 * max(1, DefaultArgumentParser.num_envs_per_env_runner)
@@ -1317,6 +1427,7 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
         self.assertIn("in_features=12, out_features=13", data["architecture"]["summary_str"])
         # Value Function:
         self.assertIn("in_features=13, out_features=1", data["architecture"]["summary_str"])
+        os.remove(out_path)
 
 
 class TestPBTSchedulerSelection(InitRay, SetupDefaults, num_cpus=4):

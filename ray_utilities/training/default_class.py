@@ -1171,16 +1171,31 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # set reward_updaters
         # config comes from new setup
         setup_config = self._setup.config.copy(copy_frozen=False)
-        if self._model_config is not None:
-            patch_model_config(setup_config, self._model_config)
+
+        perturbed: dict[str, Any] = {}
         if PERTURBED_HPARAMS in self.config:
-            perturbed: dict[str, Any] = {k: self.config[k] for k in self.config[PERTURBED_HPARAMS]}
+            perturbed = {k: self.config[k] for k in self.config[PERTURBED_HPARAMS]}
             # assert perturbed == self.config[PERTURBED_HPARAMS]
             # Remove __perturbed__ from config so that a future checkpoint hparams does not see them as highest priority
             self._perturbed_config: Optional[dict[str, Any]] = self.config.pop(PERTURBED_HPARAMS)
         else:
-            perturbed = {}
             self._perturbed_config = None
+        if self._model_config is not None or self.config.get("model_config"):
+            # If we have a model config or there is something in our original config patch the one from the setup
+            # Patch model_config if available, handling None values safely
+            model_config_patch = {}
+            if self._model_config is not None:
+                model_config_patch |= (
+                    dataclasses.asdict(self._model_config)
+                    if dataclasses.is_dataclass(self._model_config)
+                    else self._model_config
+                )
+            if self.config.get("model_config"):
+                model_config_patch |= self.config["model_config"]
+            if perturbed.get("model_config"):
+                model_config_patch |= perturbed["model_config"]
+            if model_config_patch:
+                patch_model_config(setup_config, model_config_patch)
 
         # Always patch config with param space to ensure callbacks (like seeding) are added
         # and args are consistent with config.
@@ -1197,7 +1212,18 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             _logger.warning("Using a perturbed keys and ignore_setup likely ignores the perturbed arguments.")
 
         if "config" in algo_kwargs and (self._algorithm_overrides or self._param_overrides or perturbed):
-            config_overrides = (self._algorithm_overrides or {}) | self._param_overrides | perturbed
+            config_overrides = (
+                (self._algorithm_overrides or {})
+                | ({"model_config": self._model_config} if self._model_config else {})
+                | self._param_overrides
+                | perturbed
+            )
+            if "model_config" in config_overrides:
+                patch_model_config(
+                    cast("AlgorithmConfig", algo_kwargs["config"]),
+                    config_overrides["model_config"],
+                )
+                config_overrides.pop("model_config")
             algo_kwargs["config"] = (
                 cast("AlgorithmConfig", algo_kwargs["config"])
                 .copy(copy_frozen=False)
@@ -1243,7 +1269,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     delattr(self, "_algorithm")
                 else:
                     algo_class = self._algo_class
-                    assert algo_class is not None
+                    if algo_class is None:
+                        config_class, algo_class = self._setup.get_algorithm_classes(self._setup.args)
+                        if algo_class is None:
+                            algo_class = config_class().algo_class
+                    if algo_class is None:
+                        _logger.critical("Cannot restore algorithm from checkpoint because algorithm class is unknown.")
+                        raise RuntimeError("Algorithm class is None but trying to restore from checkpoint")
                 # Does not call on_checkpoint_loaded callback
                 start = time.time()
                 if local_available:
@@ -1275,7 +1307,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 )
                 raise
             else:
-                _logger.important_info(
+                ImportantLogger.important_info(
+                    _logger,
                     "Successfully loaded algorithm checkpoint from %s in (%d seconds)",
                     checkpoint["algorithm_checkpoint_dir"],
                     end - start,
@@ -1373,10 +1406,14 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             raise ValueError(f"Checkpoint must be a dict or a path. Not {type(checkpoint)}")
         if perturbed:  # XXX: check that perturbed has highest priority and updated the config
             for k, v in perturbed.items():
-                assert getattr(self.algorithm_config, k) == v, "Expected perturbed key '%s' to be %s, but got %s" % (
+                real_value = getattr(self.algorithm_config, k)
+                if isinstance(v, dict):
+                    # subdict is ok
+                    v = real_value | v  # noqa: PLW2901
+                assert real_value == v, "Expected perturbed key '%s' to be %s, but got %s" % (
                     k,
                     v,
-                    getattr(self.algorithm_config, k),
+                    real_value,
                 )
         warn_if_batch_size_not_divisible(
             batch_size=self.algorithm_config.train_batch_size_per_learner,

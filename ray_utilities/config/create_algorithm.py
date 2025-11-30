@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Callable, Final, Literal, Optional, TypeV
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
 from ray_utilities.callbacks.algorithm.eval_ema_metric_callback import make_eval_ema_metrics_callback
 from ray_utilities.callbacks.algorithm.model_config_saver_callback import save_model_config_and_architecture
+from ray_utilities.config.parser.default_argument_parser import DQNArgumentParser, PPOArgumentParser
 from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.warn import (
     warn_about_larger_minibatch_size,
@@ -42,6 +43,7 @@ if sys.version_info < (3, 11):
 import gymnasium as gym
 from gymnasium.envs.registration import VectorizeMode
 from ray.rllib.algorithms.callbacks import DefaultCallbacks, make_multi_callbacks
+from ray.rllib.algorithms.dqn import DQNConfig
 from ray.rllib.algorithms.ppo.ppo import PPOConfig
 from ray.rllib.core.rl_module import RLModule, RLModuleSpec
 from ray.tune import logger as tune_logger
@@ -323,6 +325,40 @@ def create_algorithm_config(
     except TypeError:  # old interface
         config.training(learner_config_dict=learner_config_dict)
 
+    # Get algorithm type from args
+    algorithm_type = args.get("algorithm", "ppo")
+    if algorithm_type == "default":
+        if isinstance(config, PPOConfig):
+            algorithm_type = "ppo"
+        elif isinstance(config, DQNConfig):
+            algorithm_type = "dqn"
+        else:
+            ImportantLogger.important_info(
+                logger,
+                "'algorithm' is set as 'default' "
+                "but could not infer type from config %s. Assuming outer functions handles algorithm specific settings",
+                type(config),
+            )
+    if (
+        algorithm_type != "dqn"
+        and args["tune"]
+        and any(param in DQNArgumentParser._dqn_specific_tune_choices for param in args["tune"])
+    ):
+        raise ValueError(
+            "DQN-specific tune parameters were provided, but the selected algorithm is not DQN. "
+            "Please remove DQN-specific parameters from --tune or select --algorithm dqn."
+        )
+    if (
+        algorithm_type != "ppo"
+        and args["tune"]
+        and any(param in PPOArgumentParser._ppo_specific_tune_choices for param in args["tune"])
+    ):
+        raise ValueError(
+            "PPO-specific tune parameters were provided, but the selected algorithm is not PPO. "
+            "Please remove PPO-specific parameters from --tune or select --algorithm ppo."
+        )
+
+    # Common training configuration for all algorithms
     config.training(
         gamma=0.99,
         # with a growing number of Learners and to increase the learning rate as follows:
@@ -334,17 +370,20 @@ def create_algorithm_config(
         train_batch_size_per_learner=args["train_batch_size_per_learner"],
         grad_clip=0.5,
     )
-    try:
-        cast("PPOConfig", config).training(
-            minibatch_size=args["minibatch_size"],
-            num_epochs=32,
-        )
-    except TypeError:
-        cast("PPOConfig", config).training(
-            sgd_minibatch_size=args["minibatch_size"],
-            num_sgd_iter=32,
-        )
-    if isinstance(config, PPOConfig):
+
+    # Algorithm-specific training configuration
+    if algorithm_type == "ppo":
+        assert isinstance(config, PPOConfig)
+        try:
+            cast("PPOConfig", config).training(
+                minibatch_size=args["minibatch_size"],
+                num_epochs=32,
+            )
+        except TypeError:
+            cast("PPOConfig", config).training(
+                sgd_minibatch_size=args["minibatch_size"],
+                num_sgd_iter=32,
+            )
         config.training(
             # PPO Specific
             use_critic=True,
@@ -357,6 +396,37 @@ def create_algorithm_config(
             use_kl_loss=args.get("use_kl_loss", False),
             use_gae=True,  # Must be true to use "truncate_episodes"
         )
+    elif algorithm_type == "dqn":
+        assert isinstance(config, DQNConfig)
+        default_dqn_config = type(config)()
+        config.training(
+            # DQN Specific
+            # TODO: verify if correct defaults and present.
+            target_network_update_freq=args.get(
+                "target_network_update_freq", default_dqn_config.target_network_update_freq
+            ),
+            num_steps_sampled_before_learning_starts=args.get(
+                "num_steps_sampled_before_learning_starts", default_dqn_config.num_steps_sampled_before_learning_starts
+            ),
+            tau=args.get("tau", default_dqn_config.tau),
+            epsilon=args.get("epsilon", default_dqn_config.epsilon),
+            double_q=args.get("double_q", default_dqn_config.double_q),
+            dueling=args.get("dueling", default_dqn_config.dueling),
+            num_atoms=args.get("num_atoms", default_dqn_config.num_atoms),
+        )
+        if model_config is not None:
+            if default_dqn_config.model_config.keys() & model_config.keys():
+                logger.warning(
+                    "model_config contains dqn keys %s; changing the config parameters, "
+                    "e.g. with tune or pbt, will not work as expected as the keys are NOT updated for the RLModule",
+                    default_dqn_config.model_config.keys() & model_config.keys(),
+                )
+            # model_config = {**config.model_config, **model_config}
+        # Needed for DefaultDQNRLModule
+        # NOTE: When we set them on model_config then changes on the config are NOT longer respected
+        # as config.model_config -> config._from_settings | user_provided_model_config
+    else:
+        logger.warning("No specific training configuration for algorithm type '%s'", algorithm_type)
     if model_config is not None and "vf_share_layers" not in model_config:
         # Workaround for https://github.com/ray-project/ray/issues/58715 avoid no sync mishaps
         from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig  # noqa: PLC0415
@@ -368,7 +438,7 @@ def create_algorithm_config(
         module_class=module_class,
         observation_space=init_env.observation_space,
         action_space=init_env.action_space,
-        model_config=cast("dict[str, Any]", model_config),
+        # NOTE: Do not set the model_config; it will be taken from config.model_config
         catalog_class=catalog_class,
     )
     init_env.close()
@@ -378,6 +448,10 @@ def create_algorithm_config(
     )
     if model_config is not None:
         config.rl_module(model_config=model_config)
+    if algorithm_type == "dqn":
+        assert not config._rl_module_spec or config._rl_module_spec.model_config is None, (
+            "When using DQNConfig do not set model_config in RLModuleSpec, as it will be taken from config.model_config"
+        )
     # https://docs.ray.io/en/latest/rllib/package_ref/doc/ray.rllib.algorithms.algorithm_config.AlgorithmConfig.evaluation.html
     # Stateless callbacks
     if not args["no_exact_sampling"]:

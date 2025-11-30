@@ -712,8 +712,10 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
                         if self._state_loaded_after_pkl:
                             ImportantLogger.important_warning(
                                 logger,
-                                "Scheduler state was loaded after unpickle but still found a trial with last_time > _next_perturbation_sync. "
-                                "Either it overstepped or the state load did not restore _next_perturbation_sync correctly.",
+                                "Scheduler state was loaded after unpickle "
+                                "but still found a trial with last_time > _next_perturbation_sync. "
+                                "Either it overstepped or the state load did not restore "
+                                "_next_perturbation_sync correctly.",
                             )
                         else:
                             logger.info(

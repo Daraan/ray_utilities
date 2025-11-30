@@ -148,7 +148,7 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
         """
         logger.warning("compute_losses called, which makes no use of jit - additional step in shedule")
         curr_entropy_coeffs, curr_kl_coeffs = self._generate_curr_coeffs()
-        loss_per_module, aux_data = self._jax_compute_losses(
+        loss_per_module, _aux_data = self._jax_compute_losses(
             parameters=self._get_state_parameters(self._states),
             fwd_out=fwd_out,
             batch=batch,

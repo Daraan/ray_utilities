@@ -432,13 +432,17 @@ def patch_args(
     log_args = ()
     if log_level and "--log_level" not in args:
         log_args = ("--log_level", "DEBUG")
+    # import socket # for running on live cluster
     patched_args = map(str, (*old_args, *args) if extend_argv else args)
     patched_args = [
         sys.argv[0] if sys.argv else "_imaginary_file_for_patch.py",
         *actor_args,
         *log_args,
+        # When we run on a livecluster test locally.
+        # NOTE: Needs to be commented when there is not cluster & hostname label setup!
+        #"--hostname_selector", socket.gethostname(),
         *patched_args,
-    ]
+    ]  # fmt: skip
     if "--test" in patched_args and "COMET_API_KEY" not in os.environ:
         logger.warning("Using --test in tests will enable Comet/Wandb on GitHub Actions but API might be missing.")
     patch_obj = mock.patch.object(
@@ -640,8 +644,8 @@ class TestHelpers(unittest.TestCase):
         os.environ["CI"] = "1"  # Indicate that we are in a CI environment
         os.environ["TUNE_GLOBAL_CHECKPOINT_S"] = "10000"
         cls._disable_ray_auto_init()
-        os.environ["RAY_UTILITIES_STORAGE_PATH"] = "./outputs/experiments/TESTING"
-        ExperimentSetupBase.base_storage_path = "./outputs/experiments/TESTING"
+        os.environ["RAY_UTILITIES_STORAGE_PATH"] = "./outputs/experiments/shared/TESTING"
+        ExperimentSetupBase.base_storage_path = "./outputs/experiments/shared/TESTING"
         ExperimentSetupBase.PROJECT = "TEST-PROJECT"
         sys.modules["selenium"] = mock.MagicMock()
         cls._setup_backup_mock: mock._patch_pass_arg[mock.MagicMock | mock.AsyncMock] = mock.patch.object(
@@ -722,10 +726,17 @@ class TestHelpers(unittest.TestCase):
         try:
             AlgorithmSetup.PROJECT = "TESTING"
             # Create run config to have access to output dir
+            project_root_logger = logging.getLogger("ray_utilities")
+            during_shutdown = any(
+                handler.stream.closed for handler in project_root_logger.handlers if hasattr(handler, "stream")
+            )  # pyright: ignore[reportAttributeAccessIssue]
+            if during_shutdown:
+                change_log_level(project_root_logger, logging.CRITICAL)
+                project_root_logger.disabled = True
             with (
-                change_log_level(experiment_base_logger, logging.ERROR),
-                change_log_level(tuner_setup_logger, logging.ERROR),
-                change_log_level(extensions_logger, logging.ERROR),
+                change_log_level(experiment_base_logger, logging.ERROR if not during_shutdown else logging.CRITICAL),
+                change_log_level(tuner_setup_logger, logging.ERROR if not during_shutdown else logging.CRITICAL),
+                change_log_level(extensions_logger, logging.ERROR if not during_shutdown else logging.CRITICAL),
                 mock.patch("logging.getLogger") as mock_get_logger,  # not log or adjust
                 patch_args(),
             ):
@@ -866,6 +877,15 @@ class TestHelpers(unittest.TestCase):
         self.assertEqual(trainable._setup.args.iterations, 5)
         self.assertEqual(trainable._setup.args.total_steps, 320)
         self.assertEqual(trainable._setup.args.train_batch_size_per_learner, 64)  # not overwritten
+        # check that module has correct fcnet_hiddens
+        module = trainable.algorithm.get_module()
+        assert module.model_config
+        self.assertEqual(
+            module.model_config["fcnet_hiddens"],  # pyright: ignore
+            [self._model_config["fcnet_hiddens"][0]]  # pyright: ignore
+            if isinstance(self._model_config["fcnet_hiddens"], int)  # pyright: ignore
+            else self._model_config["fcnet_hiddens"],  # pyright: ignore
+        )
 
         if not train:
             return trainable, None

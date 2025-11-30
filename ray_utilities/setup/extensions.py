@@ -171,13 +171,27 @@ def load_distributions_from_json(
 class TunableSetupMixin(ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]):
     TUNE_PARAMETER_FILE = "experiments/tune_parameters.json"
 
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self,
+        args: Optional[Sequence[str]] = None,
+        *,
+        config_files=None,
+        load_args=None,
+        init_config: bool = True,
+        init_param_space: bool = True,
+        init_trainable: bool = True,
+        parse_args: bool = True,
+        trial_name_creator=None,
+        change_log_level: Optional[bool] = True,
+    ):
         if self.__restored__:
             _logger.debug("Not calling set_tune_parameters as instance is being restored.")
         else:
             self.tune_parameters: dict[str, ParameterSpace[Any] | optuna.distributions.BaseDistribution] = {}
             self.set_tune_parameters()
-        super().__init__(*args, **kwargs)
+        super().__init__(args, config_files=config_files, load_args=load_args, init_config=init_config,
+                         init_param_space=init_param_space, init_trainable=init_trainable, parse_args=parse_args,
+                         trial_name_creator=trial_name_creator, change_log_level=change_log_level)  # fmt: skip
 
     def add_tune_parameter(self, name: str, param_space: ParameterSpace[Any]) -> None:
         """Add a parameter to the tuning space.

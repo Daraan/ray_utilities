@@ -77,7 +77,7 @@ from ray_utilities.warn import (
 if TYPE_CHECKING:
     import gymnasium as gym
     import ray.tune.search.sample  # noqa: TC004  # present at runtime from import ray.tune
-    from ray.rllib.algorithms import PPO, Algorithm
+    from ray.rllib.algorithms import Algorithm
     from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
     from ray.rllib.utils.typing import EnvType
@@ -109,8 +109,8 @@ NamespaceType: TypeAlias = "argparse.Namespace | ParserType_co"  # Generic, form
 ConfigType_co = TypeVar("ConfigType_co", bound="AlgorithmConfig", covariant=True, default="AlgorithmConfig")
 """TypeVar for the AlgorithmConfig type of a Setup, e.g. PPOConfig, DQNConfig, etc; defaults to AlgorithmConfig."""
 
-AlgorithmType_co = TypeVar("AlgorithmType_co", bound="Algorithm", covariant=True, default="PPO")
-"""TypeVar for the Algorithm type of a Setup, e.g. PPO, DQN, etc; defaults to PPO."""
+AlgorithmType_co = TypeVar("AlgorithmType_co", bound="Algorithm", covariant=True, default="Algorithm")
+"""TypeVar for the Algorithm type of a Setup, e.g. PPO, DQN, etc; defaults to Algorithm."""
 
 _MaybeNone = Any
 """Attribute might be None when trainable is not set up"""
@@ -648,9 +648,9 @@ class ExperimentSetupBase(
             known_only = self.parse_known_only
         if not self.parser:
             self.parser = self.create_parser()
+        # If Tap parser or compatible
+        self.parser = cast("ParserType_co", self.parser)
         try:
-            # If Tap parser or compatible
-            self.parser = cast("ParserType_co", self.parser)
             parsed = self.parser.parse_args(self._remove_testing_args_from_argv(args), known_only=known_only)
             extra_args = self.parser.extra_args
         except TypeError as e:
@@ -860,11 +860,12 @@ class ExperimentSetupBase(
         else:
             module = None
         # Arguments reported on the CLI
+        _, algo_class = self.get_algorithm_classes(self.args)
         param_space: dict[str, Any] = {
             "env": (
                 self.config.env if isinstance(self.config.env, str) else self.config.env.unwrapped.spec.id  # pyright: ignore[reportOptionalMemberAccess]
             ),  # pyright: ignore[reportOptionalMemberAccess]
-            "algo": self.config.algo_class.__name__ if self.config.algo_class is not None else "UNDEFINED",
+            "algo": algo_class.__name__ if algo_class is not None else "UNDEFINED",
             "module": module,
             "setup_cls": self.__class__.__name__,
             "trainable_name": self.get_trainable_name(),  # "UNDEFINED" is called before create_trainable
@@ -934,7 +935,9 @@ class ExperimentSetupBase(
                 "Cannot override algorithm configuration as the config is already frozen. "
                 "Use this function in a `with setup` block or call `unset_trainable()` first."
             )
-        overrides = self.config_class.overrides(**kwargs)
+        # If we call this without init_args this will fail
+        config_class, _ = self.get_algorithm_classes(self.args)
+        overrides = config_class.overrides(**kwargs)
         if not self._config_overrides or not update:
             self._config_overrides = overrides
         else:
@@ -1009,6 +1012,18 @@ class ExperimentSetupBase(
         self._retrieved_callbacks = False  # Reset for next call
         type(self)._retrieved_callbacks = False
         return self.config
+
+    @classmethod
+    @abstractmethod
+    def get_algorithm_classes(
+        cls, args: NamespaceType[ParserType_co]
+    ) -> tuple[type[ConfigType_co], type[AlgorithmType_co] | None]:
+        """
+        Get the algorithm class and config class associated with this setup.
+
+        Returns:
+            A tuple containing the algorithm class and the algorithm config class.
+        """
 
     @classmethod
     @abstractmethod
@@ -1112,21 +1127,26 @@ class ExperimentSetupBase(
         # do not reset as we also check in create_config
 
         # sanity check if class aligns
-        if not isinstance(config, cls.config_class):
+        config_class, algo_class = cls.get_algorithm_classes(args)
+        if not isinstance(config, config_class):
             logger.error(
                 "The class of the config returned by _config_from_args (%s) "
-                "does not match the expected config class of the Setup %s.",
+                "does not match the expected config class of the Setup %s (value on class%s).",
                 type(config),
+                config_class,
                 cls.config_class,
             )
-        if config.algo_class and not issubclass(config.algo_class, cls.algo_class):
+        if algo_class is None:
+            algo_class = config_class().algo_class
+        if algo_class and config.algo_class and not issubclass(config.algo_class, algo_class):
             logger.error(
                 "The algo_class of the config returned by _config_from_args (%s) "
-                "is not subclass of the expected algo_class of the Setup %s.",
+                "is not subclass of the expected algo_class of the Setup %s (value on class: %s).",
                 config.algo_class,
+                algo_class,
                 cls.algo_class,
             )
-        elif config.algo_class is None and cls.algo_class is not None:  # pyright: ignore[reportUnnecessaryComparison]
+        elif config.algo_class is None and config_class is not None:  # pyright: ignore[reportUnnecessaryComparison]
             logger.warning(
                 "The algo_class of the config returned by _config_from_args is None. "
                 "This is unexpected, it should match the one defined in the Setup class (%s).",
@@ -1136,32 +1156,42 @@ class ExperimentSetupBase(
 
     @classmethod
     def algorithm_from_checkpoint(
-        cls, path: str, *, config: Optional[ConfigType_co] = None, **kwargs
+        cls, path: str, *, args: dict[str, Any], config: Optional[ConfigType_co] = None, **kwargs
     ) -> AlgorithmType_co:
         """
         Load an algorithm from a checkpoint.
 
         Args:
             path: The path to the checkpoint directory.
+            args: Should be a namespace with at least an 'algorithm' attribute for :meth:`get_algorithm_classes`.
             ignore_config: Whether to ignore the Setup's config and restore the config from the
                 checkpoint or overwrite it with the config obtained by `create_config`.
                 Defaults to False.
         """
         # Algorithm.from_checkpoint is not typed as Self, but as Algorithm
 
-        try:
-            algo_class_from_config = cls.config_class().algo_class
-        except Exception:
-            logger.exception("Error getting algo_class from config class %s", cls.config_class)
-            algo_class_from_config = cls.algo_class
-        if cls.algo_class != algo_class_from_config:
+        config_class, algo_class = cls.get_algorithm_classes(args=SimpleNamespace(**args))
+        algo_class_from_config = config_class().algo_class
+        constructor_class = algo_class_from_config or algo_class or (config and config.algo_class)
+        if algo_class is not None and algo_class != algo_class_from_config:
             logger.error(
-                "The algo_class of the config (%s) does not match the algo_class of the Setup (%s). "
+                "The algo_class of the config (%s) does not match "
+                "the algo_class of the Setup.get_algorithm_classes %s (value on class %s). "
                 "This may lead to unexpected behavior. Using the algo_class from the Setup class.",
-                cls.config_class().algo_class,
+                algo_class_from_config,
                 cls.algo_class,
+                algo_class,
             )
         if config is not None:
+            if config.algo_class != algo_class:
+                logger.error(
+                    "The algo_class of the provided config (%s) does not match "
+                    "the algo_class of the Setup.get_algorithm_classes %s (value on class %s). "
+                    "This may lead to unexpected behavior.",
+                    config.algo_class,
+                    cls.algo_class,
+                    algo_class,
+                )
             warn_if_batch_size_not_divisible(
                 batch_size=config.train_batch_size_per_learner, num_envs_per_env_runner=config.num_envs_per_env_runner
             )
@@ -1177,11 +1207,15 @@ class ExperimentSetupBase(
                 num_envs_per_env_runner=config.num_envs_per_env_runner,
             )
             kwargs = {"config": config, **kwargs}
+        if constructor_class is None:
+            raise ValueError("Could not determine the Algorithm class to restore from checkpoint.")
         try:
             # Algorithm checkpoint is likely in subdir.
-            return cast("AlgorithmType_co", cls.algo_class.from_checkpoint(os.path.join(path, "algorithm"), **kwargs))
+            return cast(
+                "AlgorithmType_co", constructor_class.from_checkpoint(os.path.join(path, "algorithm"), **kwargs)
+            )
         except ValueError:
-            return cast("AlgorithmType_co", cls.algo_class.from_checkpoint(path, **kwargs))
+            return cast("AlgorithmType_co", constructor_class.from_checkpoint(path, **kwargs))
 
     def build_algo(self) -> AlgorithmType_co:
         try:
@@ -1850,6 +1884,7 @@ class ExperimentSetupBase(
             trial_name_creator=data.get("trial_name_creator"),
             config_files=config_files_to_use,
         )
+        new.args = data["args"]  # might be just a simple namespace
         unchecked_keys.discard("trial_name_creator")
         unchecked_keys.discard("config_files")
 
@@ -1883,13 +1918,12 @@ class ExperimentSetupBase(
         if config:
             new.config = config
         command_args = data["args"].__dict__.pop("COMMAND_ARGS", None)
-        new.args = data["args"]  # might be just a simple namespace
         new.GROUP = data.get("GROUP", new.GROUP)
         new.PROJECT = data.get("PROJECT", new.PROJECT)
         unchecked_keys.discard("GROUP")
         unchecked_keys.discard("PROJECT")
         if "tune_parameters" in data:
-            new.tune_parameters = data["tune_parameters"]
+            new.tune_parameters = data["tune_parameters"]  # pyright: ignore[reportAttributeAccessIssue]
             unchecked_keys.discard("tune_parameters")
         if isinstance(new.parser, Tap):
             try:
@@ -2028,12 +2062,25 @@ class ExperimentSetupBase(
         if self._config_overrides:
             self._unfreeze_config()
             self.config.update_from_dict(self._config_overrides)
+            completed_model_config = self.config.model_config
+            model_config_matching_keys = completed_model_config.keys() & self._config_overrides.keys()
+            # heuristic remove keys that are also a config attribute like for DQN
+            # we do not want to include keys in the model config that are provided via the main config
+            model_config_matching_keys -= vars(self.config).keys()
+            # if model_config_matching_keys and self.config._model_config is not None:
+            #    # NOTE: Normally should put model parameters in hparams["model_config"]
+            #    if model_config_matching_keys:
+            #        logger.info("hparams contains keys that belong to the AlgorithmConfig.model_config. "
+            #                    "It is recommended to put these into a subdict hparams['model_config']")
+            #    patch_model_config(self.config, {k:self._config_overrides[k] for k in model_config_matching_keys})
         self.setup(
             init_config=False,
             init_param_space=True,
             init_trainable=True,
             parse_args=False,
         )
+
+    # endregion
 
     # Currently cannot use TypeForm[type[TypedDict]] as it is not included in the typing spec.
     # @property
