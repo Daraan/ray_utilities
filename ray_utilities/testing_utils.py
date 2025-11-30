@@ -1343,6 +1343,20 @@ class TestHelpers(unittest.TestCase):
                         config.callbacks_class, SeedEnvsCallbackBase
                     ):
                         config.callbacks_class = [] if isinstance(other_config.callbacks_class, list) else RLlibCallback
+        elif "callbacks_on_environment_created" in ignore:
+            assert isinstance(config1, dict) and isinstance(config2, dict)
+            for config in (config1, config2):
+                other_config = config2 if config is config1 else config1
+                if isinstance(config.get("callbacks"), list):
+                    config["callbacks"] = [
+                        cb
+                        for cb in config["callbacks"]
+                        if not (isinstance(cb, type) and issubclass(cb, SeedEnvsCallbackBase))
+                    ]
+                elif isinstance(config.get("callbacks"), type) and issubclass(
+                    config["callbacks"], SeedEnvsCallbackBase
+                ):
+                    config["callbacks"] = [] if isinstance(other_config["callbacks"], list) else RLlibCallback
 
         config1_eval = None
         config2_eval = None
