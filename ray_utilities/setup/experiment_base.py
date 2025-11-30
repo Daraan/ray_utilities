@@ -935,6 +935,7 @@ class ExperimentSetupBase(
                 "Cannot override algorithm configuration as the config is already frozen. "
                 "Use this function in a `with setup` block or call `unset_trainable()` first."
             )
+        # If we call this without init_args this will fail
         config_class, _ = self.get_algorithm_classes(self.args)
         overrides = config_class.overrides(**kwargs)
         if not self._config_overrides or not update:
@@ -1919,6 +1920,7 @@ class ExperimentSetupBase(
             trial_name_creator=data.get("trial_name_creator"),
             config_files=config_files_to_use,
         )
+        new.args = data["args"]  # might be just a simple namespace
         unchecked_keys.discard("trial_name_creator")
         unchecked_keys.discard("config_files")
 
@@ -1952,7 +1954,6 @@ class ExperimentSetupBase(
         if config:
             new.config = config
         command_args = data["args"].__dict__.pop("COMMAND_ARGS", None)
-        new.args = data["args"]  # might be just a simple namespace
         new.GROUP = data.get("GROUP", new.GROUP)
         new.PROJECT = data.get("PROJECT", new.PROJECT)
         unchecked_keys.discard("GROUP")
@@ -2097,6 +2098,17 @@ class ExperimentSetupBase(
         if self._config_overrides:
             self._unfreeze_config()
             self.config.update_from_dict(self._config_overrides)
+            completed_model_config = self.config.model_config
+            model_config_matching_keys = completed_model_config.keys() & self._config_overrides.keys()
+            # heuristic remove keys that are also a config attribute like for DQN
+            # we do not want to include keys in the model config that are provided via the main config
+            model_config_matching_keys -= vars(self.config).keys()
+            # if model_config_matching_keys and self.config._model_config is not None:
+            #    # NOTE: Normally should put model parameters in hparams["model_config"]
+            #    if model_config_matching_keys:
+            #        logger.info("hparams contains keys that belong to the AlgorithmConfig.model_config. "
+            #                    "It is recommended to put these into a subdict hparams['model_config']")
+            #    patch_model_config(self.config, {k:self._config_overrides[k] for k in model_config_matching_keys})
         self.setup(
             init_config=False,
             init_param_space=True,
