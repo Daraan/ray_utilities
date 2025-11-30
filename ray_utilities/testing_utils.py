@@ -638,6 +638,7 @@ class TestHelpers(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         os.environ["CI"] = "1"  # Indicate that we are in a CI environment
+        os.environ["TUNE_GLOBAL_CHECKPOINT_S"] = "10000"
         cls._disable_ray_auto_init()
         os.environ["RAY_UTILITIES_STORAGE_PATH"] = "./outputs/experiments/TESTING"
         ExperimentSetupBase.base_storage_path = "./outputs/experiments/TESTING"
@@ -648,7 +649,7 @@ class TestHelpers(unittest.TestCase):
         )
         cls._setup_backup_mock.start()
 
-        # mock checkpoint backup after every PBT
+        # Patch SaveTunerState to mock checkpointing after PBT epoch
         import ray_utilities.callbacks.tuner.save_tuner_state_callback as save_tuner_state_mod  # noqa: PLC0415
 
         class MockSaveTunerState(save_tuner_state_mod.SaveTunerState):
@@ -667,7 +668,6 @@ class TestHelpers(unittest.TestCase):
             MockSaveTunerState,
         )
         _save_tuner_state_patch.start()
-
         super().setUpClass()
 
     @classmethod
