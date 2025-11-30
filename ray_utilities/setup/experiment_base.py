@@ -54,7 +54,7 @@ from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.core.rl_module import MultiRLModuleSpec
 from ray.tune import error as tune_errors
 from tap.tap import Tap
-from typing_extensions import NotRequired, Self, TypedDict, TypeVar, deprecated
+from typing_extensions import NotRequired, Self, TypedDict, TypeVar
 
 from ray_utilities import get_runtime_env
 from ray_utilities.callbacks import HPARAMS_IGNORE_ARGS, remove_ignored_args

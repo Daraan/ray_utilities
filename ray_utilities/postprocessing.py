@@ -120,6 +120,8 @@ from ray_utilities.constants import (
     EPISODE_BEST_VIDEO,
     EPISODE_RETURN_MEAN_EMA,
     EPISODE_WORST_VIDEO,
+    NUM_ENV_STEPS_PASSED_TO_LEARNER,
+    NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME,
     SEED,
     SEEDS,
 )
@@ -766,11 +768,11 @@ def create_log_metrics(
     if "learners" not in log_stats and log_stats != "most":  # learners and timers+learners
         merged_result.pop("learners", None)
     elif "learners" not in log_stats and LEARNER_RESULTS in merged_result:
-        merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_IN)
-        merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_OUT)
+        merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_IN, None)
+        merged_result[LEARNER_RESULTS][ALL_MODULES].pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_OUT, None)
         if "timers" not in log_stats:  # not timers+learners case
-            merged_result[LEARNER_RESULTS][ALL_MODULES].pop(NUM_ENV_STEPS_TRAINED_LIFETIME + "_throughput")
-            merged_result[LEARNER_RESULTS][ALL_MODULES].pop(NUM_MODULE_STEPS_TRAINED + "_throughput")
+            merged_result[LEARNER_RESULTS][ALL_MODULES].pop(NUM_ENV_STEPS_TRAINED_LIFETIME + "_throughput", None)
+            merged_result[LEARNER_RESULTS][ALL_MODULES].pop(NUM_MODULE_STEPS_TRAINED + "_throughput", None)
     _remove_less_interesting_keys(merged_result)
     return merged_result  # type: ignore[return-value]
 
@@ -820,11 +822,15 @@ def _reorganize_timer_logs(results: _LogT) -> _LogT:
     # If only length 1 assume only dummy nan value inserted for metric
     if EVALUATION_RESULTS in results and len(results[EVALUATION_RESULTS]) > 1:
         evaluation_timers: dict[str, Any] = results[TIMERS].setdefault(EVALUATION_RESULTS, {})
+        try:
+            results[TIMERS][EVALUATION_RESULTS].update(_reorganize_timer_logs(results[EVALUATION_RESULTS]).pop(TIMERS))
+        except Exception:
+            _logger.exception("Error recursive reorganizing timer logs for evaluation results")
         assert EVALUATION_RESULTS not in evaluation_timers
         evaluation_timers[ENV_RUNNER_RESULTS] = {}
         # NOTE: Earlier we kept EPISODE_DURATION_SEC_MEAN at nan for first step
         for key in (EPISODE_DURATION_SEC_MEAN, TIME_BETWEEN_SAMPLING, SAMPLE_TIMER):
-            if key in results[ENV_RUNNER_RESULTS]:
+            if key in results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS]:
                 evaluation_timers[ENV_RUNNER_RESULTS][key] = results[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].pop(key)
         if not evaluation_timers[ENV_RUNNER_RESULTS]:
             results[TIMERS].pop(EVALUATION_RESULTS)
@@ -832,6 +838,11 @@ def _reorganize_timer_logs(results: _LogT) -> _LogT:
         results[TIMERS].pop(ENV_RUNNER_RESULTS)
     if not results[TIMERS]:
         results.pop(TIMERS)
+    if LEARNER_RESULTS in results:
+        learner_timers: dict[str, Any] = results[TIMERS].setdefault(LEARNER_RESULTS, {})
+        for k in set(results[LEARNER_RESULTS][ALL_MODULES].keys()):
+            if k.endswith("_throughput"):
+                learner_timers[k] = results[LEARNER_RESULTS][ALL_MODULES].pop(k)
     return results
 
 
@@ -933,6 +944,27 @@ def _remove_less_interesting_keys(metrics: LogMetricsDict | _LogMetricsEvaluatio
         modules: dict[str, dict[str, Any]] = {
             k: v for k, v in learner_results.items() if isinstance(v, dict)
         }  # best guess
+        learner_results.pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_IN, None)
+        learner_results.pop(LEARNER_CONNECTOR_SUM_EPISODES_LENGTH_OUT, None)
+        # These are wrong anyway see
+        # https://github.com/ray-project/ray/pull
+        learner_results.pop("num_envs_steps_trained", None)
+        learner_results.pop("num_envs_steps_trained_lifetime", None)
+        learner_results.pop("num_env_steps_trained_lifetime_throughput", None)
+        learner_results.pop("num_env_steps_trained_throughput", None)
+        if learner_results.get(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME) == env_runner_results.get(
+            NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
+        ):
+            learner_results.pop(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME, None)
+            # only pop if lifetime metric matches
+            if learner_results.get(NUM_ENV_STEPS_PASSED_TO_LEARNER) == env_runner_results.get(
+                NUM_ENV_STEPS_PASSED_TO_LEARNER
+            ):
+                learner_results.pop(NUM_ENV_STEPS_PASSED_TO_LEARNER, None)
+        if learner_results.get("num_non_trainable_parameters", 0) == 0:
+            learner_results.pop("num_non_trainable_parameters", None)
+        learner_results.pop("num_module_steps_trained_lifetime_throughput", None)  # there is also non lifetime
+
         for module_id, module_results in modules.items():
             if module_id == ALL_MODULES or not isinstance(module_id, dict):
                 continue

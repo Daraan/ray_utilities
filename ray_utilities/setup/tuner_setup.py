@@ -173,7 +173,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         Get the experiment name for organizing tuning results.
         This will be the subdir or the storage_path the tuner uses.
         """
-        return f"{self._setup.project}-{get_run_id()}"
+        return f"{self._setup.project}-{self._setup.args.algorithm.upper()}-{get_run_id()}"
 
     def get_storage_path(self) -> str:
         """

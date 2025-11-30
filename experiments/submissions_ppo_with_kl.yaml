@@ -220,8 +220,16 @@ pbt_lr_base_large:
   run_ids:
     (CartPole-v1):
       tws47f25113017587b594:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_lr_base_large_CartPole-v1_2025-11-30_17:58:26
+    (Acrobot-v1):
+      tws47f25113019160b2a4:
+        status: SUCCEEDED
+        submission_id: pbt_lr_base_large_Acrobot-v1_2025-11-30_17:58:26
+    (LunarLander-v3):
+      tws47f25113020323ade4:
+        status: RUNNING
+        submission_id: pbt_lr_base_large_LunarLander-v3_2025-11-30_17:58:26
 pbt_clip_param_base:
   # TODO: Change to base
   <ENV_TYPE>:

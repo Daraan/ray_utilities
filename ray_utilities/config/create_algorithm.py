@@ -339,6 +339,15 @@ def create_algorithm_config(
                 "but could not infer type from config %s. Assuming outer functions handles algorithm specific settings",
                 type(config),
             )
+    # For sanity checking set values of other algorithm to None - # XXX remove later
+    if algorithm_type != "dqn":
+        dqn_specific_keys = DQNArgumentParser._dqn_specific_tune_choices
+        for key in dqn_specific_keys:
+            args[key] = None
+    if algorithm_type != "ppo":
+        ppo_specific_keys = PPOArgumentParser._ppo_specific_tune_choices
+        for key in ppo_specific_keys:
+            args[key] = None
     if (
         algorithm_type != "dqn"
         and args["tune"]

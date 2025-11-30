@@ -66,7 +66,8 @@ default_distributions: dict[str, DistributionDefinition] = {
     # NOTE: Formula is vf_loss_coeff * vf_loss - entropy_coeff * entropy
     # Default: vf_loss_coeff = 1.0, entropy_coeff = 0.00
     "entropy_coeff": {
-        "grid_search": sorted([*np.round(np.logspace(np.log2(1e-4), np.log2(0.1), num=10, base=2), 8), 0.2, 0.0])
+        # 0.3162 is the next value in the logspace
+        "grid_search": sorted([*np.round(np.logspace(np.log2(1e-4), np.log2(0.1), num=7, base=2), 8), 0.2, 0.3162, 0.0])
     },
     "vf_loss_coeff": {"grid_search": np.linspace(0.1, 1.0, num=7).tolist()},
     # vf_clip_param - default 10 - clips in [0, vf_clip_param] - should be tuned for each env
