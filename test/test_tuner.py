@@ -642,7 +642,6 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                         "--use_exact_total_steps",  # do not adjust total_steps
                         "--minibatch_size", MINIBATCH_SIZE,  # keep
                         "--iterations", "1",  # overwrite
-                        "--hostname_selector", "copernicus",
                     ),
                      AlgorithmSetup() as setup1
                 ):  # fmt: skip
@@ -681,7 +680,6 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     "--use_exact_total_steps",  # do not adjust total_steps
                     "--from_checkpoint", checkpoints[0],
                     "--log_stats", "most",
-                    "--hostname_selector", "copernicus",
                 ):  # fmt: skip
                     with (
                         Setup() as setup2,
@@ -1283,8 +1281,8 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
     @pytest.mark.length(speed="medium")
     @mock.patch("wandb.Api", new=MagicMock())
     @mock.patch("ray_utilities.callbacks.wandb.wandb_api", new=MagicMock())
-    @pytest.mark.timeout(450)
     @mock.patch("ray.rllib.algorithms.dqn.dqn.calculate_rr_weights")
+    @pytest.mark.timeout(320)
     def test_run_tune_with_top_trial_scheduler(self, mock_rr):
         # FIXME: slowdown because of DQN use
         mock_rr.return_value = [1, 1]

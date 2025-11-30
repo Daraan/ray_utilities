@@ -642,6 +642,7 @@ class TestHelpers(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         os.environ["CI"] = "1"  # Indicate that we are in a CI environment
+        os.environ["TUNE_GLOBAL_CHECKPOINT_S"] = "10000"
         cls._disable_ray_auto_init()
         os.environ["RAY_UTILITIES_STORAGE_PATH"] = "./outputs/experiments/shared/TESTING"
         ExperimentSetupBase.base_storage_path = "./outputs/experiments/shared/TESTING"
@@ -651,6 +652,25 @@ class TestHelpers(unittest.TestCase):
             ExperimentSetupBase, ExperimentSetupBase._backup_for_restore.__name__, return_value=None
         )
         cls._setup_backup_mock.start()
+        # Patch SaveTunerState to mock save methods for tests
+        import ray_utilities.callbacks.tuner.save_tuner_state_callback as save_tuner_state_mod  # noqa: PLC0415
+
+        class MockSaveTunerState(save_tuner_state_mod.SaveTunerState):
+            def _save_experiment_state(self, trial=None):
+                # Mocked save method: do nothing
+                pass
+
+            def on_trial_save(self, iteration, trials, trial, **info):
+                pass
+
+            def on_step_end(self, iteration, trials, **info):
+                pass
+
+        _save_tuner_state_patch = mock.patch(
+            "ray_utilities.callbacks.tuner.save_tuner_state_callback.SaveTunerState",
+            MockSaveTunerState,
+        )
+        _save_tuner_state_patch.start()
         super().setUpClass()
 
     @classmethod
