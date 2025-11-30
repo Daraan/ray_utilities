@@ -652,7 +652,8 @@ class TestHelpers(unittest.TestCase):
             ExperimentSetupBase, ExperimentSetupBase._backup_for_restore.__name__, return_value=None
         )
         cls._setup_backup_mock.start()
-        # Patch SaveTunerState to mock save methods for tests
+
+        # Patch SaveTunerState to mock checkpointing after PBT epoch
         import ray_utilities.callbacks.tuner.save_tuner_state_callback as save_tuner_state_mod  # noqa: PLC0415
 
         class MockSaveTunerState(save_tuner_state_mod.SaveTunerState):
