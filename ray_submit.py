@@ -47,6 +47,18 @@ AUTOSCALER_WARNING_PATTERN = re.compile(
     r"\(autoscaler [^\)]*\) Warning: The following resource request cannot be scheduled right now: .*? This is likely due to all cluster resources being claimed by actors\.\s*Consider creating fewer actors or adding more nodes to this Ray cluster\.\s*"  # noqa: E501
 )
 
+EXCLUDE_WDIR_FILES = [
+    ".git",
+    ".vscode",
+    "docs",
+    "outputs",
+    "default_arguments",
+    ".github",
+    "get_ray_address.py",
+    "ray_submit.py",
+    "test",
+]
+
 
 def resolve_substitution_value(value: str | list[str], yaml_data: dict) -> list[str]:
     """
@@ -378,7 +390,10 @@ def submit_single_job(job_id: str, settings: dict, args: argparse.Namespace) -> 
         submission_id_out = CLIENT.submit_job(
             entrypoint=settings["entrypoint"],
             submission_id=settings.get("submission_id", args.group + "_" + job_id + "_" + TIMESTAMP_SUFFIX),
-            runtime_env=settings.get("runtime_env", {"working_dir": "."}),
+            runtime_env=settings.get(
+                "runtime_env",
+                {"working_dir": ".", "excludes": EXCLUDE_WDIR_FILES},
+            ),
             entrypoint_num_cpus=settings.get("entrypoint_num_cpus", 0.33),
             entrypoint_num_gpus=settings.get("entrypoint_num_gpus", 0),
             # While most of the time the jobs do not need that much memory there is a spike at the end

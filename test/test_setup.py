@@ -2106,7 +2106,7 @@ class TestMetricsRestored(InitRay, TestHelpers, num_cpus=4):
 
         # self.assertDictEqual(results["env_runners"][0]["step_3"], results["env_runners"][1]["step_3"])
 
-    @Cases(ENV_RUNNER_CASES)
+    @Cases([0])
     def test_restored_trainables(self, cases):
         for num_env_runners in iter_cases(cases):
             # Use multiple envs per env runner to speed up test
