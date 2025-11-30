@@ -25,6 +25,8 @@ os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
 # print all messages from comet when we upload from a worker
 os.environ.setdefault("RAY_DEDUP_LOGS_ALLOW_REGEX", "COMET|wandb")
 
+os.environ["DEBUG"] = "1"
+
 if __name__ == "__main__":
     PPOMLPSetup.PROJECT = "dev-workspace"  # Upper category on Comet / WandB
     PPOMLPSetup.group_name = "debugging"  # pyright: ignore

@@ -707,12 +707,12 @@ pbt_clip_param_:
         submission_id: pbt_clip_param__Pusher-v5_2025-11-29_18:34:11
     (InvertedDoublePendulum-v5):
       tws47f2511292025fb814:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_clip_param__InvertedDoublePendulum-v5_2025-11-29_18:34:11
     (InvertedPendulum-v5):
       tws47f251129203284f24:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_clip_param__InvertedPendulum-v5_2025-11-29_18:34:11
 pbt_entropy_coeff_base:
   # TODO: Change to base

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import tempfile
 from functools import partial, wraps
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
 from ray import tune
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS, EPISODE_RETURN_MEAN, EVALUATION_RESULTS
@@ -46,7 +46,7 @@ from ray_utilities.training.helpers import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from ray.rllib.algorithms import Algorithm
 
@@ -134,6 +134,7 @@ def default_trainable(
             discrete_eval=discrete_eval,
             disable_report=disable_report,
             log_stats=args[LOG_STATS],
+            tune_choices=args.get("tune", ()),
         )
         # Update progress bar
         if is_pbar(pbar):
@@ -221,6 +222,7 @@ def training_step(
     discrete_eval: bool = False,
     disable_report: bool = False,
     log_stats: LogStatsChoices = "minimal",
+    tune_choices: Sequence[str] | Literal[False] = (),
 ) -> tuple["StrictAlgorithmReturnData", "LogMetricsDict", "RewardsDict"]:
     """Execute a single training step with comprehensive metrics processing.
 
@@ -244,6 +246,8 @@ def training_step(
             debugging or when using custom result handling. Defaults to ``False``.
         log_stats: Level of detail for metrics logging. Controls which metrics are
             included in the processed output. Defaults to ``"minimal"``.
+        tune_choices: Sequence of hyperparameter names to include in the logged metrics.
+            If set to ``False``, no hyperparameters are included. Defaults to an empty tuple.
 
     Returns:
         A tuple containing:
@@ -281,7 +285,9 @@ def training_step(
 
     # Reduce to key-metrics
     metrics: TrainableReturnData | LogMetricsDict = {}  # type: ignore[assignment]
-    metrics = create_log_metrics(result, discrete_eval=discrete_eval, log_stats=log_stats)
+    metrics = create_log_metrics(
+        result, discrete_eval=discrete_eval, log_stats=log_stats, tune_choices=tune_choices or ()
+    )
 
     # Possibly use if train.get_context().get_local/global_rank() == 0 to save videos
     # Unknown if should save video here and clean from metrics or save in a callback later is faster.

@@ -436,7 +436,7 @@ async def monitor_job_statuses(
             for job_id in jobs_to_delete:
                 jobs_tracked_left.pop(job_id, None)
 
-            if not jobs_tracked_left and pending_submissions:
+            if len(jobs_tracked_left) < args.max_jobs and pending_submissions:
                 submission_id_out = None
                 while pending_submissions and submission_id_out is None:
                     next_job_id, next_settings = pending_submissions.pop(0)

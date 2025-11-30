@@ -58,6 +58,93 @@ pbt_batch_size:
   entrypoint_resources:
     # custom resource to not schedule on SLURM nodes that time out too early
     persistent_node: 1
+  run_ids:
+    (HumanoidStandup-v5):
+      tws47f251130010412604:
+        status: RUNNING
+        submission_id: pbt_batch_size_HumanoidStandup-v5_2025-11-30_01:03:59
+    (Humanoid-v5):
+      tws47f25113001042de04:
+        status: SUCCEEDED
+        submission_id: pbt_batch_size_Humanoid-v5_2025-11-30_01:03:59
+    (Ant-v5):
+      tws47f2511300104cbc14:
+        status: SUCCEEDED
+        submission_id: pbt_batch_size_Ant-v5_2025-11-30_01:03:59
+    (Hopper-v5):
+      tws47f251130010560324:
+        status: SUCCEEDED
+        submission_id: pbt_batch_size_Hopper-v5_2025-11-30_01:03:59
+    (Walker2d-v5):
+      tws47f2511300105b71f4:
+        status: SUCCEEDED
+        submission_id: pbt_batch_size_Walker2d-v5_2025-11-30_01:03:59
+pbt_minibatch_size_2048:
+  comment: tune minibatch_size with fixed train_batch_size_per_learner=2048
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: minibatch_size
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |-
+        --train_batch_size_per_learner 2048
+  run_ids:
+    (HumanoidStandup-v5):
+      tws47f25113001054bd04:
+        status: SUCCEEDED
+        submission_id:
+          pbt_minibatch_size_2048_HumanoidStandup-v5_2025-11-30_01:05:03
+    (Humanoid-v5):
+      tws47f2511300106a5384:
+        status: SUCCEEDED
+        submission_id: pbt_minibatch_size_2048_Humanoid-v5_2025-11-30_01:05:03
+    (Ant-v5):
+      tws47f251130010626e74:
+        status: SUCCEEDED
+        submission_id: pbt_minibatch_size_2048_Ant-v5_2025-11-30_01:05:03
+    (Hopper-v5):
+      tws47f25113001060ed94:
+        status: SUCCEEDED
+        submission_id: pbt_minibatch_size_2048_Hopper-v5_2025-11-30_01:05:03
+    (Walker2d-v5):
+      tws47f25113001075aec4:
+        status: SUCCEEDED
+        submission_id: pbt_minibatch_size_2048_Walker2d-v5_2025-11-30_01:05:03
+pbt_minibatch_size_8192:
+  comment: tune minibatch_size with fixed train_batch_size_per_learner=8192
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: minibatch_size
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |-
+        --train_batch_size_per_learner 8192
+  run_ids:
+    (HumanoidStandup-v5):
+      tws47f2511300152c1834:
+        status: SUCCEEDED
+        submission_id:
+          pbt_minibatch_size_8192_HumanoidStandup-v5_2025-11-30_01:52:07
+    (Humanoid-v5):
+      tws47f251130015268424:
+        status: SUCCEEDED
+        submission_id: pbt_minibatch_size_8192_Humanoid-v5_2025-11-30_01:52:07
+    (Ant-v5):
+      tws47f251130015253eb4:
+        status: SUCCEEDED
+        submission_id: pbt_minibatch_size_8192_Ant-v5_2025-11-30_01:52:07
+    (Hopper-v5):
+      tws47f2511300152043b4:
+        status: SUCCEEDED
+        submission_id: pbt_minibatch_size_8192_Hopper-v5_2025-11-30_01:52:07
+    (Walker2d-v5):
+      tws47f25113001532de94:
+        status: SUCCEEDED
+        submission_id: pbt_minibatch_size_8192_Walker2d-v5_2025-11-30_01:52:07
 pbt_num_envs:
   # This is a comment
   comment: small minibatch_size=256 and train_batch_size=2048
@@ -130,29 +217,7 @@ pbt_lr_base_large:
       <OTHER_FLAGS>: |
         --minibatch_size 1024
         --train_batch_size_per_learner 8192
-pbt_minibatch_size_2048:
-  comment: tune minibatch_size with fixed train_batch_size_per_learner=2048
-  entrypoint_resources:
-    persistent_node: 1
-  entrypoint_pattern:
-    pattern: global_pattern_1
-    substitutions:
-      <TUNE_PARAM>: minibatch_size
-      <ENV_TYPE>: <mujoco_envs>
-      <OTHER_FLAGS>: |-
-        --train_batch_size_per_learner 2048
-pbt_minibatch_size_8192:
-  comment: tune minibatch_size with fixed train_batch_size_per_learner=8192
-  entrypoint_resources:
-    persistent_node: 1
-  entrypoint_pattern:
-    pattern: global_pattern_1
-    substitutions:
-      <TUNE_PARAM>: minibatch_size
-      <ENV_TYPE>: <mujoco_envs>
-      <OTHER_FLAGS>: |-
-        --train_batch_size_per_learner 8192
-pbt_clip_param:
+pbt_clip_param_base:
   # TODO: Change to base
   <ENV_TYPE>:
   - CartPole-v1
@@ -165,8 +230,7 @@ pbt_clip_param:
     substitutions:
       <TUNE_PARAM>: clip_param
       <ENV_TYPE>: <basic_envs>
-pbt_clip_param_:
-  # Change to non-base
+pbt_clip_param:
   entrypoint_resources:
     persistent_node: 1
   entrypoint_pattern:
@@ -174,6 +238,27 @@ pbt_clip_param_:
     substitutions:
       <TUNE_PARAM>: clip_param
       <ENV_TYPE>: <mujoco_envs>
+  run_ids:
+    (HumanoidStandup-v5):
+      tws47f251130021462a34:
+        status: SUCCEEDED
+        submission_id: pbt_clip_param_HumanoidStandup-v5_2025-11-30_02:13:52
+    (Humanoid-v5):
+      tws47f251130021448494:
+        status: SUCCEEDED
+        submission_id: pbt_clip_param_Humanoid-v5_2025-11-30_02:13:52
+    (Ant-v5):
+      tws47f2511300214f2ae4:
+        status: SUCCEEDED
+        submission_id: pbt_clip_param_Ant-v5_2025-11-30_02:13:52
+    (Hopper-v5):
+      tws47f2511300214d78b4:
+        status: SUCCEEDED
+        submission_id: pbt_clip_param_Hopper-v5_2025-11-30_02:13:52
+    (Walker2d-v5):
+      tws47f25113002141f594:
+        status: SUCCEEDED
+        submission_id: pbt_clip_param_Walker2d-v5_2025-11-30_02:13:52
 pbt_entropy_coeff_base:
   # TODO: Change to base
   <ENV_TYPE>:
@@ -187,6 +272,19 @@ pbt_entropy_coeff_base:
     substitutions:
       <TUNE_PARAM>: entropy_coeff
       <ENV_TYPE>: <basic_envs>
+  run_ids:
+    (CartPole-v1):
+      tws47f2511300225f5214:
+        status: SUCCEEDED
+        submission_id: pbt_entropy_coeff_base_CartPole-v1_2025-11-30_02:25:01
+    (Acrobot-v1):
+      tws47f2511300226157c4:
+        status: SUCCEEDED
+        submission_id: pbt_entropy_coeff_base_Acrobot-v1_2025-11-30_02:25:01
+    (LunarLander-v3):
+      tws47f2511300705e30c4:
+        status: SUCCEEDED
+        submission_id: pbt_entropy_coeff_base_LunarLander-v3_2025-11-30_02:25:01
 pbt_vf_loss_coeff_base:
   # TODO: Change to base
   <ENV_TYPE>:
