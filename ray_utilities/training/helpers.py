@@ -177,6 +177,12 @@ def _patch_config_with_param_space(
     args["__overwritten_keys__"] = {}
     if "model_config" in hparams:
         patch_model_config(config, hparams["model_config"])
+    if "model_config" in same_keys:
+        model_config_in_both = True
+        # model_config is a property we do not want to set it
+        same_keys.discard("model_config")
+    else:
+        model_config_in_both = False
 
     completed_model_config = config.model_config
     if completed_model_config:
@@ -242,6 +248,8 @@ def _patch_config_with_param_space(
         config.update_from_dict(args["__overwritten_keys__"])
         if is_frozen:
             config.freeze()
+    if model_config_in_both:
+        args["__overwritten_keys__"]["model_config"] = hparams["model_config"]
     assert config.minibatch_size or 0 <= config.train_batch_size_per_learner
     return args, config
 
