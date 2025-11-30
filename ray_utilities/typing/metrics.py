@@ -164,6 +164,8 @@ class LogMetricsDict(_LogMetricsBase):
     env_runners: _LogMetricsEnvRunnersResultsDict
     evaluation: _LogMetricsEvaluationResultsDict
 
+    # Allow also tune choices
+
 
 class AutoExtendedLogMetricsDict(LogMetricsDict):
     """

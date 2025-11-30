@@ -587,7 +587,7 @@ class AdvCometLoggerCallback(
         # Finish comet for this trial
         start = time.time()
         with _catch_comet_offline_logger() as log_stream:
-            super().log_trial_end(trial)
+            super().log_trial_end(trial, failed=failed)
         end = time.time()
         if end - start > 30:
             _LOGGER.warning("Comet log_trial_end took a long time: %.2fs", end - start)

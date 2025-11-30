@@ -30,6 +30,8 @@ os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
 # print all messages from comet when we upload from a worker
 os.environ.setdefault("RAY_DEDUP_LOGS_ALLOW_REGEX", "COMET|wandb")
 
+os.environ["DEBUG"] = "1"
+
 if __name__ == "__main__":
     HYPERPARAMETERS = load_distributions_from_json(
         write_distributions_to_json(default_distributions, MLPPBTSetup.TUNE_PARAMETER_FILE)

@@ -553,6 +553,7 @@ def create_log_metrics(
     save_video=False,
     discrete_eval: bool = False,
     log_stats: LogStatsChoices = "minimal",
+    tune_choices: Sequence[str] = (),
 ) -> LogMetricsDict:
     """
     Filters the result of the Algorithm training step to only keep the relevant metrics.
@@ -624,7 +625,12 @@ def create_log_metrics(
         # ['mean_accuracy', 'mean_loss', 'training_iteration', 'time_total_s', 'timesteps_total', 'episode_reward_mean']
         # CLI Reporting:
         EPISODE_REWARD_MEAN: eval_ema if not math.isnan(eval_ema) else eval_mean,
+        # add tuned hyperparam value
     }
+    # Add tuned parameters
+    if tune_choices:
+        tune_params = {param: result["config"][param] for param in tune_choices if param in result["config"]}
+        metrics.update(tune_params)  # pyright: ignore
     if (grad_accum := result["config"]["learner_config_dict"].get("accumulate_gradients_every", None)) is not None:
         metrics["accumulate_gradients_every"] = grad_accum
 

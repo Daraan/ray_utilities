@@ -27,6 +27,7 @@ from ray import tune
 from ray.rllib.algorithms import Algorithm, AlgorithmConfig
 from ray.rllib.algorithms.dqn import DQN, DQNConfig
 from ray.rllib.algorithms.ppo import PPO, PPOConfig
+from ray.rllib.callbacks.callbacks import RLlibCallback
 from ray.rllib.core import ALL_MODULES
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
@@ -41,6 +42,7 @@ from ray_utilities.callbacks.algorithm.seeded_env_callback import (
     NUM_ENV_RUNNERS_0_1_EQUAL,
     AlwaysSeedEvaluationEnvsCallback,
     DirectRngSeedEnvsCallback,
+    SeedEnvsCallbackBase,
 )
 from ray_utilities.config import DefaultArgumentParser, add_callbacks_to_config, seed_environments_for_config
 from ray_utilities.config import logger as parser_logger
@@ -420,6 +422,7 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
 
     @mock_trainable_algorithm
     def test_config_overrides_via_setup(self):
+        self.maxDiff = None
         with patch_args("--batch_size", "1234", "--minibatch_size", "444"):
             # test with init_trainable=False
             with AlgorithmSetup(init_trainable=False) as setup:
@@ -434,11 +437,12 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
 
         self.set_max_diff(15000)
         self.assertIsNot(trainable.algorithm_config, setup.config)
+        # ignore callbacks that are created on Trainable.setup, this includes FixedAlwaysSeedEvaluationEnvsCallback
         self.compare_configs(
             trainable.algorithm_config,
             setup.config,
             ignore=[
-                # ignore callbacks that are created on Trainable.setup
+                # ignore callbacks that are created on Trainable.setup, this includes FixedAlwaysSeedEvaluationEnvsCallback
                 "callbacks_on_environment_created",
             ],
         )
@@ -737,8 +741,14 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
                 )
 
             callbacks = trainable.algorithm_config.callbacks_on_environment_created
-            if not isinstance(callbacks, (tuple, list)):
+            if callbacks and not isinstance(callbacks, (tuple, list)):
                 callbacks = [callbacks]
+            if callbacks is None:
+                callbacks = []
+            if trainable.algorithm_config.callbacks_class and isinstance(
+                trainable.algorithm_config.callbacks_class, (list, tuple)
+            ):
+                callbacks.extend(trainable.algorithm_config.callbacks_class)
             callbacks = [cb for cb in callbacks if isinstance(cb, type)]
             self.assertTrue(any(issubclass(cb, DirectRngSeedEnvsCallback) for cb in callbacks))
 
