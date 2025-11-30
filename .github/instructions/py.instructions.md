@@ -23,6 +23,12 @@ applyTo: "**/*.py"
 - Use consistent naming conventions and follow language-specific best practices.
 - Write concise, efficient, and idiomatic code that is also easily understandable.
 - Do not remove comments that are unrelated and in a different parts of the code that are unrelated to your change.
+- When you refactor code assure that you keep the type hint information and comments intact.
+
+# Review Instructions - apply when reviewing Python code changes or you are requested as a reviewer
+- When you encounter a `cast("some_import", variable)`, it means that `some_import` is actually used as an import for type casting, despite it being a string. For reviews do not comment on such unused imports.
+- do not comment on unused variables starting with an underscore `_` as they are intentionally unused but descriptive.
+- For larger PRs with many changes be thorough in reviewing all files, be sure to review and address all files changed.
 
 ## Docstring instructions
 
@@ -36,6 +42,7 @@ applyTo: "**/*.py"
 def calculate_area(circle: Circle) -> float:
     """
     Calculate the area of a :class:`Circle` instance.
+    Requires :attr:`Circle.radius` to be defined.
 
     Args:
         circle: The circle instance to calculate the area for.
@@ -44,7 +51,7 @@ def calculate_area(circle: Circle) -> float:
        The area of the circle, calculated as π * radius^2.
     """
     import math
-    return math.pi * radius ** 2
+    return math.pi * circle.radius ** 2
 ```
 
 ## Code Style and Formatting

@@ -61,9 +61,10 @@ optuna = [
 ]
 jax = [
   "jax",
+  "chex",
+  "distrax",
   "flax",
   "optax",
-  "chex",
 ]
 argcomplete = [
   "argcomplete",
@@ -203,6 +204,7 @@ profile = "black"
 known_third_party = [
   "default_arguments",  # This is a a lie, default_arguments should be at the top as it applies mocking
   "wandb",
+  "jax",
 ]
 line_length = 120
 

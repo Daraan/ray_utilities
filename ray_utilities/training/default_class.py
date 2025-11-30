@@ -1171,10 +1171,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # set reward_updaters
         # config comes from new setup
         setup_config = self._setup.config.copy(copy_frozen=False)
-        if self._model_config is not None:
-            patch_model_config(setup_config, self._model_config)
+
+        perturbed: dict[str, Any] = {}
         if PERTURBED_HPARAMS in self.config:
-            perturbed: dict[str, Any] = {k: self.config[k] for k in self.config[PERTURBED_HPARAMS]}
+            perturbed = {k: self.config[k] for k in self.config[PERTURBED_HPARAMS]}
             # assert perturbed == self.config[PERTURBED_HPARAMS]
             _, setup_config = patch_config_with_param_space(
                 self.config.get("cli_args", {}).copy() | perturbed, setup_config, hparams=self.config | perturbed
@@ -1183,8 +1183,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             self._perturbed_config: Optional[dict[str, Any]] = self.config.pop(PERTURBED_HPARAMS)
             # NOTE: in set_state the config might be recreated / changed depending on state
         else:
-            perturbed = {}
             self._perturbed_config = None
+        if self._model_config is not None:
+            patch_model_config(setup_config, self._model_config | perturbed.get("model_config", {}))
+
         algo_kwargs: dict[str, Any] = (
             {**kwargs}
             if ignore_setup  # NOTE: also ignores overrides on self
@@ -1195,6 +1197,12 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
         if "config" in algo_kwargs and (self._algorithm_overrides or self._param_overrides or perturbed):
             config_overrides = (self._algorithm_overrides or {}) | self._param_overrides | perturbed
+            if "model_config" in config_overrides:
+                patch_model_config(
+                    cast("AlgorithmConfig", algo_kwargs["config"]),
+                    config_overrides["model_config"],
+                )
+                config_overrides.pop("model_config")
             algo_kwargs["config"] = (
                 cast("AlgorithmConfig", algo_kwargs["config"])
                 .copy(copy_frozen=False)
@@ -1240,7 +1248,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     delattr(self, "_algorithm")
                 else:
                     algo_class = self._algo_class
-                    assert algo_class is not None
+                    if algo_class is None:
+                        config_class, algo_class = self._setup.get_algorithm_classes(self._setup.args)
+                        if algo_class is None:
+                            algo_class = config_class().algo_class
+                    if algo_class is None:
+                        _logger.critical("Cannot restore algorithm from checkpoint because algorithm class is unknown.")
+                        raise RuntimeError("Algorithm class is None but trying to restore from checkpoint")
                 # Does not call on_checkpoint_loaded callback
                 start = time.time()
                 if local_available:

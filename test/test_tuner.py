@@ -63,7 +63,7 @@ from ray_utilities.misc import is_pbar, raise_tune_errors
 from ray_utilities.runfiles import run_tune
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup
-from ray_utilities.setup.scheduled_tuner_setup import PPOMLPWithPBTSetup
+from ray_utilities.setup.scheduled_tuner_setup import MLPPBTSetup
 from ray_utilities.testing_utils import (
     ENV_RUNNER_CASES,
     Cases,
@@ -1426,7 +1426,7 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             "--quantile_fraction", "0.1",
             "--perturbation_interval", perturbation_interval,
         ):  # fmt: skip
-            Setup = SetupWithCheck(CheckTrainableForTop, PPOMLPWithPBTSetup)
+            Setup = SetupWithCheck(CheckTrainableForTop, MLPPBTSetup)
             setup = Setup(
                 config_files=["experiments/models/mlp/default.cfg"],
                 # TODO: Trials are reused, trial name might be wrong then
@@ -1436,7 +1436,8 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             setup.args.command.set_hyperparam_mutations(
                 {
                     "train_batch_size_per_learner": CyclicMutation(batch_sizes),
-                    "fcnet_hiddens": KeepMutation([2]),
+                    # NOTE: Model config_keys should go into a subdict
+                    "model_config": {"fcnet_hiddens": KeepMutation([2])},
                 }
             )
             results = run_tune(setup)
@@ -1447,7 +1448,7 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             self.assertEqual(num_exploits, max(batch_sizes) * (3 - 1) // perturbation_interval * 2)
             # Check that at most one race condition happened
             self.assertLessEqual(race_conditions, 1)
-            self.assertTrue(all(r.config["fcnet_hiddens"] == [2] for r in results))  # pyright: ignore[reportAttributeAccessIssue, reportOptionalSubscript]
+            self.assertTrue(all(r.config["model_config"]["fcnet_hiddens"] == [2] for r in results))  # pyright: ignore[reportAttributeAccessIssue, reportOptionalSubscript]
 
 
 class DummyTrial:

@@ -224,7 +224,7 @@ def init_ray_with_setup(
             )
 
     try:
-        yield context
+        yield context  # pyright: ignore[reportReturnType]
     finally:
         # Only shutdown if we started the cluster (not connected to existing)
         if not cluster_available and ray.is_initialized():

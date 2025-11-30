@@ -274,6 +274,7 @@ class TestProcessing(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         write_distributions_to_json(default_distributions, AlgorithmSetup.TUNE_PARAMETER_FILE)
+        AlgorithmSetup.PROJECT = "TESTING"
 
     @patch_args("--batch_size", "64", "--minibatch_size", "128")
     def test_to_large_minibatch_size(self):
@@ -558,6 +559,45 @@ class TestProcessing(unittest.TestCase):
                 msg=f"Expected {param} in trainable.algorithm_config to be equal to sampled parameter {sampled[param]}",
             )
         trainable.stop()
+
+    def test_invalid_tune_choice(self):
+        with patch_args("--algorithm", "dqn", "--tune", "minibatch_size"):
+            with self.assertRaises(ValueError) as context:
+                DefaultArgumentParser().parse_args()
+            self.assertIn(
+                "PPO-specific tune parameters were provided, but the selected algorithm is not PPO.",
+                str(context.exception),
+            )
+            with self.assertRaises(ValueError) as context:
+                AlgorithmSetup(init_trainable=False)
+            self.assertIn(
+                "PPO-specific tune parameters were provided, but the selected algorithm is not PPO.",
+                str(context.exception),
+            )
+
+        # TODO: For DQN we have no tuneable parameters yet, add test when we have some.
+        # NOTE: We need to pass ppo otherwise it is default and the setup must check it
+        with patch_args("--algorithm", "ppo", "--tune", "tau"):
+            with self.assertRaises(ValueError) as context:
+                DefaultArgumentParser().parse_args()
+            self.assertIn(
+                "DQN-specific tune parameters were provided, but the selected algorithm is not DQN.",
+                str(context.exception),
+            )
+            with self.assertRaises(ValueError) as context:
+                AlgorithmSetup(init_trainable=False)
+            self.assertIn(
+                "DQN-specific tune parameters were provided, but the selected algorithm is not DQN.",
+                str(context.exception),
+            )
+        # use algorithm="default" -> ppo
+        with patch_args("--tune", "epsilon"):
+            with self.assertRaises(ValueError) as context:
+                AlgorithmSetup(init_trainable=False)
+            self.assertIn(
+                "DQN-specific tune parameters were provided, but the selected algorithm is not DQN.",
+                str(context.exception),
+            )
 
 
 class TestTagArgumentProcessing(unittest.TestCase):

@@ -7,13 +7,12 @@ from ray_utilities import get_runtime_env, run_tune
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
 from ray_utilities.misc import extend_trial_name
-from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
+from ray_utilities.setup.ppo_mlp_setup import MLPSetup
 from ray_utilities.tune import update_hyperparameters
 
 os.environ.setdefault("RAY_UTILITIES_NEW_LOG_FORMAT", "1")
 
 if __name__ == "__main__":
-    PPOMLPSetup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
     from experiments.create_tune_parameters import (
         default_distributions,
         load_distributions_from_json,
@@ -37,12 +36,13 @@ if __name__ == "__main__":
         "--comet", "offline+upload",
         "--log_level", "INFO",
     ):  # fmt: skip
-        with PPOMLPSetup(
+        with MLPSetup(
             config_files=["experiments/default.cfg", "experiments/models/mlp/default.cfg"],
             trial_name_creator=extend_trial_name(insert=["<batch_size>"], prepend="Tune_BatchSize"),
         ) as setup:
             # Set hyperparameters to tune
             assert setup.args.tune
+            setup.PROJECT = "Default-<agent_type>-<env_type>"  # Upper category on Comet / WandB
             setup.GROUP = "tune-" + "_".join(setup.args.tune)  # pyright: ignore
         hyperparameters = update_hyperparameters(
             setup.param_space,

@@ -1,0 +1,125 @@
+global_pattern_1: >
+  python experiments/tune_with_scheduler.py
+  --algorithm DQN --model mlp
+  --env_type <ENV_TYPE>
+  --tune <TUNE_PARAM> --num_samples 1
+  <OTHER_FLAGS:>
+  --tag:core --tag:pbt  --tag:pbt-grouped
+  --buffer_length auto
+  --comet offline --wandb offline+upload@end --log_stats learners
+  --hostname_selector '!in(dws-login-01,dws-login-02)'
+  pbt --grouped --group_size 3 --perturbation_interval 0.125 --quantile_fraction 0.05
+# NOTE: Use set +H when using hostname selector
+# TODO: lr as > 10 options and so quantile_fraction = 0.1 -> 2 top groups
+submit_pattern: >
+  ray job submit --working-dir "." --entrypoint-memory 3000000000  --entrypoint-num-cpus
+  0.66 --entrypoint-resources '{"persistent_node":1}'
+  --submission-id pbt_batch_size_mlp-xxxxxxxxx_restore -- \  python  experiments/tune_with_scheduler.py
+  --restore_path yyyyy  --hostname_selector '!in(dws-login-01,dws-login-02)'
+
+  --submission-id pbt_batch_size_InvertedDoublePendulum-v5_7435_restore -- python  experiments/tune_with_scheduler.py
+  --restore_path /home/dsperber/master/repos/ray_utilities/outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:batch_size/Default-mlp-InvertedPendulum-v5-tws47f25112200240e674
+  --hostname_selector '!in(dws-login-01,dws-login-02)'
+notes: |
+  none
+# --- Envs --- #
+<mujoco_envs>:
+- HumanoidStandup-v5
+- Humanoid-v5
+- Ant-v5
+- Hopper-v5
+- Walker2d-v5
+- HalfCheetah-v5
+- Reacher-v5
+- Swimmer-v5
+- Pusher-v5
+- InvertedDoublePendulum-v5
+- InvertedPendulum-v5
+<basic_envs>:
+- CartPole-v1
+- Acrobot-v1
+- LunarLander-v3
+# ---
+test_command:
+  test:id:
+    entrypoint: >
+      python
+      -c "print('Hello, World!')"
+# ---
+pbt_batch_size:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: batch_size
+      <ENV_TYPE>: <mujoco_envs>
+  entrypoint_resources:
+    # custom resource to not schedule on SLURM nodes that time out too early
+    persistent_node: 1
+pbt_num_envs:
+  # This is a comment
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: num_envs_per_env_runner
+      <ENV_TYPE>: <mujoco_envs>
+  entrypoint_resources:
+    persistent_node: 1
+pbt_num_envs_large:
+  comment: train_batch_size_per_learner=8192
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: num_envs_per_env_runner
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |
+        --train_batch_size_per_learner 8192
+pbt_lr_base:
+  <ENV_TYPE>:
+  - CartPole-v1
+  - Acrobot-v1
+  - LunarLander-v3
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: lr
+      <ENV_TYPE>: <basic_envs>
+pbt_lr:
+  comment: spread lr - need to repeat because of 2 top groups
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: lr
+      <ENV_TYPE>: <mujoco_envs>
+pbt_lr_large:
+  comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
+    scale  - need to repeat because of 2 top groups
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: lr
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |
+        --train_batch_size_per_learner 8192
+pbt_lr_base_large:
+  <ENV_TYPE>:
+  - CartPole-v1
+  - Acrobot-v1
+  - LunarLander-v3
+  #entrypoint_resources:
+  #  persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: lr
+      <ENV_TYPE>: <basic_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192

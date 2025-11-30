@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import os
 import sys
+from typing import TYPE_CHECKING
 
 # Enable shell completion for this file
-import default_arguments.PYTHON_ARGCOMPLETE_OK
 from experiments.create_tune_parameters import default_distributions, write_distributions_to_json
 from experiments.ray_init_helper import init_ray_with_setup
 from ray_utilities import get_runtime_env, run_tune
 from ray_utilities.config import DefaultArgumentParser
-from ray_utilities.setup import PPOSetup
 from ray_utilities.setup.extensions import load_distributions_from_json
-from ray_utilities.setup.ppo_mlp_setup import PPOMLPSetup
-from ray_utilities.setup.scheduled_tuner_setup import PPOMLPWithPBTSetup
+from ray_utilities.setup.ppo_mlp_setup import MLPSetup
+from ray_utilities.setup.scheduled_tuner_setup import MLPPBTSetup
 from ray_utilities.tune import update_hyperparameters
 from ray_utilities.tune.scheduler.top_pbt_scheduler import KeepMutation
+
+if TYPE_CHECKING:
+    from ray_utilities.config.parser.mlp_argument_parser import MLPArgumentParser
+    from ray_utilities.config.parser.pbt_scheduler_parser import PopulationBasedTrainingParser
 
 # Replace outputs to be more human readable and less nested
 # env_runners -> training
@@ -28,10 +33,8 @@ os.environ.setdefault("RAY_DEDUP_LOGS_ALLOW_REGEX", "COMET|wandb")
 os.environ["DEBUG"] = "1"
 
 if __name__ == "__main__":
-    PPOMLPSetup.PROJECT = "dev-workspace"  # Upper category on Comet / WandB
-    PPOMLPSetup.group_name = "debugging"  # pyright: ignore
     HYPERPARAMETERS = load_distributions_from_json(
-        write_distributions_to_json(default_distributions, PPOMLPWithPBTSetup.TUNE_PARAMETER_FILE)
+        write_distributions_to_json(default_distributions, MLPPBTSetup.TUNE_PARAMETER_FILE)
     )
     with DefaultArgumentParser.patch_args(
         # main args for this experiment
@@ -52,11 +55,14 @@ if __name__ == "__main__":
         "--log_level", "DEBUG",
         "--offline_loggers", "0",
     ):  # fmt: skip
+        setup: MLPSetup[MLPArgumentParser[None] | MLPArgumentParser[PopulationBasedTrainingParser]]
         if "pbt" in sys.argv:
-            setup = PPOMLPWithPBTSetup(
+            setup = MLPPBTSetup(
                 config_files=["experiments/pbt.cfg", "experiments/default.cfg", "experiments/models/mlp/default.cfg"],
                 # TODO: Trials are reused, trial name might be wrong then
             )
+            setup.PROJECT = "dev-workspace"  # Upper category on Comet / WandB
+            setup.group_name = "debugging"  # pyright: ignore
             assert setup.args.tune, "Use --tune ... when using PBT setup"
             hyperparameters = {k: HYPERPARAMETERS[k] for k in setup.args.tune}
             hyperparameters = update_hyperparameters(
@@ -70,9 +76,7 @@ if __name__ == "__main__":
             mutations: dict[str, KeepMutation[object]] = {k: KeepMutation() for k in hyperparameters.keys()}
             setup.args.command.set_hyperparam_mutations(mutations)  # pyright: ignore[reportArgumentType]
         else:
-            setup: PPOSetup[DefaultArgumentParser] = PPOMLPSetup(
-                config_files=["experiments/default.cfg", "experiments/models/mlp/default.cfg"]
-            )
+            setup = MLPSetup(config_files=["experiments/default.cfg", "experiments/models/mlp/default.cfg"])
         os.environ["RAY_ENABLE_RECORD_ACTOR_TASK_LOGGING"] = "1"
         setup.base_storage_path = "./outputs/experiments/TESTING/"
         with init_ray_with_setup(setup, runtime_env=get_runtime_env()):

@@ -19,10 +19,12 @@ a standardized interface for algorithm configuration across different RL algorit
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Optional
 
+from ray.rllib.algorithms.dqn import DQN, DQNConfig
 from ray.rllib.algorithms.ppo import PPO, PPOConfig
 from typing_extensions import TypeVar
 
@@ -43,11 +45,13 @@ if TYPE_CHECKING:
 
     from ray_utilities.typing import TrainableReturnData
 
-__all__ = ["AlgorithmSetup", "AlgorithmType_co", "ConfigType_co", "PPOSetup", "ParserType_co"]
+__all__ = ["AlgorithmSetup", "AlgorithmType_co", "ConfigType_co", "DQNSetup", "PPOSetup", "ParserType_co"]
 
 
 TrainableT = TypeVar("TrainableT", bound=Callable[..., "TrainableReturnData"] | type["DefaultTrainable"])
 """TypeVar for the two trainable types. Note that default values of generic DefaultTrainable are applied here"""
+
+logger = logging.getLogger(__name__)
 
 
 class AlgorithmSetup(
@@ -96,7 +100,7 @@ class AlgorithmSetup(
     """
 
     PROJECT = "Unnamed Project"
-    # FIXME: Need at least PPO to use run_tune with this class
+    # Default to PPO, but will be overridden based on args.algorithm
     config_class: type[ConfigType_co] = PPOConfig  # evaluate the forward ref of ConfigType.__default__
     algo_class: type[AlgorithmType_co] = PPO
 
@@ -120,15 +124,58 @@ class AlgorithmSetup(
         return None
 
     @classmethod
+    def get_algorithm_classes(
+        cls, args: NamespaceType[ParserType_co]
+    ) -> tuple[type[ConfigType_co], type[AlgorithmType_co] | None]:
+        """Get algorithm config and class based on args.algorithm selection.
+
+        Args:
+            args: Parsed arguments with algorithm selection
+
+        Returns:
+            Tuple of (config_class, algo_class)
+        """
+        algorithm = getattr(args, "algorithm", "default")
+        if algorithm == "default":
+            return cls.config_class or PPOConfig, cls.algo_class or PPO
+        if algorithm == "dqn":
+            return DQNConfig, DQN
+        if algorithm == "ppo":
+            return PPOConfig, PPO
+        return cls.config_class, cls.algo_class
+
+    @classmethod
     def _config_from_args(cls, args, base: Optional[ConfigType_co] = None) -> ConfigType_co:
+        # Determine algorithm classes dynamically
+        config_class, _ = cls.get_algorithm_classes(args)
+        if config_class != cls.config_class:
+            logger.warning(
+                "The selected algorithm config returned by _get_algorithm_classes "
+                "does not match the class config_class attribute. "
+                "Will use the dynamically selected config class %s.",
+                config_class.__name__,
+            )
+
         learner_class = None
-        if args.accumulate_gradients_every > 1 or args.dynamic_batch:
+        # Use gradient accumulation learner for both PPO and DQN
+        if (args.algorithm == "ppo" or (args.algorithm == "default" and issubclass(cls.config_class, PPOConfig))) and (
+            args.accumulate_gradients_every > 1 or args.dynamic_batch
+        ):
             # import lazy as currently not used elsewhere
             from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
                 PPOTorchLearnerWithGradientAccumulation,
             )
 
             learner_class = PPOTorchLearnerWithGradientAccumulation
+        elif (
+            args.algorithm == "dqn" or (args.algorithm == "default" and issubclass(cls.config_class, DQNConfig))
+        ) and (args.accumulate_gradients_every > 1 or args.dynamic_batch):
+            from ray_utilities.learners.dqn_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
+                DQNTorchLearnerWithGradientAccumulation,
+            )
+
+            learner_class = DQNTorchLearnerWithGradientAccumulation
+
         config, _module_spec = create_algorithm_config(
             args=args,
             module_class=None,
@@ -136,7 +183,7 @@ class AlgorithmSetup(
             model_config=cls._model_config_from_args(args),
             learner_class=learner_class,
             framework="torch",
-            config_class=cls.config_class,
+            config_class=config_class,
             base_config=base,
         )
         add_callbacks_to_config(config, cls.get_callbacks_from_args(args))
@@ -190,6 +237,92 @@ class PPOSetup(AlgorithmSetup[ParserType_co, "PPOConfig", "PPO"]):
 
     config_class = PPOConfig
     algo_class = PPO
+
+    def parse_args(
+        self, args: list[str] | None = None, *, known_only: bool | None = None, checkpoint: str | None = None
+    ):
+        namespace = super().parse_args(args, known_only=known_only, checkpoint=checkpoint)
+        if namespace.algorithm != "default" and "ppo" not in namespace.algorithm.lower():
+            raise ValueError(
+                f"PPOSetup can only be used with the PPO algorithm (or algorithm='default'), got {namespace.algorithm}"
+            )
+        return namespace
+
+    def _create_config(self, base: PPOConfig | None = None):
+        config = super()._create_config(base=base)
+        if not isinstance(config, PPOConfig):
+            raise TypeError(f"Expected config to be of type PPOConfig, got {type(config)}")
+        return config
+
+    @classmethod
+    def get_algorithm_classes(cls, args: Any):  # noqa: ARG003
+        return cls.config_class, cls.algo_class
+
+
+class DQNSetup(AlgorithmSetup[ParserType_co, "DQNConfig", "DQN"]):
+    """Specialized setup class for Deep Q-Networks (DQN) experiments.
+
+    This class provides a ready-to-use setup specifically configured for DQN
+    algorithms in Ray RLlib. It inherits all the dynamic configuration capabilities
+    from :class:`AlgorithmSetup` while ensuring type safety with DQN-specific
+    algorithm and configuration types.
+
+    The setup automatically configures DQN-specific features like replay buffer,
+    target network updates, and epsilon-greedy exploration when requested through
+    command-line arguments, and provides sensible defaults for DQN experiments.
+
+    Features:
+        - Type-safe DQN configuration and algorithm classes
+        - Automatic replay buffer configuration
+        - Target network update scheduling
+        - Epsilon-greedy exploration scheduling
+        - Inherits dynamic batch sizing and buffer management
+        - Compatible with Ray Tune hyperparameter optimization
+
+    Attributes:
+        config_class: Set to :class:`ray.rllib.algorithms.dqn.DQNConfig`
+        algo_class: Set to :class:`ray.rllib.algorithms.dqn.DQN`
+
+    Example:
+        >>> setup = DQNSetup()
+        >>> parser = setup.create_parser()
+        >>> args = parser.parse_args(["--env", "CartPole-v1", "--algorithm", "dqn"])
+        >>> config = setup.create_config(args)
+        >>> trainable = setup._create_trainable()
+
+    Note:
+        This class can be extended to customize DQN configurations and callbacks
+        for specific experiment requirements. Override methods like ``create_config``
+        or ``_get_callbacks_from_args`` to add custom behavior.
+
+    See Also:
+        :class:`AlgorithmSetup`: Base algorithm setup class
+        :class:`ray.rllib.algorithms.dqn.DQN`: The DQN algorithm implementation
+        :class:`ray.rllib.algorithms.dqn.DQNConfig`: DQN configuration class
+    """
+
+    config_class = DQNConfig
+    algo_class = DQN
+
+    def parse_args(
+        self, args: list[str] | None = None, *, known_only: bool | None = None, checkpoint: str | None = None
+    ):
+        namespace = super().parse_args(args, known_only=known_only, checkpoint=checkpoint)
+        if namespace.algorithm != "default" and "dqn" not in namespace.algorithm.lower():
+            raise ValueError(
+                f"DQNSetup can only be used with the DQN algorithm (or algorithm='default'), got {namespace.algorithm}"
+            )
+        return namespace
+
+    def _create_config(self, base: DQNConfig | None = None):
+        config = super()._create_config(base=base)
+        if not isinstance(config, DQNConfig):
+            raise TypeError(f"Expected config to be of type DQNConfig, got {type(config)}")
+        return config
+
+    @classmethod
+    def get_algorithm_classes(cls, args: Any):  # noqa: ARG003
+        return cls.config_class, cls.algo_class
 
 
 if TYPE_CHECKING:  # check ABC
