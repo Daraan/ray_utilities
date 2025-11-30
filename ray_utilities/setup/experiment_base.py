@@ -1258,42 +1258,6 @@ class ExperimentSetupBase(
         assert not isinstance(self.config._rl_module_spec, MultiRLModuleSpec)
         return self.config._rl_module_spec
 
-    @deprecated("Use get_rl_module_spec on the config instead")
-    def create_config_and_module_spec(
-        self,
-        base: Optional[ConfigType_co] = None,
-        *,
-        env: Optional[EnvType] = None,
-        spaces: Optional[dict[str, tuple[gym.Space, gym.Space]]] = None,
-        inference_only: Optional[bool] = None,
-    ) -> tuple[ConfigType_co, RLModuleSpec]:
-        """
-        Creates the config and module spec for the experiment.
-
-        Warning:
-            The returned module_spec can be a copy. Modifying it will not result in a change when
-            calling config.build() again.
-
-        Args:
-            base: Optional config to update instead of creating a new one.
-            env: Optional environment to use for the module spec.
-            spaces: Optional spaces to use for the module spec.
-            inference_only: If True, the module spec will be created for inference only.
-        """
-        config = self.create_config(base=base)
-        module_spec = config.get_rl_module_spec(env=env, spaces=spaces, inference_only=inference_only)
-        if not module_spec.action_space:
-            logger.warning(
-                "No action space found in the module spec. "
-                "Adjust your create_config method or pass env or spaces to create_config_and_module_spec."
-            )
-        if not module_spec.observation_space:
-            logger.warning(
-                "No observation space found in the module spec. "
-                "Adjust your create_config method or pass env or spaces to create_config_and_module_spec."
-            )
-        return config, module_spec
-
     @property
     def trainable_class(self) -> type[TrainableBase[ParserType_co, ConfigType_co, AlgorithmType_co]]:
         """

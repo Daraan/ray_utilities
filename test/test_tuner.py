@@ -710,6 +710,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     )
                 self.maxDiff = None
                 # DynamicEvalInterval can change evaluation_interval; ignore that key
+
                 self.compare_configs(
                     trainable2_local.algorithm_config.to_dict(),
                     setup2.config.to_dict(),
@@ -1442,7 +1443,6 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             "--fcnet_hiddens", "[4]",
             "--num_envs_per_env_runner", 5,
             "--test",
-            "--hostname_selector", "copernicus",
             "pbt",
             "--quantile_fraction", "0.1",
             "--perturbation_interval", perturbation_interval,

@@ -165,10 +165,3 @@ def exact_sampling_callback(
         )
     # _correct_increase_sampled_metrics(metrics_logger, total_samples)
     _log_steps_to_learner(metrics_logger, total_samples)
-
-
-@deprecated("old api, no need for stateful class")
-class ExactSamplingCallback(DefaultCallbacks):
-    """Reduces the samples of the env_runners to an exact number of samples"""
-
-    on_sample_end = staticmethod(exact_sampling_callback)  # pyright: ignore[reportAssignmentType]
