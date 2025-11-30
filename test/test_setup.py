@@ -27,7 +27,6 @@ from ray import tune
 from ray.rllib.algorithms import Algorithm, AlgorithmConfig
 from ray.rllib.algorithms.dqn import DQN, DQNConfig
 from ray.rllib.algorithms.ppo import PPO, PPOConfig
-from ray.rllib.callbacks.callbacks import RLlibCallback
 from ray.rllib.core import ALL_MODULES
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
@@ -42,7 +41,6 @@ from ray_utilities.callbacks.algorithm.seeded_env_callback import (
     NUM_ENV_RUNNERS_0_1_EQUAL,
     AlwaysSeedEvaluationEnvsCallback,
     DirectRngSeedEnvsCallback,
-    SeedEnvsCallbackBase,
 )
 from ray_utilities.config import DefaultArgumentParser, add_callbacks_to_config, seed_environments_for_config
 from ray_utilities.config import logger as parser_logger
@@ -65,7 +63,7 @@ from ray_utilities.nice_logger import set_project_log_level
 from ray_utilities.random import seed_everything
 from ray_utilities.setup.algorithm_setup import AlgorithmSetup
 from ray_utilities.setup.experiment_base import logger
-from ray_utilities.setup.ppo_mlp_setup import DQNMLPSetup, MLPSetup, PPOMLPSetup
+from ray_utilities.setup.ppo_mlp_setup import DQNMLPSetup, MLPSetup
 from ray_utilities.testing_utils import (
     ENV_RUNNER_CASES,
     TWO_ENV_RUNNER_CASES,
@@ -437,12 +435,12 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
 
         self.set_max_diff(15000)
         self.assertIsNot(trainable.algorithm_config, setup.config)
-        # ignore callbacks that are created on Trainable.setup, this includes FixedAlwaysSeedEvaluationEnvsCallback
         self.compare_configs(
             trainable.algorithm_config,
             setup.config,
             ignore=[
-                # ignore callbacks that are created on Trainable.setup, this includes FixedAlwaysSeedEvaluationEnvsCallback
+                # ignore callbacks that are created on Trainable.setup
+                # this includes FixedAlwaysSeedEvaluationEnvsCallback
                 "callbacks_on_environment_created",
             ],
         )

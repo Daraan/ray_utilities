@@ -383,18 +383,15 @@ class AlwaysSeedEvaluationEnvsCallback(SeedEnvsCallback):
             current_step: The current training step, used as part of the seed sequence for reproducibility.
         """
         env_context = _env_runner_get_context(env_runner)
-        try:
-            seed_sequence: np.random.SeedSequence = np.random.SeedSequence(
-                self.env_seed,
-                spawn_key=(
-                    env_context.worker_index,
-                    env_context.vector_index,
-                    env_runner.config.in_evaluation,
-                    current_step,
-                ),
-            )
-        except TypeError:
-            breakpoint()
+        seed_sequence: np.random.SeedSequence = np.random.SeedSequence(
+            self.env_seed,
+            spawn_key=(
+                env_context.worker_index,
+                env_context.vector_index,
+                env_runner.config.in_evaluation,
+                current_step,
+            ),
+        )
         logger.debug(
             "Resetting and reseeding evaluation envs at step %s with sequence: %r", current_step, seed_sequence
         )

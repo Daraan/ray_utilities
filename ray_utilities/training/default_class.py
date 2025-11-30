@@ -1197,7 +1197,6 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             if model_config_patch:
                 patch_model_config(setup_config, model_config_patch)
 
-
         # Always patch config with param space to ensure callbacks (like seeding) are added
         # and args are consistent with config.
         _, setup_config = patch_config_with_param_space(

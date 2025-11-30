@@ -77,7 +77,7 @@ from ray_utilities.warn import (
 if TYPE_CHECKING:
     import gymnasium as gym
     import ray.tune.search.sample  # noqa: TC004  # present at runtime from import ray.tune
-    from ray.rllib.algorithms import PPO, Algorithm
+    from ray.rllib.algorithms import Algorithm
     from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
     from ray.rllib.utils.typing import EnvType

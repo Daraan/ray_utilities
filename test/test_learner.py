@@ -421,7 +421,8 @@ class TestDQNGradientAccumulation(InitRay, TestHelpers, DisableLoggers, num_cpus
     @mock.patch("ray.rllib.algorithms.dqn.dqn.calculate_rr_weights")
     def test_dqn_torch_learner_with_gradient_accumulation(self, mock_rr):
         """
-        Test that DQNTorchLearnerWithGradientAccumulation accumulates gradients and applies them only at the correct steps.
+        Test that DQNTorchLearnerWithGradientAccumulation accumulates gradients
+        and applies them only at the correct steps.
         """
         batch_size = 1
         accumulate_every = 3
@@ -527,7 +528,8 @@ class TestDQNGradientAccumulation(InitRay, TestHelpers, DisableLoggers, num_cpus
     @mock.patch("ray.rllib.algorithms.dqn.dqn.calculate_rr_weights")
     def test_dqn_torch_learner_accumulation_sums_gradients(self, mock_rr):
         """
-        Test that DQNTorchLearnerWithGradientAccumulation sums gradients over steps and applies the mean at the correct time.
+        Test that DQNTorchLearnerWithGradientAccumulation sums gradients over steps
+        and applies the mean at the correct time.
         """
         batch_size = 1000
         accumulate_every = 2

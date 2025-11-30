@@ -7,7 +7,6 @@ from experiments.ray_init_helper import init_ray_with_setup
 from ray_utilities import get_runtime_env, run_tune
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
-from ray_utilities.setup import PPOSetup
 from ray_utilities.setup.ppo_mlp_setup import DQNMLPSetup, PPOMLPSetup
 
 # Replace outputs to be more human readable and less nested

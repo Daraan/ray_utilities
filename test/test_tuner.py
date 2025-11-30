@@ -471,7 +471,7 @@ class TestTuner(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             try:
                 self.assertLess(best_result.metrics[TRAINING_ITERATION], ITERATIONS)  # pyright: ignore[reportOptionalSubscript]
             except AssertionError as e2:
-                raise XFailException(
+                raise XFailException(  # noqa: TRY003
                     f"Best result already completed all iterations: "
                     f"{best_result.metrics[TRAINING_ITERATION]} >= {ITERATIONS}"  # pyright: ignore[reportOptionalSubscript]
                 ) from e2
@@ -1280,7 +1280,11 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
     @pytest.mark.length(speed="medium")
     @mock.patch("wandb.Api", new=MagicMock())
     @mock.patch("ray_utilities.callbacks.wandb.wandb_api", new=MagicMock())
-    def test_run_tune_with_top_trial_scheduler(self):
+    @pytest.mark.timeout(450)
+    @mock.patch("ray.rllib.algorithms.dqn.dqn.calculate_rr_weights")
+    def test_run_tune_with_top_trial_scheduler(self, mock_rr):
+        # FIXME: slowdown because of DQN use
+        mock_rr.return_value = [1, 1]
         original_exploit = TopPBTTrialScheduler._exploit
         perturbation_interval = 100
         best_step_size_idx = 0
@@ -1444,10 +1448,12 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             "--perturbation_interval", perturbation_interval,
         ):  # fmt: skip
             Setup = SetupWithCheck(CheckTrainableForTop, MLPPBTSetup)
-            setup = Setup(
+            with Setup(
                 config_files=["experiments/models/mlp/default.cfg"],
                 # TODO: Trials are reused, trial name might be wrong then
-            )
+            ) as setup:
+                setup.config.reporting(min_sample_timesteps_per_iteration=min(batch_sizes))
+                setup.config.training(training_intensity=None, num_epochs=1)  # pyright: ignore[reportAttributeAccessIssue]
             setup.param_space["train_batch_size_per_learner"] = tune.grid_search(batch_sizes)
             assert setup.args.command
             eps_choices = [0.8333, 0.4222]

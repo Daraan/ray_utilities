@@ -246,7 +246,8 @@ def patch_offline_history(
                 or ExperimentKey.FORK_SEPARATOR not in parent_run_id
             ):
                 logger.warning(
-                    "parent_run_id in slot %s seems might be wrong due to a bug. Check carefully. Skipping. All Ids: %s",
+                    "parent_run_id in slot %s seems might be wrong due to a bug. "
+                    "Check carefully. Skipping. All Ids: %s",
                     i,
                     parent_run_ids,
                 )
@@ -382,8 +383,8 @@ def _write_failures_to_submission_file(
                 group_data["failures"][run.id] = [failure.type.value for failure in failures] if failures else ["none"]
             # remove duplicates
             group_data["failures"][run.id] = list(set(group_data["failures"][run.id]))
-        except Exception as e:
-            logger.error("Error writing failure for run %s: %s", run.id, e)
+        except Exception:
+            logger.exception("Error writing failure for run %s:", run.id)
     with open(file, "w") as f:
         yaml_dump(data, f)
 
@@ -446,10 +447,8 @@ if __name__ == "__main__":
             else:
                 if not args.experiment_key:
                     raise ValueError(
-                        "experiment_key is required if run_id does not contain a RUN_ID_SEPARATOR '%s', "
-                        "i.e. for forked runs. "
+                        f"experiment_key is required if run_id does not contain the RUN_ID_SEPARATOR '{ExperimentKey.RUN_ID_SEPARATOR}', "  # noqa: E501
                         "For non-forked runs pass the --experiment_key explicitly",
-                        ExperimentKey.RUN_ID_SEPARATOR,
                     )
                 single_experiment = args.experiment_key
             group_glob = "*"
