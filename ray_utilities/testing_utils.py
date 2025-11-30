@@ -57,14 +57,6 @@ from unittest import mock
 import debugpy  # noqa: T100
 import gymnasium as gym
 import numpy as np
-
-try:
-    import jax.numpy as jnp
-
-    import jax
-except ImportError:
-    jax = None
-    jnp = None
 import numpy.testing as npt
 import ray
 import ray.tune
@@ -75,6 +67,7 @@ from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import Algorithm, AlgorithmConfig
 from ray.rllib.algorithms import algorithm as algorithm_module
 from ray.rllib.algorithms.ppo.ppo import PPO
+from ray.rllib.callbacks.callbacks import RLlibCallback
 from ray.rllib.core import ALL_MODULES
 from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
@@ -105,6 +98,7 @@ from typing_extensions import Final, NotRequired, Required, Sentinel, TypeAliasT
 import ray_utilities.callbacks.algorithm.model_config_saver_callback
 import ray_utilities.config.create_algorithm
 from ray_utilities import get_runtime_env
+from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallbackBase
 from ray_utilities.callbacks.wandb import WandbUploaderMixin
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.config.parser.mlp_argument_parser import MLPArgumentParser
@@ -124,6 +118,13 @@ from ray_utilities.training.functional import training_step
 from ray_utilities.training.helpers import make_divisible, nan_to_zero_hist_leaves
 
 try:
+    import jax
+    import jax.numpy as jnp
+except ImportError:
+    jax = None
+    jnp = None
+
+try:
     from ray.rllib.utils.metrics.stats.mean import MeanStats  # pyright: ignore[reportMissingImports]
 except ImportError:
     # create a dummy type
@@ -141,7 +142,6 @@ if TYPE_CHECKING:
     from jaxlib.xla_extension import pytree  # pyright: ignore[reportMissingModuleSource,reportMissingImports] pyi file
     from ray import tune
     from ray.rllib.algorithms.ppo.ppo import PPO, PPOConfig
-    from ray.rllib.callbacks.callbacks import RLlibCallback
     from ray.tune import Result
 
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ParserType_co
@@ -1305,6 +1305,25 @@ class TestHelpers(unittest.TestCase):
         *,
         ignore: Collection[str] = (),
     ):
+        if (
+            "callbacks_on_environment_created" in ignore
+            and not isinstance(config1, dict)
+            and not isinstance(config2, dict)
+        ):
+            for config in (config1, config2):
+                other_config = config2 if config is config1 else config1
+                with AlgorithmSetup.open_config(config) if not isinstance(config, dict) else nullcontext():
+                    if isinstance(config.callbacks_class, list):
+                        config.callbacks_class = [
+                            cb
+                            for cb in config.callbacks_class
+                            if not (isinstance(cb, type) and issubclass(cb, SeedEnvsCallbackBase))
+                        ]
+                    elif isinstance(config.callbacks_class, type) and issubclass(
+                        config.callbacks_class, SeedEnvsCallbackBase
+                    ):
+                        config.callbacks_class = [] if isinstance(other_config.callbacks_class, list) else RLlibCallback
+
         config1_eval = None
         config2_eval = None
         if isinstance(config1, AlgorithmConfig):

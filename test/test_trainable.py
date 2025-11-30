@@ -19,6 +19,7 @@ from ray.tune.utils import validate_save_restore
 from ray.util.multiprocessing import Pool
 
 from ray_utilities.callbacks.algorithm.dynamic_evaluation_callback import DynamicEvalInterval
+from ray_utilities.callbacks.algorithm.seeded_env_callback import SeedEnvsCallbackBase
 from ray_utilities.config import DefaultArgumentParser
 from ray_utilities.constants import EVAL_METRIC_RETURN_MEAN, FORK_FROM, PERTURBED_HPARAMS
 from ray_utilities.dynamic_config.dynamic_buffer_update import split_timestep_budget
@@ -1033,7 +1034,14 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
         def set_lr(r):
             object.__setattr__(r.config, "lr", 0.9997)
             r.config.learner_config_dict["total_steps"] = 8000
-            r.config.callbacks_on_environment_created.env_seed = 98765
+            cb = next(
+                (cb for cb in r.config.callbacks_on_environment_created if issubclass(cb, SeedEnvsCallbackBase)), None
+            )
+            if cb is not None:
+                cb.env_seed = 98765
+            else:
+                cb = next((cb for cb in r.config.callback_class if issubclass(cb, SeedEnvsCallbackBase)))
+                cb.env_seed = 98765
 
         trainable2.algorithm.env_runner_group.foreach_env_runner(set_lr)  # pyright: ignore[reportOptionalMemberAccess]
 

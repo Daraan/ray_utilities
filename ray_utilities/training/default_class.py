@@ -24,7 +24,20 @@ from copy import copy, deepcopy
 from inspect import isclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, ClassVar, Collection, Generic, Optional, TypedDict, TypeVar, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Collection,
+    Generic,
+    Literal,
+    Optional,
+    Sequence,
+    TypedDict,
+    TypeVar,
+    cast,
+    overload,
+)
 
 import git
 import pyarrow.fs
@@ -456,6 +469,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             - restore -> load_checkpoint -> set_state -> train
         """
 
+        self._tune_choices: Sequence[str] | Literal[False] = (
+            config.get("cli_args", {}).get("tune", False) if config else False
+        )
+        """Parameters that were passed to --tune ... or False if not set."""
+
         super().__init__(config or {}, **kwargs)  # calls setup
         # TODO: do not create loggers, if any are created
         self.config: dict[str, Any]
@@ -661,6 +679,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         assert algorithm is not None
         self._algorithm = algorithm
         assert self.algorithm.config
+        self._tune_choices = config.get("cli_args", {}).get("tune", False) if config else False
         self._calculate_steps_and_iterations(args)  # also called in load_checkpoint
         self._call_on_setup_callbacks()
 
@@ -1999,6 +2018,7 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
             discrete_eval=self.discrete_eval,
             disable_report=True,
             log_stats=self.log_stats,
+            tune_choices=self._tune_choices,
         )
         self._current_step = get_current_step(result)
         if (
