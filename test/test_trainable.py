@@ -1043,13 +1043,16 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
         def set_lr(r):
             object.__setattr__(r.config, "lr", 0.9997)
             r.config.learner_config_dict["total_steps"] = 8000
-            cb = next(
-                (cb for cb in r.config.callbacks_on_environment_created if issubclass(cb, SeedEnvsCallbackBase)), None
-            )
+            cb = None
+            if r.config.callbacks_on_environment_created:
+                cb = next(
+                    (cb for cb in r.config.callbacks_on_environment_created if issubclass(cb, SeedEnvsCallbackBase)),
+                    None,
+                )
             if cb is not None:
                 cb.env_seed = 98765
             else:
-                cb = next((cb for cb in r.config.callback_class if issubclass(cb, SeedEnvsCallbackBase)))
+                cb = next((cb for cb in r.config.callbacks_class if issubclass(cb, SeedEnvsCallbackBase)))
                 cb.env_seed = 98765
 
         trainable2.algorithm.env_runner_group.foreach_env_runner(set_lr)  # pyright: ignore[reportOptionalMemberAccess]

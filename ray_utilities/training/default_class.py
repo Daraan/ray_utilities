@@ -1176,12 +1176,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         if PERTURBED_HPARAMS in self.config:
             perturbed = {k: self.config[k] for k in self.config[PERTURBED_HPARAMS]}
             # assert perturbed == self.config[PERTURBED_HPARAMS]
-            _, setup_config = patch_config_with_param_space(
-                self.config.get("cli_args", {}).copy() | perturbed, setup_config, hparams=self.config | perturbed
-            )
             # Remove __perturbed__ from config so that a future checkpoint hparams does not see them as highest priority
             self._perturbed_config: Optional[dict[str, Any]] = self.config.pop(PERTURBED_HPARAMS)
-            # NOTE: in set_state the config might be recreated / changed depending on state
         else:
             self._perturbed_config = None
         if self._model_config is not None or self.config.get("model_config"):
@@ -1201,6 +1197,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             if model_config_patch:
                 patch_model_config(setup_config, model_config_patch)
 
+
+        # Always patch config with param space to ensure callbacks (like seeding) are added
+        # and args are consistent with config.
+        _, setup_config = patch_config_with_param_space(
+            self.config.get("cli_args", {}).copy() | perturbed, setup_config, hparams=self.config | perturbed
+        )
+        # NOTE: in set_state the config might be recreated / changed depending on state
         algo_kwargs: dict[str, Any] = (
             {**kwargs}
             if ignore_setup  # NOTE: also ignores overrides on self
