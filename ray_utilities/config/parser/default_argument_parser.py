@@ -801,6 +801,26 @@ class _BaseRLlibArgumentParser(TuneableParameters, _EnvRunnerParser):
     lr: float | list[tuple[int, float]] = 1e-4
     """Learning rate or schedule: float or list of (timestep, lr) tuples"""
 
+    use_kl_loss: bool = False
+    """Whether to use KL divergence loss in the PPO objective."""
+
+    entropy_coeff: float = 0.01
+    """Coefficient for the entropy regularization term in the PPO objective."""
+
+    vf_loss_coeff: float = 1.0
+    """Coefficient for the value function loss in the PPO objective."""
+
+    clip_param: float = 0.2
+    """Clipping parameter for the PPO objective."""
+
+    vf_clip_param: float = 10.0
+    """
+    Clipping parameter for the value function loss in PPO
+
+    Note:
+        For higher rewards this should also be higher
+    """
+
     def configure(self) -> None:
         super().configure()
         self.add_argument(

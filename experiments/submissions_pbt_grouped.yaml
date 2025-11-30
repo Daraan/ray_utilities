@@ -62,7 +62,7 @@ pbt_batch_size:
         status: FAILED
         submission_id: pbt_batch_size_HumanoidStandup-v5_2025-11-26_02:17:27
       tws47f2511290001a43b4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_batch_size_HumanoidStandup-v5_2025-11-29_00:01:12
     (Humanoid-v5):
       tws47f251126021825754:
@@ -470,7 +470,7 @@ pbt_minibatch_size_2048:
         submission_id:
           pbt_minibatch_size_2048_HumanoidStandup-v5_2025-11-26_02:17:39
       tws47f2511291226a9f64:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_minibatch_size_2048_HumanoidStandup-v5_2025-11-29_12:25:34
     (Humanoid-v5):
@@ -485,7 +485,7 @@ pbt_minibatch_size_2048:
         status: FAILED
         submission_id: pbt_minibatch_size_2048_Ant-v5_2025-11-26_02:17:39
       tws47f25112912264c954:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_minibatch_size_2048_Ant-v5_2025-11-29_12:25:34
     (Hopper-v5):
       tws47f2511260217e5504:
@@ -504,7 +504,7 @@ pbt_minibatch_size_2048:
         submission_id:
           pbt_minibatch_size_2048_HalfCheetah-v5_2025-11-26_02:17:39
       tws47f251129122616f94:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_minibatch_size_2048_HalfCheetah-v5_2025-11-29_12:25:34
     (Pusher-v5):
@@ -630,10 +630,11 @@ pbt_minibatch_size_8192:
         submission_id:
           pbt_minibatch_size_8192_InvertedPendulum-v5_2025-11-26_02:17:45
       tws47f251129143152124:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_minibatch_size_8192_InvertedPendulum-v5_2025-11-29_12:41:30
 pbt_clip_param:
+  # TODO: Change to base
   <ENV_TYPE>:
   - CartPole-v1
   - Acrobot-v1
@@ -645,3 +646,149 @@ pbt_clip_param:
     substitutions:
       <TUNE_PARAM>: clip_param
       <ENV_TYPE>: <basic_envs>
+  run_ids:
+    (CartPole-v1):
+      tws47f2511291621ba254:
+        status: SUCCEEDED
+        submission_id: pbt_clip_param_CartPole-v1_2025-11-29_16:20:56
+    (Acrobot-v1):
+      tws47f2511291621cbd94:
+        status: SUCCEEDED
+        submission_id: pbt_clip_param_Acrobot-v1_2025-11-29_16:20:56
+    (LunarLander-v3):
+      tws47f2511291621b5b94:
+        status: SUCCEEDED
+        submission_id: pbt_clip_param_LunarLander-v3_2025-11-29_16:20:56
+pbt_clip_param_:
+  # Change to non-base
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: clip_param
+      <ENV_TYPE>: <mujoco_envs>
+  run_ids:
+    (HumanoidStandup-v5):
+      tws47f2511291835125c4:
+        status: SUCCEEDED
+        submission_id: pbt_clip_param__HumanoidStandup-v5_2025-11-29_18:34:11
+    (Humanoid-v5):
+      tws47f251129183829b74:
+        status: SUCCEEDED
+        submission_id: pbt_clip_param__Humanoid-v5_2025-11-29_18:34:11
+    (Ant-v5):
+      tws47f2511291930d1434:
+        status: SUCCEEDED
+        submission_id: pbt_clip_param__Ant-v5_2025-11-29_18:34:11
+    (Hopper-v5):
+      tws47f25112919355a424:
+        status: SUCCEEDED
+        submission_id: pbt_clip_param__Hopper-v5_2025-11-29_18:34:11
+    (HalfCheetah-v5):
+      tws47f2511291947ff994:
+        status: SUCCEEDED
+        submission_id: pbt_clip_param__HalfCheetah-v5_2025-11-29_18:34:11
+    (Walker2d-v5):
+      tws47f25112919483dbe4:
+        status: SUCCEEDED
+        submission_id: pbt_clip_param__Walker2d-v5_2025-11-29_18:34:11
+    (Reacher-v5):
+      tws47f2511291948728b4:
+        status: SUCCEEDED
+        submission_id: pbt_clip_param__Reacher-v5_2025-11-29_18:34:11
+    (Swimmer-v5):
+      tws47f2511291951b0fa4:
+        status: SUCCEEDED
+        submission_id: pbt_clip_param__Swimmer-v5_2025-11-29_18:34:11
+    (Pusher-v5):
+      tws47f2511291951341c4:
+        status: SUCCEEDED
+        submission_id: pbt_clip_param__Pusher-v5_2025-11-29_18:34:11
+    (InvertedDoublePendulum-v5):
+      tws47f2511292025fb814:
+        status: RUNNING
+        submission_id:
+          pbt_clip_param__InvertedDoublePendulum-v5_2025-11-29_18:34:11
+    (InvertedPendulum-v5):
+      tws47f251129203284f24:
+        status: RUNNING
+        submission_id: pbt_clip_param__InvertedPendulum-v5_2025-11-29_18:34:11
+pbt_entropy_coeff_base:
+  # TODO: Change to base
+  <ENV_TYPE>:
+  - CartPole-v1
+  - Acrobot-v1
+  - LunarLander-v3
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: entropy_coeff
+      <ENV_TYPE>: <basic_envs>
+  run_ids:
+    (CartPole-v1):
+      tws47f25112916257ab34:
+        status: SUCCEEDED
+        submission_id: pbt_entropy_coeff_base_CartPole-v1_2025-11-29_16:25:21
+    (Acrobot-v1):
+      tws47f25112916256bd84:
+        status: SUCCEEDED
+        submission_id: pbt_entropy_coeff_base_Acrobot-v1_2025-11-29_16:25:21
+    (LunarLander-v3):
+      tws47f2511291626867d4:
+        status: SUCCEEDED
+        submission_id: pbt_entropy_coeff_base_LunarLander-v3_2025-11-29_16:25:21
+pbt_vf_loss_coeff_base:
+  # TODO: Change to base
+  <ENV_TYPE>:
+  - CartPole-v1
+  - Acrobot-v1
+  - LunarLander-v3
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: vf_loss_coeff
+      <ENV_TYPE>: <basic_envs>
+  run_ids:
+    (CartPole-v1):
+      tws47f251129164619b94:
+        status: SUCCEEDED
+        submission_id: pbt_vf_loss_coeff_base_CartPole-v1_2025-11-29_16:45:45
+    (Acrobot-v1):
+      tws47f251129164603c34:
+        status: SUCCEEDED
+        submission_id: pbt_vf_loss_coeff_base_Acrobot-v1_2025-11-29_16:45:45
+    (LunarLander-v3):
+      tws47f2511291646d4da4:
+        status: SUCCEEDED
+        submission_id: pbt_vf_loss_coeff_base_LunarLander-v3_2025-11-29_16:45:45
+pbt_vf_clip_param_base:
+  # TODO: Change to base
+  <ENV_TYPE>:
+  - CartPole-v1
+  - Acrobot-v1
+  - LunarLander-v3
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: vf_clip_param
+      <ENV_TYPE>: <basic_envs>
+  run_ids:
+    (CartPole-v1):
+      tws47f251129164943de4:
+        status: SUCCEEDED
+        submission_id: pbt_vf_clip_param_base_CartPole-v1_2025-11-29_16:49:17
+    (Acrobot-v1):
+      tws47f251129164903794:
+        status: SUCCEEDED
+        submission_id: pbt_vf_clip_param_base_Acrobot-v1_2025-11-29_16:49:17
+    (LunarLander-v3):
+      tws47f2511291649291a4:
+        status: SUCCEEDED
+        submission_id: pbt_vf_clip_param_base_LunarLander-v3_2025-11-29_16:49:17

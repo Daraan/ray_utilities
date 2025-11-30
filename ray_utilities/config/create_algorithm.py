@@ -393,7 +393,7 @@ def create_algorithm_config(
             vf_loss_coeff=args.get("vf_loss_coeff", 1.0),  # rllib default is 1.0
             vf_clip_param=args.get("vf_clip_param", 10),  # rllib default is 10
             # vf_clip_param=10,
-            use_kl_loss=False,
+            use_kl_loss=args.get("use_kl_loss", False),
             use_gae=True,  # Must be true to use "truncate_episodes"
         )
     elif algorithm_type == "dqn":
