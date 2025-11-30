@@ -642,6 +642,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                         "--use_exact_total_steps",  # do not adjust total_steps
                         "--minibatch_size", MINIBATCH_SIZE,  # keep
                         "--iterations", "1",  # overwrite
+                        "--hostname_selector", "copernicus",
                     ),
                      AlgorithmSetup() as setup1
                 ):  # fmt: skip
@@ -680,6 +681,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     "--use_exact_total_steps",  # do not adjust total_steps
                     "--from_checkpoint", checkpoints[0],
                     "--log_stats", "most",
+                    "--hostname_selector", "copernicus",
                 ):  # fmt: skip
                     with (
                         Setup() as setup2,
@@ -710,6 +712,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                     )
                 self.maxDiff = None
                 # DynamicEvalInterval can change evaluation_interval; ignore that key
+
                 self.compare_configs(
                     trainable2_local.algorithm_config.to_dict(),
                     setup2.config.to_dict(),
