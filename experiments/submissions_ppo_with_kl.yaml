@@ -61,7 +61,7 @@ pbt_batch_size:
   run_ids:
     (HumanoidStandup-v5):
       tws47f251130010412604:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_batch_size_HumanoidStandup-v5_2025-11-30_01:03:59
     (Humanoid-v5):
       tws47f25113001042de04:

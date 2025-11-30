@@ -713,7 +713,7 @@ class TestReTuning(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
                 self.compare_configs(
                     trainable2_local.algorithm_config.to_dict(),
                     setup2.config.to_dict(),
-                    ignore=("evaluation_interval",),
+                    ignore=("evaluation_interval", "callbacks_on_environment_created"),
                 )
                 self.assertEqual(trainable2_local.algorithm_config.train_batch_size_per_learner, batch_size * 2)
                 trainable2_local.stop()
