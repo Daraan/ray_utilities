@@ -987,7 +987,7 @@ class DQNArgumentParser(_BaseRLlibArgumentParser):
                 "double_q",
                 "dueling",
                 "num_atoms",
-            }
+            }.union(cls._valid_tune_choices)
         )
         super()._add_tune_parameters()
 

@@ -432,13 +432,17 @@ def patch_args(
     log_args = ()
     if log_level and "--log_level" not in args:
         log_args = ("--log_level", "DEBUG")
+    # import socket # for running on live cluster
     patched_args = map(str, (*old_args, *args) if extend_argv else args)
     patched_args = [
         sys.argv[0] if sys.argv else "_imaginary_file_for_patch.py",
         *actor_args,
         *log_args,
+        # When we run on a livecluster test locally.
+        # NOTE: Needs to be commented when there is not cluster & hostname label setup!
+        #"--hostname_selector", socket.gethostname(),
         *patched_args,
-    ]
+    ]  # fmt: skip
     if "--test" in patched_args and "COMET_API_KEY" not in os.environ:
         logger.warning("Using --test in tests will enable Comet/Wandb on GitHub Actions but API might be missing.")
     patch_obj = mock.patch.object(
@@ -639,8 +643,8 @@ class TestHelpers(unittest.TestCase):
     def setUpClass(cls):
         os.environ["CI"] = "1"  # Indicate that we are in a CI environment
         cls._disable_ray_auto_init()
-        os.environ["RAY_UTILITIES_STORAGE_PATH"] = "./outputs/experiments/TESTING"
-        ExperimentSetupBase.base_storage_path = "./outputs/experiments/TESTING"
+        os.environ["RAY_UTILITIES_STORAGE_PATH"] = "./outputs/experiments/shared/TESTING"
+        ExperimentSetupBase.base_storage_path = "./outputs/experiments/shared/TESTING"
         ExperimentSetupBase.PROJECT = "TEST-PROJECT"
         sys.modules["selenium"] = mock.MagicMock()
         cls._setup_backup_mock: mock._patch_pass_arg[mock.MagicMock | mock.AsyncMock] = mock.patch.object(

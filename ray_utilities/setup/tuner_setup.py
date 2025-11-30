@@ -29,7 +29,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, Optional, Protocol, cast, overload
 
 from ray import train, tune
-from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.algorithms.ppo import PPO
 from ray.tune.execution.placement_groups import PlacementGroupFactory
 from ray.tune.schedulers import MedianStoppingRule
@@ -57,7 +56,7 @@ from ray_utilities.tune.stoppers.maximum_iteration_stopper import MaximumResultI
 
 if TYPE_CHECKING:
     from ray.air.config import RunConfig as RunConfigV1
-    from ray.rllib.algorithms import Algorithm
+    from ray.rllib.algorithms import Algorithm, AlgorithmConfig
     from ray.tune.experiment import Trial
     from ray.tune.stopper import Stopper
 
@@ -530,9 +529,10 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
                 * GB
             )
         }
-        resource_requirements = PPO.default_resource_request(
+        config_class = type(self._setup.config)
+        resource_requirements = (config_class().algo_class or PPO).default_resource_request(
             self._setup.config.copy(copy_frozen=False).update_from_dict(
-                AlgorithmConfig.overrides(custom_resources_per_env_runner=custom_resources_per_env_runner)
+                config_class.overrides(custom_resources_per_env_runner=custom_resources_per_env_runner)
             )
         )
         resource_requirements = cast(
