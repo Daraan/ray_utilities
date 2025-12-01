@@ -408,6 +408,10 @@ def create_algorithm_config(
     elif algorithm_type == "dqn":
         assert isinstance(config, DQNConfig)
         default_dqn_config = type(config)()
+        config.reporting(
+            # Should be disivisble by 2
+            min_train_timesteps_per_iteration=args.get("num_steps_sampled_before_learning_starts", 1024)
+        )
         config.training(
             # DQN Specific
             # TODO: verify if correct defaults and present.
@@ -415,7 +419,7 @@ def create_algorithm_config(
                 "target_network_update_freq", default_dqn_config.target_network_update_freq
             ),
             num_steps_sampled_before_learning_starts=args.get(
-                "num_steps_sampled_before_learning_starts", default_dqn_config.num_steps_sampled_before_learning_starts
+                "num_steps_sampled_before_learning_starts", config.min_train_timesteps_per_iteration
             ),
             tau=args.get("tau", default_dqn_config.tau),
             epsilon=args.get("epsilon", default_dqn_config.epsilon),

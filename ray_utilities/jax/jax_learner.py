@@ -22,9 +22,13 @@ from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 import jax
 import jax.numpy as jnp
+import optax
 from ray.rllib.core.learner.learner import Learner
 from ray.rllib.core.learner.torch.torch_learner import TorchLearner
 from ray.rllib.policy.sample_batch import MultiAgentBatch
+
+from ray_utilities.jax.math import clip_gradients
+from ray_utilities.nice_logger import ImportantLogger
 
 if TYPE_CHECKING:
     from collections.abc import Hashable, Mapping
@@ -33,7 +37,7 @@ if TYPE_CHECKING:
     from ray.rllib.algorithms.ppo.ppo import PPOConfig
     from ray.rllib.core.rl_module.multi_rl_module import MultiRLModuleSpec
     from ray.rllib.core.rl_module.rl_module import RLModule, RLModuleSpec
-    from ray.rllib.utils.typing import ModuleID, Optimizer, Param, ParamDict, TensorType
+    from ray.rllib.utils.typing import ModuleID, Optimizer, Param, ParamDict, StateDict, TensorType
 
     from ray_utilities.jax.jax_module import JaxModule, JaxStateDict
     from ray_utilities.jax.ppo.jax_ppo_module import JaxPPOModule
@@ -175,21 +179,14 @@ class JaxLearner(Learner):
 
     @staticmethod
     def _get_clip_function():
-        logger.warning("_get_clip_function called which is not fully implemented")
-        if 0:
-            # returns
-            from ray.rllib.utils.tf_utils import clip_gradients
-            from ray.rllib.utils.torch_utils import clip_gradients
-        # possibly use optax.clip; but needs to be in transformation pipeline
-        from ray_utilities.jax.math import clip_gradient
-
-        # Has wrong interface
-        return clip_gradient
+        return clip_gradients
 
     @staticmethod
     def _get_global_norm_function() -> Any:
-        logger.warning("_get_global_norm_function called which is not fully implemented")
-        return super(JaxLearner)._get_global_norm_function()
+        # should behave like
+        if 0:
+            from ray.rllib.utils.torch_utils import compute_global_norm
+        return optax.global_norm
 
     def _get_tensor_variable(self, value: Any, dtype: Any = None, trainable: bool = False) -> TensorType:  # noqa: FBT001, FBT002
         # TODO: is kl_coeffs a variable that is learned?
@@ -206,19 +203,40 @@ class JaxLearner(Learner):
 
     @staticmethod
     def _get_optimizer_lr(optimizer: Optimizer) -> float:
+        # Attempt to get LR from optimizer state if it follows Flax/Optax patterns with inject_hyperparams
+        if hasattr(optimizer, "opt_state"):
+            opt_state: optax.OptState = optimizer.opt_state
+            if hasattr(opt_state, "hyperparams"):
+                return float(optimizer.opt_state.hyperparams.get("learning_rate", 0.0))
         logger.warning("_get_optimizer_lr called which is not fully implemented")
-        return super(JaxLearner)._get_optimizer_lr(optimizer)
+        return None
 
     @staticmethod
     def _set_optimizer_lr(optimizer: Optimizer, lr: float) -> None:
-        logger.warning("_set_optimizer_lr called which is not fully implemented")
-        # Needs to change opt_state
-        # TODO: reduce lr not implemented
-        super(JaxLearner)._set_optimizer_lr(optimizer, lr)
+        # JAX optimizers (Optax) are functional and states are immutable.
+        # Setting LR in place is not typically supported unless using a mutable wrapper.
+        ImportantLogger.important_warning(logger, "_set_optimizer_lr called which is not implemented and a no-op")
 
-    def _get_optimizer_state(self, *args, **kwargs):
-        logger.warning("_get_optimizer_state called which is not fully implemented")
-        return super()._get_optimizer_state(*args, **kwargs)
+    def _get_optimizer_state(self) -> StateDict:
+        """Returns the state of all optimizers currently registered in this Learner."""
+        optimizer_states = {}
+        for module_id, state_dict in self._states.items():
+            optimizer_states[module_id] = {}
+            for key, train_state in state_dict.items():
+                if hasattr(train_state, "opt_state"):
+                    optimizer_states[module_id][key] = train_state.opt_state
+        return optimizer_states
+
+    def _set_optimizer_state(self, state: StateDict) -> None:
+        """Sets the state of all optimizers currently registered in this Learner."""
+        for module_id, module_opt_states in state.items():
+            if module_id not in self._states:
+                continue
+            for key, opt_state in module_opt_states.items():
+                if key in self._states[module_id]:
+                    train_state = self._states[module_id][key]
+                    if hasattr(train_state, "replace"):
+                        self._states[module_id][key] = train_state.replace(opt_state=opt_state)
 
 
 # pyright: reportAbstractUsage=information

@@ -774,7 +774,12 @@ class TestHelpers(unittest.TestCase):
         fast_model: bool = True,
         eval_interval: Optional[int] = 1,
         class_only: Literal[True],
-    ) -> type[DefaultTrainable[DefaultArgumentParser[Any | None], PPOConfig, PPO]]: ...
+        setup_class: type[ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]] = PPOMLPSetup[
+            MLPArgumentParser[Any | None]
+        ]
+        if TYPE_CHECKING
+        else PPOMLPSetup,
+    ) -> type[DefaultTrainable[ParserType_co, ConfigType_co, AlgorithmType_co]]: ...
 
     @overload
     def get_trainable(
@@ -786,7 +791,12 @@ class TestHelpers(unittest.TestCase):
         fast_model: bool = True,
         eval_interval: Optional[int] = 1,
         class_only: Literal[False] = False,
-    ) -> tuple[DefaultTrainable[DefaultArgumentParser[Any | None], PPOConfig, PPO], AutoExtendedLogMetricsDict]: ...
+        setup_class: type[ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]] = PPOMLPSetup[
+            MLPArgumentParser[Any | None]
+        ]
+        if TYPE_CHECKING
+        else PPOMLPSetup,
+    ) -> tuple[DefaultTrainable[ParserType_co, ConfigType_co, AlgorithmType_co], AutoExtendedLogMetricsDict]: ...
 
     @overload
     def get_trainable(
@@ -798,7 +808,12 @@ class TestHelpers(unittest.TestCase):
         fast_model: bool = True,
         eval_interval: Optional[int] = 1,
         class_only: Literal[False] = False,
-    ) -> tuple[DefaultTrainable[DefaultArgumentParser[Any | None], PPOConfig, PPO], None]: ...
+        setup_class: type[ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]] = PPOMLPSetup[
+            MLPArgumentParser[Any | None]
+        ]
+        if TYPE_CHECKING
+        else PPOMLPSetup,
+    ) -> tuple[DefaultTrainable[ParserType_co, ConfigType_co, AlgorithmType_co], None]: ...
 
     def get_trainable(
         self,
@@ -809,10 +824,16 @@ class TestHelpers(unittest.TestCase):
         fast_model: bool = True,
         eval_interval: Optional[int] = None,
         class_only: bool = False,
+        ignore_argv: bool = True,
+        setup_class: type[ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]] = PPOMLPSetup[
+            MLPArgumentParser[Any | None]
+        ]
+        if TYPE_CHECKING
+        else PPOMLPSetup,
     ) -> (
-        tuple[DefaultTrainable[DefaultArgumentParser[Any | None], PPOConfig, PPO], None]
-        | tuple[DefaultTrainable[DefaultArgumentParser[Any | None], PPOConfig, PPO], AutoExtendedLogMetricsDict]
-        | type[DefaultTrainable[DefaultArgumentParser[Any | None], PPOConfig, PPO]]
+        tuple[DefaultTrainable[ParserType_co, ConfigType_co, AlgorithmType_co], None]
+        | tuple[DefaultTrainable[ParserType_co, ConfigType_co, AlgorithmType_co], AutoExtendedLogMetricsDict]
+        | type[DefaultTrainable[ParserType_co, ConfigType_co, AlgorithmType_co]]
     ):
         with patch_args(
             "--iterations", "5",
@@ -823,7 +844,7 @@ class TestHelpers(unittest.TestCase):
             "--min_step_size", "64",  # try not to adjust total_steps
             "--max_step_size", "64",  # try not to adjust total_steps
             "--num_envs_per_env_runner", "1",
-            extend_argv=True,
+            extend_argv=not ignore_argv,
         # "--no_dynamic_eval_interval",
         ):  # fmt: skip
             # NOTE: In this test attributes are shared BY identity, this is just a weak test.
@@ -831,9 +852,7 @@ class TestHelpers(unittest.TestCase):
                 self._model_config = {"fcnet_hiddens": [self._fast_model_fcnet_hiddens], "head_fcnet_hiddens": []}
             else:
                 self._model_config = None
-            self.TrainableClass: type[DefaultTrainable[DefaultArgumentParser, PPOConfig, PPO]] = (
-                DefaultTrainable.define(PPOMLPSetup.typed(), model_config=self._model_config)
-            )
+            self.TrainableClass = DefaultTrainable.define(setup_class.typed(), model_config=self._model_config)
             self.TrainableClass.setup_class.PROJECT = "TESTING"  # pyright: ignore[reportGeneralTypeIssues]
             if self._model_config is not None:
                 self.TrainableClass.cls_model_config = self._model_config
@@ -881,14 +900,15 @@ class TestHelpers(unittest.TestCase):
             self.assertEqual(trainable._setup.args.total_steps, 320)
             self.assertEqual(trainable._setup.args.train_batch_size_per_learner, 64)  # not overwritten
             # check that module has correct fcnet_hiddens
-            module = trainable.algorithm.get_module()
-            assert module.model_config
-            self.assertEqual(
-                module.model_config["fcnet_hiddens"],  # pyright: ignore
-                [self._model_config["fcnet_hiddens"][0]]  # pyright: ignore
-                if isinstance(self._model_config["fcnet_hiddens"], int)  # pyright: ignore
-                else self._model_config["fcnet_hiddens"],  # pyright: ignore
-            )
+            if fast_model:
+                module = trainable.algorithm.get_module()
+                assert module.model_config
+                self.assertEqual(
+                    module.model_config["fcnet_hiddens"],  # pyright: ignore
+                    [self._model_config["fcnet_hiddens"][0]]  # pyright: ignore
+                    if isinstance(self._model_config["fcnet_hiddens"], int)  # pyright: ignore
+                    else self._model_config["fcnet_hiddens"],  # pyright: ignore
+                )
 
         if not train:
             return trainable, None

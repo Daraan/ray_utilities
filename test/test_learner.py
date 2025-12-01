@@ -531,7 +531,7 @@ class TestDQNGradientAccumulation(InitRay, TestHelpers, DisableLoggers, num_cpus
         Test that DQNTorchLearnerWithGradientAccumulation sums gradients over steps
         and applies the mean at the correct time.
         """
-        batch_size = 1000
+        batch_size = 128
         accumulate_every = 2
         mock_rr.return_value = [1, 1]
         with patch_args(
@@ -552,6 +552,7 @@ class TestDQNGradientAccumulation(InitRay, TestHelpers, DisableLoggers, num_cpus
                 setup.config.env_runners(
                     rollout_fragment_length=batch_size,
                 )
+                setup.config.reporting(min_sample_timesteps_per_iteration=batch_size)
         self.assertIsInstance(setup.config, DQNConfig)
         algorithm = setup.build_algo()
         learner: DQNTorchLearnerWithGradientAccumulation = (
