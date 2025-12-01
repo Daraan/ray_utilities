@@ -37,8 +37,10 @@ def _jax_module_to_env_connector(
     rl_module: RLModule | None = None,  # noqa: ARG001
     *,
     key: chex.PRNGKey,
-    algo: AlgorithmConfig,
+    is_multi_agent: bool,
     debug=False,
+    normalize_actions: bool,
+    clip_actions: bool,
     **kwargs,  # noqa: ARG001
 ) -> list["ConnectorV2"]:
     # NOTE: rl_module might not be used
@@ -48,7 +50,7 @@ def _jax_module_to_env_connector(
     pipeline.insert(0, RemoveSingleTsTimeRankFromBatch())
 
     # If multi-agent -> Map from ModuleID-based data to AgentID based data.
-    if algo.is_multi_agent:
+    if is_multi_agent:
         pipeline.insert(0, ModuleToAgentUnmapping())
 
     # Unbatch all data.
@@ -67,8 +69,8 @@ def _jax_module_to_env_connector(
     # Unsquash/clip actions based on config and action space.
     pipeline.append(
         NormalizeAndClipActions(
-            normalize_actions=algo.normalize_actions,  # pyright: ignore[reportArgumentType]
-            clip_actions=algo.clip_actions,  # pyright: ignore[reportArgumentType]
+            normalize_actions=normalize_actions,
+            clip_actions=clip_actions,
         )
     )
     # Listify data from ConnectorV2-data format to normal lists that we can
@@ -82,12 +84,26 @@ def _jax_module_to_env_connector(
 
 # NOTE: ray has wrong signature in algorithm config
 def make_jax_module_to_env_connector(
-    algo, *, key: chex.PRNGKey, debug=False
+    algo: AlgorithmConfig, *, key: chex.PRNGKey, debug=False
 ) -> Callable[..., ConnectorV2 | list[ConnectorV2]]:
     """
     Same as the default pipeline, but with JAX compatible.
 
     This especially removes the TensorToNumpy connector.
     Optionally can add a DebugConnector at the start and end of the pipeline.
+
+    Attention:
+        This binds algo.is_multi_agent, algo.clip_actions, algo.normalize_actions, and
+        algo.policies at creation time. If these change during training or by definitions after
+        calling this function, the changes will not be reflected in the created connector!
+
+        You should use this function *after* calling config.environment(...)
     """
-    return partial(_jax_module_to_env_connector, algo=algo, key=key, debug=debug)
+    return partial(
+        _jax_module_to_env_connector,
+        is_multi_agent=algo.is_multi_agent,
+        clip_actions=algo.clip_actions,  # pyright: ignore[reportArgumentType]
+        normalize_actions=algo.normalize_actions,  # pyright: ignore[reportArgumentType]
+        key=key,
+        debug=debug,
+    )

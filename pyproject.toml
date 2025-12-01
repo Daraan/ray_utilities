@@ -64,7 +64,6 @@ jax = [
   "chex",
   "distrax",
   "flax",
-  "optax",
 ]
 argcomplete = [
   "argcomplete",

@@ -15,8 +15,7 @@ from typing import TYPE_CHECKING, Any, Collection
 
 from ray.rllib.core.learner.torch.torch_learner import TorchLearner
 from ray.rllib.utils.annotations import override
-
-from default_arguments._ray_metrics import NUM_ENV_STEPS_SAMPLED_LIFETIME
+from ray.rllib.utils.metrics import NUM_ENV_STEPS_SAMPLED_LIFETIME
 
 if TYPE_CHECKING:
     import torch
@@ -24,8 +23,8 @@ if TYPE_CHECKING:
         ModuleID,
         ParamDict,
         ParamRef,
-        TensorType,
         StateDict,
+        TensorType,
     )
 
 

@@ -433,6 +433,8 @@ def patch_args(
     if log_level and "--log_level" not in args:
         log_args = ("--log_level", "DEBUG")
     # import socket # for running on live cluster
+    if extend_argv and old_args:
+        old_args = ExperimentSetupBase._remove_testing_args_from_argv(old_args)
     patched_args = map(str, (*old_args, *args) if extend_argv else args)
     patched_args = [
         sys.argv[0] if sys.argv else "_imaginary_file_for_patch.py",
@@ -798,17 +800,6 @@ class TestHelpers(unittest.TestCase):
         class_only: Literal[False] = False,
     ) -> tuple[DefaultTrainable[DefaultArgumentParser[Any | None], PPOConfig, PPO], None]: ...
 
-    @patch_args(
-        "--iterations", "5",
-        "--total_steps", "320",
-        "--batch_size", "64",  # overwritten with 32!
-        "--comment", "created by TestHelpers.get_trainable",
-        "--seed", "42",
-        "--min_step_size", "64",  # try not to adjust total_steps
-        "--max_step_size", "64",  # try not to adjust total_steps
-        "--num_envs_per_env_runner", "1",
-       # "--no_dynamic_eval_interval",
-    )  # fmt: skip
     def get_trainable(
         self,
         *,
@@ -823,69 +814,81 @@ class TestHelpers(unittest.TestCase):
         | tuple[DefaultTrainable[DefaultArgumentParser[Any | None], PPOConfig, PPO], AutoExtendedLogMetricsDict]
         | type[DefaultTrainable[DefaultArgumentParser[Any | None], PPOConfig, PPO]]
     ):
-        # NOTE: In this test attributes are shared BY identity, this is just a weak test.
-        if fast_model:
-            self._model_config = {"fcnet_hiddens": [self._fast_model_fcnet_hiddens], "head_fcnet_hiddens": []}
-        else:
-            self._model_config = None
-        self.TrainableClass: type[DefaultTrainable[DefaultArgumentParser, PPOConfig, PPO]] = DefaultTrainable.define(
-            PPOMLPSetup.typed(), model_config=self._model_config
-        )
-        self.TrainableClass.setup_class.PROJECT = "TESTING"  # pyright: ignore[reportGeneralTypeIssues]
-        if self._model_config is not None:
-            self.TrainableClass.cls_model_config = self._model_config
-        if class_only:
-            return self.TrainableClass
-        # this initializes the algorithm; overwrite batch_size of 64 again.
-        # This does not modify the state["setup"]["config"]
-        overrides = AlgorithmConfig.overrides(
-            num_env_runners=num_env_runners,
-            num_epochs=2,
-            minibatch_size=32,
-            train_batch_size_per_learner=32,
-        )
-        if eval_interval is not None:
-            overrides["evaluation_interval"] = eval_interval
-        # TODO: Should modify DynamicEvalInterval to evaluate every iteration if wanted.
-        if env_seed is _NOT_PROVIDED:
-            # use a random but reproducible seed
-            if not hasattr(self, "_env_seed_rng"):
-                self.setUp()
-            env_seed = self._env_seed_rng.randint(0, 2**15 - 1)
-        with (
-            MLPArgumentParser.patch_args(
-                "--fcnet_hiddens", self._model_config["fcnet_hiddens"][0], # pyright: ignore[reportOptionalSubscript]
-                "--head_fcnet_hiddens", "[]",
-            )
-            if fast_model
-            else nullcontext()
+        with patch_args(
+            "--iterations", "5",
+            "--total_steps", "320",
+            "--batch_size", "64",  # overwritten with 32!
+            "--comment", "created by TestHelpers.get_trainable",
+            "--seed", "42",
+            "--min_step_size", "64",  # try not to adjust total_steps
+            "--max_step_size", "64",  # try not to adjust total_steps
+            "--num_envs_per_env_runner", "1",
+            extend_argv=True,
+        # "--no_dynamic_eval_interval",
         ):  # fmt: skip
-            trainable = self.TrainableClass(
-                {"env_seed": env_seed}, algorithm_overrides=overrides, model_config=self._model_config
+            # NOTE: In this test attributes are shared BY identity, this is just a weak test.
+            if fast_model:
+                self._model_config = {"fcnet_hiddens": [self._fast_model_fcnet_hiddens], "head_fcnet_hiddens": []}
+            else:
+                self._model_config = None
+            self.TrainableClass: type[DefaultTrainable[DefaultArgumentParser, PPOConfig, PPO]] = (
+                DefaultTrainable.define(PPOMLPSetup.typed(), model_config=self._model_config)
             )
-        self._created_trainables.append(trainable)
-        self.assertEqual(trainable._algorithm_overrides, overrides)
-        if eval_interval is None:
-            self.assertSetEqual(set(overrides.keys()), OVERRIDE_KEYS)
-        else:
-            self.assertSetEqual(set(overrides.keys()), OVERRIDE_KEYS | {"evaluation_interval"})
-            self.assertEqual(trainable.algorithm_config.evaluation_interval, eval_interval)
-        self.assertEqual(trainable.algorithm_config.num_env_runners, num_env_runners)
-        self.assertEqual(trainable.algorithm_config.minibatch_size, 32)
-        self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 32)  # overwritten
-        self.assertEqual(trainable.algorithm_config.num_epochs, 2)
-        self.assertEqual(trainable._setup.args.iterations, 5)
-        self.assertEqual(trainable._setup.args.total_steps, 320)
-        self.assertEqual(trainable._setup.args.train_batch_size_per_learner, 64)  # not overwritten
-        # check that module has correct fcnet_hiddens
-        module = trainable.algorithm.get_module()
-        assert module.model_config
-        self.assertEqual(
-            module.model_config["fcnet_hiddens"],  # pyright: ignore
-            [self._model_config["fcnet_hiddens"][0]]  # pyright: ignore
-            if isinstance(self._model_config["fcnet_hiddens"], int)  # pyright: ignore
-            else self._model_config["fcnet_hiddens"],  # pyright: ignore
-        )
+            self.TrainableClass.setup_class.PROJECT = "TESTING"  # pyright: ignore[reportGeneralTypeIssues]
+            if self._model_config is not None:
+                self.TrainableClass.cls_model_config = self._model_config
+            if class_only:
+                return self.TrainableClass
+            # this initializes the algorithm; overwrite batch_size of 64 again.
+            # This does not modify the state["setup"]["config"]
+            overrides = AlgorithmConfig.overrides(
+                num_env_runners=num_env_runners,
+                num_epochs=2,
+                minibatch_size=32,
+                train_batch_size_per_learner=32,
+            )
+            if eval_interval is not None:
+                overrides["evaluation_interval"] = eval_interval
+            # TODO: Should modify DynamicEvalInterval to evaluate every iteration if wanted.
+            if env_seed is _NOT_PROVIDED:
+                # use a random but reproducible seed
+                if not hasattr(self, "_env_seed_rng"):
+                    self.setUp()
+                env_seed = self._env_seed_rng.randint(0, 2**15 - 1)
+            with (
+                MLPArgumentParser.patch_args(
+                    "--fcnet_hiddens", self._model_config["fcnet_hiddens"][0], # pyright: ignore[reportOptionalSubscript]
+                    "--head_fcnet_hiddens", "[]",
+                )
+                if fast_model
+                else nullcontext()
+            ):  # fmt: skip
+                trainable = self.TrainableClass(
+                    {"env_seed": env_seed}, algorithm_overrides=overrides, model_config=self._model_config
+                )
+            self._created_trainables.append(trainable)
+            self.assertEqual(trainable._algorithm_overrides, overrides)
+            if eval_interval is None:
+                self.assertSetEqual(set(overrides.keys()), OVERRIDE_KEYS)
+            else:
+                self.assertSetEqual(set(overrides.keys()), OVERRIDE_KEYS | {"evaluation_interval"})
+                self.assertEqual(trainable.algorithm_config.evaluation_interval, eval_interval)
+            self.assertEqual(trainable.algorithm_config.num_env_runners, num_env_runners)
+            self.assertEqual(trainable.algorithm_config.minibatch_size, 32)
+            self.assertEqual(trainable.algorithm_config.train_batch_size_per_learner, 32)  # overwritten
+            self.assertEqual(trainable.algorithm_config.num_epochs, 2)
+            self.assertEqual(trainable._setup.args.iterations, 5)
+            self.assertEqual(trainable._setup.args.total_steps, 320)
+            self.assertEqual(trainable._setup.args.train_batch_size_per_learner, 64)  # not overwritten
+            # check that module has correct fcnet_hiddens
+            module = trainable.algorithm.get_module()
+            assert module.model_config
+            self.assertEqual(
+                module.model_config["fcnet_hiddens"],  # pyright: ignore
+                [self._model_config["fcnet_hiddens"][0]]  # pyright: ignore
+                if isinstance(self._model_config["fcnet_hiddens"], int)  # pyright: ignore
+                else self._model_config["fcnet_hiddens"],  # pyright: ignore
+            )
 
         if not train:
             return trainable, None

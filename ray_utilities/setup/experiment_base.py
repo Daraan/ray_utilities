@@ -445,15 +445,23 @@ class ExperimentSetupBase(
             )
         if self.__restored__:
             return
-        cfg_file_parser = ConfigFilePreParser()
-        cfgs_from_cli = cfg_file_parser.parse_args(args, known_only=True)
-        if config_files:
-            logger.info("Adding config files %s to those found in args: %s", config_files, cfgs_from_cli.config_files)
-            config_files = list(config_files)
-            config_files.extend(cfgs_from_cli.config_files)
+        if "--help" in (args or sys.argv) or "-h" in (args or sys.argv):
+            if "-h" in (args or sys.argv):
+                logger.info("-h found in args assuming help was requested Skipping ConfigFilePreParser")
+            # skip the ConfigFilePreParser
+            pre_parsed_args = list((args or sys.argv))[1:]
         else:
-            config_files = cfgs_from_cli.config_files  # pyright: ignore[reportAssignmentType]
-        pre_parsed_args = cfg_file_parser.extra_args
+            cfg_file_parser = ConfigFilePreParser()
+            cfgs_from_cli = cfg_file_parser.parse_args(args, known_only=True)
+            if config_files:
+                logger.info(
+                    "Adding config files %s to those found in args: %s", config_files, cfgs_from_cli.config_files
+                )
+                config_files = list(config_files)
+                config_files.extend(cfgs_from_cli.config_files)
+            else:
+                config_files = cfgs_from_cli.config_files  # pyright: ignore[reportAssignmentType]
+            pre_parsed_args = cfg_file_parser.extra_args
         self._config_overrides: Optional[dict[str, Any]] = None
         self._config_files = config_files
         self._load_args = load_args
@@ -2022,7 +2030,51 @@ class ExperimentSetupBase(
             self_or_config._unfreeze_config()
             yield self_or_config.config
             config_after = self_or_config.config.to_dict()
-            diff = {k: v for k, v in config_after.items() if config_before.get(k) != v}
+            try:
+                diff = {k: v for k, v in config_after.items() if config_before.get(k) != v}
+            except ValueError as e:
+                if "The truth value of an array" not in str(e):
+                    raise
+                import numpy as np  # noqa: PLC0415
+
+                try:
+                    import jax.numpy as jnp  # noqa: PLC0415
+                except ImportError:
+                    jnp = np
+                # there is a numpy/jax array somewhere lets iterate more carefully and check for those
+                diff = {}
+                for k, v in config_after.items():
+                    v_before = config_before.get(k)
+                    try:
+                        if isinstance(v, (np.ndarray, jnp.ndarray)) or isinstance(v_before, (np.ndarray, jnp.ndarray)):
+                            try:
+                                if not np.array_equal(v, v_before):  # pyright: ignore[reportArgumentType]
+                                    diff[k] = v
+                            except TypeError:
+                                # The other is not array like
+                                diff[k] = v
+                        elif v != v_before:
+                            diff[k] = v
+                    except ValueError:
+                        # cannot compare, possibly that array is inside a dict
+                        if isinstance(v, dict) and isinstance(v_before, dict):
+                            for kk, vv in v.items():
+                                vv_before = v_before.get(kk)
+                                if isinstance(vv, (np.ndarray, jnp.ndarray)) or isinstance(
+                                    vv_before, (np.ndarray, jnp.ndarray)
+                                ):
+                                    try:
+                                        if not np.array_equal(vv, vv_before):  # pyright: ignore[reportArgumentType]
+                                            diff[k] = v
+                                            break
+                                    except TypeError:
+                                        # The other is not array like
+                                        diff[k] = v
+                                elif vv != vv_before:
+                                    diff[k] = v
+                                    break
+                        else:
+                            raise
             if diff:
                 self_or_config._config_overrides = self_or_config.config_overrides(update=True, **diff)
             if _was_frozen:

@@ -178,11 +178,13 @@ class PureJaxModelProtocol(Protocol):
         """Applies the model to the input data."""
         ...
 
-    def init(self, random_key: chex.Array, *args, **kwargs) -> dict[str, chex.Array]:
+    def init(self, random_key: chex.Array | chex.PRNGKey, *args, **kwargs) -> dict[str, chex.Array]:
         """Initializes the model with random keys and arguments."""
         ...
 
-    def init_indices(self, random_key: chex.Array, *args, **kwargs) -> dict[str, chex.Array] | Indices: ...
+    def init_indices(
+        self, random_key: chex.Array | chex.PRNGKey, *args, **kwargs
+    ) -> dict[str, chex.Array] | Indices: ...
 
 
 class JaxRLModel(BaseModel):

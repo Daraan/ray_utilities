@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import logging
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional
 
 from ray.rllib.connectors.env_to_module import (
     AddObservationsFromEpisodesToBatch,
@@ -51,6 +51,9 @@ from ray_utilities.connectors.debug_connector import DebugConnector
 if TYPE_CHECKING:
     from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
     from ray.rllib.connectors.connector_v2 import ConnectorV2
+    from ray.rllib.core.rl_module import RLModuleSpec
+    from ray.rllib.policy.policy import PolicySpec  # old API
+    from ray.rllib.utils.typing import AgentID, PolicyID, EpisodeType
 
     from ray_utilities.typing import EnvType
 
@@ -62,7 +65,10 @@ def _default_env_to_module_without_numpy(
     spaces=None,
     device=None,
     *,
-    algo: AlgorithmConfig,
+    is_multi_agent: bool = False,
+    rl_module_spec: Optional[RLModuleSpec] = None,
+    multi_agent_policies: Optional[dict[str, PolicySpec]] = None,
+    policy_mapping_fn: Optional[Callable[[AgentID, "EpisodeType"], PolicyID]] = None,
     debug=False,
 ) -> list[ConnectorV2]:
     """Default pipleine without NumpyToTensor conversion.
@@ -94,21 +100,21 @@ def _default_env_to_module_without_numpy(
     # Append STATE_IN/STATE_OUT handler.
     pipeline.append(AddStatesFromEpisodesToBatch())
     # If multi-agent -> Map from AgentID-based data to ModuleID based data.
-    if algo.is_multi_agent:
+    if is_multi_agent:
         from ray.rllib.core.rl_module.multi_rl_module import MultiRLModuleSpec  # noqa: PLC0415
 
         pipeline.append(
             AgentToModuleMapping(
                 rl_module_specs=(
-                    algo.rl_module_spec.rl_module_specs
-                    if isinstance(algo.rl_module_spec, MultiRLModuleSpec)
-                    else set(algo.policies)  # pyright: ignore[reportArgumentType] # old api
+                    rl_module_spec.rl_module_specs
+                    if isinstance(rl_module_spec, MultiRLModuleSpec)
+                    else set(multi_agent_policies)  # pyright: ignore[reportArgumentType] # old api
                 ),
-                agent_to_module_mapping_fn=algo.policy_mapping_fn,
+                agent_to_module_mapping_fn=policy_mapping_fn,
             )
         )
     # Batch all data.
-    pipeline.append(BatchIndividualItems(multi_agent=algo.is_multi_agent))
+    pipeline.append(BatchIndividualItems(multi_agent=is_multi_agent))
     # Convert to Tensors.
     # pipeline.append(NumpyToTensor(device=device))
     if debug:
@@ -116,6 +122,19 @@ def _default_env_to_module_without_numpy(
     return pipeline
 
 
-def make_env_to_module_without_numpy(algo, *, debug=False) -> partial[list[ConnectorV2]]:
+def make_env_to_module_without_numpy(algo: AlgorithmConfig, *, debug=False) -> partial[list[ConnectorV2]]:
     """Make env_to_module without NumpyToTensor conversion."""
-    return partial(_default_env_to_module_without_numpy, algo=algo, debug=debug)
+    if not algo.is_multi_agent:
+        return partial(_default_env_to_module_without_numpy, is_multi_agent=False, debug=debug)
+    if algo.enable_env_runner_and_connector_v2:
+        assert algo.rl_module_spec is not None
+    else:
+        assert algo.policy_mapping_fn is not None
+    return partial(
+        _default_env_to_module_without_numpy,
+        is_multi_agent=True,
+        rl_module_spec=algo.rl_module_spec,  # pyright: ignore[reportArgumentType]
+        multi_agent_policies=algo.policies,
+        policy_mapping_fn=algo.policy_mapping_fn,  # pyright: ignore[reportArgumentType]
+        debug=debug,
+    )
