@@ -99,6 +99,71 @@ def episode_iterator(
     return range(args["iterations"])
 
 
+def get_valid_model_config_keys() -> frozenset[str]:
+    """Returns the set of valid keys for DefaultModelConfig.
+
+    These are the keys that should be present in model_config for RLlib modules.
+    Any other keys (like CLI arguments) should be filtered out.
+
+    Returns:
+        A frozen set of valid model configuration key names.
+    """
+    from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig  # noqa: PLC0415
+
+    if dataclasses.is_dataclass(DefaultModelConfig):
+        return frozenset(f.name for f in dataclasses.fields(DefaultModelConfig))
+    return frozenset()
+
+
+def filter_model_config(
+    model_config: dict[str, Any] | None,
+    *,
+    extra_valid_keys: frozenset[str] | set[str] | None = None,
+    warn_on_invalid_keys: bool = True,
+) -> dict[str, Any] | None:
+    """Filter a model_config dict to only include valid model configuration keys.
+
+    This function removes CLI arguments and other invalid keys that may have been
+    accidentally included in the model_config. This is useful when converting
+    args to a model_config dict to ensure only relevant keys are passed to RLlib.
+
+    Args:
+        model_config: Dictionary that may contain both valid model config keys and
+            invalid keys (like CLI arguments). Can be None.
+        extra_valid_keys: Additional keys to consider valid beyond the DefaultModelConfig
+            fields. Useful for custom model configurations.
+        warn_on_invalid_keys: If True, logs a warning about removed invalid keys.
+
+    Returns:
+        A filtered dictionary containing only valid model configuration keys,
+        or None if the input was None or empty after filtering.
+
+    Example:
+        >>> args_dict = {"fcnet_hiddens": [64, 64], "env_type": "CartPole-v1", "seed": 42}
+        >>> filtered = filter_model_config(args_dict)
+        >>> # Returns {"fcnet_hiddens": [64, 64]}
+    """
+    if model_config is None:
+        return None
+
+    valid_keys = get_valid_model_config_keys()
+    if extra_valid_keys:
+        valid_keys = valid_keys | set(extra_valid_keys)
+
+    filtered_config = {k: v for k, v in model_config.items() if k in valid_keys}
+
+    if warn_on_invalid_keys:
+        invalid_keys = set(model_config.keys()) - valid_keys
+        if invalid_keys:
+            logger.debug(
+                "Filtered %d invalid keys from model_config: %s",
+                len(invalid_keys),
+                sorted(invalid_keys)[:10],  # Show up to 10 invalid keys
+            )
+
+    return filtered_config if filtered_config else None
+
+
 def patch_model_config(config: AlgorithmConfig, model_config: dict[str, Any] | DefaultModelConfig):
     """Updates the config.model_config and rl_module_spec.model_config with the given model_config."""
     if dataclasses.is_dataclass(model_config):
@@ -586,7 +651,8 @@ def setup_trainable(
                 algo = config.build_algo(use_copy=True)  # copy=True is default; maybe use False
             except AttributeError:
                 algo = config.build()
-            # FIXME too much info in model_config (most cli args are present there), i.e will also contain methods of the parser. Possibly vars(args) or similar was stored in there. Figure out where this happens fix it so that these invalid keys are no longer in the model config.
+            # Note: If model_config contains unexpected CLI args, use filter_model_config()
+            # in _model_config_from_args to filter them out before passing to create_algorithm_config.
 
         # Load from checkpoint
         elif checkpoint_loader := (

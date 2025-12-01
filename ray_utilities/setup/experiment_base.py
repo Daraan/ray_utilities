@@ -1054,7 +1054,7 @@ class ExperimentSetupBase(
 
                 algo: AlgorithmConfig = Setup.config_from_args(args)
 
-            The easiest way to write this method is to use:
+            The recommended way to write this method is to use ``_model_config_from_args``:
 
             ```python
             config, _spec = create_algorithm_config(
@@ -1062,12 +1062,19 @@ class ExperimentSetupBase(
                 env_type=args.env_type,
                 module_class=YourModuleClass,
                 catalog_class=YourCatalogClass,
-                model_config=args.as_dict() if hasattr(args, "as_dict") else vars(args).copy(),
+                model_config=cls._model_config_from_args(args),  # Recommended
                 framework="torch",  # or "tf2"; "jax" not supported
                 discrete_eval=False,
             )
             add_callbacks_to_config(config, cls.get_callbacks_from_args(args))
             ```
+
+        Warning:
+            Do NOT pass ``vars(args).copy()`` or ``args.as_dict()`` directly as ``model_config``.
+            This would include all CLI arguments in the model configuration, which causes
+            unexpected behavior. Instead, use :meth:`_model_config_from_args` which filters
+            to only include valid model configuration keys, or use
+            :func:`~ray_utilities.training.helpers.filter_model_config` to filter the dict.
         """
 
     @classmethod

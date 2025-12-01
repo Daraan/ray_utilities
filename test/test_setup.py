@@ -1045,6 +1045,58 @@ class TestMLPSetup(InitRay, num_cpus=4):
             self.assertIn(k, model_config)
             self.assertEqual(v, model_config[k])
 
+    def test_filter_model_config(self):
+        """Test that filter_model_config correctly filters out non-model-config keys."""
+        from ray_utilities.training.helpers import filter_model_config, get_valid_model_config_keys
+
+        # Test get_valid_model_config_keys returns expected keys
+        valid_keys = get_valid_model_config_keys()
+        self.assertIsInstance(valid_keys, frozenset)
+        self.assertIn("fcnet_hiddens", valid_keys)
+        self.assertIn("vf_share_layers", valid_keys)
+        self.assertIn("conv_filters", valid_keys)
+        # These should NOT be valid model config keys
+        self.assertNotIn("env_type", valid_keys)
+        self.assertNotIn("seed", valid_keys)
+        self.assertNotIn("lr", valid_keys)
+
+        # Test filter_model_config with mixed keys
+        mixed_dict = {
+            "fcnet_hiddens": [64, 64],
+            "vf_share_layers": True,
+            "env_type": "CartPole-v1",
+            "seed": 42,
+            "lr": 0.001,
+            "iterations": 1000,
+            "batch_size": 2048,
+        }
+        filtered = filter_model_config(mixed_dict, warn_on_invalid_keys=False)
+        self.assertIsNotNone(filtered)
+        self.assertEqual(filtered["fcnet_hiddens"], [64, 64])
+        self.assertEqual(filtered["vf_share_layers"], True)
+        # CLI args should be filtered out
+        self.assertNotIn("env_type", filtered)
+        self.assertNotIn("seed", filtered)
+        self.assertNotIn("lr", filtered)
+        self.assertNotIn("iterations", filtered)
+        self.assertNotIn("batch_size", filtered)
+
+        # Test with None input
+        self.assertIsNone(filter_model_config(None))
+
+        # Test with empty dict
+        self.assertIsNone(filter_model_config({}))
+
+        # Test with extra_valid_keys
+        extra_keys = {"custom_key"}
+        mixed_with_custom = {"fcnet_hiddens": [32], "custom_key": "value", "env_type": "CartPole-v1"}
+        filtered_with_extra = filter_model_config(
+            mixed_with_custom, extra_valid_keys=extra_keys, warn_on_invalid_keys=False
+        )
+        self.assertIsNotNone(filtered_with_extra)
+        self.assertEqual(filtered_with_extra["custom_key"], "value")
+        self.assertNotIn("env_type", filtered_with_extra)
+
     @Cases([[], ["--fcnet_hiddens", "[16, 32, 64]"]])
     def test_layers(self, cases):
         import torch  # noqa: PLC0415  # import lazy
