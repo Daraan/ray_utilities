@@ -18,7 +18,6 @@ from ray.rllib.algorithms.ppo.ppo_learner import PPOLearner as RayPPOLearner
 from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import PPOTorchLearner
 from ray.rllib.connectors.learner import GeneralAdvantageEstimation
 from ray.rllib.core.learner.learner import ENTROPY_KEY, POLICY_LOSS_KEY, VF_LOSS_KEY
-from ray.rllib.core.learner.tf.tf_learner import TfLearner
 from ray.rllib.core.learner.torch.torch_learner import TorchLearner
 from ray.rllib.core.rl_module.apis import SelfSupervisedLossAPI
 
@@ -40,6 +39,10 @@ if TYPE_CHECKING:
     from ray_utilities.typing.jax import type_grad_and_value
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    # Helper reference for implementation in older ray versions
+    from ray.rllib.core.learner.tf.tf_learner import TfLearner  # pyright: ignore[reportMissingImports] # noqa
 
 
 class JaxPPOLearner(RayPPOLearner, JaxLearner):

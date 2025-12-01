@@ -945,10 +945,10 @@ class DQNArgumentParser(_BaseRLlibArgumentParser):
     replay buffer settings, and exploration parameters.
     """
 
-    target_network_update_freq: int = 500
+    target_network_update_freq: int = 512
     """Update the target network every N sample steps"""
 
-    num_steps_sampled_before_learning_starts: int = 1000
+    num_steps_sampled_before_learning_starts: int = 1024
     """Number of timesteps to collect before starting learning"""
 
     tau: float = 1.0

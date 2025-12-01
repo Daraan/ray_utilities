@@ -597,6 +597,14 @@ def create_log_metrics(
             (list(s_seq) if len(s_seq) > 1 else s_seq[0]) if not isinstance(s_seq, (int, float, np.number)) else s_seq
         )
 
+    # Calculate effective_train_batch_size
+    grad_accum = result["config"]["learner_config_dict"].get("accumulate_gradients_every", 1)
+    if result["config"].get("minibatch_size"):
+        effective_train_batch_size: int = result["config"]["minibatch_size"] * grad_accum
+    else:
+        # using train_batch_size
+        effective_train_batch_size = result["config"]["train_batch_size_per_learner"] * grad_accum
+
     current_step = get_current_step(result)
     metrics: LogMetricsDict = {
         ENV_RUNNER_RESULTS: {
@@ -616,10 +624,7 @@ def create_log_metrics(
         "batch_size": result["config"]["_train_batch_size_per_learner"],
         "minibatch_size": result["config"]["minibatch_size"],
         # While this could be a config parameter, we can also just calculate it here
-        "effective_train_batch_size": (
-            result["config"]["minibatch_size"]
-            * result["config"]["learner_config_dict"].get("accumulate_gradients_every", 1)
-        ),
+        "effective_train_batch_size": effective_train_batch_size,
         # Not included in the CLI report by tune:
         "minibatch_scale": result["config"]["minibatch_size"] / result["config"]["_train_batch_size_per_learner"],
         "num_environments": result["config"]["num_envs_per_env_runner"] * (result["config"]["num_env_runners"] or 1),

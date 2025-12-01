@@ -69,9 +69,9 @@ default_distributions: dict[str, DistributionDefinition] = {
         # 0.3162 is the next value in the logspace
         "grid_search": sorted([*np.round(np.logspace(np.log2(1e-4), np.log2(0.1), num=7, base=2), 8), 0.2, 0.3162, 0.0])
     },
-    "vf_loss_coeff": {"grid_search": np.linspace(0.1, 1.0, num=7).tolist()},
+    "vf_loss_coeff": {"grid_search": [np.linspace(0.1, 1.0, num=7).tolist(), 0.0, 1.25, 1.5]},
     # vf_clip_param - default 10 - clips in [0, vf_clip_param] - should be tuned for each env
-    "vf_clip_param": {"grid_search": [5, 10, 20, 25, 50, 75, 100, 500, 1000]},
+    "vf_clip_param": {"grid_search": [1, 5, 10, 25, 50, 75, 100, 500, 1000]},
     # vf_loss_coeff
     # Dummy value --tune test
     "test": {"grid_search": [1, 2, 3]},

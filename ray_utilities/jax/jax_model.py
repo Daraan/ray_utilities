@@ -156,6 +156,14 @@ class FlaxRLModel(BaseModel, Generic[ModelType, ConfigType]):
     @abstractmethod
     def init_state(self, *args, **kwargs) -> TrainState: ...
 
+    def __init_subclass__(cls, **kwargs):
+        # Problem Model does not call on super()
+        super().__init_subclass__(**kwargs)
+        Generic.__init_subclass__.__func__(cls)
+
+
+Generic.__init_subclass__.__func__(FlaxRLModel)
+
 
 @runtime_checkable
 class PureJaxModelProtocol(Protocol):
