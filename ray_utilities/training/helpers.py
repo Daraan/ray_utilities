@@ -107,11 +107,18 @@ def get_valid_model_config_keys() -> frozenset[str]:
 
     Returns:
         A frozen set of valid model configuration key names.
+
+    Raises:
+        RuntimeError: If DefaultModelConfig is not a dataclass (unexpected RLlib version).
     """
     from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig  # noqa: PLC0415
 
     if dataclasses.is_dataclass(DefaultModelConfig):
         return frozenset(f.name for f in dataclasses.fields(DefaultModelConfig))
+    logger.error(
+        "DefaultModelConfig is not a dataclass. This is unexpected and may indicate "
+        "an incompatible RLlib version. Returning empty frozenset."
+    )
     return frozenset()
 
 
