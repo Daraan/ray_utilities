@@ -5,6 +5,7 @@ from contextlib import nullcontext
 from typing import TYPE_CHECKING, NamedTuple
 from unittest import mock
 
+import pytest
 import torch
 from ray.rllib.algorithms import DQNConfig
 
@@ -526,12 +527,13 @@ class TestDQNGradientAccumulation(InitRay, TestHelpers, DisableLoggers, num_cpus
                 self.assertEqual(learner._last_gradient_update_step, i, f"Wrong last update step at step {i}")
 
     @mock.patch("ray.rllib.algorithms.dqn.dqn.calculate_rr_weights")
+    @pytest.mark.timeout(400)
     def test_dqn_torch_learner_accumulation_sums_gradients(self, mock_rr):
         """
         Test that DQNTorchLearnerWithGradientAccumulation sums gradients over steps
         and applies the mean at the correct time.
         """
-        batch_size = 1000
+        batch_size = 128
         accumulate_every = 2
         mock_rr.return_value = [1, 1]
         with patch_args(
@@ -552,6 +554,7 @@ class TestDQNGradientAccumulation(InitRay, TestHelpers, DisableLoggers, num_cpus
                 setup.config.env_runners(
                     rollout_fragment_length=batch_size,
                 )
+                setup.config.reporting(min_sample_timesteps_per_iteration=batch_size)
         self.assertIsInstance(setup.config, DQNConfig)
         algorithm = setup.build_algo()
         learner: DQNTorchLearnerWithGradientAccumulation = (

@@ -13,6 +13,8 @@ import ray
 from packaging.version import Version
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import AlgorithmConfig
+from ray.rllib.algorithms.dqn.torch.dqn_torch_learner import DQNTorchLearner
+from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import PPOTorchLearner
 from ray.rllib.callbacks.callbacks import RLlibCallback
 from ray.rllib.core import COMPONENT_LEARNER, COMPONENT_METRICS_LOGGER, COMPONENT_RL_MODULE, DEFAULT_MODULE_ID
 from ray.rllib.env import INPUT_ENV_SPACES
@@ -28,6 +30,9 @@ from ray_utilities.config import DefaultArgumentParser, seed_environments_for_co
 from ray_utilities.constants import ENVIRONMENT_RESULTS, RAY_METRICS_V2, RAY_VERSION, SEED, SEEDS
 from ray_utilities.dynamic_config.dynamic_buffer_update import calculate_iterations, calculate_steps
 from ray_utilities.learners import mix_learners
+from ray_utilities.learners.torch_learner_with_gradient_accumulation_base import (
+    TorchLearnerWithGradientAccumulationBase,
+)
 from ray_utilities.misc import AutoInt
 from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.warn import (
@@ -282,27 +287,47 @@ def _post_patch_config_with_param_space(
     # Change learner class if needed
     if args.get("accumulate_gradients_every", 0) > 1 or args.get("dynamic_batch", False):
         # import lazy as currently not used elsewhere
-        from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
-            PPOTorchLearnerWithGradientAccumulation,
-        )
-
-        learner_class = PPOTorchLearnerWithGradientAccumulation
-        if not issubclass(config.learner_class, learner_class):
-            # need to account for mixer classes - take bases expect last
-            # TODO: This is not 100% save better add correct learner class if accumulate_gradients is a tune parameter in Setup
-            logger.info("Changing learner class to %s", learner_class)
-            try:
-                config.learners(
-                    learner_class=mix_learners(  # pyright: ignore[reportCallIssue]
-                        [*config.learner_class.__bases__[:1], learner_class]
-                    )
+        if not issubclass(config.learner_class, TorchLearnerWithGradientAccumulationBase):
+            if issubclass(config.learner_class, PPOTorchLearner):
+                from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
+                    PPOTorchLearnerWithGradientAccumulation,
                 )
-            except TypeError:
-                # Deprecated keyword
-                config.training(
-                    learner_class=mix_learners(  # pyright: ignore[reportCallIssue]
-                        [*config.learner_class.__bases__[:1], learner_class]
-                    )  # pyright: ignore[reportCallIssue]
+
+                learner_class = PPOTorchLearnerWithGradientAccumulation
+            elif issubclass(config.learner_class, DQNTorchLearner):
+                from ray_utilities.learners.dqn_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
+                    DQNTorchLearnerWithGradientAccumulation,
+                )
+
+                learner_class = DQNTorchLearnerWithGradientAccumulation
+            else:
+                ImportantLogger.important_warning(
+                    logger,
+                    "Detected neither a PPOTorchLearner nor DQNTorchLearner, cannot set gradient accumulation learner.",
+                )
+                learner_class = None
+            if learner_class is not None and not issubclass(config.learner_class, learner_class):
+                # need to account for mixer classes - take bases expect last
+                # TODO: This is not 100% save better add correct learner class if accumulate_gradients is a tune parameter in Setup
+                logger.info("Changing learner class to %s", learner_class)
+                try:
+                    config.learners(
+                        learner_class=mix_learners(  # pyright: ignore[reportCallIssue]
+                            [*config.learner_class.__bases__[:1], learner_class]
+                        )
+                    )
+                except TypeError:
+                    # Deprecated keyword
+                    config.training(
+                        learner_class=mix_learners(  # pyright: ignore[reportCallIssue]
+                            [*config.learner_class.__bases__[:1], learner_class]
+                        )  # pyright: ignore[reportCallIssue]
+                    )
+            else:
+                logger.info(
+                    "Learner class %s already is a subclass of %s. Not adjusting for gradient accumulation.",
+                    config.learner_class,
+                    TorchLearnerWithGradientAccumulationBase,
                 )
     # Seeded environments - sequential seeds have to be set here, env_seed comes from Tuner
     if args.get("env_seeding_strategy", "sequential") == "sequential":
@@ -561,7 +586,13 @@ def setup_trainable(
                 algo = config.build_algo(use_copy=True)  # copy=True is default; maybe use False
             except AttributeError:
                 algo = config.build()
-            # FIXME too much info in model_config (most cli args)
+            if algo.config and len(algo.config.model_config) > 25:
+                logger.warning(
+                    "Large model_config detected with %d keys. Possibility of wrong config.",
+                    len(algo.config.model_config),
+                )
+            # NOTE in case of too much info in config.model_config (most cli args are present there),
+            # Check if there is an args.to_dict or vars(args) dump into it.
 
         # Load from checkpoint
         elif checkpoint_loader := (

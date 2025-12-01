@@ -423,8 +423,13 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
         setup = PPOSetup()
         trainable = setup.trainable_class({"accumulate_gradients_every": 2})
         self.assertTrue(issubclass(trainable.algorithm_config.learner_class, PPOTorchLearnerWithGradientAccumulation))
+        # check_instances
+        learner = trainable.algorithm.learner_group._learner
+        self.assertIsInstance(learner, PPOTorchLearnerWithGradientAccumulation)
         trainable = setup.trainable_class({"accumulate_gradients_every": 1})
         self.assertFalse(issubclass(trainable.algorithm_config.learner_class, PPOTorchLearnerWithGradientAccumulation))
+        learner = trainable.algorithm.learner_group._learner
+        self.assertFalse(isinstance(learner, PPOTorchLearnerWithGradientAccumulation))
 
     def test_evaluation_interval_consistency(self):
         """
