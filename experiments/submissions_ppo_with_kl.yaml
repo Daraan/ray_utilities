@@ -168,6 +168,53 @@ pbt_num_envs_large:
       <OTHER_FLAGS>: |
         --minibatch_size 1024
         --train_batch_size_per_learner 8192
+  run_ids:
+    (HumanoidStandup-v5):
+      tws47f2512010216a94d4:
+        status: FAILED
+        submission_id: pbt_num_envs_large_HumanoidStandup-v5_2025-12-01_02:15:38
+    (Humanoid-v5):
+      tws47f251201021610834:
+        status: FAILED
+        submission_id: pbt_num_envs_large_Humanoid-v5_2025-12-01_02:15:38
+    (Ant-v5):
+      tws47f2512010216e7e34:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Ant-v5_2025-12-01_02:15:38
+    (Hopper-v5):
+      tws47f2512010216cbf74:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Hopper-v5_2025-12-01_02:15:38
+    (Walker2d-v5):
+      tws47f2512010216e5154:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Walker2d-v5_2025-12-01_02:15:38
+    (HalfCheetah-v5):
+      tws47f25120108283d324:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_HalfCheetah-v5_2025-12-01_02:15:38
+    (Reacher-v5):
+      tws47f251201085184264:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Reacher-v5_2025-12-01_02:15:38
+    (Swimmer-v5):
+      tws47f2512011030b37c4:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Swimmer-v5_2025-12-01_02:15:38
+    (Pusher-v5):
+      tws47f251201132570ef4:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_large_Pusher-v5_2025-12-01_02:15:38
+    (InvertedDoublePendulum-v5):
+      tws47f251201140137324:
+        status: SUCCEEDED
+        submission_id:
+          pbt_num_envs_large_InvertedDoublePendulum-v5_2025-12-01_02:15:38
+    (InvertedPendulum-v5):
+      tws47f25120115501ee54:
+        status: SUCCEEDED
+        submission_id:
+          pbt_num_envs_large_InvertedPendulum-v5_2025-12-01_02:15:38
 pbt_lr_base:
   <ENV_TYPE>:
   - CartPole-v1
@@ -202,6 +249,52 @@ pbt_lr_large:
       <OTHER_FLAGS>: |
         --minibatch_size 1024
         --train_batch_size_per_learner 8192
+  run_ids:
+    (HumanoidStandup-v5):
+      tws47f2512010217d55d4:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_HumanoidStandup-v5_2025-12-01_02:16:20
+    (Walker2d-v5):
+      tws47f251201021787e94:
+        status: FAILED
+        submission_id: pbt_lr_large_Walker2d-v5_2025-12-01_02:16:20
+    (Humanoid-v5):
+      tws47f25120102176b1a4:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_Humanoid-v5_2025-12-01_02:16:20
+    (Ant-v5):
+      tws47f251201021791744:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_Ant-v5_2025-12-01_02:16:20
+    (Hopper-v5):
+      tws47f2512010217d6474:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_Hopper-v5_2025-12-01_02:16:20
+    (HalfCheetah-v5):
+      tws47f2512011202a9754:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_HalfCheetah-v5_2025-12-01_02:16:20
+    (Reacher-v5):
+      tws47f2512011225a18a4:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_Reacher-v5_2025-12-01_02:16:20
+    (Swimmer-v5):
+      tws47f2512011242bf104:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_Swimmer-v5_2025-12-01_02:16:20
+    (Pusher-v5):
+      tws47f251201150995e84:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_Pusher-v5_2025-12-01_02:16:20
+    (InvertedDoublePendulum-v5):
+      tws47f25120118400ad24:
+        status: SUCCEEDED
+        submission_id:
+          pbt_lr_large_InvertedDoublePendulum-v5_2025-12-01_02:16:20
+    (InvertedPendulum-v5):
+      tws47f251201193749f44:
+        status: SUCCEEDED
+        submission_id: pbt_lr_large_InvertedPendulum-v5_2025-12-01_02:16:20
 pbt_lr_base_large:
   <ENV_TYPE>:
   - CartPole-v1
@@ -228,7 +321,7 @@ pbt_lr_base_large:
         submission_id: pbt_lr_base_large_Acrobot-v1_2025-11-30_17:58:26
     (LunarLander-v3):
       tws47f25113020323ade4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_lr_base_large_LunarLander-v3_2025-11-30_17:58:26
 pbt_clip_param_base:
   # TODO: Change to base

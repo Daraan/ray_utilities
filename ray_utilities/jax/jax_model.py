@@ -43,9 +43,10 @@ if TYPE_CHECKING:
     from ray_utilities.typing.jax import GeneralParams
     from ray_utilities.typing.model_return import Batch
 
+
 logger = logging.getLogger(__name__)
 
-ConfigType = TypeVar("ConfigType", bound="GeneralParams", default="GeneralParams")
+ModelConfigType = TypeVar("ModelConfigType", bound="GeneralParams", default="GeneralParams")
 ModelType = TypeVar("ModelType", bound="nn.Module", default="nn.Module | FlaxTypedModule")
 
 
@@ -93,7 +94,7 @@ class BaseModel(Model):
         Returns:
             JAX array with the model output.
         """
-        ...  # pyright: ignore[reportIncompatibleMethodOverride]
+        ...
 
     def get_num_parameters(self) -> tuple[int, int]:
         """Get the number of trainable and non-trainable parameters.
@@ -128,7 +129,7 @@ class BaseModel(Model):
         return super()._set_to_dummy_weights(value_sequence)
 
 
-class FlaxRLModel(BaseModel, Generic[ModelType, ConfigType]):
+class FlaxRLModel(BaseModel, Generic[ModelType, ModelConfigType]):
     def __call__(self, input_dict: Batch, *, parameters, **kwargs) -> jax.Array:
         return self._forward(input_dict, parameters=parameters, **kwargs)
 
@@ -137,8 +138,8 @@ class FlaxRLModel(BaseModel, Generic[ModelType, ConfigType]):
         """Set up the underlying flax model."""
         ...
 
-    def __init__(self, config: ConfigType, **kwargs):
-        self.config: ConfigType = config
+    def __init__(self, config: ModelConfigType, **kwargs):
+        self.config: ModelConfigType = config
         super().__init__(config=config)  # pyright: ignore[reportArgumentType]  # ModelConfig
         self.model: ModelType = self._setup_model(**kwargs)
 

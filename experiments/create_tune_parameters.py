@@ -32,9 +32,9 @@ __all__ = [
     "write_distributions_to_json",
 ]
 
-GridSearch = Mapping[Literal["grid_search"], list[float | int | str]]
+GridSearch = Mapping[Literal["grid_search"], list[float | int | str | bool | None]]
 
-DistributionDefinition = BaseDistribution | GridSearch | Mapping[str, Mapping[str, float | bool]]
+DistributionDefinition = BaseDistribution | GridSearch | Mapping[str, Mapping[str, float | int | bool | None]]
 
 ACCUMULATION_BATCH_SIZE_BASE = DefaultArgumentParser.minibatch_size
 
@@ -49,18 +49,22 @@ default_distributions: dict[str, DistributionDefinition] = {
     # "lr": {"qloguniform": {"lower": 5e-5, "upper": 1e-1, "q": 5e-5}},
     # qloguniform does not sample that well, samples that are close by and not spreading over the whole range
     # pure random would be nicer if a setting is totally not usable
+    # region training
+    "gamma": {"grid_search": [0.8, 0.85, 0.9, 0.95, 0.99, 0.999, 0.9999]},
     "lr": {"grid_search": sorted([*np.round(np.logspace(np.log2(5e-8), np.log2(0.0015), num=10, base=2), 8), 1e-4])},
     "batch_size": {"grid_search": [128, 256, 512, 1024, 2048, 4096, 8192, 8192 * 2]},
+    "grad_clip": {"grid_search": [0.1, 0.5, 1.0, 10.0, 40.0, 1000, None]},
     # NOTE: Upperbound of accumulate_gradients_every num_epochs * train_batch_size_per_learner / minibatch_size
     "accumulate_gradients_every": {
         "grid_search": [2**i for i in list(range(int(log2(MAX_DYNAMIC_BATCH_SIZE / ACCUMULATION_BATCH_SIZE_BASE)) + 1))]
     },  # assume 128 as base
+    # endregion training
+    # For high num_envs_per_env runner should adjust num_env_runners accordingly
+    "num_envs_per_env_runner": {"grid_search": [1, 2, 4, 8, 16, 32]},
+    # region PPO
     "minibatch_size": {"grid_search": [2**i for i in range(base_exp, max_exp + 1)]},
     # Need to skip too small minibatches, i.e. min 32, skip/resample. Alternatively use FloatDistribution
     "minibatch_scale": {"grid_search": [1 / 16, 1 / 8, 1 / 4, 1 / 2, 1.0]},
-    # For high num_envs_per_env runner should adjust num_env_runners accordingly
-    "num_envs_per_env_runner": {"grid_search": [1, 2, 4, 8, 16, 32]},
-    # PPO
     # clip_param - default 0.3 - possibly change to uniform distribution later
     "clip_param": {"grid_search": [0.1, 0.2, 0.3, 0.4, 0.5, 0.8, 1.0]},
     # NOTE: Formula is vf_loss_coeff * vf_loss - entropy_coeff * entropy
@@ -72,7 +76,7 @@ default_distributions: dict[str, DistributionDefinition] = {
     "vf_loss_coeff": {"grid_search": [np.linspace(0.1, 1.0, num=7).tolist(), 0.0, 1.25, 1.5]},
     # vf_clip_param - default 10 - clips in [0, vf_clip_param] - should be tuned for each env
     "vf_clip_param": {"grid_search": [1, 5, 10, 25, 50, 75, 100, 500, 1000]},
-    # vf_loss_coeff
+    # endregion PPO
     # Dummy value --tune test
     "test": {"grid_search": [1, 2, 3]},
 }

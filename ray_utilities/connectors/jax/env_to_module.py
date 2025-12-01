@@ -122,19 +122,61 @@ def _default_env_to_module_without_numpy(
     return pipeline
 
 
-def make_env_to_module_without_numpy(algo: AlgorithmConfig, *, debug=False) -> partial[list[ConnectorV2]]:
-    """Make env_to_module without NumpyToTensor conversion."""
-    if not algo.is_multi_agent:
-        return partial(_default_env_to_module_without_numpy, is_multi_agent=False, debug=debug)
-    if algo.enable_env_runner_and_connector_v2:
-        assert algo.rl_module_spec is not None
-    else:
-        assert algo.policy_mapping_fn is not None
-    return partial(
-        _default_env_to_module_without_numpy,
-        is_multi_agent=True,
-        rl_module_spec=algo.rl_module_spec,  # pyright: ignore[reportArgumentType]
-        multi_agent_policies=algo.policies,
-        policy_mapping_fn=algo.policy_mapping_fn,  # pyright: ignore[reportArgumentType]
-        debug=debug,
-    )
+class EnvToModuleWithoutNumpyConnector:
+    """Factory class to create a connector for env_to_module without NumpyToTensor conversion."""
+
+    def __init__(
+        self,
+        algo: AlgorithmConfig,
+        *,
+        debug=False,
+    ):
+        self.is_multi_agent = algo.is_multi_agent
+        self.enable_env_runner_and_connector_v2 = algo.enable_env_runner_and_connector_v2
+        if self.is_multi_agent:
+            assert algo.rl_module_spec
+            self.rl_module_spec = algo.rl_module_spec
+        else:
+            self.rl_module_spec = None
+        self.policies = algo.policies
+        self.policy_mapping_fn = algo.policy_mapping_fn
+        self.debug = debug
+
+    def __call__(self, env) -> list["ConnectorV2"]:
+        if not self.is_multi_agent:
+            return _default_env_to_module_without_numpy(env, is_multi_agent=False, debug=self.debug)
+        if self.enable_env_runner_and_connector_v2:
+            assert self.rl_module_spec is not None
+        else:
+            assert self.policy_mapping_fn is not None
+        return _default_env_to_module_without_numpy(
+            env,
+            is_multi_agent=True,
+            rl_module_spec=self.rl_module_spec,  # pyright: ignore[reportArgumentType]
+            multi_agent_policies=self.policies,
+            policy_mapping_fn=self.policy_mapping_fn,  # pyright: ignore[reportArgumentType]
+            debug=self.debug,
+        )
+
+    def __eq__(self, other):
+        if not isinstance(other, EnvToModuleWithoutNumpyConnector):
+            return False
+        return bool(
+            self.is_multi_agent == other.is_multi_agent
+            and self.enable_env_runner_and_connector_v2 == other.enable_env_runner_and_connector_v2
+            and self.rl_module_spec == other.rl_module_spec
+            and self.policies == other.policies
+            and self.policy_mapping_fn == other.policy_mapping_fn
+        )
+
+    def __hash__(self) -> int:
+        return hash(
+            (
+                type(self),
+                self.is_multi_agent,
+                self.enable_env_runner_and_connector_v2,
+                self.rl_module_spec,
+                self.policies,
+                self.policy_mapping_fn,
+            )
+        )

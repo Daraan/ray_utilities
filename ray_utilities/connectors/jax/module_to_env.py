@@ -4,8 +4,7 @@ from __future__ import annotations
 
 # Prepend: Anything that has to do with plain data processing (not
 # particularly with the actions).
-from functools import partial
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 from ray.rllib.connectors.module_to_env import (
     ListifyDataForVectorEnv,
@@ -82,10 +81,7 @@ def _jax_module_to_env_connector(
     return pipeline
 
 
-# NOTE: ray has wrong signature in algorithm config
-def make_jax_module_to_env_connector(
-    algo: AlgorithmConfig, *, key: chex.PRNGKey, debug=False
-) -> Callable[..., ConnectorV2 | list[ConnectorV2]]:
+class MakeJaxModuleToEnvConnector:
     """
     Same as the default pipeline, but with JAX compatible.
 
@@ -99,11 +95,34 @@ def make_jax_module_to_env_connector(
 
         You should use this function *after* calling config.environment(...)
     """
-    return partial(
-        _jax_module_to_env_connector,
-        is_multi_agent=algo.is_multi_agent,
-        clip_actions=algo.clip_actions,  # pyright: ignore[reportArgumentType]
-        normalize_actions=algo.normalize_actions,  # pyright: ignore[reportArgumentType]
-        key=key,
-        debug=debug,
-    )
+
+    def __init__(self, algo: AlgorithmConfig, *, key: "chex.PRNGKey", debug=False):
+        self.key = key
+        self.debug = debug
+        self.is_multi_agent = algo.is_multi_agent
+        self.clip_actions = algo.clip_actions
+        self.normalize_actions = algo.normalize_actions
+
+    def __call__(self, env, rl_module) -> "ConnectorV2" | list["ConnectorV2"]:
+        return _jax_module_to_env_connector(
+            env,
+            rl_module,
+            is_multi_agent=self.is_multi_agent,
+            clip_actions=bool(self.clip_actions),
+            normalize_actions=bool(self.normalize_actions),
+            key=self.key,
+            debug=self.debug,
+        )
+
+    def __eq__(self, other):
+        if not isinstance(other, MakeJaxModuleToEnvConnector):
+            return False
+        return bool(
+            self.is_multi_agent == other.is_multi_agent
+            and self.clip_actions == other.clip_actions
+            and self.normalize_actions == other.normalize_actions
+            and all(self.key == other.key)
+        )
+
+    def __hash__(self) -> int:
+        return hash((type(self), self.is_multi_agent, self.clip_actions, self.normalize_actions, tuple(self.key)))

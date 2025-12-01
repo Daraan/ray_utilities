@@ -1348,9 +1348,14 @@ class RunNotFound(RunWithVerificationFailures):
 def default_experiment_validator(experiment_data: dict[str, Any]) -> None | _FailureTuple:
     if any(exp["current_step"] > 1_000_000 for exp in experiment_data.values()):
         return None
+    try:
+        max_off_value = max(exp["current_step"] for exp in experiment_data.values())
+    except ValueError:
+        # empty sequence
+        max_off_value = "empty sequence - no data"
     return _FailureTuple(
         metric="No experiment with > 1M steps",
-        offline_value=max(exp["current_step"] for exp in experiment_data.values()),
+        offline_value=max_off_value,
         online_value="max(offline, online) checked",
         type=VerificationFailure.EXPERIMENT_INCOMPLETE,
     )

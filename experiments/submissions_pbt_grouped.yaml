@@ -122,7 +122,7 @@ pbt_batch_size:
           pbt_batch_size_InvertedDoublePendulum-v5_2025-11-29_00:01:12
     (InvertedPendulum-v5):
       tws47f2511290010dcbd4:
-        status: RUNNING
+        status: FAILED
         submission_id: pbt_batch_size_InvertedPendulum-v5_2025-11-29_00:01:12
 pbt_num_envs:
   # This is a comment

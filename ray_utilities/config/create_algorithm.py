@@ -369,7 +369,7 @@ def create_algorithm_config(
 
     # Common training configuration for all algorithms
     config.training(
-        gamma=0.99,
+        gamma=args.get("gamma", 0.99),
         # with a growing number of Learners and to increase the learning rate as follows:
         # lr = [original_lr] * ([num_learners] ** 0.5)
         lr=args["lr"],
@@ -377,7 +377,7 @@ def create_algorithm_config(
         # `num_learners` x `train_batch_size_per_learner` and you can
         # access it with the property `AlgorithmConfig.total_train_batch_size`.
         train_batch_size_per_learner=args["train_batch_size_per_learner"],
-        grad_clip=0.5,
+        grad_clip=args.get("grad_clip", 0.5),  # Default is None or 40 for DQN - we used 0.5
     )
 
     # Algorithm-specific training configuration

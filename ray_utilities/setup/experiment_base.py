@@ -463,6 +463,8 @@ class ExperimentSetupBase(
                 config_files = cfgs_from_cli.config_files  # pyright: ignore[reportAssignmentType]
             pre_parsed_args = cfg_file_parser.extra_args
         self._config_overrides: Optional[dict[str, Any]] = None
+        """Config overrides applied by config_overrides or those that are modified in an with setup: block"""
+
         self._config_files = config_files
         self._load_args = load_args
         self._tune_trial_name_creator = trial_name_creator
@@ -2076,6 +2078,10 @@ class ExperimentSetupBase(
                         else:
                             raise
             if diff:
+                if restored_overrides := diff.pop("_restored_overrides", None):
+                    logger.warning(
+                        "_restored_overrides found in config diff, this is an unexpected key %s", restored_overrides
+                    )
                 self_or_config._config_overrides = self_or_config.config_overrides(update=True, **diff)
             if _was_frozen:
                 self_or_config.config.freeze()

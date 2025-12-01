@@ -192,7 +192,7 @@ class JaxLearner(Learner):
         # TODO: is kl_coeffs a variable that is learned?
         logger.warning("_get_tensor_variable called which is not fully implemented", stacklevel=2)
         if 0:
-            from ray.rllib.core.learner.tf.tf_learner import TfLearner  # removed somewhere around 2.48
+            from ray.rllib.core.learner.tf.tf_learner import TfLearner  # pyright: ignore[reportMissingImports] # removed somewhere around 2.48
 
             TorchLearner._get_tensor_variable(value, dtype, trainable)
             TfLearner._get_tensor_variable(value, dtype, trainable)

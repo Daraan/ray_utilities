@@ -1,4 +1,15 @@
 {
+  "gamma": {
+    "grid_search": [
+      0.8,
+      0.85,
+      0.9,
+      0.95,
+      0.99,
+      0.999,
+      0.9999
+    ]
+  },
   "lr": {
     "grid_search": [
       5e-08,
@@ -26,6 +37,17 @@
       16384
     ]
   },
+  "grad_clip": {
+    "grid_search": [
+      0.1,
+      0.5,
+      1.0,
+      10.0,
+      40.0,
+      1000,
+      null
+    ]
+  },
   "accumulate_gradients_every": {
     "grid_search": [
       1,
@@ -36,6 +58,16 @@
       32,
       64,
       128
+    ]
+  },
+  "num_envs_per_env_runner": {
+    "grid_search": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32
     ]
   },
   "minibatch_size": {
@@ -57,16 +89,6 @@
       0.25,
       0.5,
       1.0
-    ]
-  },
-  "num_envs_per_env_runner": {
-    "grid_search": [
-      1,
-      2,
-      4,
-      8,
-      16,
-      32
     ]
   },
   "clip_param": {

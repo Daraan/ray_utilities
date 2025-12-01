@@ -794,32 +794,14 @@ class _BaseRLlibArgumentParser(TuneableParameters, _EnvRunnerParser):
     train_batch_size_per_learner: int = 2048
     """Batch size per learner. For PPO: synchronous sampling. For DQN: samples from replay buffer."""
 
-    minibatch_scale: float | None = None
-    """If set, minibatch_size will be scaled as: minibatch_size = int(train_batch_size_per_learner * minibatch_scale).
-    Must be in range (0, 1]. A value of 1.0 sets minibatch_size equal to train_batch_size_per_learner."""
-
     lr: float | list[tuple[int, float]] = 1e-4
     """Learning rate or schedule: float or list of (timestep, lr) tuples"""
 
-    use_kl_loss: bool = False
-    """Whether to use KL divergence loss in the PPO objective."""
+    gamma: float = 0.99
+    """Discount factor for future rewards"""
 
-    entropy_coeff: float = 0.01
-    """Coefficient for the entropy regularization term in the PPO objective."""
-
-    vf_loss_coeff: float = 1.0
-    """Coefficient for the value function loss in the PPO objective."""
-
-    clip_param: float = 0.2
-    """Clipping parameter for the PPO objective."""
-
-    vf_clip_param: float = 10.0
-    """
-    Clipping parameter for the value function loss in PPO
-
-    Note:
-        For higher rewards this should also be higher
-    """
+    grad_clip: float | None = 0.5
+    """If set, clip gradients during optimization at this value"""
 
     def configure(self) -> None:
         super().configure()
@@ -862,6 +844,10 @@ class PPOArgumentParser(_BaseRLlibArgumentParser):
 
     minibatch_size: int = 128
     """Minibatch size for PPO SGD updates"""
+
+    minibatch_scale: float | None = None
+    """If set, minibatch_size will be scaled as: minibatch_size = int(train_batch_size_per_learner * minibatch_scale).
+    Must be in range (0, 1]. A value of 1.0 sets minibatch_size equal to train_batch_size_per_learner."""
 
     num_epochs: int = 30
     """Number of SGD epochs to run per training batch"""

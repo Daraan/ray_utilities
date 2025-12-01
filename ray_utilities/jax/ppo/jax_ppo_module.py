@@ -43,9 +43,9 @@ class JaxPPOModule(DefaultPPORLModule, JaxModule):
             or (seed := self.model_config.get("seed", -1)) == -1  # pyright: ignore[reportAttributeAccessIssue]
         ):
             _logger.warning(
-                "No seed provided in the model_config_dict of %s, using default seed 123.", self.__class__.__name__
+                "No seed provided in the model_config_dict of %s, using default seed 42.", self.__class__.__name__
             )
-            seed = 123
+            seed = 42
         module_key = jax.random.PRNGKey(seed)
         module_key, actor_key, critic_key = jax.random.split(module_key, 3)
 
