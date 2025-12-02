@@ -1901,10 +1901,8 @@ class TestHelpers(unittest.TestCase):
                 self.assertDictEqual(spec_1.model_config, spec_2.model_config)
             else:
                 self.util_test_tree_equivalence(spec_1.model_config, spec_2.model_config)
-            # NOTE: These have no value function head as they come from the env runners!
             mod1 = trainable.algorithm.get_module()
             mod2 = trainable2.algorithm.get_module()
-            # TODO: possibly add model_config to state
             if isinstance(mod1.model_config, dict) and isinstance(mod2.model_config, dict):
                 self.assertDictEqual(mod1.model_config, mod2.model_config)
             else:
@@ -1959,6 +1957,10 @@ class TestHelpers(unittest.TestCase):
 
             # Step 2
             result2 = trainable.train()
+            # Might mitigate deadlocks but often the problem was somewhere else
+            # if "jax" in sys.modules:
+            #    import jax  # noqa: PLC0415
+            #    jax.clear_caches()
             result2_restored = trainable2.train()
             self.assertEqual(
                 trainable2.algorithm_config.get_rollout_fragment_length(),

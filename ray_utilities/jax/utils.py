@@ -3,9 +3,10 @@ from __future__ import annotations
 from dataclasses import field
 from typing import TYPE_CHECKING
 
-import jax.numpy as jnp
+import numpy as np
 from chex import dataclass
 from flax.training.train_state import TrainState as FlaxTrainState
+import jax.numpy as jnp
 
 if TYPE_CHECKING:
     import chex
@@ -58,6 +59,16 @@ class Indices:
     def __eq__(self, other) -> bool:
         if not isinstance(other, Indices):
             return NotImplemented
+        # When we encounter a tracer we should just return False here
+        # Use numpy here otherwise we might get a tracer => error
+        # When indices are properly ignored as static args jnp is also fine
+        out = (
+            np.array_equal(self.features_by_estimator, other.features_by_estimator)
+            and np.array_equal(self.path_identifier_list, other.path_identifier_list)
+            and np.array_equal(self.internal_node_index_list, other.internal_node_index_list)
+        )
+        return out
+        # For stricter and sanity checking use jnp here:
         out = (
             jnp.array_equal(self.features_by_estimator, other.features_by_estimator).item()
             and jnp.array_equal(self.path_identifier_list, other.path_identifier_list).item()

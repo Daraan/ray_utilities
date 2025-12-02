@@ -3,7 +3,7 @@ from __future__ import annotations
 # some of ray's TypeAlias are not detected as such
 # pyright: reportInvalidTypeForm=warning
 import logging
-from typing import TYPE_CHECKING, Any, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, cast
 
 import jax
 import jax.numpy as jnp
@@ -47,8 +47,15 @@ if TYPE_CHECKING:
 
 
 class JaxPPOLearner(RayPPOLearner, JaxLearner):
-    def build(self, **kwargs) -> None:
+    def build(
+        self,
+        jit_update_static_argnames: Sequence[str] = (),
+        jit_forward_kwargs: Optional[dict[str, Any]] = None,
+        jit_update_kwargs: Optional[dict[str, Any]] = None,
+        **kwargs,
+    ) -> None:
         super().build(**kwargs)
+        assert not kwargs, f"Unknown kwargs passed to build: {kwargs}"
         self._rng_key = self.config.learner_config_dict["rng_key"]
         if self._learner_connector is not None and (self.config.add_default_connectors_to_learner_pipeline):
             # super().build adds (PPO) AddOneTsToEpisodesAndTruncate, GeneralAdvantageEstimation
@@ -85,8 +92,14 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
             # _forward_with_gradds is used inside _update_jax
             self._forward_with_grads = type_grad_and_value(self._jax_forward_pass)
         else:
-            self._forward_with_grads = jax.jit(jax.value_and_grad(self._jax_forward_pass, has_aux=True, argnums=(0,)))
-        self._update_jax = jax.jit(self._update_jax, static_argnames=["accumulate_gradients_every"])
+            self._forward_with_grads = jax.jit(
+                jax.value_and_grad(self._jax_forward_pass, has_aux=True, argnums=(0,)), **(jit_forward_kwargs or {})
+            )
+        self._update_jax = jax.jit(
+            self._update_jax,
+            static_argnames=["accumulate_gradients_every", *jit_update_static_argnames],
+            **(jit_update_kwargs or {}),
+        )
 
     def get_jax_states(self) -> dict[ModuleID, JaxActorCriticStateDict]:
         return super().get_jax_states()
@@ -208,13 +221,22 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
         self, batch, parameters: dict[ModuleID, dict[Literal["actor", "critic"], Mapping[str, Any]]], **kwargs
     ):
         """jittable"""
-        fwd_out = {
-            mid: cast("JaxPPOModule", self.module._rl_modules[mid])._forward_train(
-                batch[mid], parameters=parameters[mid]["actor"], **kwargs
+        fwd_out = {}
+        for module_id in batch.keys():
+            if module_id not in self.module:
+                logger.warning("Got module id %s that is not in %s", module_id, self.module.keys())
+                continue
+            # check if module related entry is in kwargs
+            kwargs_now = {}
+            for kw_name, kwarg in kwargs.items():
+                if module_id in kwarg:
+                    kwargs_now[kw_name] = kwarg[module_id]
+                # can I detect general kwargs?
+            out = cast("JaxPPOModule", self.module._rl_modules[module_id])._forward_train(
+                batch[module_id], parameters=parameters[module_id]["actor"], **kwargs_now
             )
-            for mid in batch.keys()
-            if mid in self.module
-        }
+            fwd_out[module_id] = out
+        assert len(fwd_out) > 0, "No module ids found during forward pass!"
         return fwd_out
 
     # NOTE: do not pass indices as states
@@ -226,7 +248,7 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
         batch: dict[str, Any],
         curr_entropy_coeffs: dict[ModuleID, float | chex.Numeric | TensorType],
         curr_kl_coeffs: Optional[dict[ModuleID, float | chex.Numeric | TensorType]] = None,
-        # indices: dict[ModuleID, Any] | None = None,
+        **kwargs,
     ) -> tuple[chex.Numeric, tuple[Any, dict[ModuleID, chex.Numeric], dict[str, Any]]]:
         """
         Note:
@@ -235,7 +257,7 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
         fwd_out = self._forward_train_call(
             batch,
             parameters=parameters,
-            # indices=indices,
+            **kwargs,
         )
         loss_per_module, compute_loss_aux = self._jax_compute_losses(
             parameters, fwd_out, batch, curr_entropy_coeffs, curr_kl_coeffs
@@ -251,6 +273,7 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
         curr_kl_coeffs: Optional[dict[ModuleID, float | chex.Numeric | TensorType]] = None,
         *,
         accumulate_gradients_every: int,  # possibly make book and static
+        **kwargs,
     ) -> tuple[Mapping[ModuleID, JaxActorCriticStateDict], tuple[Any, dict[ModuleID, chex.Numeric], dict[str, Any]]]:
         # TODO: Could make accumulate_gradients_every a bool -> two different jax-compilations, BUT only when not taking mean  # noqa: E501
         parameters = self._get_state_parameters(states)
@@ -261,7 +284,7 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
                 batch,
                 curr_entropy_coeffs,
                 curr_kl_coeffs,
-                # indices=indices,
+                **kwargs,
             )
         )
         if 0:
@@ -310,10 +333,12 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
         curr_entropy_coeffs, curr_kl_coeffs = self._generate_curr_coeffs()
         new_states, (fwd_out, loss_per_module, compute_loss_aux) = self._update_jax(
             states=self.get_jax_states(),
+            # Turn sample batch into a dict
             batch={mid: dict(v) for mid, v in batch.items()},
             curr_entropy_coeffs=curr_entropy_coeffs,
             curr_kl_coeffs=curr_kl_coeffs,
             accumulate_gradients_every=self.config.learner_config_dict.get("accumulate_gradients_every", 1),
+            **kwargs,
         )
         # TODO: Is this update at the correct location?
         for module_id, new_state in new_states.items():
