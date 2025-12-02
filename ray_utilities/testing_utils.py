@@ -2346,6 +2346,40 @@ class _FakeFutureResult(_FutureTrainingResult):
         return self.result
 
 
+_mock_save_model_module = mock.patch(
+    "ray_utilities.config.create_algorithm.save_model_config_and_architecture",
+    new=lambda *args, **kwargs: None,  # noqa: ARG005
+)
+
+_save_model_mock_origin = mock.patch.object(
+    ray_utilities.callbacks.algorithm.model_config_saver_callback,
+    "_get_module",
+)
+_save_model_mock_origin_b = mock.patch.object(
+    ray_utilities.callbacks.algorithm.model_config_saver_callback,
+    "open",
+    new=lambda *args, **kwargs: nullcontext(),  # noqa: ARG005
+)
+_save_model_mock_origin_c = mock.patch.object(
+    ray_utilities.callbacks.algorithm.model_config_saver_callback,
+    "json",
+)
+
+
+def disable_architecture_json_save(func):
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        with (
+            _mock_save_model_module,
+            _save_model_mock_origin,
+            _save_model_mock_origin_b,
+            _save_model_mock_origin_c,
+        ):
+            return func(self, *args, **kwargs)
+
+    return wrapper
+
+
 def mock_trainable_algorithm(
     func: Optional[Callable[..., None]] = None,
     *,
@@ -2381,41 +2415,11 @@ def mock_trainable_algorithm(
     env_runner_group_mock = mock.patch.object(algorithm_module, "EnvRunnerGroup") if mock_env_runners else nullcontext()
     save_model_mock = (
         # use a lambda to allow comparision
-        mock.patch.object(
-            ray_utilities.config.create_algorithm,
-            "save_model_config_and_architecture",
-            new=lambda *args, **kwargs: None,  # noqa: ARG005
-        )
-        if mock_save_model_callback
-        else nullcontext()
-    )
-    save_model_mock_origin = (
-        mock.patch.object(
-            ray_utilities.callbacks.algorithm.model_config_saver_callback,
-            "_get_module",
-        )
-        if mock_save_model_callback
-        else nullcontext()
-    )
-    save_model_mock_origin_b = (
-        mock.patch.object(
-            ray_utilities.callbacks.algorithm.model_config_saver_callback,
-            "open",
-            new=lambda *args, **kwargs: nullcontext(),  # noqa: ARG005
-        )
-        if mock_save_model_callback
-        else nullcontext()
-    )
-    save_model_mock_origin_c = (
-        mock.patch.object(
-            ray_utilities.callbacks.algorithm.model_config_saver_callback,
-            "json",
-        )
-        if mock_save_model_callback
-        else nullcontext()
+        disable_architecture_json_save if mock_save_model_callback else nullcontext()
     )
 
     @wraps(func)
+    @disable_architecture_json_save
     def wrapper(self, *args, **kwargs):
         with (
             env_runner_settings_mock,
@@ -2424,10 +2428,6 @@ def mock_trainable_algorithm(
             module_spec_mock,
             # mock_old_api_multi_agent_setup,
             env_runner_group_mock,
-            save_model_mock,
-            save_model_mock_origin,
-            save_model_mock_origin_b,
-            save_model_mock_origin_c,
         ):
             return func(self, *args, **kwargs)
 

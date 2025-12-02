@@ -761,7 +761,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 _logger,
                 "Trainable.train is called and Trainable is in reset state. Trying to clear old states.",
             )
-            if not self._rebuild_algorithm_if_necessary(self._algo_config):
+            if not self._rebuild_algorithm_if_necessary(self._algo_config, load_current_learner_state=False):
                 # reset all env runners states
                 algo_ref = ray.put(self._algo_config)
 
@@ -782,7 +782,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 if self.algorithm.eval_env_runner_group is not None:  # pyright: ignore[reportUnnecessaryComparison]
                     self.algorithm.eval_env_runner_group.foreach_env_runner(reset_env_runner)
                 # eval runner as well? env config might have changed
-            rebuild_learner_group(self.algorithm)
+            # Rebuild learner should be covered by rebuild_algorithm_if_necessary
+            # rebuild_learner_group(self.algorithm)
             sync_env_runner_states_after_reload(self.algorithm)
             self._is_in_reset_state = False
         if self._during_buffered_training or self.config.get("cli_args", {}).get("buffer_length") != "auto":
@@ -1031,7 +1032,9 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
     # region checkpointing
 
-    def _rebuild_algorithm_if_necessary(self, new_algo_config: AlgorithmConfig) -> bool | None:
+    def _rebuild_algorithm_if_necessary(
+        self, new_algo_config: AlgorithmConfig, *, load_current_learner_state: bool = True
+    ) -> bool | None:
         """Check if env runners need to be recreated based on state or algorithm changes.
 
         Args:
@@ -1056,15 +1059,28 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                 stacklevel=2,
             )
             self.algorithm.config = new_algo_config
+
+        # Check the module config if it aligns with the new config
+        module = self.algorithm.get_module()
+        module_needs_update = False
+        if module is not None:
+            module_needs_update = module.model_config != new_algo_config.model_config
+            if module_needs_update:
+                _logger.info(
+                    "Module model_config %s vs new model_config %s needs update: %s",
+                    module.model_config,
+                    new_algo_config.model_config,
+                    module_needs_update,
+                )
         # TODO: Also need update if model_config / rl_module changed
-        env_runners_need_update = (
+        env_runners_need_update = module_needs_update or (
             self.algorithm.env_runner_group
             and new_algo_config.num_env_runners != self.algorithm.env_runner_group.num_remote_env_runners()
         )
         eval_config = (
             new_algo_config.get_evaluation_config_object() if not new_algo_config.in_evaluation else new_algo_config
         )
-        eval_env_runners_need_update = bool(
+        eval_env_runners_need_update = module_needs_update or bool(
             eval_config
             and self.algorithm._should_create_evaluation_env_runners(eval_config)  # if deactivated dont care
             and self.algorithm.eval_env_runner_group
@@ -1123,7 +1139,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             )
             # FIXME
             # assert self.algorithm.spaces == self.algorithm.eval_env_runner_group.get_spaces()
-        return env_runners_need_update or eval_env_runners_need_update
+        if module_needs_update:
+            rebuild_learner_group(self.algorithm, load_current_learner_state=load_current_learner_state)
+
+        return env_runners_need_update or eval_env_runners_need_update or module_needs_update
 
     # region Trainable checkpoints
 
@@ -1729,6 +1748,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
                     if self._algorithm.learner_group is not None and self._algorithm.learner_group.is_local:
                         self._algorithm.learner_group._learner.config = self.algorithm_config.copy(copy_frozen=True)  # pyright: ignore[reportOptionalMemberAccess]
         if self._algorithm is not None:  # Otherwise algorithm will be created later
+            # FIXME: Need to update the learner state as well
+            # current_learner_state = self.algorithm.get_state["learner_group"]
             self._rebuild_algorithm_if_necessary(new_algo_config)
             sync_env_runner_states_after_reload(self.algorithm)  # NEW, Test, sync states here
             if self.algorithm.metrics and RAY_VERSION >= Version("2.50.0"):
