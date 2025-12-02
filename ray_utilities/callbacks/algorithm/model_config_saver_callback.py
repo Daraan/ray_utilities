@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from ray.rllib.core.rl_module.multi_rl_module import MultiRLModule
-from ray.rllib.core.rl_module.torch.torch_rl_module import TorchRLModule
+from ray.rllib.core.rl_module.rl_module import RLModule
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms.algorithm import Algorithm
-    from ray.rllib.core.rl_module.rl_module import RLModule
+    from ray.rllib.core.rl_module.torch.torch_rl_module import TorchRLModule
 
 logger = logging.getLogger(__name__)
 
@@ -92,32 +93,42 @@ def _jsonify_summary(summary: str) -> dict:
 
 def save_model_config_and_architecture(*, algorithm: "Algorithm", **kwargs) -> None:
     """on_algorithm_init callback that saves the model config and architecture as json dict."""
-    module = _get_module(algorithm)
-    config = _get_module_config(module)
-    for k, v in config.items():
-        # Step 1: Convert value to string and replace escaped newlines
-        value_str = repr(v).replace("\\n", "\n")
-        # Step 2: Replace multiple spaces with ', '
-        value_with_commas = re.sub(r"\ {2,}", ", ", value_str)
-        # Step 3: Replace 'inf ' with 'inf,'
-        cleaned_value = re.sub(r"inf ", "inf,", value_with_commas)
-        config[k] = cleaned_value
-
-    arch = _get_model_architecture(module)
-    output = {
-        "config": config,
-        "architecture": arch,
-    }
-    out_path = "./model_architecture.json"
+    # NOTE: do not use algorithm.get_module() here as it lacks the vf head
     try:
-        with open(out_path, "w") as f:
-            json.dump(output, f, indent=2)
-        logger.info("Saved model architecture/config to: %s", out_path)
-    except OSError as e:
-        logger.error("Failed to save model architecture/config: %s", str(e))
+        module = _get_module(algorithm)
+        if module is None:
+            return
+
+        if isinstance(module, MultiRLModule):
+            module = module["default_policy"]
+
+        config = _get_module_config(module)
+        for k, v in config.items():
+            # Step 1: Convert value to string and replace escaped newlines
+            value_str = repr(v).replace("\\n", "\n")
+            # Step 2: Replace multiple spaces with ', '
+            value_with_commas = re.sub(r"\ {2,}", ", ", value_str)
+            # Step 3: Replace 'inf ' with 'inf,'
+            cleaned_value = re.sub(r"inf ", "inf,", value_with_commas)
+            config[k] = cleaned_value
+
+        arch = _get_model_architecture(module)
+        output = {
+            "config": config,
+            "architecture": arch,
+        }
+        out_path = "./model_architecture.json"
+        try:
+            with open(out_path, "w") as f:
+                json.dump(output, f, indent=2)
+            logger.info("Saved model architecture/config to: %s", os.path.abspath(out_path))
+        except OSError as e:
+            logger.error("Failed to save model architecture/config: %s", str(e))
+    except Exception:
+        logger.exception("Failed to extract model config")
 
 
-def _get_module(algorithm: "Algorithm") -> TorchRLModule:
+def _get_module(algorithm: "Algorithm") -> TorchRLModule | RLModule | Any:
     module = getattr(algorithm, "rl_module", None)
     if module is None:
         try:
@@ -127,14 +138,15 @@ def _get_module(algorithm: "Algorithm") -> TorchRLModule:
             module = algorithm.config.rl_module_spec.build()  # pyright: ignore[reportOptionalMemberAccess]
     if isinstance(module, MultiRLModule):
         module = module["default_policy"]
-    if isinstance(module, TorchRLModule):
+    if isinstance(module, RLModule):
         return module
-    if module is not None and hasattr(module, "_modules"):
-        modules = getattr(module, "_modules", {})
-        for m in modules.values():
-            if isinstance(m, TorchRLModule):
-                return m
-    raise RuntimeError("No TorchRLModule found in algorithm.rl_module")
+    return module
+    # if module is not None and hasattr(module, "_modules"):
+    #    modules = getattr(module, "_modules", {})
+    #    for m in modules.values():
+    #        if isinstance(m, TorchRLModule):
+    #            return m
+    # return None
 
 
 def _get_module_config(module: TorchRLModule | RLModule) -> dict:

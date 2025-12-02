@@ -35,6 +35,7 @@ from collections import deque
 from collections.abc import Iterator, Mapping
 from contextlib import ContextDecorator, nullcontext
 from copy import deepcopy
+from dataclasses import is_dataclass
 from functools import partial, wraps
 from types import MappingProxyType
 from typing import (
@@ -118,13 +119,6 @@ from ray_utilities.training.functional import training_step
 from ray_utilities.training.helpers import make_divisible, nan_to_zero_hist_leaves
 
 try:
-    import jax
-    import jax.numpy as jnp
-except ImportError:
-    jax = None
-    jnp = None
-
-try:
     from ray.rllib.utils.metrics.stats.mean import MeanStats  # pyright: ignore[reportMissingImports]
 except ImportError:
     # create a dummy type
@@ -141,7 +135,8 @@ if TYPE_CHECKING:
     from flax.training.train_state import TrainState
     from jaxlib.xla_extension import pytree  # pyright: ignore[reportMissingModuleSource,reportMissingImports] pyi file
     from ray import tune
-    from ray.rllib.algorithms.ppo.ppo import PPO, PPOConfig
+    from ray.rllib.core.models.base import Model
+    from ray.rllib.core.models.torch.base import TorchModel
     from ray.tune import Result
 
     from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ParserType_co
@@ -987,7 +982,10 @@ class TestHelpers(unittest.TestCase):
         attr_checked: str = "",
         *,
         use_subtests: bool = False,
+        almost: bool = False,
     ):
+        import jax  # noqa: PLC0415
+
         leaves1 = jax.tree.leaves_with_path(tree1)
         leaves2 = jax.tree.leaves_with_path(tree2)
         # flat1 = tree.flatten(val1)
@@ -1003,9 +1001,14 @@ class TestHelpers(unittest.TestCase):
                     leaf_name = get_leafpath_value(leaf)
                     if leaf_name in ignore_leaves:
                         continue
-                npt.assert_array_equal(
-                    val1, val2, err_msg=f"Attribute '{attr_checked}.{path1}' not equal in both states {msg}"
-                )
+                if almost:
+                    npt.assert_array_almost_equal(
+                        val1, val2, err_msg=f"Attribute '{attr_checked}.{path1}' not equal in both states {msg}"
+                    )
+                else:
+                    npt.assert_array_equal(
+                        val1, val2, err_msg=f"Attribute '{attr_checked}.{path1}' not equal in both states {msg}"
+                    )
 
     def compare_env_runner_results(
         self,
@@ -1230,6 +1233,9 @@ class TestHelpers(unittest.TestCase):
                     if not isinstance(config[key], type)
                     else config[key].__name__
                 )
+        if "learner_config_dict" in config and "rng_key" in config["learner_config_dict"]:
+            # For jax rng_keys in the dict
+            config["learner_config_dict"]["rng_key"] = tuple(config["learner_config_dict"]["rng_key"])
         return config
 
     def compare_weights(
@@ -1270,6 +1276,13 @@ class TestHelpers(unittest.TestCase):
             if w1 is None:
                 self.assertIsNone(weights2[key], f"Key '{key}' not equal in both states {msg}")
                 continue
+            if is_dataclass(w1) or is_dataclass(weights2[key]):
+                self.util_test_tree_equivalence(w1, weights2[key], almost=almost)
+                return
+            if isinstance(w1, tuple):
+                # optax state or similar
+                self.util_test_tree_equivalence(w1, weights2[key], almost=almost)
+                return
             if almost:
                 # Use almost equal for floats, arrays, etc.
                 npt.assert_array_almost_equal(
@@ -1552,6 +1565,12 @@ class TestHelpers(unittest.TestCase):
                         almost=True,
                     )
                 else:
+                    # _is_atari might have been replaced, see filter_incompatible_remote_config
+                    if key == "config":
+                        for config in (algorithm_state2["config"], algorithm_state1["config"]):
+                            config["_is_atari"] = (
+                                None if not config["_is_atari"] else config["_is_atari"]
+                            )  # False to None
                     try:
                         self.assertDictEqual(
                             algorithm_state2[key],
@@ -1559,8 +1578,7 @@ class TestHelpers(unittest.TestCase):
                             f"Algorithm state[{key}] in checkpoint differs from current algorithm state.",
                         )
                     except ValueError as e:
-                        print("Cannot compare dicts for key %s: %s" % (key, e))
-                        raise
+                        self.util_test_tree_equivalence(algorithm_state2[key], algorithm_state1[key])
                     except AssertionError:
                         if key == "eval_env_runner":
                             print(
@@ -1702,10 +1720,19 @@ class TestHelpers(unittest.TestCase):
             state2 = {k: v for k, v in state2.items() if k not in ("desc", "uuid")}  # pyright: ignore[reportAttributeAccessIssue]
         self.assertEqual(state1, state2)
 
+    def util_compare_models(self, model1: Model | TorchModel | Any, model2: Model | Any, msg: str = ""):
+        """Compare two models' weights and structures."""
+        self.assertEqual(type(model1), type(model2), f"Model types do not match: {msg}")
+        if isinstance(model1.config, dict) and isinstance(model2.config, dict):
+            self.assertDictEqual(model1.config, model2.config)
+        else:
+            self.util_test_tree_equivalence(model1.config, model2.config)
+        # Weights should be compared by state dict
+
     def compare_trainables(
         self,
-        trainable: TrainableBase["ParserType_co", "ConfigType_co", "AlgorithmType_co"],
-        trainable2: TrainableBase["ParserType_co", "ConfigType_co", "AlgorithmType_co"],
+        trainable: TrainableBase["ParserType_co | Any", "ConfigType_co", "AlgorithmType_co"],
+        trainable2: TrainableBase["ParserType_co | Any", "ConfigType_co | Any", "AlgorithmType_co | Any"],
         msg: str = "",
         *,
         ignore_env_runner_state: bool = True,
@@ -1865,6 +1892,42 @@ class TestHelpers(unittest.TestCase):
                 ignore_env_runner_state=ignore_env_runner_state,
                 ignore_timers=ignore_timers,
             )
+
+            # State comparision lacks module compare
+            self.assertDictEqual(trainable.algorithm_config.model_config, trainable2.algorithm_config.model_config)
+            spec_1 = trainable.algorithm_config.get_rl_module_spec()
+            spec_2 = trainable2.algorithm_config.get_rl_module_spec()
+            if isinstance(spec_1.model_config, dict) and isinstance(spec_2.model_config, dict):
+                self.assertDictEqual(spec_1.model_config, spec_2.model_config)
+            else:
+                self.util_test_tree_equivalence(spec_1.model_config, spec_2.model_config)
+            # NOTE: These have no value function head as they come from the env runners!
+            mod1 = trainable.algorithm.get_module()
+            mod2 = trainable2.algorithm.get_module()
+            # TODO: possibly add model_config to state
+            if isinstance(mod1.model_config, dict) and isinstance(mod2.model_config, dict):
+                self.assertDictEqual(mod1.model_config, mod2.model_config)
+            else:
+                self.util_test_tree_equivalence(mod1.model_config, mod2.model_config)
+            if (mod1 and hasattr(mod1, "pi")) or (mod2 and hasattr(mod2, "pi")):
+                self.util_compare_models(mod2.pi, mod1.pi, msg + "policy model")  # pyright: ignore[reportOptionalMemberAccess, reportAttributeAccessIssue]
+            if (mod1 and hasattr(mod1, "vf")) or (mod2 and hasattr(mod2, "vf")):
+                self.util_compare_models(mod2.vf, mod1.vf, msg + "value model")  # pyright: ignore[reportOptionalMemberAccess, reportAttributeAccessIssue]
+            # TODO: Compare DQN models
+            if mod1 and hasattr(mod1, "states"):
+                self.util_test_tree_equivalence(mod2.states, mod1.states)  # pyright: ignore[reportAttributeAccessIssue]
+            if trainable.algorithm.learner_group._learner is not None:
+                learner_mod1 = trainable.algorithm.learner_group._learner.module["default_policy"]
+                learner_mod2 = trainable2.algorithm.learner_group._learner.module["default_policy"]
+                if isinstance(learner_mod1.model_config, dict) and isinstance(learner_mod2.model_config, dict):
+                    self.assertDictEqual(learner_mod1.model_config, learner_mod2.model_config)
+                    self.assertDictEqual(mod1.model_config, learner_mod2.model_config)
+                else:
+                    self.util_test_tree_equivalence(learner_mod1.model_config, learner_mod2.model_config)
+                    self.util_test_tree_equivalence(mod1.model_config, learner_mod2.model_config)
+            else:
+                # need to get remote
+                pass
 
             # Step 2
             result2 = trainable.train()
@@ -2112,7 +2175,12 @@ class SetupDefaults(SetupLowRes, SetupWithEnv, TestHelpers, DisableLoggers):
         self._INPUT_LENGTH = self._env.observation_space.shape[0]  # pyright: ignore[reportOptionalSubscript]
         self._ACTION_DIM: int = self._ACTION_SPACE.n  # pyright: ignore[reportAttributeAccessIssue]
         self._OBS_DIM: int = self._OBSERVATION_SPACE.shape[0]  # pyright: ignore[reportOptionalSubscript]
-        if jnp is not None:
+        try:
+            import jax  # noqa: PLC0415
+            import jax.numpy as jnp  # noqa: PLC0415
+        except ImportError:
+            logger.warning("JAX is not installed, skipping JAX related test setup. Can ause some attribute failures!")
+        else:
             self._DEFAULT_INPUT = jnp.arange(self._INPUT_LENGTH * 2).reshape((2, self._INPUT_LENGTH))
             self._DEFAULT_BATCH: dict[str, chex.Array] = MappingProxyType({"obs": self._DEFAULT_INPUT})  # pyright: ignore[reportAttributeAccessIssue]
             self._ENV_SAMPLE = jnp.arange(self._INPUT_LENGTH)

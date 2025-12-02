@@ -142,15 +142,17 @@ class EnvToModuleWithoutNumpyConnector:
         self.policy_mapping_fn = algo.policy_mapping_fn
         self.debug = debug
 
-    def __call__(self, env) -> list["ConnectorV2"]:
+    def __call__(self, env, spaces=None, device=None, /) -> list["ConnectorV2"]:  # noqa: ARG002
         if not self.is_multi_agent:
-            return _default_env_to_module_without_numpy(env, is_multi_agent=False, debug=self.debug)
+            return _default_env_to_module_without_numpy(env, spaces, device, is_multi_agent=False, debug=self.debug)
         if self.enable_env_runner_and_connector_v2:
             assert self.rl_module_spec is not None
         else:
             assert self.policy_mapping_fn is not None
         return _default_env_to_module_without_numpy(
             env,
+            spaces,
+            device,
             is_multi_agent=True,
             rl_module_spec=self.rl_module_spec,  # pyright: ignore[reportArgumentType]
             multi_agent_policies=self.policies,

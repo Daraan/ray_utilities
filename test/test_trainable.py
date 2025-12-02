@@ -424,11 +424,11 @@ class TestTrainable(InitRay, TestHelpers, DisableLoggers, DisableGUIBreakpoints,
         trainable = setup.trainable_class({"accumulate_gradients_every": 2})
         self.assertTrue(issubclass(trainable.algorithm_config.learner_class, PPOTorchLearnerWithGradientAccumulation))
         # check_instances
-        learner = trainable.algorithm.learner_group._learner
+        learner = trainable.algorithm.learner_group._learner  # pyright: ignore[reportOptionalMemberAccess]
         self.assertIsInstance(learner, PPOTorchLearnerWithGradientAccumulation)
         trainable = setup.trainable_class({"accumulate_gradients_every": 1})
         self.assertFalse(issubclass(trainable.algorithm_config.learner_class, PPOTorchLearnerWithGradientAccumulation))
-        learner = trainable.algorithm.learner_group._learner
+        learner = trainable.algorithm.learner_group._learner  # pyright: ignore[reportOptionalMemberAccess]
         self.assertFalse(isinstance(learner, PPOTorchLearnerWithGradientAccumulation))
 
     def test_evaluation_interval_consistency(self):
@@ -660,6 +660,7 @@ class TestClassCheckpointing(InitRay, TestHelpers, DisableLoggers, num_cpus=4):
             "--use_exact_total_steps",
             "--batch_size", "64",
             "--minibatch_size", "32",
+            "--num_envs_per_env_runner", "2",
         ):  # fmt: skip
             # Need to fix argv for remote
             PPOTrainable = DefaultTrainable.define(PPOSetup.typed(), fix_argv=True, use_pbar=False)

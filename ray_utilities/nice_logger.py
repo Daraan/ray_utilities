@@ -213,7 +213,8 @@ def set_project_log_level(
         pkg_name = pkg_logger.name.split(".")[0]
 
     # Also set level for any already-configured child loggers (skip placeholders)
-    for name, lg in logging.Logger.manager.loggerDict.items():
+    # Use copy for rare case during debugging that dict changes during t
+    for name, lg in logging.Logger.manager.loggerDict.copy().items():
         if not isinstance(lg, logging.Logger):
             continue
         if lg is pkg_logger:

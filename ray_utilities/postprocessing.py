@@ -652,32 +652,41 @@ def create_log_metrics(
             _logger.warning("NaN values in metrics: %s", metrics)
 
         # Store videos
-        if evaluation_videos_best := result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(
-            EPISODE_BEST_VIDEO,
-        ):
+        if (
+            evaluation_videos_best := result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(
+                EPISODE_BEST_VIDEO,
+            )
+        ) is not None and len(evaluation_videos_best) > 0:
+            raise RuntimeError("We do not want videos")
             metrics[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_BEST_VIDEO] = {
                 "video": evaluation_videos_best,
                 # if we have a video but no max reward, use the mean as the guaranteed metric present
                 "reward": result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(EPISODE_RETURN_MAX, eval_mean),
             }
-        if evaluation_videos_worst := result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(
-            EPISODE_WORST_VIDEO,
-        ):
+        if (
+            evaluation_videos_worst := result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(
+                EPISODE_WORST_VIDEO,
+            )
+        ) is not None and len(evaluation_videos_worst) > 0:
             metrics[EVALUATION_RESULTS][ENV_RUNNER_RESULTS][EPISODE_WORST_VIDEO] = {
                 "video": evaluation_videos_worst,
                 "reward": result[EVALUATION_RESULTS][ENV_RUNNER_RESULTS].get(EPISODE_RETURN_MIN, eval_mean),
             }
         if discrete_evaluation_results := result[EVALUATION_RESULTS].get("discrete"):
-            if discrete_evaluation_videos_best := discrete_evaluation_results[ENV_RUNNER_RESULTS].get(
-                EPISODE_BEST_VIDEO
-            ):
+            if (
+                discrete_evaluation_videos_best := discrete_evaluation_results[ENV_RUNNER_RESULTS].get(
+                    EPISODE_BEST_VIDEO
+                )
+            ) is not None and len(discrete_evaluation_videos_best) > 0:
                 metrics[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS][EPISODE_BEST_VIDEO] = {  # pyright: ignore[reportTypedDictNotRequiredAccess]
                     "video": discrete_evaluation_videos_best,
                     "reward": discrete_evaluation_results[ENV_RUNNER_RESULTS].get(EPISODE_RETURN_MAX, disc_eval_mean),
                 }  # fmt: skip
-            if discrete_evaluation_videos_worst := discrete_evaluation_results[ENV_RUNNER_RESULTS].get(
-                EPISODE_WORST_VIDEO
-            ):
+            if (
+                discrete_evaluation_videos_worst := discrete_evaluation_results[ENV_RUNNER_RESULTS].get(
+                    EPISODE_WORST_VIDEO
+                )
+            ) is not None and len(discrete_evaluation_videos_worst) > 0:
                 metrics[EVALUATION_RESULTS]["discrete"][ENV_RUNNER_RESULTS][EPISODE_WORST_VIDEO] = {  # pyright: ignore[reportTypedDictNotRequiredAccess]
                     "video": discrete_evaluation_videos_worst,
                     "reward": discrete_evaluation_results[ENV_RUNNER_RESULTS].get(EPISODE_RETURN_MIN, disc_eval_mean),
@@ -686,9 +695,9 @@ def create_log_metrics(
                 check_if_video(discrete_evaluation_videos_best, "discrete" + EPISODE_BEST_VIDEO)
             if discrete_evaluation_videos_worst:
                 check_if_video(discrete_evaluation_videos_worst, "discrete" + EPISODE_WORST_VIDEO)
-        if evaluation_videos_best:
+        if evaluation_videos_best is not None:
             check_if_video(evaluation_videos_best, EPISODE_BEST_VIDEO)
-        if evaluation_videos_worst:
+        if evaluation_videos_worst is not None:
             check_if_video(evaluation_videos_worst, EPISODE_WORST_VIDEO)
         if save_video:
             save_videos(metrics)
@@ -828,7 +837,7 @@ def _reorganize_timer_logs(results: _LogT) -> _LogT:
     if EVALUATION_RESULTS in results and len(results[EVALUATION_RESULTS]) > 1:
         evaluation_timers: dict[str, Any] = results[TIMERS].setdefault(EVALUATION_RESULTS, {})
         try:
-            results[TIMERS][EVALUATION_RESULTS].update(_reorganize_timer_logs(results[EVALUATION_RESULTS]).pop(TIMERS))
+            results[TIMERS][EVALUATION_RESULTS].update(_reorganize_timer_logs(results[EVALUATION_RESULTS]).pop(TIMERS))  # pyright: ignore[reportArgumentType]
         except Exception:
             _logger.exception("Error recursive reorganizing timer logs for evaluation results")
         assert EVALUATION_RESULTS not in evaluation_timers

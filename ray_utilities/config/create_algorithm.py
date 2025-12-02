@@ -410,7 +410,7 @@ def create_algorithm_config(
         default_dqn_config = type(config)()
         config.reporting(
             # Should be disivisble by 2
-            min_train_timesteps_per_iteration=args.get("num_steps_sampled_before_learning_starts", 1024)
+            min_sample_timesteps_per_iteration=args.get("num_steps_sampled_before_learning_starts", 1024)
         )
         config.training(
             # DQN Specific

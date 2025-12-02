@@ -905,7 +905,7 @@ def get_evaluation_results(
     return eval_results
 
 
-def rebuild_learner_group(algorithm: Algorithm) -> None:
+def rebuild_learner_group(algorithm: Algorithm, *, load_current_learner_state: bool = True) -> None:
     """
     Rebuilds the learner group of the given algorithm.
 
@@ -944,13 +944,17 @@ def rebuild_learner_group(algorithm: Algorithm) -> None:
         spaces=spaces,  # pyright: ignore[reportArgumentType]
         inference_only=False,
     )
+    current_state = algorithm.learner_group.get_state() if algorithm.learner_group is not None else None
     algorithm.learner_group = algorithm.config.build_learner_group(rl_module_spec=module_spec)
+    if load_current_learner_state and current_state is not None:
+        algorithm.learner_group.set_state(current_state)
 
     # Check if there are modules to load from the `module_spec`.
     rl_module_ckpt_dirs = {}
+    module_specs = module_spec.rl_module_specs
+    # Deprecated
     multi_rl_module_ckpt_dir = module_spec.load_state_path
     modules_to_load = module_spec.modules_to_load
-    module_specs = module_spec.rl_module_specs
     if not isinstance(module_specs, dict):
         # Very unlikely. Would rise AttributeError on ray if this actually were a dict.
         module_specs = {DEFAULT_MODULE_ID: module_specs}

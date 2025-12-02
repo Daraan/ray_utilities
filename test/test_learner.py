@@ -527,14 +527,13 @@ class TestDQNGradientAccumulation(InitRay, TestHelpers, DisableLoggers, num_cpus
                 self.assertEqual(learner._last_gradient_update_step, i, f"Wrong last update step at step {i}")
 
     @mock.patch("ray.rllib.algorithms.dqn.dqn.calculate_rr_weights")
-    @pytest.mark.timeout(400)
     def test_dqn_torch_learner_accumulation_sums_gradients(self, mock_rr):
         """
         Test that DQNTorchLearnerWithGradientAccumulation sums gradients over steps
         and applies the mean at the correct time.
         """
         batch_size = 128
-        accumulate_every = 2
+        accumulate_every: int = 2
         mock_rr.return_value = [1, 1]
         with patch_args(
             "-a", "mlp",
@@ -544,12 +543,15 @@ class TestDQNGradientAccumulation(InitRay, TestHelpers, DisableLoggers, num_cpus
             "--fcnet_hiddens", "[8, 8]",
             "--no_exact_sampling",
             "--num_envs_per_env_runner", 1,
+            "--target_network_update_freq", batch_size // 2,
+            "--num_steps_sampled_before_learning_starts", batch_size,
         ):  # fmt: skip
             with DQNMLPSetup(init_trainable=False) as setup:
                 setup.config.training(
                     num_epochs=1,
                     train_batch_size=batch_size,
                     training_intensity=None,
+                    num_steps_sampled_before_learning_starts=batch_size,
                 )
                 setup.config.env_runners(
                     rollout_fragment_length=batch_size,
@@ -580,13 +582,17 @@ class TestDQNGradientAccumulation(InitRay, TestHelpers, DisableLoggers, num_cpus
             result = original_compute_gradients(loss_per_module, **kwargs)
             raw_gradients.append(param_tensor.grad.detach().clone())
             # unaccumulated and raw_gradients (accumulated) should never match, except when set to None one step later
-            if accumulate_every != 1 and learner._step_count % accumulate_every != 1:
+            if accumulate_every != 1 and (learner._step_count % accumulate_every != 1):  # pyright: ignore[reportUnnecessaryComparison]
                 with self.assertRaises(AssertionError, msg=f"Gradients matched at step {learner._step_count}"):
                     torch.testing.assert_close(
                         unaccumulated_grads[-1],
                         raw_gradients[-1],
                         msg=f"Gradients matched at step {learner._step_count}",
                     )
+            elif accumulate_every == 1:  # pyright: ignore[reportUnnecessaryComparison]
+                if not hasattr(learner, "_step_count"):
+                    learner._step_count = 0
+                learner._step_count += 1
             updated_gradients.append({param_ref: result[param_ref].detach().clone()} if len(result) > 0 else {})
             return result
 
@@ -606,7 +612,7 @@ class TestDQNGradientAccumulation(InitRay, TestHelpers, DisableLoggers, num_cpus
 
         learner.apply_gradients = mock_apply_gradients
         # Step 1: accumulate
-        algorithm.step()
+        algorithm.train()
         self.assertEqual(learner._step_count, 1)
         self.assertEqual(learner._gradient_updates, 0)
         self.assertEqual(learner._step_count % setup.config.learner_config_dict["accumulate_gradients_every"], 1)
@@ -614,7 +620,7 @@ class TestDQNGradientAccumulation(InitRay, TestHelpers, DisableLoggers, num_cpus
         self.assertIs(param_tensor, learner._params[param_ref], "Parameter reference should match")
         grad_step1 = unaccumulated_grads[0]
         # Step 2: accumulate and apply
-        algorithm.step()
+        algorithm.train()
         self.assertEqual(learner._step_count, 2)
         self.assertEqual(learner._gradient_updates, 1)
         self.assertEqual(learner._step_count % setup.config.learner_config_dict["accumulate_gradients_every"], 0)

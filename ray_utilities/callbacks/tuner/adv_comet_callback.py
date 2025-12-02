@@ -135,6 +135,7 @@ class AdvCometLoggerCallback(
         self,
         *,
         online: bool = True,
+        upload: bool = True,
         upload_intermediate: bool = False,
         tags: Optional[list[str]] = None,
         save_checkpoints: bool = False,
@@ -213,6 +214,9 @@ class AdvCometLoggerCallback(
 
         self._trials_created = 0
         self._logged_architectures: set[Trial] = set()
+        self.upload = upload
+        """Whether to upload offline experiments at all."""
+
         self.upload_intermediate = upload_intermediate
         """If True, offline experiments will be uploaded intermediately when trials complete/pause.
 
@@ -611,7 +615,7 @@ class AdvCometLoggerCallback(
         self._trial_experiments.clear()
 
         # Handle "offline+upload@end" mode: upload all experiments at the end
-        if not self.online and not self.upload_intermediate:
+        if not self.online and self.upload and not self.upload_intermediate:
             _LOGGER.info("Processing offline+upload@end: uploading all Comet experiments at experiment end")
             for trial in trials:
                 process = self._upload_offline_experiment_if_available(trial, blocking=False)

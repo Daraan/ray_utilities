@@ -192,13 +192,13 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
         # - "offline+upload" -> upload intermediately when trials complete/pause (upload_intermediate=True)
         # - "offline+upload@end" -> upload only at experiment end via setup (upload_intermediate=False)
         upload_intermediate_comet = False
-        if self._setup.args.comet and "upload" in self._setup.args.comet:
-            # Check if it's the @end variant
-            if "@end" not in self._setup.args.comet:
-                upload_intermediate_comet = True
+        upload = self._setup.args.comet and "upload" in self._setup.args.comet
+        if upload and "@end" not in self._setup.args.comet:  # pyright: ignore[reportOperatorIssue]
+            upload_intermediate_comet = True
 
         return AdvCometLoggerCallback(
             # new key
+            upload=upload,
             upload_intermediate=upload_intermediate_comet,
             api_key=api_key,
             disabled=not args.comet and args.test if disabled is None else disabled,
