@@ -9,7 +9,7 @@ from ray.rllib.algorithms.ppo.default_ppo_rl_module import DefaultPPORLModule
 from ray.rllib.core.columns import Columns
 from ray.rllib.core.models.base import ACTOR, CRITIC, ENCODER_OUT
 
-from ray_utilities.jax.jax_module import JaxActorCriticEncoder, JaxModule, JaxActorCriticStateDict
+from ray_utilities.jax.jax_module import JaxActorCriticEncoder, JaxModule, JaxActorCriticStateDict, JaxModuleState
 
 if TYPE_CHECKING:
     from ray.rllib.utils.typing import TensorType
@@ -55,15 +55,18 @@ class JaxPPOModule(DefaultPPORLModule, JaxModule):
         critic_state = critic.init_state(critic_key, sample)
 
         self.states: JaxActorCriticStateDict  # pyright: ignore[reportIncompatibleVariableOverride]
-        self.set_state(
-            JaxActorCriticStateDict(
+        # assert isinstance(self.model_config, dict)
+        state: JaxModuleState = {
+            "jax_state": JaxActorCriticStateDict(
                 {
                     "actor": actor_state,
                     "critic": critic_state,
                     "module_key": module_key,
                 }
-            )
-        )
+            ),
+            "model_config": self.model_config,
+        }
+        self.set_state(state)
 
     def _forward(self, batch: dict[str, Any], *, parameters: Mapping[str, Any], **kwargs) -> dict[str, Any]:
         """Default forward pass (used for inference and exploration)."""

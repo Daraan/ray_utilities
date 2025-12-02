@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 from jax import lax
 from ray.rllib.core.models.base import ActorCriticEncoder
 from ray.rllib.core.rl_module import RLModule
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,11 @@ class JaxActorCriticStateDict(JaxStateDict):
     module_key: int | chex.PRNGKey
 
 
+class JaxModuleState(TypedDict):
+    jax_state: JaxStateDict | StateDict | JaxActorCriticStateDict
+    model_config: NotRequired[StateDict]
+
+
 class JaxModule(RLModule):
     """
     Attributes:
@@ -58,15 +63,22 @@ class JaxModule(RLModule):
         *args,  # noqa: ARG002
         inference_only: bool = False,  # noqa: ARG002
         **kwargs,  # noqa: ARG002
-    ) -> JaxStateDict | StateDict | JaxActorCriticStateDict:
+    ) -> JaxModuleState | StateDict:
         # TODO: could return less than the full state if not inference_only; i.e. do not return the critic
-        return self.states
+        state = super().get_state(*args, **kwargs)
+        state["jax_state"] = self.states
+        if hasattr(self, "model_config"):
+            state["module_config"] = self.model_config
+        return state
 
-    def set_state(self, state: JaxStateDict | StateDict | JaxActorCriticStateDict) -> None:
+    def set_state(self, state: JaxModuleState | StateDict) -> None:
         # Note: Not entirely following Rllib interface
         if not state:
             logger.warning("State is empty, not setting state.")
-        self.states = state
+        self.states = state["jax_state"]
+        if "model_config" in state:
+            self.model_config = state["model_config"]
+        # NOTE: possibly need to update models with new model config!
 
     def _forward_exploration(self, batch: dict[str, Any], **kwargs) -> dict[str, Any]:
         return self._forward(lax.stop_gradient(batch), **kwargs)

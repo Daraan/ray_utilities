@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from ray.rllib.core.rl_module.rl_module import RLModule, RLModuleSpec
     from ray.rllib.utils.typing import ModuleID, Optimizer, Param, ParamDict, StateDict, TensorType
 
-    from ray_utilities.jax.jax_module import JaxModule, JaxStateDict
+    from ray_utilities.jax.jax_module import JaxActorCriticStateDict, JaxModule, JaxStateDict
     from ray_utilities.jax.ppo.jax_ppo_module import JaxPPOModule
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ class JaxLearner(Learner):
         >>> # Use with RLlib training pipeline
     """
 
-    framework = "jax"
+    framework = "torch"
     """Set to "jax" to indicate the backend framework. Possibly needs to be changed for rllib compatibility."""
 
     def __init__(
@@ -104,12 +104,23 @@ class JaxLearner(Learner):
         # TODO
         # possible use config["accumulate_grad_batches"]
         self._accumulate_gradients_every_initial: int = config.learner_config_dict["accumulate_gradients_every"]
-        # XXX Possibly do not keep them and access via self.module!
-        self._states: dict[ModuleID, JaxStateDict | Mapping[str, Any]] = {}
 
     # calls configure_optimziers_for_module
     # def configure_optimizers(self) -> None:
     #    return super().configure_optimizers()
+
+    def get_jax_states(self) -> dict[ModuleID, JaxStateDict | JaxActorCriticStateDict]:
+        """Get the current JAX states for all modules in the learner.
+
+        Returns:
+            A dictionary mapping module IDs to their corresponding JAX state dictionaries.
+        """
+        if self._module is None:
+            return {}
+        states = {}
+        for module_id, module in self._module.items():
+            states[module_id] = module.get_state(inference_only=False)["jax_state"]
+        return states
 
     def configure_optimizers_for_module(
         self,
@@ -121,7 +132,6 @@ class JaxLearner(Learner):
         # likely do not need these here
         actor_params, critic_params = self.get_parameters(module)  # Re-enable this line
         # Optimizer is set in init_state
-        self._states[module_id] = module.get_state(inference_only=False)
 
         if False:
             # commented out to avoid linter errors
@@ -192,7 +202,9 @@ class JaxLearner(Learner):
         # TODO: is kl_coeffs a variable that is learned?
         logger.warning("_get_tensor_variable called which is not fully implemented", stacklevel=2)
         if 0:
-            from ray.rllib.core.learner.tf.tf_learner import TfLearner  # pyright: ignore[reportMissingImports] # removed somewhere around 2.48
+            from ray.rllib.core.learner.tf.tf_learner import (  # pyright: ignore[reportMissingImports] # removed somewhere around 2.48
+                TfLearner,
+            )
 
             TorchLearner._get_tensor_variable(value, dtype, trainable)
             TfLearner._get_tensor_variable(value, dtype, trainable)
@@ -220,23 +232,25 @@ class JaxLearner(Learner):
     def _get_optimizer_state(self) -> StateDict:
         """Returns the state of all optimizers currently registered in this Learner."""
         optimizer_states = {}
-        for module_id, state_dict in self._states.items():
+        states = self.get_jax_states()
+        for module_id, state_dict in states.items():
             optimizer_states[module_id] = {}
             for key, train_state in state_dict.items():
                 if hasattr(train_state, "opt_state"):
-                    optimizer_states[module_id][key] = train_state.opt_state
+                    optimizer_states[module_id][key] = train_state.opt_state  # pyright: ignore[reportAttributeAccessIssue]
         return optimizer_states
 
     def _set_optimizer_state(self, state: StateDict) -> None:
         """Sets the state of all optimizers currently registered in this Learner."""
+        states = self.get_jax_states()
         for module_id, module_opt_states in state.items():
-            if module_id not in self._states:
+            if module_id not in states:
                 continue
             for key, opt_state in module_opt_states.items():
-                if key in self._states[module_id]:
-                    train_state = self._states[module_id][key]
+                if key in states[module_id]:
+                    train_state = states[module_id][key]
                     if hasattr(train_state, "replace"):
-                        self._states[module_id][key] = train_state.replace(opt_state=opt_state)
+                        states[module_id][key] = train_state.replace(opt_state=opt_state)
 
 
 # pyright: reportAbstractUsage=information

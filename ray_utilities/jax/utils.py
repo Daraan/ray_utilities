@@ -16,6 +16,7 @@ class ExtendedTrainState(FlaxTrainState):
     grad_accum: jnp.ndarray
 
 
+# TODO: This is only relevant for sympol should move it back
 @dataclass(kw_only=True, frozen=True, eq=False)
 class Indices:
     """Frozen and hashable variant of the indices dict used by SYMPOL to allow using them as static_args"""
@@ -27,16 +28,20 @@ class Indices:
 
     def __hash__(self) -> int:
         if self._hash is None:  # type: ignore
+            hash_value = hash(
+                (
+                    tuple(a.item() for entry in self.features_by_estimator for a in entry),
+                    tuple(a.item() for entry in self.path_identifier_list for a in entry),
+                    tuple(a.item() for entry in self.internal_node_index_list for a in entry),
+                )
+            )
+            # Wrap hash_value to int32 range without external libraries
+            hash_value = ((hash_value + 2**31) % 2**32) - 2**31
+            hash_value = int(hash_value)
             object.__setattr__(
                 self,
                 "_hash",
-                hash(
-                    (
-                        tuple(a.item() for entry in self.features_by_estimator for a in entry),
-                        tuple(a.item() for entry in self.path_identifier_list for a in entry),
-                        tuple(a.item() for entry in self.internal_node_index_list for a in entry),
-                    )
-                ),
+                hash_value,
             )
         return self._hash
 

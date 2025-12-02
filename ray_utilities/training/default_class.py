@@ -1023,10 +1023,16 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
     def cleanup(self):
         # call stop to fully free resources
         super().cleanup()
-        if hasattr(self, "_algorithm") and self._algorithm is not None:
-            self._algorithm.cleanup()
-        if hasattr(self, "_pbar") and is_pbar(self._pbar):
-            self._pbar.close()
+        try:
+            if hasattr(self, "_algorithm") and self._algorithm is not None:
+                self._algorithm.cleanup()
+        except Exception as e:  # noqa: BLE001
+            _logger.error("Error during cleanup: %s", e)
+        try:
+            if hasattr(self, "_pbar") and is_pbar(self._pbar):
+                self._pbar.close()
+        except Exception as e:  # noqa: BLE001
+            _logger.error("Error during progress bar cleanup: %s", e)
 
     # endregion Trainable setup
 
@@ -1666,6 +1672,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             algorithm_state_dict["_train_batch_size_per_learner"] = algorithm_state_dict.pop(
                 "train_batch_size_per_learner"
             )
+        if "model_config" in algorithm_state_dict:
+            algorithm_state_dict["_model_config"] = algorithm_state_dict.pop("model_config")
         ATTR_NOT_FOUND = object()
         for k in algorithm_state_dict.keys():
             cls_attr = getattr(algorithm_state_dict["class"], k, ATTR_NOT_FOUND)

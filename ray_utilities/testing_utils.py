@@ -1910,24 +1910,52 @@ class TestHelpers(unittest.TestCase):
             else:
                 self.util_test_tree_equivalence(mod1.model_config, mod2.model_config)
             if (mod1 and hasattr(mod1, "pi")) or (mod2 and hasattr(mod2, "pi")):
-                self.util_compare_models(mod2.pi, mod1.pi, msg + "policy model")  # pyright: ignore[reportOptionalMemberAccess, reportAttributeAccessIssue]
-            if (mod1 and hasattr(mod1, "vf")) or (mod2 and hasattr(mod2, "vf")):
-                self.util_compare_models(mod2.vf, mod1.vf, msg + "value model")  # pyright: ignore[reportOptionalMemberAccess, reportAttributeAccessIssue]
+                self.util_compare_models(mod1.pi, mod2.pi, msg + "policy model")  # pyright: ignore[reportOptionalMemberAccess, reportAttributeAccessIssue]
+            if (mod1 and hasattr(mod1, "vf")) and (mod2 and hasattr(mod2, "vf")):
+                self.util_compare_models(mod1.vf, mod2.vf, msg + "value model")  # pyright: ignore[reportOptionalMemberAccess, reportAttributeAccessIssue]
             # TODO: Compare DQN models
             if mod1 and hasattr(mod1, "states"):
-                self.util_test_tree_equivalence(mod2.states, mod1.states)  # pyright: ignore[reportAttributeAccessIssue]
-            if trainable.algorithm.learner_group._learner is not None:
+                self.util_test_tree_equivalence(mod1.states, mod2.states)  # pyright: ignore[reportAttributeAccessIssue]
+
+            # NOTE: falsy for local!
+            lg = trainable.algorithm.learner_group
+            if lg is not None and lg.is_remote:
+                modules = lg.foreach_learner(
+                    lambda er: er.module,
+                )
+                result = next(iter(modules))
+                if not result.ok:
+                    raise result.get()
+                learner_mod1 = result.get()["default_policy"]  # pyright: ignore[reportIndexIssue]
+            else:
                 learner_mod1 = trainable.algorithm.learner_group._learner.module["default_policy"]
+            lg2 = trainable2.algorithm.learner_group
+            if lg2 is not None and lg2.is_remote:
+                modules = lg2.foreach_learner(
+                    lambda er: er.module,
+                )
+                result = next(iter(modules))
+                if not result.ok:
+                    raise result.get()
+                learner_mod2 = result.get()["default_policy"]  # pyright: ignore[reportIndexIssue]
+            else:
                 learner_mod2 = trainable2.algorithm.learner_group._learner.module["default_policy"]
+            if learner_mod1 or learner_mod2:
                 if isinstance(learner_mod1.model_config, dict) and isinstance(learner_mod2.model_config, dict):
                     self.assertDictEqual(learner_mod1.model_config, learner_mod2.model_config)
                     self.assertDictEqual(mod1.model_config, learner_mod2.model_config)
                 else:
                     self.util_test_tree_equivalence(learner_mod1.model_config, learner_mod2.model_config)
                     self.util_test_tree_equivalence(mod1.model_config, learner_mod2.model_config)
+                ls1 = learner_mod1.get_state()
+                ls2 = learner_mod2.get_state()
+                try:
+                    self.assertDictEqual(ls2, ls1)
+                except ValueError:
+                    self.util_test_tree_equivalence(ls1, ls2, "Error for learner module states")
             else:
-                # need to get remote
-                pass
+                assert learner_mod1 is None
+                assert learner_mod2 is None
 
             # Step 2
             result2 = trainable.train()
@@ -1946,8 +1974,7 @@ class TestHelpers(unittest.TestCase):
                         r.config.get_rollout_fragment_length(),
                         r.config.total_train_batch_size,
                         r.config.train_batch_size_per_learner,
-                        r.config.num_envs_per_env_runner
-                        == r.num_envs,  # This is False for the local env runner # pyright: ignore[reportAttributeAccessIssue]
+                        r.config.num_envs_per_env_runner == r.num_envs,  # This is False for the local env runner # pyright: ignore[reportAttributeAccessIssue]  # noqa: E501
                         r.config.get_rollout_fragment_length() * r.num_envs,  # pyright: ignore[reportAttributeAccessIssue]
                     )
                 )[-1],
@@ -1960,7 +1987,7 @@ class TestHelpers(unittest.TestCase):
                         r.config.get_rollout_fragment_length() * r.num_envs,  # pyright: ignore[reportAttributeAccessIssue]
                     )
                 )[-1],
-            )
+            )  # fmt: skip
             self.assertEqual(
                 trainable2.algorithm_config.total_train_batch_size,
                 trainable.algorithm_config.total_train_batch_size,

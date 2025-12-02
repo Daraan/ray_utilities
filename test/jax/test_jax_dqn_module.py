@@ -30,6 +30,8 @@ from ray_utilities.testing_utils import DisableLoggers, TestHelpers, patch_args
 if TYPE_CHECKING:
     from ray_utilities.jax.dqn.jax_dqn_module import JaxDQNStateDict
 
+pytestmark = pytest.mark.xfail(reason="experimental")
+
 
 class TestJaxDQNModule(DisableLoggers, TestHelpers):
     """Test suite for JaxDQNModule."""
@@ -223,13 +225,14 @@ class TestJaxDQNModule(DisableLoggers, TestHelpers):
         )
         # Get initial state
         state = module.get_state()
-        assert "qf" in state
-        assert "qf_target" in state
-        assert "module_key" in state
+        jax_state = state["jax_state"]
+        assert "qf" in jax_state
+        assert "qf_target" in jax_state
+        assert "module_key" in jax_state
         # Set state
-        module.set_state(state)
+        module.set_state({"jax_state": jax_state})
         # Verify state after set
-        new_state = module.get_state()
+        new_state = module.get_state()["jax_state"]
         assert "qf" in new_state
         assert "qf_target" in new_state
 

@@ -24,6 +24,7 @@ from ray.rllib.core.rl_module.apis import SelfSupervisedLossAPI
 from ray_utilities.connectors.debug_connector import add_debug_connectors
 from ray_utilities.connectors.dummy_connector import DummyNumpyToTensor
 from ray_utilities.jax.jax_learner import JaxLearner
+from ray_utilities.jax.jax_module import JaxModuleState
 from ray_utilities.jax.ppo.compute_ppo_loss import make_jax_compute_ppo_loss_function
 
 if TYPE_CHECKING:
@@ -48,7 +49,6 @@ if TYPE_CHECKING:
 class JaxPPOLearner(RayPPOLearner, JaxLearner):
     def build(self, **kwargs) -> None:
         super().build(**kwargs)
-        self._states: Mapping[ModuleID, JaxActorCriticStateDict]
         self._rng_key = self.config.learner_config_dict["rng_key"]
         if self._learner_connector is not None and (self.config.add_default_connectors_to_learner_pipeline):
             # super().build adds (PPO) AddOneTsToEpisodesAndTruncate, GeneralAdvantageEstimation
@@ -86,7 +86,10 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
             self._forward_with_grads = type_grad_and_value(self._jax_forward_pass)
         else:
             self._forward_with_grads = jax.jit(jax.value_and_grad(self._jax_forward_pass, has_aux=True, argnums=(0,)))
-        self._update_jax = jax.jit(self._update_jax)
+        self._update_jax = jax.jit(self._update_jax, static_argnames=["accumulate_gradients_every"])
+
+    def get_jax_states(self) -> dict[ModuleID, JaxActorCriticStateDict]:
+        return super().get_jax_states()
 
     # jittable
     @staticmethod
@@ -127,7 +130,9 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
             ),
         ) = self._compute_loss_for_modules[module_id](
             # batch is a SampleBatch which is not compatible
-            critic_state_params if critic_state_params is not None else self._states[module_id]["critic"].params,
+            critic_state_params
+            if critic_state_params is not None
+            else self.get_jax_states()[module_id]["critic"].params,
             batch=batch,
             fwd_out=fwd_out,
             curr_entropy_coeffs=curr_entropy_coeff,
@@ -152,7 +157,7 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
         logger.warning("compute_losses called, which makes no use of jit - additional step in shedule")
         curr_entropy_coeffs, curr_kl_coeffs = self._generate_curr_coeffs()
         loss_per_module, _aux_data = self._jax_compute_losses(
-            parameters=self._get_state_parameters(self._states),
+            parameters=self._get_state_parameters(self.get_jax_states()),
             fwd_out=fwd_out,
             batch=batch,
             curr_entropy_coeffs=curr_entropy_coeffs,
@@ -221,12 +226,17 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
         batch: dict[str, Any],
         curr_entropy_coeffs: dict[ModuleID, float | chex.Numeric | TensorType],
         curr_kl_coeffs: Optional[dict[ModuleID, float | chex.Numeric | TensorType]] = None,
+        # indices: dict[ModuleID, Any] | None = None,
     ) -> tuple[chex.Numeric, tuple[Any, dict[ModuleID, chex.Numeric], dict[str, Any]]]:
         """
         Note:
             Do not use directly use wrapped version: `self._forward_with_grads`
         """
-        fwd_out = self._forward_train_call(batch, parameters=parameters)
+        fwd_out = self._forward_train_call(
+            batch,
+            parameters=parameters,
+            # indices=indices,
+        )
         loss_per_module, compute_loss_aux = self._jax_compute_losses(
             parameters, fwd_out, batch, curr_entropy_coeffs, curr_kl_coeffs
         )
@@ -246,7 +256,13 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
         parameters = self._get_state_parameters(states)
         gradients: dict[ModuleID, dict[Literal["actor", "critic"], Any]]
         (_all_losses_combined, (fwd_out, loss_per_module_do_not_use, compute_loss_aux)), (gradients,) = (
-            self._forward_with_grads(parameters, batch, curr_entropy_coeffs, curr_kl_coeffs)
+            self._forward_with_grads(
+                parameters,
+                batch,
+                curr_entropy_coeffs,
+                curr_kl_coeffs,
+                # indices=indices,
+            )
         )
         if 0:
             # consider if implementation is necessary
@@ -293,14 +309,15 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
         # TODO: fwd_out["default_policy"]["embeddings"] has many keys
         curr_entropy_coeffs, curr_kl_coeffs = self._generate_curr_coeffs()
         new_states, (fwd_out, loss_per_module, compute_loss_aux) = self._update_jax(
-            states=self._states,
+            states=self.get_jax_states(),
             batch={mid: dict(v) for mid, v in batch.items()},
             curr_entropy_coeffs=curr_entropy_coeffs,
             curr_kl_coeffs=curr_kl_coeffs,
             accumulate_gradients_every=self.config.learner_config_dict.get("accumulate_gradients_every", 1),
         )
-        self._states = new_states  # pyright: ignore[reportIncompatibleVariableOverride]
-        self.module.set_state(self._states)  # pyright: ignore[reportArgumentType]
+        # TODO: Is this update at the correct location?
+        for module_id, new_state in new_states.items():
+            self.module[module_id].set_state({"jax_state": new_state})
 
         # Log important loss stats.
         for module_id in fwd_out.keys():
@@ -359,30 +376,34 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
                 # )
                 actor_state = jax.lax.cond(
                     # NOTE: should do a + 1 to not update at step 0 - however the apply above sets it to 1 at this point
-                    actor_state.step % accumulate_gradients_every
-                    == 0,  # TODO: For gradient accumulation must be passed as argument
+                    actor_state.step % accumulate_gradients_every == 0,  # TODO: For gradient accumulation must be passed as argument
                     lambda _: update_fn(),
                     lambda _, actor_state=actor_state, actor_grad_accum=actor_grad_accum: actor_state.replace(
                         grad_accum=actor_grad_accum,
                         step=actor_state.step + 1,  # step increased by apply gradient already
                     ),
                     None,
-                )
+                )  # fmt: skip
                 # jax.debug.print("Actor step after (legacy): {}", actor_state.step)
+
+            def apply_fn(accum_grads_and_state: tuple[Any, TrainState]):
+                accum_grads, state = accum_grads_and_state
+                # Average gradients
+                grads = jax.tree_util.tree_map(lambda x: x / accumulate_gradients_every, accum_grads)
+                updated_state = state.apply_gradients(grads=grads)
+                zero_grads = jax.tree_util.tree_map(jnp.zeros_like, accum_grads)
+                return updated_state.replace(grad_accum=zero_grads)
+
+            def accumulate_only_fn(accum_grads_and_state: tuple[Any, TrainState]):
+                accum_grads, state = accum_grads_and_state
+                return state.replace(grad_accum=accum_grads, step=state.step + 1)
+
+            actor_state: TrainState = states[module_id]["actor"]
+
+            if accumulate_gradients_every == 1:
+                # Optimization: Avoid lax.cond when not needed
+                actor_state = apply_fn((actor_grad_accum, actor_state))
             else:
-
-                def apply_fn(accum_grads_and_state: tuple[Any, TrainState]):
-                    accum_grads, state = accum_grads_and_state
-                    updated_state = state.apply_gradients(grads=accum_grads)
-                    zero_grads = jax.tree_util.tree_map(jnp.zeros_like, accum_grads)
-                    return updated_state.replace(grad_accum=zero_grads)
-
-                def accumulate_only_fn(accum_grads_and_state: tuple[Any, TrainState]):
-                    accum_grads, state = accum_grads_and_state
-                    return state.replace(grad_accum=accum_grads, step=state.step + 1)
-
-                actor_state: TrainState = states[module_id]["actor"]
-
                 # Use lax.cond to decide what to do
                 actor_state = jax.lax.cond(
                     # +1 to not apply on step 0
