@@ -18,14 +18,17 @@ from __future__ import annotations
 
 import logging
 from abc import abstractmethod
+from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 import jax
 import jax.numpy as jnp
 import optax
+from ray.rllib.core import DEFAULT_MODULE_ID
 from ray.rllib.core.learner.learner import Learner
 from ray.rllib.core.learner.torch.torch_learner import TorchLearner
 from ray.rllib.policy.sample_batch import MultiAgentBatch
+from ray.util import log_once
 
 from ray_utilities.jax.math import clip_gradients
 from ray_utilities.nice_logger import ImportantLogger
@@ -43,6 +46,13 @@ if TYPE_CHECKING:
     from ray_utilities.jax.ppo.jax_ppo_module import JaxPPOModule
 
 logger = logging.getLogger(__name__)
+
+
+class JaxOptStateWrapper:
+    """Need a hashable object to be a valid Optimizer in RLlib Learner."""
+
+    def __init__(self, module: JaxModule):
+        self.module = module
 
 
 class JaxLearner(Learner):
@@ -128,36 +138,42 @@ class JaxLearner(Learner):
         config: Optional["AlgorithmConfig"] = None,  # noqa: ARG002
     ) -> None:
         # MAYBE NOT NEEDED
+        super().configure_optimizers_for_module(module_id, config)
+        logger.warning("JaxLearner.configure_optimizers_for_module called which is not fully implemented", stacklevel=2)
         module: JaxModule = self._module[module_id]  # type: ignore[assignment]
         # likely do not need these here
         actor_params, critic_params = self.get_parameters(module)  # Re-enable this line
         # Optimizer is set in init_state
+        # TODO: PPO version
+        params = [actor_params, critic_params]
+        states = self.get_jax_states()[module_id]
+        opt_states: Sequence[optax.OptState] = tuple(
+            state.opt_state for state in states.values() if hasattr(state, "opt_state")
+        )
+        assert len(params) == len(opt_states)
+        # logger.info(f"Module {module_id} has optimizers with states: {opt_states}")
+        # should be a dict like {'actor': optax.OptState, 'critic': optax.OptState} where opt state is a tuple
 
-        if False:
-            # commented out to avoid linter errors
-            self.register_optimizer(
-                module_id=module_id,
-                # optimizer=optimizer,
-                params=actor_params,
-                # lr_or_lr_schedule=config.lr,
-            )
-            # module.states["actor"].tx = optimizer
-            self.register_optimizer(
-                module_id=module_id,
-                # optimizer=optimizer,
-                params=critic_params,
-                # lr_or_lr_schedule=config.lr,
-            )
+        # commented out to avoid linter errors
+        self.register_optimizer(
+            module_id=module_id,
+            optimizer=JaxOptStateWrapper(module),  # needs to be a hashable
+            params=params,  # needs to be list. NOTE: The parameters change with every iteration!
+            lr_or_lr_schedule=config.lr if config else None,
+        )
 
     def get_parameters(self, module: JaxPPOModule | Any) -> tuple[Sequence[Param], Sequence[Param]]:
+        # TODO: This is PPO; should move it to a subclass and make this abstract in base
         logger.warning("JaxLearner.get_parameters called which is not fully implemented", stacklevel=2)
         # module.states["actor"].params is a dict
         return list(module.states["actor"].params.values()), list(module.states["critic"].params.values())
 
     def get_param_ref(self, param: Param) -> Hashable:
         # Reference to param: self._params[param_ref] = param
+        # param is a list but we need to return a Hashable
+        param_ref = id(param)
         logger.warning("JaxLearner.get_param_ref called which is not fully implemented")
-        return param
+        return param_ref
 
     def compute_gradients(self, *args, **kwargs) -> ParamDict:  # noqa: ARG002
         # TODO: Can this be its own function?
@@ -202,6 +218,7 @@ class JaxLearner(Learner):
         # TODO: is kl_coeffs a variable that is learned?
         logger.warning("_get_tensor_variable called which is not fully implemented", stacklevel=2)
         if 0:
+            # References for implementation
             from ray.rllib.core.learner.tf.tf_learner import (  # pyright: ignore[reportMissingImports] # removed somewhere around 2.48
                 TfLearner,
             )
@@ -213,31 +230,74 @@ class JaxLearner(Learner):
             v = jax.lax.stop_gradient(v)
         return v
 
-    @staticmethod
-    def _get_optimizer_lr(optimizer: Optimizer) -> float:
+    def _get_optimizer_lr(self, optimizer: Optimizer) -> float:  # pyright: ignore[reportIncompatibleMethodOverride]
         # Attempt to get LR from optimizer state if it follows Flax/Optax patterns with inject_hyperparams
-        if hasattr(optimizer, "opt_state"):
-            opt_state: optax.OptState = optimizer.opt_state
-            if hasattr(opt_state, "hyperparams"):
-                return float(optimizer.opt_state.hyperparams.get("learning_rate", 0.0))
-        logger.warning("_get_optimizer_lr called which is not fully implemented")
-        return None
+        opt_states = self._get_optimizer_state()
+        lrs = self._find_lrs(opt_states, key_or_pattern="learning_rate", strict=True)
+        if len(lrs) > 1 and log_once("multiple_lrs_found"):
+            ImportantLogger.important_info(
+                logger,
+                f"_get_optimizer_lr found multiple learning rates {lrs}, returning the first one. "
+                "To log individual lrs implement a custom logging mechanism.",
+            )
+        return lrs[0]
 
     @staticmethod
-    def _set_optimizer_lr(optimizer: Optimizer, lr: float) -> None:
+    def _find_lrs(
+        opt_state: optax.OptState | list[optax.OptState],
+        key_or_pattern="learning_rate",
+        update: Optional[float] = None,
+        strict: bool = True,
+    ) -> list[float]:
+        found_lrs = []
+        hyperparams = optax.tree_utils.tree_get_all_with_path(opt_state, "hyperparams")
+        for _path, hp in hyperparams:
+            if "*" not in key_or_pattern:
+                if key_or_pattern in hp:
+                    found_lrs.append(float(hp[key_or_pattern]))
+                    if update is not None:
+                        hp[key_or_pattern] = jnp.array(update) if not isinstance(update, jnp.ndarray) else update
+                elif strict:
+                    raise KeyError(f"Could not find learning rate with key {key_or_pattern} in hyperparams {hp}")
+            else:
+                keys = hp.keys()
+                matched = False
+                for k in keys:
+                    if fnmatch(k, key_or_pattern):
+                        found_lrs.append(float(hp[k]))
+                        matched = True
+                        if update is not None:
+                            hp[k] = jnp.array(update) if not isinstance(update, jnp.ndarray) else update
+                if strict and not matched:
+                    raise KeyError(
+                        f"Could not find learning rate with key pattern {key_or_pattern} in hyperparams {hp}"
+                    )
+        return found_lrs
+
+    def _set_optimizer_lr(self, optimizer: Any, lr: float) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
         # JAX optimizers (Optax) are functional and states are immutable.
         # Setting LR in place is not typically supported unless using a mutable wrapper.
-        ImportantLogger.important_warning(logger, "_set_optimizer_lr called which is not implemented and a no-op")
+        # ImportantLogger.important_warning(logger, "_set_optimizer_lr called which is not implemented and a no-op")
+        # TODO: allow multiple optimizers
+        # states = self.get_jax_states()
+        opt_states = self._get_optimizer_state()
+        self._find_lrs(opt_states, key_or_pattern="learning_rate", update=lr, strict=True)
 
-    def _get_optimizer_state(self) -> StateDict:
+    def _get_optimizer_state(self, module: Optional[JaxModule] = None, module_id: Optional[str] = None) -> StateDict:
         """Returns the state of all optimizers currently registered in this Learner."""
         optimizer_states = {}
-        states = self.get_jax_states()
-        for module_id, state_dict in states.items():
-            optimizer_states[module_id] = {}
+        if not module:
+            states = self.get_jax_states()
+        else:
+            module_id = module_id if module_id else DEFAULT_MODULE_ID
+            states = {DEFAULT_MODULE_ID: module.states}
+        for mid, state_dict in states.items():
+            if module_id is not None and module_id != mid:
+                continue
+            optimizer_states[mid] = {}
             for key, train_state in state_dict.items():
                 if hasattr(train_state, "opt_state"):
-                    optimizer_states[module_id][key] = train_state.opt_state  # pyright: ignore[reportAttributeAccessIssue]
+                    optimizer_states[mid][key] = train_state.opt_state  # pyright: ignore[reportAttributeAccessIssue]
         return optimizer_states
 
     def _set_optimizer_state(self, state: StateDict) -> None:

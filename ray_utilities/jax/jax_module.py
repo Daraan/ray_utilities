@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from abc import abstractmethod
 from jax import lax
 from ray.rllib.core.models.base import ActorCriticEncoder
 from ray.rllib.core.rl_module import RLModule
@@ -79,6 +80,18 @@ class JaxModule(RLModule):
         if "model_config" in state:
             self.model_config = state["model_config"]
         # NOTE: possibly need to update models with new model config!
+
+    @abstractmethod
+    def update_jax_state(self, **kwargs):
+        """Update the complete subkeys of self.states"""
+        # Bruteforce method as some kind of fallback
+        updated = False
+        for key, value in kwargs.items():
+            if key in self.states:
+                self.states[key] = value
+                updated = True
+        if kwargs and not updated:
+            raise KeyError("Provided arguments match no keys: ", kwargs, self.states.keys())
 
     def _forward_exploration(self, batch: dict[str, Any], **kwargs) -> dict[str, Any]:
         return self._forward(lax.stop_gradient(batch), **kwargs)

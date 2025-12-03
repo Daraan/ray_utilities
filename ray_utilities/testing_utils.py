@@ -2119,11 +2119,11 @@ class TestHelpers(unittest.TestCase):
 
 
 class SetupWithEnv(TestHelpers):
-    def setUp(self):
+    def setUp(self, *args, **kwargs):
         self._env = gym.make("CartPole-v1")
         self._OBSERVATION_SPACE = self._env.observation_space
         self._ACTION_SPACE = self._env.action_space
-        super().setUp()
+        super().setUp(*args, **kwargs)
 
     def tearDown(self):
         super().tearDown()
@@ -2185,35 +2185,37 @@ class SetupLowRes(TestHelpers):
 
 
 class SetupDefaults(SetupLowRes, SetupWithEnv, TestHelpers, DisableLoggers):
-    @clean_args
-    def setUp(self):
-        super().setUp()
+    def setUp(self, setup_class=AlgorithmSetup, *, empty_args=True):
+        with clean_args if empty_args else nullcontext():
+            super().setUp()
 
-        self._DEFAULT_NAMESPACE = DefaultArgumentParser()
-        self._DEFAULT_NAMESPACE._change_log_level = False
-        self._DEFAULT_CONFIG_DICT: MappingProxyType[str, Any] = MappingProxyType(
-            self._DEFAULT_NAMESPACE.parse_args().as_dict()
-        )
-        with (
-            change_log_level(experiment_base_logger, logging.ERROR),
-            change_log_level(dynamic_buffer_logger, logging.ERROR),
-        ):
-            self._DEFAULT_SETUP = AlgorithmSetup(init_trainable=False, change_log_level=False)
-            self._DEFAULT_SETUP.create_trainable()
-        self._INPUT_LENGTH = self._env.observation_space.shape[0]  # pyright: ignore[reportOptionalSubscript]
-        self._ACTION_DIM: int = self._ACTION_SPACE.n  # pyright: ignore[reportAttributeAccessIssue]
-        self._OBS_DIM: int = self._OBSERVATION_SPACE.shape[0]  # pyright: ignore[reportOptionalSubscript]
-        try:
-            import jax  # noqa: PLC0415
-            import jax.numpy as jnp  # noqa: PLC0415
-        except ImportError:
-            logger.warning("JAX is not installed, skipping JAX related test setup. Can ause some attribute failures!")
-        else:
-            self._DEFAULT_INPUT = jnp.arange(self._INPUT_LENGTH * 2).reshape((2, self._INPUT_LENGTH))
-            self._DEFAULT_BATCH: dict[str, chex.Array] = MappingProxyType({"obs": self._DEFAULT_INPUT})  # pyright: ignore[reportAttributeAccessIssue]
-            self._ENV_SAMPLE = jnp.arange(self._INPUT_LENGTH)
-            model_key = jax.random.PRNGKey(self._DEFAULT_CONFIG_DICT["seed"] or 2)
-            self._RANDOM_KEY, self._ACTOR_KEY, self._CRITIC_KEY = jax.random.split(model_key, 3)
+            self._DEFAULT_NAMESPACE = DefaultArgumentParser()
+            self._DEFAULT_NAMESPACE._change_log_level = False
+            self._DEFAULT_CONFIG_DICT: MappingProxyType[str, Any] = MappingProxyType(
+                self._DEFAULT_NAMESPACE.parse_args().as_dict()
+            )
+            with (
+                change_log_level(experiment_base_logger, logging.ERROR),
+                change_log_level(dynamic_buffer_logger, logging.ERROR),
+            ):
+                self._DEFAULT_SETUP = setup_class(init_trainable=False, change_log_level=False)
+                self._DEFAULT_SETUP.create_trainable()
+            self._INPUT_LENGTH = self._env.observation_space.shape[0]  # pyright: ignore[reportOptionalSubscript]
+            self._ACTION_DIM: int = self._ACTION_SPACE.n  # pyright: ignore[reportAttributeAccessIssue]
+            self._OBS_DIM: int = self._OBSERVATION_SPACE.shape[0]  # pyright: ignore[reportOptionalSubscript]
+            try:
+                import jax  # noqa: PLC0415
+                import jax.numpy as jnp  # noqa: PLC0415
+            except ImportError:
+                logger.warning(
+                    "JAX is not installed, skipping JAX related test setup. Can ause some attribute failures!"
+                )
+            else:
+                self._DEFAULT_INPUT = jnp.arange(self._INPUT_LENGTH * 2).reshape((2, self._INPUT_LENGTH))
+                self._DEFAULT_BATCH: dict[str, chex.Array] = MappingProxyType({"obs": self._DEFAULT_INPUT})  # pyright: ignore[reportAttributeAccessIssue]
+                self._ENV_SAMPLE = jnp.arange(self._INPUT_LENGTH)
+                model_key = jax.random.PRNGKey(self._DEFAULT_CONFIG_DICT["seed"] or 2)
+                self._RANDOM_KEY, self._ACTOR_KEY, self._CRITIC_KEY = jax.random.split(model_key, 3)
 
 
 class DisableGUIBreakpoints(unittest.TestCase):

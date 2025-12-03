@@ -28,6 +28,13 @@ class JaxPPOModule(DefaultPPORLModule, JaxModule):
         super().__init__(*args, **kwargs)
         self.encoder: JaxActorCriticEncoder
 
+    def __repr__(self):
+        s = f"{self.__class__.__name__}(\n    'pi':{self.pi!r}"
+        if hasattr(self, "vf"):
+            s += f",\n    'vf':{self.vf!r}"
+        s += "\n)"
+        return s
+
     def setup(self) -> None:
         super().setup()
         self.pi: JaxRLModel | FlaxRLModel

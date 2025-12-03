@@ -18,6 +18,7 @@ from ray.rllib.utils.metrics import EVALUATION_RESULTS
 from ray.tune.experiment.trial import Trial
 from ray.tune.logger import JsonLoggerCallback
 from ray.tune.utils.util import SafeFallbackEncoder  # pyright: ignore[reportPrivateImportUsage]
+from ray.util.debug import log_once
 
 from ray_utilities.callbacks.tuner._file_logger_fork_mixin import FileLoggerForkMixin
 from ray_utilities.callbacks.tuner._log_result_grouping import exclude_results
@@ -142,12 +143,13 @@ class AdvJsonLoggerCallback(NewStyleLoggerCallback, FileLoggerForkMixin, JsonLog
             result.pop(EVALUATION_RESULTS, None)
         # XXX DEBUG
         if "effective_train_batch_size" not in result:
-            logger.warning(
-                "effective_train_batch_size not in result metrics, "
-                "cannot log it in AdvJsonLoggerCallback. Actor IP %s on node IP %s",
-                trial.get_ray_actor_ip(),
-                trial.node_ip,
-            )
+            if log_once("adv_json_logger_missing_effective_batch_size"):
+                logger.warning(
+                    "effective_train_batch_size not in result metrics, "
+                    "cannot log it in AdvJsonLoggerCallback. Actor IP %s on node IP %s",
+                    trial.get_ray_actor_ip(),
+                    trial.node_ip,
+                )
         clean_results = remove_videos(round_floats(result), is_copy=True)
         for key in exclude_results:
             if "/" in key and key not in clean_results:

@@ -826,16 +826,11 @@ class TestSetupClasses(InitRay, SetupDefaults, num_cpus=4):
     @mock_trainable_algorithm(mock_env_runners=False)
     def test_cfg_loading(self):
         with tempfile.NamedTemporaryFile("w+") as f, patch_args("-cfg", f.name):
-            f.write(
-                """
-                --tag:mlp
-                --tag:mlp:tiny
-                --agent_type mlp
-                --fcnet_hiddens 8, 8
-                """
-            )
+            args = ["--tag:mlp", "--tag:mlp:tiny", "--agent_type mlp", "--fcnet_hiddens 8, 8"]
+            f.write("\n".join(args))
             f.flush()
             setup = MLPSetup(init_param_space=False)
+            self.assertListEqual(["\n".join(args)], setup.parser.args_from_configs)
             self.assertEqual(setup.args.fcnet_hiddens, [8, 8])
 
             # Test on algo
@@ -1320,14 +1315,16 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
                         ENV_RUNNER_RESULTS: {
                             NUM_ENV_STEPS_SAMPLED_LIFETIME: i,
                         },
-                        "evaluation/env_runners/episode_return_mean": i,
+                        EVAL_METRIC_RETURN_MEAN: i,
+                        EVAL_METRIC_RETURN_MEAN_EMA: i,
                     }
                 )
             return {
                 "done": True,
                 "current_step": i * params["train_batch_size_per_learner"],
                 "env_runners/episode_return_mean": i,
-                "evaluation/env_runners/episode_return_mean": i,
+                EVAL_METRIC_RETURN_MEAN: i,
+                EVAL_METRIC_RETURN_MEAN_EMA: i,
                 "train_batch_size_per_learner": params["train_batch_size_per_learner"],
             }
 
@@ -1351,8 +1348,8 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
                 return {
                     "should_checkpoint": False,
                     "current_step": i * self.algorithm_config.train_batch_size_per_learner,
-                    "env_runners/episode_return_mean": i,
-                    "evaluation/env_runners/episode_return_mean": i,
+                    EVAL_METRIC_RETURN_MEAN: i,
+                    EVAL_METRIC_RETURN_MEAN_EMA: i,
                     "train_batch_size_per_learner": self.algorithm_config.train_batch_size_per_learner,
                 }
 

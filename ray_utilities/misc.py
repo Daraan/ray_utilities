@@ -843,20 +843,20 @@ def get_current_step(result: StrictAlgorithmReturnData | LogMetricsDict | Mappin
         # For peek do not use None as default as this triggers KeyError
         current_step = result.peek((LEARNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=_NOT_FOUND)
         if current_step is not _NOT_FOUND:
-            return current_step
+            return int(current_step)
         current_step = result.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME), default=_NOT_FOUND)
         if current_step is not _NOT_FOUND:
-            return current_step
-        return result.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=0)
+            return int(current_step)
+        return int(result.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=0))
 
     current_step = result.get(CURRENT_STEP)  # likely not present
     if current_step is not None:  # LogMetricsDict
-        return current_step
+        return int(current_step)
     result = cast("StrictAlgorithmReturnData", result)
     if LEARNER_RESULTS in result:
         current_step = result[LEARNER_RESULTS][ALL_MODULES].get(NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME)
         if current_step is not None:
-            return current_step
+            return int(current_step)
     # try metric logged on env runner; else defaults to NUM_ENV_STEPS_SAMPLED_LIFETIME
     return int(
         result[ENV_RUNNER_RESULTS].get(
