@@ -814,10 +814,20 @@ def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
     eval_runner_metrics = {COMPONENT_METRICS_LOGGER: {"stats": eval_stats}}
 
     if algorithm.env_runner_group:
+        env_steps_sampled = algorithm.metrics.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=0)
+        # Helps with syncinc JAX models and non standard modules.
+        # If not remote runners will sync the local one just like this
+        if algorithm.env_runner_group.local_env_runner and algorithm.env_runner_group.num_healthy_remote_workers() > 0:
+            cast("SingleAgentEnvRunner", algorithm.env_runner_group.local_env_runner).set_state(
+                {
+                    NUM_ENV_STEPS_SAMPLED_LIFETIME: env_steps_sampled,
+                    **(rl_module_state or {}),
+                }
+            )
         algorithm.env_runner_group.sync_env_runner_states(
             config=algorithm.config,
-            env_steps_sampled=algorithm.metrics.peek((ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=0),
             rl_module_state=rl_module_state,
+            env_steps_sampled=env_steps_sampled,
             env_to_module=algorithm.env_to_module_connector,
             module_to_env=algorithm.module_to_env_connector,
             # env_runner_metrics=env_runner_metrics,
@@ -835,17 +845,30 @@ def sync_env_runner_states_after_reload(algorithm: Algorithm) -> None:
         )
 
     if algorithm.eval_env_runner_group:  # XXX Why elif here in RLLib code?
+        env_steps_sampled = algorithm.metrics.peek(
+            (EVALUATION_RESULTS, ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=0
+        )
+        if (
+            algorithm.eval_env_runner_group.local_env_runner
+            and algorithm.eval_env_runner_group.num_healthy_remote_workers() > 0
+        ):
+            cast("SingleAgentEnvRunner", algorithm.eval_env_runner_group.local_env_runner).set_state(
+                {
+                    NUM_ENV_STEPS_SAMPLED_LIFETIME: env_steps_sampled,
+                    **(rl_module_state or {}),
+                }
+            )
         algorithm.eval_env_runner_group.sync_env_runner_states(
             config=algorithm.evaluation_config,
             # NOTE: Ray does not use EVALUATION_RESULTS here!
-            env_steps_sampled=algorithm.metrics.peek(
-                (EVALUATION_RESULTS, ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME), default=0
-            ),
             rl_module_state=rl_module_state,
+            env_steps_sampled=env_steps_sampled,
             env_to_module=algorithm.env_to_module_connector,
             module_to_env=algorithm.module_to_env_connector,
             # env_runner_metrics=env_runner_metrics,
         )
+        if algorithm.eval_env_runner_group.local_env_runner:
+            cast("SingleAgentEnvRunner", algorithm.eval_env_runner_group.local_env_runner).set_state(rl_module_state)
         if eval_stats:
             eval_state_ref = ray.put(eval_runner_metrics)
             eval_config_ref = ray.put(algorithm.config.get_evaluation_config_object())

@@ -161,9 +161,6 @@ else:
     ENV_RUNNER_CASES = [0, 1, 2]
 
 
-args_train_no_tuner = mock.patch.object(
-    sys, "argv", ["file.py", "--a", "NA", "--no-render_env", "-J", "1", "-it", "2", "-np"]
-)
 clean_args = mock.patch.object(sys, "argv", ["file.py", "-a", "NA"])
 """Use when comparing to CLIArgs"""
 
@@ -1902,6 +1899,8 @@ class TestHelpers(unittest.TestCase):
             else:
                 self.util_test_tree_equivalence(spec_1.model_config, spec_2.model_config)
             mod1 = trainable.algorithm.get_module()
+            # When we have > 0 env runner its possible, depending on the restore method that the
+            # local env runner was not synced - which is the one returned by get_module
             mod2 = trainable2.algorithm.get_module()
             if isinstance(mod1.model_config, dict) and isinstance(mod2.model_config, dict):
                 self.assertDictEqual(mod1.model_config, mod2.model_config)

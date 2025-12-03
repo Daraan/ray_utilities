@@ -75,7 +75,7 @@ class JaxModule(RLModule):
         # Note: Not entirely following Rllib interface
         if not state:
             logger.warning("State is empty, not setting state.")
-        self.states = state["jax_state"]
+        self.states = state["jax_state"].copy()
         if "model_config" in state:
             self.model_config = state["model_config"]
         # NOTE: possibly need to update models with new model config!
