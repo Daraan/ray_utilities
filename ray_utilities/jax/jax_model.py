@@ -143,6 +143,9 @@ class FlaxRLModel(BaseModel, Generic[ModelType, ModelConfigType]):
         super().__init__(config=config)  # pyright: ignore[reportArgumentType]  # ModelConfig
         self.model: ModelType = self._setup_model(**kwargs)
 
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(\n    config={self.config}\n    model={self.model!r}\n)"
+
     def _forward(self, input_dict: Batch, *, parameters, **kwargs) -> jax.Array:
         # NOTE: Ray's return type-hint is a dict, however this is often not true and rather an array.
         out = self.model.apply(parameters, input_dict["obs"], **kwargs)

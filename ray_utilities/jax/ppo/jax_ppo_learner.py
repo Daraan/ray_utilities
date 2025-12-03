@@ -92,6 +92,7 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
             # _forward_with_gradds is used inside _update_jax
             self._forward_with_grads = type_grad_and_value(self._jax_forward_pass)
         else:
+            # TODO: Could add PPOSettings as static argument here
             self._forward_with_grads = jax.jit(
                 jax.value_and_grad(self._jax_forward_pass, has_aux=True, argnums=(0,)), **(jit_forward_kwargs or {})
             )
@@ -239,15 +240,15 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
         assert len(fwd_out) > 0, "No module ids found during forward pass!"
         return fwd_out
 
-    # NOTE: do not pass indices as states
-    # @jax.jit
-    # @partial(jax.value_and_grad, has_aux=True, argnums=(0,))
+    # @jax.jit in build
     def _jax_forward_pass(
         self,
         parameters: dict[ModuleID, dict[Literal["actor", "critic"], Mapping[str, Any]]],
         batch: dict[str, Any],
         curr_entropy_coeffs: dict[ModuleID, float | chex.Numeric | TensorType],
         curr_kl_coeffs: Optional[dict[ModuleID, float | chex.Numeric | TensorType]] = None,
+        # TODO: Could add config as static arg - currently the current config will be used when
+        # it encounters it during calculate module loss.
         **kwargs,
     ) -> tuple[chex.Numeric, tuple[Any, dict[ModuleID, chex.Numeric], dict[str, Any]]]:
         """

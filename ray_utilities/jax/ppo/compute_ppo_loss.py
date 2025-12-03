@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Protocol, cast
 
 import jax
@@ -26,6 +28,24 @@ _return_signature = tuple[
     # metrics; TODO: possibly use a dict here
     "tuple[chex.Numeric, chex.Numeric, chex.Numeric, chex.Numeric, chex.Numeric, chex.Numeric]",
 ]
+
+
+@dataclass
+class _PPOSettings:
+    """
+    Settings for PPO loss computation, during creating time. NOT during call time
+    modification of the config is supported before calling the loss function.
+    However, these settings are treated as constant at definition - might reveal some bugs
+    or subtle issues if config is changed after creating the loss function.
+
+    Later on we can use this as a static type for the loss function to access these
+    """
+
+    use_critic: bool
+    vf_loss_coeff: float
+    clip_param: float
+    vf_clip_param: float | None
+    use_kl_loss: bool
 
 
 class ComputeLossFunction(Protocol):
@@ -142,5 +162,16 @@ def make_jax_compute_ppo_loss_function(module: JaxPPOModule, config: PPOConfig) 
             policy_loss_key,
             mean_kl_loss,
         )
+
+    ppo_setting = _PPOSettings(
+        use_critic=config.use_critic,  # pyright: ignore[reportArgumentType]
+        vf_loss_coeff=config.vf_loss_coeff,  # pyright: ignore[reportArgumentType]
+        clip_param=config.clip_param,  # pyright: ignore[reportArgumentType]
+        vf_clip_param=config.vf_clip_param,
+        use_kl_loss=config.use_kl_loss,  # pyright: ignore[reportArgumentType]
+    )
+    if "CI" in os.environ:
+        # for testing tag the _config onto the function for easier access
+        object.__setattr__(jax_compute_loss_for_module, "__config", ppo_setting)
 
     return jax_compute_loss_for_module
