@@ -1296,9 +1296,18 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
     @unittest.mock.patch.dict("os.environ", RAY_DEDUP="0")
     @pytest.mark.tuner
     @pytest.mark.length(speed="medium")
+    @pytest.mark.timeout(300, method="thread")
     @pytest.mark.xfail(reason="still old param space selection")
-    def test_no_max_iteration_stopper_when_tuning(self):
+    @unittest.mock.patch("ray.tune.schedulers.MedianStoppingRule.on_trial_result")
+    @mock_trainable_algorithm
+    def test_no_max_iteration_stopper_when_tuning(self, scheduler_mock=None):
+        # NOTE: Since this test was written the MedianStoppingRule was added which slows down trials
+        scheduler_mock.side_effect = lambda *args, **kwargs: "CONTINUE"
+
         setup = AlgorithmSetup()
+        setup.param_space["train_batch_size_per_learner"] = tune.grid_search(
+            [setup.args.min_step_size, 512, setup.args.max_step_size]
+        )
         # TODO: Compare setup.param_space["train_batch_size_per_learner"] with expected values
 
         def fake_trainable(params):
@@ -1354,7 +1363,10 @@ class TestAlgorithm(InitRay, SetupDefaults, num_cpus=4):
                 }
 
             def save_checkpoint(self, checkpoint_dir: str) -> dict[str, Any]:
-                return {}
+                return {"iteration": self.iteration}
+
+            def load_checkpoint(self, checkpoint: dict | str | None, *, ignore_setup: bool = False, **kwargs) -> None:
+                self._iteration = checkpoint.get("iteration", 0) if isinstance(checkpoint, dict) else 64
 
         for trainable in (fake_trainable, FakeTrainable.define(setup, use_pbar=False)):
             with self.subTest(function=trainable is fake_trainable, is_class=isclass(trainable)):

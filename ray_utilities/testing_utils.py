@@ -2185,7 +2185,7 @@ class SetupLowRes(TestHelpers):
 
 
 class SetupDefaults(SetupLowRes, SetupWithEnv, TestHelpers, DisableLoggers):
-    def setUp(self, setup_class=AlgorithmSetup, *, empty_args=True):
+    def setUp(self, setup_class: type[AlgorithmSetup] = AlgorithmSetup, *, empty_args=True):
         with clean_args if empty_args else nullcontext():
             super().setUp()
 
