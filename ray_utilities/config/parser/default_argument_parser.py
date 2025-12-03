@@ -817,21 +817,6 @@ class _BaseRLlibArgumentParser(TuneableParameters, _EnvRunnerParser):
             type=_parse_lr,
         )
 
-    def process_args(self):
-        # Apply minibatch_scale setting
-        if self.minibatch_scale is not None:
-            if self.minibatch_scale > 1.0:
-                raise ValueError(f"minibatch_scale must be <= 1.0, got {self.minibatch_scale}")
-            if self.minibatch_scale <= 0.0:
-                raise ValueError(f"minibatch_scale must be > 0.0, got {self.minibatch_scale}")
-            self.minibatch_size = int(self.train_batch_size_per_learner * self.minibatch_scale)
-
-        # Emit warnings:
-        warn_if_batch_size_not_divisible(
-            batch_size=self.train_batch_size_per_learner, num_envs_per_env_runner=self.num_envs_per_env_runner
-        )
-        return super().process_args()
-
 
 class PPOArgumentParser(_BaseRLlibArgumentParser):
     """Parser for PPO-specific algorithm configurations.
@@ -886,6 +871,8 @@ class PPOArgumentParser(_BaseRLlibArgumentParser):
     def _add_tune_parameters(cls) -> None:
         cls._valid_tune_choices.update(
             {
+                "minibatch_size",
+                "minibatch_scale",
                 "entropy_coeff",
                 "clip_param",
                 "vf_clip_param",
@@ -912,6 +899,18 @@ class PPOArgumentParser(_BaseRLlibArgumentParser):
                 )
             return
 
+        # Apply minibatch_scale setting
+        if self.minibatch_scale is not None:
+            if self.minibatch_scale > 1.0:
+                raise ValueError(f"minibatch_scale must be <= 1.0, got {self.minibatch_scale}")
+            if self.minibatch_scale <= 0.0:
+                raise ValueError(f"minibatch_scale must be > 0.0, got {self.minibatch_scale}")
+            self.minibatch_size = int(self.train_batch_size_per_learner * self.minibatch_scale)
+
+        # Emit warnings:
+        warn_if_batch_size_not_divisible(
+            batch_size=self.train_batch_size_per_learner, num_envs_per_env_runner=self.num_envs_per_env_runner
+        )
         if self.minibatch_size > self.train_batch_size_per_learner:
             warn_about_larger_minibatch_size(
                 minibatch_size=self.minibatch_size,
@@ -922,6 +921,7 @@ class PPOArgumentParser(_BaseRLlibArgumentParser):
         warn_if_minibatch_size_not_divisible(
             minibatch_size=self.minibatch_size, num_envs_per_env_runner=self.num_envs_per_env_runner
         )
+        return super().process_args()
 
 
 class DQNArgumentParser(_BaseRLlibArgumentParser):
@@ -1632,8 +1632,7 @@ class OptunaArgumentParser(TuneableParameters, GoalParser, Tap):
                 "accumulate_gradients_every",
                 "batch_size",
                 "lr",
-                "minibatch_size",
-                "minibatch_scale",
+                "grad_clip",
                 "num_envs_per_env_runner",
                 "test",
             ]

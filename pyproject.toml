@@ -222,11 +222,6 @@ exclude = [
   ".git/*",
   ".vscode/*"
 ]
-packageIndexDepths = [
-  { name = "sklearn", depth = 2, includeAllSymbols = true },
-  { name = "matplotlib", depth = 3, includeAllSymbols = false },
-  { name = "ray", depth = 2, includeAllSymbols = true }
-]
 
 [tool.pytest.ini_options]
 console_output_style = "count"

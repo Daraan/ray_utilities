@@ -120,7 +120,7 @@ def patch_model_config(config: AlgorithmConfig, model_config: dict[str, Any] | D
                 "Config should not have auto-filled keys.",
                 key,
                 poped,
-                model_config[key],
+                model_config.get(key, "N/A"),
             )
     if config._rl_module_spec:
         if isinstance(config._rl_module_spec.model_config, dict):
@@ -220,14 +220,14 @@ def _patch_model_config_with_param_space(
 
     if model_config_in_both:
         args["__overwritten_keys__"]["model_config"] = hparams_model_config
-    assert config.minibatch_size or 0 <= config.train_batch_size_per_learner
+    assert (config.minibatch_size or 0) <= config.train_batch_size_per_learner
     return args, config
 
 
 def _patch_config_with_param_space(
     args: dict[str, Any],
     config: _AlgorithmConfigT,
-    setup_class: Optional[type[ExperimentSetupBase[Any, _AlgorithmConfigT, Any]]] = None,
+    setup_class: Optional[type[ExperimentSetupBase[Any, _AlgorithmConfigT, Any]]] = None,  # noqa: ARG001
     *,
     hparams: dict[str, Any],
     config_inplace: bool = False,
@@ -287,7 +287,7 @@ def _patch_config_with_param_space(
         config.update_from_dict(args["__overwritten_keys__"])
         if is_frozen:
             config.freeze()
-    assert config.minibatch_size or 0 <= config.train_batch_size_per_learner
+    assert (config.minibatch_size or 0) <= config.train_batch_size_per_learner
     return args, config
 
 
@@ -475,6 +475,7 @@ def get_args_and_config(
         args,
         config,
         hparams=hparams,
+        setup_class=setup_class or type(setup),  # pyright: ignore[reportArgumentType]
     )
 
     return args, config

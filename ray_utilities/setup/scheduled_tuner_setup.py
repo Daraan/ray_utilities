@@ -142,7 +142,7 @@ class MLPPBTSetup(MLPSetup["MLPArgumentParser[PopulationBasedTrainingParser]"]):
         if os.environ.get("RAY_UTILITIES_NO_PBT_CHECKPOINT_CHANGE") != "1":
             os.environ["TUNE_GLOBAL_CHECKPOINT_S"] = str(60 * 15)
         assert self.args.command is not None
-        # NOTE: Uses args.metrics/mode not the args.command.metric/mode
+        # NOTE: Uses args.metric/mode not the args.command.metric/mode
         return super().create_tuner(adv_loggers=True if adv_loggers is None else adv_loggers)
 
 
