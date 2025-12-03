@@ -198,17 +198,8 @@ def _patch_model_config_with_param_space(
         # model_config is a property we do not want to set it
     else:
         model_config_in_both = False
-    completed_model_config = config.model_config
-    if completed_model_config:
-        if dataclasses.is_dataclass(completed_model_config):
-            completed_model_config_keys = dataclasses.asdict(completed_model_config).keys()
-        else:
-            completed_model_config_keys = completed_model_config.keys()
-
-        model_config_matching_keys = completed_model_config_keys & args.keys()
-
-        if model_config_matching_keys:
-            patch_model_config(config, {k: args[k] for k in model_config_matching_keys})
+    # Removing this blocks puts the work on the setup, kind of saver but easily pass arguments anymore from args -> model_config
+    # completed_model_config = config.model_config | args
     model_config_from_args = setup_class._model_config_from_args(args)
     model_config_so_far = model_config_from_args or {}
     if hparams_model_config:
@@ -405,13 +396,15 @@ def patch_config_with_param_space(
     Returns:
         Tuple of patched args and config.
     """
+    hparams = hparams.copy()
+    hparams_model_config = hparams.pop("model_config", None)
     args, config = _patch_config_with_param_space(
         args, config, hparams=hparams, config_inplace=config_inplace, setup_class=setup_class
     )
     args, config = _patch_model_config_with_param_space(
         args,
         config,
-        hparams_model_config=hparams.get("model_config"),
+        hparams_model_config=hparams_model_config,
         setup_class=setup_class,
         config_inplace=config_inplace,
     )

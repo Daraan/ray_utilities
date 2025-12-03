@@ -1036,8 +1036,13 @@ class ExperimentSetupBase(
 
     @classmethod
     @abstractmethod
-    def _model_config_from_args(cls, args: NamespaceType[ParserType_co]) -> dict[str, Any] | None:  # noqa: ARG003
-        """Returns a model_config to be used with an RLModule. Return None for default option."""
+    def _model_config_from_args(cls, args: NamespaceType[ParserType_co] | dict[str, Any]) -> dict[str, Any] | None:  # noqa: ARG003
+        """
+        Returns a model_config to be used with an RLModule. Return None for default option.
+
+        Attention:
+            This function must be prepared to accept a dict.
+        """
         return None
 
     @classmethod

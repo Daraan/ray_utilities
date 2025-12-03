@@ -140,7 +140,7 @@ class AlgorithmSetup(
         return cls.config_class, cls.algo_class
 
     @classmethod
-    def _model_config_from_args(cls, args: NamespaceType[ParserType_co]) -> dict[str, Any] | None:  # noqa: ARG003
+    def _model_config_from_args(cls, args: NamespaceType[ParserType_co] | dict[str, Any]) -> dict[str, Any] | None:  # noqa: ARG003
         """Returns a model_config to be used with an RLModule. Return None for default option."""
         return super()._model_config_from_args(args) or None
 

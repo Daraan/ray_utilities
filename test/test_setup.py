@@ -1044,6 +1044,8 @@ class TestMLPSetup(InitRay, num_cpus=4):
     def test_layers(self, cases):
         import torch  # noqa: PLC0415  # import lazy
 
+        # NOTE: This test assumes on vf_share_layers=True, which creates the shared module.encoder.encoder
+
         for args in iter_cases(cases):
             with patch_args(*args):
                 setup = MLPSetup()
@@ -1480,7 +1482,7 @@ class TestPBTSchedulerSelection(InitRay, SetupDefaults, num_cpus=4):
 
         self.assertIsInstance(scheduler, GroupedTopPBTTrialScheduler)
 
-    def test_grouped_scheduler_with_tuner(self):
+    def test_grouped_scheduler_on_tuner(self):
         """Test that GroupedTopPBTTrialScheduler is correctly used in the tuner setup."""
         from ray_utilities.tune.scheduler.grouped_top_pbt_scheduler import GroupedTopPBTTrialScheduler
 
