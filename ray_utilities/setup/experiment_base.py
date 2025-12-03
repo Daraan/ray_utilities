@@ -894,7 +894,6 @@ class ExperimentSetupBase(
             param_space["env_seed"] = None
         else:  # "sequential", sample from distribution
             param_space["env_seed"] = tune.randint(0, 2**16)
-            # param_space["run_seed"] = tune.randint(0, 2**16)  # potential seed for config
         if self.args.command_str == "pbt" and self.args.command.grouped:  # pyright: ignore[reportOptionalMemberAccess]
             logger.info("Using grid search over seed for PBT grouped trials. Removing env_seed from param space.")
             param_space["seed"] = {"grid_search": self.args.command.get_seed_options()}  # pyright: ignore[reportOptionalMemberAccess]
@@ -1034,6 +1033,12 @@ class ExperimentSetupBase(
         Returns:
             A tuple containing the algorithm class and the algorithm config class.
         """
+
+    @classmethod
+    @abstractmethod
+    def _model_config_from_args(cls, args: NamespaceType[ParserType_co]) -> dict[str, Any] | None:  # noqa: ARG003
+        """Returns a model_config to be used with an RLModule. Return None for default option."""
+        return None
 
     @classmethod
     @abstractmethod

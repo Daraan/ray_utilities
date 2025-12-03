@@ -104,14 +104,27 @@ def patch_model_config(config: AlgorithmConfig, model_config: dict[str, Any] | D
     if dataclasses.is_dataclass(model_config):
         model_config = dataclasses.asdict(model_config)
     model_config = deepcopy(model_config)
+    # We want to avoid setting auto filled keys
     if isinstance(config._model_config, dict):
         config._model_config.update(model_config)
     elif config._model_config is not None:
         config._model_config = dataclasses.asdict(config._model_config) | model_config
     else:
         config._model_config = model_config
+    auto_model_config_keys = config._model_config_auto_includes.keys()
+    for key in auto_model_config_keys:
+        if (poped := config._model_config.pop(key, _NOT_FOUND)) is not _NOT_FOUND:
+            logger.warning(
+                "Removing auto-filled model_config key '%s':'%s' "
+                "- should be auto filled to '%s' to allow config propagation. "
+                "Config should not have auto-filled keys.",
+                key,
+                poped,
+                model_config[key],
+            )
     if config._rl_module_spec:
         if isinstance(config._rl_module_spec.model_config, dict):
+            # Is normally the best to have rl_module_spec.model_config as None to allow config propagation
             if len(config._rl_module_spec.model_config) == 0:
                 ImportantLogger.important_warning(
                     logger,
@@ -171,24 +184,20 @@ def _patch_learner_config_with_param_space(
         )
 
 
-def _patch_config_with_param_space(
+def _patch_model_config_with_param_space(
     args: dict[str, Any],
     config: _AlgorithmConfigT,
+    setup_class: type[ExperimentSetupBase[Any, _AlgorithmConfigT, Any]],
+    hparams_model_config: Optional[dict[str, Any]] = None,
     *,
-    hparams: dict[str, Any],
     config_inplace: bool = False,
 ) -> tuple[dict[str, Any], _AlgorithmConfigT]:
-    same_keys = set(args.keys()) & set(hparams.keys())
-    args["__overwritten_keys__"] = {}
-    if "model_config" in hparams:
-        patch_model_config(config, hparams["model_config"])
-    if "model_config" in same_keys:
+    """Receives the already patched args and config and patches the model_config specifically."""
+    if "model_config" in args and hparams_model_config:
         model_config_in_both = True
         # model_config is a property we do not want to set it
-        same_keys.discard("model_config")
     else:
         model_config_in_both = False
-
     completed_model_config = config.model_config
     if completed_model_config:
         if dataclasses.is_dataclass(completed_model_config):
@@ -196,10 +205,35 @@ def _patch_config_with_param_space(
         else:
             completed_model_config_keys = completed_model_config.keys()
 
-        model_config_matching_keys = completed_model_config_keys & hparams.keys()
+        model_config_matching_keys = completed_model_config_keys & args.keys()
 
         if model_config_matching_keys:
-            patch_model_config(config, {k: hparams[k] for k in model_config_matching_keys})
+            patch_model_config(config, {k: args[k] for k in model_config_matching_keys})
+    model_config_from_args = setup_class._model_config_from_args(args)
+    model_config_so_far = model_config_from_args or {}
+    if hparams_model_config:
+        # fill in extra keys constructed from args
+        # we take priority constructed from args < hparams["model_config"]
+        model_config_so_far = model_config_so_far | hparams_model_config
+    if model_config_so_far:
+        patch_model_config(config, model_config_so_far)
+
+    if model_config_in_both:
+        args["__overwritten_keys__"]["model_config"] = hparams_model_config
+    assert config.minibatch_size or 0 <= config.train_batch_size_per_learner
+    return args, config
+
+
+def _patch_config_with_param_space(
+    args: dict[str, Any],
+    config: _AlgorithmConfigT,
+    setup_class: Optional[type[ExperimentSetupBase[Any, _AlgorithmConfigT, Any]]] = None,
+    *,
+    hparams: dict[str, Any],
+    config_inplace: bool = False,
+) -> tuple[dict[str, Any], _AlgorithmConfigT]:
+    same_keys = set(args.keys()) & set(hparams.keys())
+    args["__overwritten_keys__"] = {}
 
     _patch_learner_config_with_param_space(config=config, args=args, hparams=hparams, config_inplace=config_inplace)
     if not same_keys and (not args["__overwritten_keys__"] or config_inplace):
@@ -253,8 +287,6 @@ def _patch_config_with_param_space(
         config.update_from_dict(args["__overwritten_keys__"])
         if is_frozen:
             config.freeze()
-    if model_config_in_both:
-        args["__overwritten_keys__"]["model_config"] = hparams["model_config"]
     assert config.minibatch_size or 0 <= config.train_batch_size_per_learner
     return args, config
 
@@ -358,6 +390,7 @@ def _post_patch_config_with_param_space(
 def patch_config_with_param_space(
     args: dict[str, Any],
     config: _AlgorithmConfigT,
+    setup_class: type[ExperimentSetupBase[Any, _AlgorithmConfigT, Any]],
     *,
     hparams: dict[str, Any],
     config_inplace: bool = False,
@@ -372,7 +405,16 @@ def patch_config_with_param_space(
     Returns:
         Tuple of patched args and config.
     """
-    args, config = _patch_config_with_param_space(args, config, hparams=hparams, config_inplace=config_inplace)
+    args, config = _patch_config_with_param_space(
+        args, config, hparams=hparams, config_inplace=config_inplace, setup_class=setup_class
+    )
+    args, config = _patch_model_config_with_param_space(
+        args,
+        config,
+        hparams_model_config=hparams.get("model_config"),
+        setup_class=setup_class,
+        config_inplace=config_inplace,
+    )
     _post_patch_config_with_param_space(args, config, env_seed=hparams.get("env_seed", _NOT_FOUND))
     return args, config
 
