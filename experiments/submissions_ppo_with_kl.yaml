@@ -79,6 +79,38 @@ pbt_batch_size:
       tws47f2511300105b71f4:
         status: SUCCEEDED
         submission_id: pbt_batch_size_Walker2d-v5_2025-11-30_01:03:59
+# Add base, large, and base_large variants for batch_size
+pbt_batch_size_base:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: batch_size
+      <ENV_TYPE>: <basic_envs>
+  entrypoint_resources:
+    persistent_node: 1
+
+pbt_batch_size_large:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: batch_size
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+  entrypoint_resources:
+    persistent_node: 1
+
+pbt_batch_size_base_large:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: batch_size
+      <ENV_TYPE>: <basic_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+  entrypoint_resources:
+    persistent_node: 1
+
 pbt_minibatch_size_2048:
   comment: tune minibatch_size with fixed train_batch_size_per_learner=2048
   entrypoint_resources:
@@ -145,6 +177,28 @@ pbt_minibatch_size_8192:
       tws47f25113001532de94:
         status: SUCCEEDED
         submission_id: pbt_minibatch_size_8192_Walker2d-v5_2025-11-30_01:52:07
+
+pbt_minibatch_size_base:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: minibatch_size
+      <ENV_TYPE>: <basic_envs>
+  entrypoint_resources:
+    persistent_node: 1
+
+pbt_minibatch_size_base_large:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: minibatch_size
+      <ENV_TYPE>: <basic_envs>
+      <OTHER_FLAGS>: |
+        --train_batch_size_per_learner 8192
+  entrypoint_resources:
+    persistent_node: 1
+
+# endregion
 pbt_num_envs:
   # This is a comment
   comment: small minibatch_size=256 and train_batch_size=2048
@@ -155,6 +209,16 @@ pbt_num_envs:
       <ENV_TYPE>: <mujoco_envs>
   entrypoint_resources:
     persistent_node: 1
+# Add base and base_large variants for num_envs_per_env_runner
+pbt_num_envs_base:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: num_envs_per_env_runner
+      <ENV_TYPE>: <basic_envs>
+  entrypoint_resources:
+    persistent_node: 1
+
 pbt_num_envs_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale
@@ -215,6 +279,22 @@ pbt_num_envs_large:
         status: SUCCEEDED
         submission_id:
           pbt_num_envs_large_InvertedPendulum-v5_2025-12-01_02:15:38
+
+pbt_num_envs_base_large:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: num_envs_per_env_runner
+      <ENV_TYPE>: <basic_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+  entrypoint_resources:
+    persistent_node: 1
+
+# endregion
+# ---
+
 pbt_lr_base:
   <ENV_TYPE>:
   - CartPole-v1
@@ -300,8 +380,8 @@ pbt_lr_base_large:
   - CartPole-v1
   - Acrobot-v1
   - LunarLander-v3
-  #entrypoint_resources:
-  #  persistent_node: 1
+  entrypoint_resources:
+    persistent_node: 1
   entrypoint_pattern:
     pattern: global_pattern_1
     substitutions:
@@ -336,6 +416,31 @@ pbt_clip_param_base:
     substitutions:
       <TUNE_PARAM>: clip_param
       <ENV_TYPE>: <basic_envs>
+# Add large and base_large variants for clip_param
+pbt_clip_param_large:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: clip_param
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+  entrypoint_resources:
+    persistent_node: 1
+
+pbt_clip_param_base_large:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: clip_param
+      <ENV_TYPE>: <basic_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+  entrypoint_resources:
+    persistent_node: 1
+
 pbt_clip_param:
   entrypoint_resources:
     persistent_node: 1
@@ -391,6 +496,40 @@ pbt_entropy_coeff_base:
       tws47f2511300705e30c4:
         status: SUCCEEDED
         submission_id: pbt_entropy_coeff_base_LunarLander-v3_2025-11-30_02:25:01
+# Add mujoco, large, and base_large variants for entropy_coeff
+pbt_entropy_coeff:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: entropy_coeff
+      <ENV_TYPE>: <mujoco_envs>
+  entrypoint_resources:
+    persistent_node: 1
+
+pbt_entropy_coeff_large:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: entropy_coeff
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+  entrypoint_resources:
+    persistent_node: 1
+
+pbt_entropy_coeff_base_large:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: entropy_coeff
+      <ENV_TYPE>: <basic_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+  entrypoint_resources:
+    persistent_node: 1
+
 pbt_vf_loss_coeff_base:
   # TODO: Change to base
   <ENV_TYPE>:
@@ -404,6 +543,42 @@ pbt_vf_loss_coeff_base:
     substitutions:
       <TUNE_PARAM>: vf_loss_coeff
       <ENV_TYPE>: <basic_envs>
+
+# region vf_loss_coeff
+
+pbt_vf_loss_coeff:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: vf_loss_coeff
+      <ENV_TYPE>: <mujoco_envs>
+  entrypoint_resources:
+    persistent_node: 1
+
+pbt_vf_loss_coeff_large:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: vf_loss_coeff
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+  entrypoint_resources:
+    persistent_node: 1
+
+pbt_vf_loss_coeff_base_large:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: vf_loss_coeff
+      <ENV_TYPE>: <basic_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+  entrypoint_resources:
+    persistent_node: 1
+
 pbt_vf_clip_param_base:
   # TODO: Change to base
   <ENV_TYPE>:
@@ -417,3 +592,38 @@ pbt_vf_clip_param_base:
     substitutions:
       <TUNE_PARAM>: vf_clip_param
       <ENV_TYPE>: <basic_envs>
+
+# region vf_clip_param
+
+pbt_vf_clip_param:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: vf_clip_param
+      <ENV_TYPE>: <mujoco_envs>
+  entrypoint_resources:
+    persistent_node: 1
+
+pbt_vf_clip_param_large:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: vf_clip_param
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+  entrypoint_resources:
+    persistent_node: 1
+
+pbt_vf_clip_param_base_large:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: vf_clip_param
+      <ENV_TYPE>: <basic_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+  entrypoint_resources:
+    persistent_node: 1

@@ -1112,8 +1112,8 @@ pbt_lr_base_large:
   - CartPole-v1
   - Acrobot-v1
   - LunarLander-v3
-  #entrypoint_resources:
-  #  persistent_node: 1
+  entrypoint_resources:
+    persistent_node: 1
   entrypoint_pattern:
     pattern: global_pattern_1
     substitutions:

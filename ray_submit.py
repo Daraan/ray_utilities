@@ -90,14 +90,21 @@ def get_submissions(
     failed_only: bool = False,
     ignore_node_ids: Collection[str] = (),
     ignore_hostnames: Collection[str] = (),
+    excludes: list[str] | None = None,
 ) -> dict[str, dict]:
+    """
+    Get job submissions for a group.
+
+    Returns:
+        Dictionary mapping job_id to settings dict. Settings dict now includes a 'group' key.
+    """
     with open(file, "r") as f:
         data = yaml_load(f)
     group_data = data.get(group)
     if group_data is None:
         raise KeyError(f"Group '{group}' not found in the submissions file.")
     if "entrypoint_pattern" not in group_data:
-        return {k: v for k, v in data[group].items() if k not in IGNORE_KEYS}
+        return {k: {**v, "group": group} for k, v in data[group].items() if k not in IGNORE_KEYS}
 
     entrypoint_pattern_config = group_data["entrypoint_pattern"]
 
@@ -266,9 +273,15 @@ def get_submissions(
                 f"After substitution: {entrypoint}"
             )
 
+        # Exclude if entrypoint matches any exclude pattern
+        if excludes:
+            if any(excl in entrypoint for excl in excludes):
+                continue
+
         job_id = "_".join(values)
         submissions[job_id] = {
             "entrypoint": entrypoint,
+            "group": group,
             **{
                 k: v
                 for k, v in group_data.items()
@@ -276,6 +289,145 @@ def get_submissions(
             },
         }
     return submissions
+
+
+def is_valid_group(group_data: dict) -> bool:
+    """Check if a group has a valid entrypoint_pattern configuration."""
+    return isinstance(group_data, dict) and "entrypoint_pattern" in group_data
+
+
+def get_environment_types(group_data: dict, yaml_data: dict) -> list[str]:
+    """
+    Extract environment types needed for a group.
+
+    Args:
+        group_data: The group configuration dictionary
+        yaml_data: The full YAML data for resolving references
+
+    Returns:
+        List of environment type values needed for this group
+    """
+    entrypoint_pattern_config = group_data["entrypoint_pattern"]
+
+    # Find <ENV_TYPE> in substitutions or group keys
+    env_type_key = "<ENV_TYPE>"
+
+    # Check group-level keys first (higher priority)
+    if env_type_key in group_data:
+        return resolve_substitution_value(group_data[env_type_key], yaml_data)
+
+    # Check substitutions
+    if isinstance(entrypoint_pattern_config, dict):
+        substitutions = entrypoint_pattern_config.get("substitutions", {})
+        if env_type_key in substitutions:
+            return resolve_substitution_value(substitutions[env_type_key], yaml_data)
+
+    return []
+
+
+def should_submit_group(group_name: str, group_data: dict, yaml_data: dict) -> bool:
+    """
+    Determine if a group should have submissions based on run_ids status.
+
+    Args:
+        group_name: Name of the group
+        group_data: The group configuration dictionary
+        yaml_data: The full YAML data
+
+    Returns:
+        True if the group needs submissions (no run_ids or missing/failed environments)
+    """
+    run_ids_data = group_data.get("run_ids")
+
+    # If no run_ids section or run_ids is None/empty dict, submit all
+    if not run_ids_data:
+        return True
+
+    # Get required environments
+    env_types = get_environment_types(group_data, yaml_data)
+
+    # If no environment types defined, always submit
+    if not env_types:
+        return True
+
+    # Check each environment for at least one SUCCEEDED entry
+    for env_type in env_types:
+        # Look for run_key containing this environment
+        env_has_success = False
+        env_found = False
+
+        for run_key, runs in run_ids_data.items():
+            # Check if this run_key contains the environment
+            # run_key format: "(<val1>, <val2>, ...)"
+            if env_type in run_key:
+                env_found = True
+                # Check if any run for this environment succeeded
+                if runs:
+                    for run_info in runs.values():
+                        if isinstance(run_info, dict) and run_info.get("status") == JobStatus.SUCCEEDED.value:
+                            env_has_success = True
+                            break
+
+            if env_has_success:
+                break
+
+        # If environment not found in run_ids or has no success, need to submit
+        if not env_found or not env_has_success:
+            return True
+
+    # All environments have at least one success
+    return False
+
+
+def get_all_submissions(
+    *,
+    file,
+    failed_only: bool = False,
+    ignore_node_ids: Collection[str] = (),
+    ignore_hostnames: Collection[str] = (),
+    excludes: list[str] | None = None,
+) -> dict[str, dict]:
+    """
+    Get submissions from all valid groups in the YAML file.
+
+    Returns:
+        Dictionary mapping job_id to settings dict (including 'group' key)
+    """
+    with open(file, "r") as f:
+        yaml_data = yaml_load(f)
+
+    all_submissions = {}
+
+    for group_name, group_data in yaml_data.items():
+        # Skip non-group entries and invalid groups
+        if not is_valid_group(group_data):
+            continue
+
+        # Check if this group should be submitted
+        if not should_submit_group(group_name, group_data, yaml_data):
+            print(f"Skipping group '{group_name}': all environments have succeeded")
+            continue
+
+        try:
+            group_submissions = get_submissions(
+                group_name,
+                file=file,
+                failed_only=failed_only,
+                ignore_node_ids=ignore_node_ids,
+                ignore_hostnames=ignore_hostnames,
+                excludes=excludes,
+            )
+
+            # Prefix job_id with group name to avoid collisions
+            for job_id, settings in group_submissions.items():
+                prefixed_job_id = f"{group_name}_{job_id}"
+                all_submissions[prefixed_job_id] = settings
+
+        except Exception as e:
+            print(f"Warning: Failed to get submissions for group '{group_name}': {e}")
+            continue
+
+    return all_submissions
 
 
 def deep_update(original: dict, updates: dict) -> dict:
@@ -380,16 +532,21 @@ def get_tmux_log_command(job_id: str) -> str:
 def submit_single_job(job_id: str, settings: dict, args: argparse.Namespace) -> str | None:
     if args.test:
         settings = settings.copy()
-        settings.pop("run_ids")
+        settings.pop("run_ids", None)
+        settings.pop("group", None)
         print(f"\n-----------------------\nTest mode: would submit job {job_id} with settings:\n{pformat(settings)}")
         return None
 
     print(f"Submitting job: {job_id}")
     assert CLIENT
+
+    # Extract group from settings
+    group = settings.pop("group", args.group)
+
     try:
         submission_id_out = CLIENT.submit_job(
             entrypoint=settings["entrypoint"],
-            submission_id=settings.get("submission_id", args.group + "_" + job_id + "_" + TIMESTAMP_SUFFIX),
+            submission_id=settings.get("submission_id", group + "_" + job_id + "_" + TIMESTAMP_SUFFIX),
             runtime_env=settings.get(
                 "runtime_env",
                 {"working_dir": ".", "excludes": EXCLUDE_WDIR_FILES},
@@ -458,7 +615,9 @@ async def monitor_job_statuses(
                     print("No running jobs left. Automatically submitting next pending job:", next_job_id)
                     submission_id_out = submit_single_job(next_job_id, next_settings, args)
                     if submission_id_out:
-                        jobs_tracked_left[submission_id_out] = (args.group, next_job_id)
+                        # Extract group from settings
+                        group = next_settings.get("group", args.group)
+                        jobs_tracked_left[submission_id_out] = (group, next_job_id)
 
             if not jobs_tracked_left and not pending_submissions:
                 break
@@ -481,7 +640,9 @@ async def monitor_job_statuses(
                             next_job_id, next_settings = pending_submissions.pop(0)
                             submission_id_out = submit_single_job(next_job_id, next_settings, args)
                             if submission_id_out:
-                                jobs_tracked_left[submission_id_out] = (args.group, next_job_id)
+                                # Extract group from settings
+                                group = next_settings.get("group", args.group)
+                                jobs_tracked_left[submission_id_out] = (group, next_job_id)
                         print("\r\033[K", end="", flush=True)
                     else:
                         input_future.cancel()
@@ -527,7 +688,12 @@ class AsyncInput:
 if __name__ == "__main__":
     os.environ["RAY_UTILITIES_NO_TQDM"] = "1"
     parser = argparse.ArgumentParser()
-    parser.add_argument("group", nargs="?", help="The group key in the yaml file to run, or 'monitor'.", type=str)
+    parser.add_argument(
+        "group",
+        nargs="?",
+        help="The group key in the yaml file to run, 'all' for all groups, or 'monitor'.",
+        type=str,
+    )
     parser.add_argument("submissions_file", help="The submissions yaml file.")
     parser.add_argument("monitor_group", nargs="*")
     parser.add_argument(
@@ -557,6 +723,12 @@ if __name__ == "__main__":
         type=int,
         default=5,
         help="Maximum number of concurrent jobs to run.",
+    )
+    parser.add_argument(
+        "--excludes",
+        nargs="+",
+        default=[],
+        help="Exclude submissions whose entrypoint contains any of these patterns.",
     )
 
     args = parser.parse_args()
@@ -611,16 +783,27 @@ if __name__ == "__main__":
 
     else:
         assert args.group, "A group must be specified if not in monitor mode."
-        submissions_dict = get_submissions(
-            args.group,
-            file=args.submissions_file,
-            failed_only=args.failed_only,
-            ignore_node_ids=args.ignore_nodes,
-            ignore_hostnames=args.ignore_hostnames,
-        )
+
+        if args.group == "all":
+            submissions_dict = get_all_submissions(
+                file=args.submissions_file,
+                failed_only=args.failed_only,
+                ignore_node_ids=args.ignore_nodes,
+                ignore_hostnames=args.ignore_hostnames,
+                excludes=args.excludes,
+            )
+        else:
+            submissions_dict = get_submissions(
+                args.group,
+                file=args.submissions_file,
+                failed_only=args.failed_only,
+                ignore_node_ids=args.ignore_nodes,
+                ignore_hostnames=args.ignore_hostnames,
+                excludes=args.excludes,
+            )
         submissions = list(submissions_dict.items())
 
-        if args.max_jobs is not None and args.max_jobs > 0:
+        if not args.test and args.max_jobs is not None and args.max_jobs > 0:
             pending_submissions = submissions[args.max_jobs :]
             submissions = submissions[: args.max_jobs]
 
@@ -628,7 +811,9 @@ if __name__ == "__main__":
             submission_id_out = submit_single_job(job_id, settings, args)
             if submission_id_out:
                 jobs_tracked[submission_id_out] = CLIENT.tail_job_logs(submission_id_out)  # pyright: ignore[reportOptionalMemberAccess]
-                monitor_jobs_tracked[submission_id_out] = (args.group, job_id)
+                # Extract group from settings or use args.group as fallback
+                group = settings.get("group", args.group)
+                monitor_jobs_tracked[submission_id_out] = (group, job_id)
                 time.sleep(10)
 
     if args.test:
@@ -662,7 +847,9 @@ if __name__ == "__main__":
                 submission_id_out = submit_single_job(next_job_id, next_settings, args)
                 if submission_id_out:
                     jobs_tracked[submission_id_out] = CLIENT.tail_job_logs(submission_id_out)
-                    monitor_jobs_tracked[submission_id_out] = (args.group, next_job_id)
+                    # Extract group from settings
+                    group = next_settings.get("group", args.group)
+                    monitor_jobs_tracked[submission_id_out] = (group, next_job_id)
                     async_read_tasks[submission_id_out] = asyncio.create_task(get_next(jobs_tracked[submission_id_out]))
                     last_outputs[submission_id_out] = []
                     return True

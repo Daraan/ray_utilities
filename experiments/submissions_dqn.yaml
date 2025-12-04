@@ -113,8 +113,8 @@ pbt_lr_base_large:
   - CartPole-v1
   - Acrobot-v1
   - LunarLander-v3
-  #entrypoint_resources:
-  #  persistent_node: 1
+  entrypoint_resources:
+    persistent_node: 1
   entrypoint_pattern:
     pattern: global_pattern_1
     substitutions:
@@ -123,3 +123,91 @@ pbt_lr_base_large:
       <OTHER_FLAGS>: |
         --minibatch_size 1024
         --train_batch_size_per_learner 8192
+
+# region gamma
+pbt_gamma_base:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: gamma
+      <ENV_TYPE>: <basic_envs>
+  entrypoint_resources:
+    persistent_node: 1
+
+pbt_gamma:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: gamma
+      <ENV_TYPE>: <mujoco_envs>
+  entrypoint_resources:
+    persistent_node: 1
+
+pbt_gamma_large:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: gamma
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+  entrypoint_resources:
+    persistent_node: 1
+
+pbt_gamma_base_large:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: gamma
+      <ENV_TYPE>: <basic_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+  entrypoint_resources:
+    persistent_node: 1
+# endregion
+
+# region grad_clip
+pbt_grad_clip_base:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: grad_clip
+      <ENV_TYPE>: <basic_envs>
+  entrypoint_resources:
+    persistent_node: 1
+
+pbt_grad_clip:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: grad_clip
+      <ENV_TYPE>: <mujoco_envs>
+  entrypoint_resources:
+    persistent_node: 1
+
+pbt_grad_clip_large:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: grad_clip
+      <ENV_TYPE>: <mujoco_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+  entrypoint_resources:
+    persistent_node: 1
+
+pbt_grad_clip_base_large:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: grad_clip
+      <ENV_TYPE>: <basic_envs>
+      <OTHER_FLAGS>: |
+        --minibatch_size 1024
+        --train_batch_size_per_learner 8192
+  entrypoint_resources:
+    persistent_node: 1
+# endregion
