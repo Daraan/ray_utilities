@@ -1479,7 +1479,7 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
             self.assertLessEqual(race_conditions, 1)
             self.assertTrue(all(r.config["train_batch_size_per_learner"] in batch_sizes for r in results))  # pyright: ignore[reportAttributeAccessIssue, reportOptionalSubscript]
             self.assertTrue(all(r.config["model_config"]["fcnet_hiddens"] == [2] for r in results))  # pyright: ignore[reportAttributeAccessIssue, reportOptionalSubscript]
-            self.assertTrue(all(r.config["model_config"]["v_max"] == 13.13 for r in results))  # pyright: ignore[reportAttributeAccessIssue, reportOptionalSubscript]
+            self.assertTrue(all(r.config["v_max"] == 13.13 for r in results))  # pyright: ignore[reportAttributeAccessIssue, reportOptionalSubscript]
             self.assertTrue(all(r.config["epsilon"] in eps_choices for r in results))  # pyright: ignore[reportAttributeAccessIssue, reportOptionalSubscript]
 
 

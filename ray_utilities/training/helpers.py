@@ -114,6 +114,9 @@ def patch_model_config(config: AlgorithmConfig, model_config: dict[str, Any] | D
         config._model_config = model_config
     auto_model_config_keys = config._model_config_auto_includes.keys()
     for key in auto_model_config_keys:
+        if key == "vf_share_layers":
+            # This is an exception we keep. That it is autofilled is deprecated. Furthermore PPO sets it to False
+            continue
         if (poped := config._model_config.pop(key, _NOT_FOUND)) is not _NOT_FOUND:
             logger.warning(
                 "Removing auto-filled model_config key '%s':'%s' "
