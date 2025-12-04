@@ -193,12 +193,18 @@ def _patch_learner_config_with_param_space(
 def _patch_model_config_with_param_space(
     args: dict[str, Any],
     config: _AlgorithmConfigT,
-    setup_class: type[ExperimentSetupBase[Any, _AlgorithmConfigT, Any]],
+    setup_class: type[ExperimentSetupBase[Any, _AlgorithmConfigT, Any]]
+    | ExperimentSetupBase[Any, _AlgorithmConfigT, Any],
     hparams_model_config: Optional[dict[str, Any]] = None,
     *,
     config_inplace: bool = False,
 ) -> tuple[dict[str, Any], _AlgorithmConfigT]:
     """Receives the already patched args and config and patches the model_config specifically."""
+    if not isinstance(setup_class, type):
+        # might have confiv overrides of model_config that we would overwrite now!
+        overrides = setup_class.config_overrides()
+        if "_model_config" in overrides:
+            args.update({k: overrides["_model_config"][k] for k in args.keys() & overrides["_model_config"].keys()})
     if "model_config" in args and hparams_model_config:
         model_config_in_both = True
         # model_config is a property we do not want to set it
@@ -392,7 +398,8 @@ def _post_patch_config_with_param_space(
 def patch_config_with_param_space(
     args: dict[str, Any],
     config: _AlgorithmConfigT,
-    setup_class: type[ExperimentSetupBase[Any, _AlgorithmConfigT, Any]],
+    setup_class: type[ExperimentSetupBase[Any, _AlgorithmConfigT, Any]]
+    | ExperimentSetupBase[Any, _AlgorithmConfigT, Any],
     *,
     hparams: dict[str, Any],
     config_inplace: bool = False,
@@ -415,7 +422,10 @@ def patch_config_with_param_space(
     check_for_auto_filled_keys(hparams_model_config, config)
     args_copy = args.copy()
     args_copy.pop("__overwritten_keys__")
-    if args_copy or hparams_model_config:  # when we have no args there is nothing to update
+    # XXX: This does not allow for non matchong key to udpate the model_config; but its the safest we can do atm
+    if (
+        args_copy.keys() & config.model_config.keys()
+    ) or hparams_model_config:  # when we have no args there is nothing to update
         args, config = _patch_model_config_with_param_space(
             args,
             config,
@@ -431,7 +441,8 @@ def check_for_auto_filled_keys(model_config: dict | Any, config: AlgorithmConfig
     if not model_config or not isinstance(model_config, Mapping):
         # could still be a full ModelConfigDict but not much we can do then
         return
-    auto_keys = config._model_config_auto_includes.keys()
+    # In the case that update_from_dict is called this might contain keys we do not want
+    auto_keys = type(config)()._model_config_auto_includes.keys()
     if model_config.keys() & auto_keys:
         raise RuntimeError(
             f"Model config contains auto-filled keys {model_config.keys() & auto_keys}. "
@@ -496,7 +507,7 @@ def get_args_and_config(
         args,
         config,
         hparams=hparams,
-        setup_class=setup_class or type(setup),  # pyright: ignore[reportArgumentType]
+        setup_class=setup or setup_class,  # pyright: ignore[reportArgumentType]
     )
 
     return args, config
