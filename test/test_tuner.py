@@ -1387,6 +1387,8 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
                     "epsilon on model_config does not match that of the config"
                 )
 
+                # NOTE: v_max is an auto_filled key we want it to propagate from the config
+                # Otherwise it will be more tricky
                 assert self.algorithm.config.model_config["v_max"] == 13.13, (
                     f"model_config vmax not set correctly: {self.algorithm.config.model_config['v_max']}"
                 )
@@ -1462,9 +1464,9 @@ class TestTuneWithTopTrialScheduler(TestHelpers, DisableLoggers, InitRay, num_cp
                     "train_batch_size_per_learner": CyclicMutation(batch_sizes),
                     # TODO: This does NOT propagate to results.config
                     "epsilon": CyclicMutation(eps_choices),
-                    # NOTE: Model config_keys should go into a subdict
-                    # This propagates to result.config["mode"]
-                    "model_config": {"fcnet_hiddens": KeepMutation([2]), "v_max": KeepMutation(13.13)},
+                    # NOTE: Model config_keys should go into a subdict. auto-filled keys like v_max are not allowed
+                    "v_max": KeepMutation(13.13),
+                    "model_config": {"fcnet_hiddens": KeepMutation([2])},
                 }
             )
             results = run_tune(setup)

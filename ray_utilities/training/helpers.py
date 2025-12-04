@@ -1,6 +1,7 @@
 # pyright: enableExperimentalFeatures=true
 from __future__ import annotations
 
+from collections.abc import Mapping
 import dataclasses
 import logging
 import math
@@ -207,6 +208,7 @@ def _patch_model_config_with_param_space(
         # we take priority constructed from args < hparams["model_config"]
         model_config_so_far = model_config_so_far | hparams_model_config
     if model_config_so_far:
+        check_for_auto_filled_keys(model_config_so_far, config)
         patch_model_config(config, model_config_so_far)
 
     if model_config_in_both:
@@ -223,13 +225,17 @@ def _patch_config_with_param_space(
     hparams: dict[str, Any],
     config_inplace: bool = False,
 ) -> tuple[dict[str, Any], _AlgorithmConfigT]:
-    same_keys = set(args.keys()) & set(hparams.keys())
+    auto_keys = config._model_config_auto_includes.keys()
+    same_keys = set(args.keys()) & set(hparams.keys()) | (set(auto_keys) & set(hparams.keys()))
+    # Also allow patching of auto-include keys
+    # TODO: Allow any valid config key
+    # other_keys = config.to_dict().keys() & hparams.keys()
     args["__overwritten_keys__"] = {}
 
     _patch_learner_config_with_param_space(config=config, args=args, hparams=hparams, config_inplace=config_inplace)
     if not same_keys and (not args["__overwritten_keys__"] or config_inplace):
         return args, config
-    msg_dict = {k: f"{args[k]} -> {hparams[k]}" for k in same_keys}
+    msg_dict = {k: f"{args[k] if k in args else 'to config'} -> {hparams[k]}" for k in same_keys}
 
     # Check if minibatch_scale is set (from args or hparams)
     # NOTE: Cli args priority is higher here. # XXX Why? # CRITICAL This could be wrong when we tune minibatch_scale. Test
@@ -401,6 +407,7 @@ def patch_config_with_param_space(
     args, config = _patch_config_with_param_space(
         args, config, hparams=hparams, config_inplace=config_inplace, setup_class=setup_class
     )
+    check_for_auto_filled_keys(hparams_model_config, config)
     args, config = _patch_model_config_with_param_space(
         args,
         config,
@@ -410,6 +417,19 @@ def patch_config_with_param_space(
     )
     _post_patch_config_with_param_space(args, config, env_seed=hparams.get("env_seed", _NOT_FOUND))
     return args, config
+
+
+def check_for_auto_filled_keys(model_config: dict | Any, config: AlgorithmConfig) -> None:
+    if not model_config or not isinstance(model_config, Mapping):
+        # could still be a full ModelConfigDict but not much we can do then
+        return
+    auto_keys = config._model_config_auto_includes.keys()
+    if model_config.keys() & auto_keys:
+        raise RuntimeError(
+            f"Model config contains auto-filled keys {model_config.keys() & auto_keys}. "
+            "These should not be set manually as they are auto-filled by RLlib. "
+            "Please remove them from the model_config passed to the algorithm."
+        )
 
 
 def get_args_and_config(
