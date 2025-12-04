@@ -531,7 +531,7 @@ def create_algorithm_config(
 
     config.reporting(
         keep_per_episode_custom_metrics=True,  # If True calculate max min mean
-        log_gradients=args["test"],  # Default is True
+        log_gradients="learners" in args["log_stats"] or args["log_stats"] in ("all", "most"),  # Default is True
         # Will smooth metrics in the reports, e.g. tensorboard
         # NOTE This value will smooth over num_episodes, which might be from the past iterations.
         # But should be > 1 to smooth over episodes from the current iteration
