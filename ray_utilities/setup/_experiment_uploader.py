@@ -16,6 +16,7 @@ from ray_utilities.callbacks.wandb import WandbUploaderMixin, get_wandb_failed_u
 from ray_utilities.constants import get_run_id
 from ray_utilities.misc import get_trials_from_tuner
 from ray_utilities.nice_logger import ImportantLogger
+from ray_utilities.setup.tuner_setup import TunerSetup
 
 # pyright: enableExperimentalFeatures=true
 
@@ -128,9 +129,22 @@ class ExperimentUploader(WandbUploaderMixin, CometUploaderMixin[ParserType_co]):
             filesystem = None
             if tuner and tuner._local_tuner:
                 run_config = tuner._local_tuner.get_run_config()
+                try:
+                    tuner_setup = TunerSetup(setup=self)
+                    experiment_name = tuner_setup.get_experiment_name()
+                    if (self.project and self.project not in experiment_name) or get_run_id() not in experiment_name:
+                        logger.warning(
+                            "Experiment name %s does not match expected format with project %s and run id %s",
+                            experiment_name,
+                            self.project,
+                            get_run_id(),
+                        )
+                except Exception:
+                    logger.exception("Could not get experiment name from tuner setup")
+                    experiment_name = f"{self.project}-{self.args.algorithm.upper()}-{get_run_id()}"
                 experiment_path = os.path.join(
                     run_config.storage_path or ".",
-                    f"{self.project}-{get_run_id()}",
+                    experiment_name,
                 )
                 if trials := get_trials_from_tuner(tuner):
                     local_experiment_path = trials[0].local_experiment_path
