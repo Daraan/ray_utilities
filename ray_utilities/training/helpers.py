@@ -413,13 +413,16 @@ def patch_config_with_param_space(
         args, config, hparams=hparams, config_inplace=config_inplace, setup_class=setup_class
     )
     check_for_auto_filled_keys(hparams_model_config, config)
-    args, config = _patch_model_config_with_param_space(
-        args,
-        config,
-        hparams_model_config=hparams_model_config,
-        setup_class=setup_class,
-        config_inplace=config_inplace,
-    )
+    args_copy = args.copy()
+    args_copy.pop("__overwritten_keys__")
+    if args_copy or hparams_model_config:  # when we have no args there is nothing to update
+        args, config = _patch_model_config_with_param_space(
+            args,
+            config,
+            hparams_model_config=hparams_model_config,
+            setup_class=setup_class,
+            config_inplace=config_inplace,
+        )
     _post_patch_config_with_param_space(args, config, env_seed=hparams.get("env_seed", _NOT_FOUND))
     return args, config
 

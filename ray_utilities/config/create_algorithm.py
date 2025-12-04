@@ -404,6 +404,8 @@ def create_algorithm_config(
             # vf_clip_param=10,
             use_kl_loss=args.get("use_kl_loss", False),
             use_gae=True,  # Must be true to use "truncate_episodes"
+            # As long as this is not fully deprecated keep it here.
+            vf_share_layers=args.get("vf_share_layers", True),
         )
     elif algorithm_type == "dqn":
         assert isinstance(config, DQNConfig)

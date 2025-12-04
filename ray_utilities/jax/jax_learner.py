@@ -132,6 +132,21 @@ class JaxLearner(Learner):
             states[module_id] = module.get_state(inference_only=False)["jax_state"]
         return states
 
+    def update(self, *args, **kwargs):
+        result = super().update(*args, _no_metrics_reduce=True, **kwargs)
+        try:
+            counts = [
+                c[1].item()
+                for c in optax.tree_utils.tree_get_all_with_path(self.module["default_policy"].states, "count")
+            ]
+        except Exception as e:
+            print("Error occurred while getting current count:", e)
+        else:
+            self.metrics.log_value("jax_state_count", counts[0], clear_on_reduce=True, reduce=None)
+        if result is not None:  # pyright: ignore[reportUnnecessaryComparison]
+            return result
+        return self.metrics.reduce()
+
     def configure_optimizers_for_module(
         self,
         module_id: ModuleID,
