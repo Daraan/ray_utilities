@@ -393,15 +393,23 @@ fi
 # As we use SLURM the actual memory limit is not the total free memory but the SLURM limit
 # need to scale down the fraction accordingly.
 # Calculate the fraction based on SLURM memory / system memory
+echo "Calculating RAY_memory_usage_threshold based on SLURM memory limits..."
 SYSTEM_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
 SLURM_MEM_KB=$((SLURM_MEM_PER_NODE * 1024 ))
 MEMORY_FRACTION=$(awk "BEGIN {printf \"%.4f\", ${SLURM_MEM_KB} / ${SYSTEM_MEM_KB}}")
-RAY_memory_usage_threshold=$(awk "BEGIN {printf \"%.4f\", 0.95 * ${MEMORY_FRACTION}}")
-export RAY_memory_usage_threshold
-echo "Calculated RAY_memory_usage_threshold: ${RAY_memory_usage_threshold} (SLURM memory: $(awk "BEGIN {printf \"%.1f\", ${SLURM_MEM_KB} / 1024 / 1024}")GB, System memory: $(awk "BEGIN {printf \"%.1f\", ${SYSTEM_MEM_KB} / 1024 / 1024}")GB)"
+#RAY_memory_usage_threshold=$(awk "BEGIN {printf \"%.4f\", 0.95 * ${MEMORY_FRACTION}}")
 # example 700GB total
 # SLURM_MEM_PER_NODE=100GB -> 0.142857
 # SLURM_MEM_PER_NODE=50GB  -> 0.0714
+# However this does not take into account memory usage of other user processes on the node
+# Ray would start to kill way to early if there are other users
+# Now assume that the memory left by other user processes is ~35%; set the threshold to half of that.
+# Set the usage to max(min(0.35 + MEMORY_FRACTION, 0.85), MEMORY_FRACTION)
+echo "Calculated memory fraction (relative to system): ${MEMORY_FRACTION} (SLURM memory: $(awk "BEGIN {printf \"%.1f\", ${SLURM_MEM_KB} / 1024 / 1024}")GB, System memory: $(awk "BEGIN {printf \"%.1f\", ${SYSTEM_MEM_KB} / 1024 / 1024}")GB)"
+RAY_memory_usage_threshold=$(awk "BEGIN {temp=0.35 + ${MEMORY_FRACTION}; if (temp > 0.85) temp=0.85; if (temp < ${MEMORY_FRACTION}) temp=${MEMORY_FRACTION}; printf \"%.4f\", temp}")
+echo "Final RAY_memory_usage_threshold set to: ${RAY_memory_usage_threshold}"
+export RAY_memory_usage_threshold
+
 
 # Connect this node to the Ray cluster as a worker
 echo "Connecting as Ray worker..."

@@ -59,19 +59,6 @@ pbt_batch_size_base:
   entrypoint_resources:
     # custom resource to not schedule on SLURM nodes that time out too early
     persistent_node: 1
-  run_ids:
-    (CartPole-v1):
-      sp87c6251204170535344:
-        status: FAILED
-        submission_id: pbt_batch_size_base_CartPole-v1_2025-12-04_17:05:47
-    (LunarLander-v3):
-      sp87c62512041706600a4:
-        status: FAILED
-        submission_id: pbt_batch_size_base_LunarLander-v3_2025-12-04_17:05:47
-    (Acrobot-v1):
-      sp87c625120417064e1c4:
-        status: FAILED
-        submission_id: pbt_batch_size_base_Acrobot-v1_2025-12-04_17:05:47
 pbt_batch_size:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -92,6 +79,17 @@ pbt_minibatch_size_2048:
       <ENV_TYPE>: <mujoco_envs>
       <OTHER_FLAGS>: |-
         --train_batch_size_per_learner 2048
+pbt_minibatch_size_8192_base:
+  comment: tune minibatch_size with fixed train_batch_size_per_learner=8192
+  entrypoint_resources:
+    persistent_node: 1
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: minibatch_size
+      <ENV_TYPE>: <basic_envs>
+      <OTHER_FLAGS>: |-
+        --train_batch_size_per_learner 8192
 pbt_minibatch_size_8192:
   comment: tune minibatch_size with fixed train_batch_size_per_learner=8192
   entrypoint_resources:
@@ -188,19 +186,6 @@ pbt_clip_param_base:
     substitutions:
       <TUNE_PARAM>: clip_param
       <ENV_TYPE>: <basic_envs>
-  run_ids:
-    (CartPole-v1):
-      sp87c62512041706b55d4:
-        status: FAILED
-        submission_id: pbt_clip_param_base_CartPole-v1_2025-12-04_17:06:18
-    (Acrobot-v1):
-      sp87c62512041718491f4:
-        status: FAILED
-        submission_id: pbt_clip_param_base_Acrobot-v1_2025-12-04_17:06:18
-    (LunarLander-v3):
-      sp87c62512041718b8d54:
-        status: FAILED
-        submission_id: pbt_clip_param_base_LunarLander-v3_2025-12-04_17:06:18
 pbt_clip_param:
   entrypoint_resources:
     persistent_node: 1

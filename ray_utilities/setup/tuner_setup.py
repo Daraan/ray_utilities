@@ -475,7 +475,7 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
             callbacks=callbacks,  # type: ignore[reportArgumentType] # Ray New Train Interface!
             # Use fail_fast for during debugging/testing to stop all experiments
             failure_config=FailureConfig(
-                fail_fast=self._setup.args.test, max_failures=0 if self._setup.args.test else 2
+                fail_fast=self._setup.args.test, max_failures=0 if self._setup.args.test else 100
             ),
             checkpoint_config=CheckpointConfig(
                 num_to_keep=self._setup.args.num_to_keep,
