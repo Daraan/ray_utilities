@@ -61,6 +61,11 @@ def get_parser() -> argparse.ArgumentParser:
         subparser.add_argument(
             "--experiment_key", type=str, default=None, help="WandB to upload check a single experiment key (optional)."
         )
+        subparser.add_argument(
+            "wandb_args",
+            nargs=argparse.REMAINDER,
+            help="Capture all arguments following '--'.",
+        )
 
     # Upload subparser
     upload_parser = subparsers.add_parser("upload", help="Upload WandB logs for a run.")
@@ -675,7 +680,9 @@ if __name__ == "__main__":
                         if run.id in str(path)
                     )
                 ]
-        uploader.upload_paths(wandb_paths=wandb_paths, use_tqdm=True, wait=True, skip_synced=False)
+        uploader.upload_paths(
+            wandb_paths=wandb_paths, use_tqdm=True, wait=True, skip_synced=False, wandb_args=args.wandb_args
+        )
         print("All project uploads done. Verifying...")
         try:
             time.sleep(30)

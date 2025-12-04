@@ -173,7 +173,15 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
         Get the experiment name for organizing tuning results.
         This will be the subdir or the storage_path the tuner uses.
         """
-        return f"{self._setup.project}-{self._setup.args.algorithm.upper()}-{get_run_id()}"
+        algorithm = self._setup.args.algorithm
+        if algorithm == "default":
+            try:
+                _, algo_class = self._setup.get_algorithm_classes(self._setup.args)
+            except Exception:
+                logger.exception("Error getting algorithm class for default naming")
+            else:
+                algorithm = algo_class.__name__ if algo_class is not None else "default"
+        return f"{self._setup.project}-{algorithm.upper()}-{get_run_id()}"
 
     def get_storage_path(self) -> str:
         """

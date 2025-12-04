@@ -326,6 +326,7 @@ class WandbUploaderMixin(UploadHelperMixin):
             logger.exception("Error during monitor check and retry for trial %s", trial_id)
             return ExitCode.ERROR
 
+        # wandb args already included
         process_retry = subprocess.Popen(
             ["wandb", "sync", *cast("Iterable[str]", process.args[2:])],  # pyright: ignore[reportIndexIssue]
             stdout=subprocess.PIPE,
@@ -358,6 +359,7 @@ class WandbUploaderMixin(UploadHelperMixin):
         parallel_uploads: int | Literal["auto"] = "auto",
         use_tqdm: bool = False,
         skip_synced: bool = True,
+        wandb_args: Sequence[str] = (),
     ):
         # Step 2: Collect all trial runs with their trial IDs
         if trial_runs is None:
@@ -578,7 +580,7 @@ class WandbUploaderMixin(UploadHelperMixin):
                         [p.name for p in run_dirs],
                     )
                     process = subprocess.Popen(
-                        ["wandb", "sync", *[d.as_posix() for d in run_dirs], "--append"],
+                        ["wandb", "sync", *[d.as_posix() for d in run_dirs], "--append", *wandb_args],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
                         text=True,
