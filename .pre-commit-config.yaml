@@ -31,7 +31,6 @@ repos:
     - id: check-merge-conflict
     - id: check-case-conflict
     - id: mixed-line-ending
-    - id: name-tests-test
       args: [--fix=lf]
     - id: check-illegal-windows-names
 - repo: https://github.com/sphinx-contrib/sphinx-lint

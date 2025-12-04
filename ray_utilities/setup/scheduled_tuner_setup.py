@@ -10,8 +10,10 @@ from ray.tune.stopper import CombinedStopper, MaximumIterationStopper, Stopper
 
 from ray_utilities.callbacks.tuner.sync_config_files_callback import SyncConfigFilesCallback
 from ray_utilities.nice_logger import ImportantLogger
+from ray_utilities.setup.experiment_base import AlgorithmType_co, ConfigType_co, ExperimentSetupBase, ParserType_co
 from ray_utilities.setup.ppo_mlp_setup import MLPSetup, PPOMLPSetup
 from ray_utilities.setup.tuner_setup import SetupType_co, TunerSetup
+from ray_utilities.training.helpers import check_for_auto_filled_keys
 from ray_utilities.tune.scheduler.re_tune_scheduler import ReTuneScheduler
 from ray_utilities.tune.searcher.constrained_minibatch_search import constrained_minibatch_search
 from ray_utilities.tune.searcher.optuna_searcher import OptunaSearchWithPruner
@@ -128,7 +130,9 @@ class PBTTunerSetup(ScheduledTunerSetup["MLPPBTSetup"]):
         return callbacks
 
 
-class MLPPBTSetup(MLPSetup["MLPArgumentParser[PopulationBasedTrainingParser]"]):
+class PBTSetup(ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]):
+    """Extension class for :class:ExperimentSetupBase to use tuning with PBT"""
+
     _tuner_setup_cls = PBTTunerSetup
 
     def _tuner_add_iteration_stopper(self):
@@ -142,8 +146,18 @@ class MLPPBTSetup(MLPSetup["MLPArgumentParser[PopulationBasedTrainingParser]"]):
         if os.environ.get("RAY_UTILITIES_NO_PBT_CHECKPOINT_CHANGE") != "1":
             os.environ["TUNE_GLOBAL_CHECKPOINT_S"] = str(60 * 15)
         assert self.args.command is not None
-        # NOTE: Uses args.metrics/mode not the args.command.metric/mode
+        # NOTE: Uses args.metric/mode not the args.command.metric/mode
+        # Sanity check against auto filled model args keys
+        if self.args.command.hyperparam_mutations:
+            check_for_auto_filled_keys(self.args.command.hyperparam_mutations.get("model_config"), self.config)
         return super().create_tuner(adv_loggers=True if adv_loggers is None else adv_loggers)
+
+
+class MLPPBTSetup(
+    PBTSetup["MLPArgumentParser[PopulationBasedTrainingParser]", ConfigType_co, AlgorithmType_co],
+    MLPSetup["MLPArgumentParser[PopulationBasedTrainingParser]", ConfigType_co, AlgorithmType_co],
+):
+    pass
 
 
 # endregion

@@ -170,6 +170,8 @@ force-single-line = false  # default: false
 # Avoid F401 error when Generic is not detected
 extend-generics = [
     "ray_utilities.setup.experiment_base.ExperimentSetupBase",
+    "ray_utilities.setup.scheduled_tuner_setup.PBTSetup",
+    "ray_utilities.setup.scheduled_tuner_setup.MLPPBTSetup",
     "ray_utilities.jax.jax_model.FlaxRLModel",
     "ray_utilities.setup.ppo_mlp_setup.MLPSetup",
     "ray_utilities.setup.ppo_mlp_setup.PPOMLPSetup",
@@ -221,11 +223,6 @@ exclude = [
   "**/outputs/**",
   ".git/*",
   ".vscode/*"
-]
-packageIndexDepths = [
-  { name = "sklearn", depth = 2, includeAllSymbols = true },
-  { name = "matplotlib", depth = 3, includeAllSymbols = false },
-  { name = "ray", depth = 2, includeAllSymbols = true }
 ]
 
 [tool.pytest.ini_options]

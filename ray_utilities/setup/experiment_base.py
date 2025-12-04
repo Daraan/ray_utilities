@@ -68,6 +68,7 @@ from ray_utilities.misc import AutoInt, get_trainable_name
 from ray_utilities.nice_logger import ImportantLogger
 from ray_utilities.setup._experiment_uploader import ExperimentUploader
 from ray_utilities.setup.tuner_setup import TunerSetup
+from ray_utilities.training.helpers import check_for_auto_filled_keys
 from ray_utilities.warn import (
     warn_about_larger_minibatch_size,
     warn_if_batch_size_not_divisible,
@@ -894,7 +895,6 @@ class ExperimentSetupBase(
             param_space["env_seed"] = None
         else:  # "sequential", sample from distribution
             param_space["env_seed"] = tune.randint(0, 2**16)
-            # param_space["run_seed"] = tune.randint(0, 2**16)  # potential seed for config
         if self.args.command_str == "pbt" and self.args.command.grouped:  # pyright: ignore[reportOptionalMemberAccess]
             logger.info("Using grid search over seed for PBT grouped trials. Removing env_seed from param space.")
             param_space["seed"] = {"grid_search": self.args.command.get_seed_options()}  # pyright: ignore[reportOptionalMemberAccess]
@@ -1034,6 +1034,17 @@ class ExperimentSetupBase(
         Returns:
             A tuple containing the algorithm class and the algorithm config class.
         """
+
+    @classmethod
+    @abstractmethod
+    def _model_config_from_args(cls, args: NamespaceType[ParserType_co] | dict[str, Any]) -> dict[str, Any] | None:  # noqa: ARG003
+        """
+        Returns a model_config to be used with an RLModule. Return None for default option.
+
+        Attention:
+            This function must be prepared to accept a dict.
+        """
+        return None
 
     @classmethod
     @abstractmethod
@@ -1402,6 +1413,7 @@ class ExperimentSetupBase(
             :class:`TunerSetup`: Advanced tuner configuration options
             :class:`ray.tune.Tuner`: Underlying Ray Tune tuner class
         """
+        check_for_auto_filled_keys(self.param_space.get("model_config", {}), self.config)
         if os.environ.get("CI") or (str(self.storage_path).startswith("s3://") and self.args.test):
             # CI is env variable used by GitHub actions
             # Do not use remote when we are testing

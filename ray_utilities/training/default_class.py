@@ -1225,7 +1225,10 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # Always patch config with param space to ensure callbacks (like seeding) are added
         # and args are consistent with config.
         _, setup_config = patch_config_with_param_space(
-            self.config.get("cli_args", {}).copy() | perturbed, setup_config, hparams=self.config | perturbed
+            self.config.get("cli_args", {}).copy() | perturbed,
+            setup_config,
+            hparams=self.config | perturbed,
+            setup_class=self.setup_class,  # pyright: ignore[reportArgumentType]
         )
         # NOTE: in set_state the config might be recreated / changed depending on state
         algo_kwargs: dict[str, Any] = (
@@ -1697,6 +1700,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             new_algo_config,
             # Using self.config here would overwrite the restored config values, we only want to respect perturbed keys
             hparams=(state["config"] or {}) | (self._perturbed_config or {}),
+            setup_class=self.setup_class,  # pyright: ignore[reportArgumentType]
         )
         keys_to_process.remove("config")
         if type(new_algo_config) is not type(self.algorithm_config):

@@ -4,6 +4,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import math
+from collections.abc import Mapping
 from copy import deepcopy
 from functools import partial
 from types import SimpleNamespace
@@ -43,6 +44,7 @@ from ray_utilities.warn import (
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
+    from ray.rllib.core.rl_module import RLModuleSpec
     from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
     from ray.rllib.env.env_runner import EnvRunner
     from ray.rllib.env.multi_agent_env_runner import MultiAgentEnvRunner
@@ -61,6 +63,7 @@ if TYPE_CHECKING:
         _NewLogMetricsEvaluationResultsDict,
     )
     from ray_utilities.typing.trainable_return import RewardUpdater
+
 
 logger = logging.getLogger(__name__)
 
@@ -104,14 +107,30 @@ def patch_model_config(config: AlgorithmConfig, model_config: dict[str, Any] | D
     if dataclasses.is_dataclass(model_config):
         model_config = dataclasses.asdict(model_config)
     model_config = deepcopy(model_config)
+    # We want to avoid setting auto filled keys
     if isinstance(config._model_config, dict):
         config._model_config.update(model_config)
     elif config._model_config is not None:
         config._model_config = dataclasses.asdict(config._model_config) | model_config
     else:
         config._model_config = model_config
+    auto_model_config_keys = config._model_config_auto_includes.keys()
+    for key in auto_model_config_keys:
+        if key == "vf_share_layers":
+            # This is an exception we keep. That it is autofilled is deprecated. Furthermore PPO sets it to False
+            continue
+        if (poped := config._model_config.pop(key, _NOT_FOUND)) is not _NOT_FOUND:
+            logger.warning(
+                "Removing auto-filled model_config key '%s':'%s' "
+                "- should be auto filled to '%s' to allow config propagation. "
+                "Config should not have auto-filled keys.",
+                key,
+                poped,
+                model_config.get(key, "N/A"),
+            )
     if config._rl_module_spec:
         if isinstance(config._rl_module_spec.model_config, dict):
+            # Is normally the best to have rl_module_spec.model_config as None to allow config propagation
             if len(config._rl_module_spec.model_config) == 0:
                 ImportantLogger.important_warning(
                     logger,
@@ -171,40 +190,57 @@ def _patch_learner_config_with_param_space(
         )
 
 
+def _patch_model_config_with_param_space(
+    args: dict[str, Any],
+    config: _AlgorithmConfigT,
+    setup_class: type[ExperimentSetupBase[Any, _AlgorithmConfigT, Any]],
+    hparams_model_config: Optional[dict[str, Any]] = None,
+    *,
+    config_inplace: bool = False,
+) -> tuple[dict[str, Any], _AlgorithmConfigT]:
+    """Receives the already patched args and config and patches the model_config specifically."""
+    if "model_config" in args and hparams_model_config:
+        model_config_in_both = True
+        # model_config is a property we do not want to set it
+    else:
+        model_config_in_both = False
+    # Removing this blocks puts the work on the setup, kind of saver but easily pass arguments anymore from args -> model_config
+    # completed_model_config = config.model_config | args
+    model_config_from_args = setup_class._model_config_from_args(args)
+    model_config_so_far = model_config_from_args or {}
+    if hparams_model_config:
+        # fill in extra keys constructed from args
+        # we take priority constructed from args < hparams["model_config"]
+        model_config_so_far = model_config_so_far | hparams_model_config
+    if model_config_so_far:
+        check_for_auto_filled_keys(model_config_so_far, config)
+        patch_model_config(config, model_config_so_far)
+
+    if model_config_in_both:
+        args["__overwritten_keys__"]["model_config"] = hparams_model_config
+    assert (config.minibatch_size or 0) <= config.train_batch_size_per_learner
+    return args, config
+
+
 def _patch_config_with_param_space(
     args: dict[str, Any],
     config: _AlgorithmConfigT,
+    setup_class: Optional[type[ExperimentSetupBase[Any, _AlgorithmConfigT, Any]]] = None,  # noqa: ARG001
     *,
     hparams: dict[str, Any],
     config_inplace: bool = False,
 ) -> tuple[dict[str, Any], _AlgorithmConfigT]:
-    same_keys = set(args.keys()) & set(hparams.keys())
+    auto_keys = config._model_config_auto_includes.keys()
+    same_keys = set(args.keys()) & set(hparams.keys()) | (set(auto_keys) & set(hparams.keys()))
+    # Also allow patching of auto-include keys
+    # TODO: Allow any valid config key
+    # other_keys = config.to_dict().keys() & hparams.keys()
     args["__overwritten_keys__"] = {}
-    if "model_config" in hparams:
-        patch_model_config(config, hparams["model_config"])
-    if "model_config" in same_keys:
-        model_config_in_both = True
-        # model_config is a property we do not want to set it
-        same_keys.discard("model_config")
-    else:
-        model_config_in_both = False
-
-    completed_model_config = config.model_config
-    if completed_model_config:
-        if dataclasses.is_dataclass(completed_model_config):
-            completed_model_config_keys = dataclasses.asdict(completed_model_config).keys()
-        else:
-            completed_model_config_keys = completed_model_config.keys()
-
-        model_config_matching_keys = completed_model_config_keys & hparams.keys()
-
-        if model_config_matching_keys:
-            patch_model_config(config, {k: hparams[k] for k in model_config_matching_keys})
 
     _patch_learner_config_with_param_space(config=config, args=args, hparams=hparams, config_inplace=config_inplace)
     if not same_keys and (not args["__overwritten_keys__"] or config_inplace):
         return args, config
-    msg_dict = {k: f"{args[k]} -> {hparams[k]}" for k in same_keys}
+    msg_dict = {k: f"{args[k] if k in args else 'to config'} -> {hparams[k]}" for k in same_keys}
 
     # Check if minibatch_scale is set (from args or hparams)
     # NOTE: Cli args priority is higher here. # XXX Why? # CRITICAL This could be wrong when we tune minibatch_scale. Test
@@ -253,9 +289,7 @@ def _patch_config_with_param_space(
         config.update_from_dict(args["__overwritten_keys__"])
         if is_frozen:
             config.freeze()
-    if model_config_in_both:
-        args["__overwritten_keys__"]["model_config"] = hparams["model_config"]
-    assert config.minibatch_size or 0 <= config.train_batch_size_per_learner
+    assert (config.minibatch_size or 0) <= config.train_batch_size_per_learner
     return args, config
 
 
@@ -358,6 +392,7 @@ def _post_patch_config_with_param_space(
 def patch_config_with_param_space(
     args: dict[str, Any],
     config: _AlgorithmConfigT,
+    setup_class: type[ExperimentSetupBase[Any, _AlgorithmConfigT, Any]],
     *,
     hparams: dict[str, Any],
     config_inplace: bool = False,
@@ -372,9 +407,34 @@ def patch_config_with_param_space(
     Returns:
         Tuple of patched args and config.
     """
-    args, config = _patch_config_with_param_space(args, config, hparams=hparams, config_inplace=config_inplace)
+    hparams = hparams.copy()
+    hparams_model_config = hparams.pop("model_config", None)
+    args, config = _patch_config_with_param_space(
+        args, config, hparams=hparams, config_inplace=config_inplace, setup_class=setup_class
+    )
+    check_for_auto_filled_keys(hparams_model_config, config)
+    args, config = _patch_model_config_with_param_space(
+        args,
+        config,
+        hparams_model_config=hparams_model_config,
+        setup_class=setup_class,
+        config_inplace=config_inplace,
+    )
     _post_patch_config_with_param_space(args, config, env_seed=hparams.get("env_seed", _NOT_FOUND))
     return args, config
+
+
+def check_for_auto_filled_keys(model_config: dict | Any, config: AlgorithmConfig) -> None:
+    if not model_config or not isinstance(model_config, Mapping):
+        # could still be a full ModelConfigDict but not much we can do then
+        return
+    auto_keys = config._model_config_auto_includes.keys()
+    if model_config.keys() & auto_keys:
+        raise RuntimeError(
+            f"Model config contains auto-filled keys {model_config.keys() & auto_keys}. "
+            "These should not be set manually as they are auto-filled by RLlib. "
+            "Please remove them from the model_config passed to the algorithm."
+        )
 
 
 def get_args_and_config(
@@ -433,6 +493,7 @@ def get_args_and_config(
         args,
         config,
         hparams=hparams,
+        setup_class=setup_class or type(setup),  # pyright: ignore[reportArgumentType]
     )
 
     return args, config
@@ -970,6 +1031,18 @@ def rebuild_learner_group(algorithm: Algorithm, *, load_current_learner_state: b
     current_state = algorithm.learner_group.get_state() if algorithm.learner_group is not None else None
     algorithm.learner_group = algorithm.config.build_learner_group(rl_module_spec=module_spec)
     if load_current_learner_state and current_state is not None:
+        # Replace old module_config with new config in state / or pop?
+        specs = module_spec.rl_module_specs
+        rl_spec: RLModuleSpec
+        if isinstance(specs, dict):
+            for module_id, rl_spec in specs.items():
+                if (
+                    module_id in (rl_state := current_state["learner"]["rl_module"])
+                    and "model_config" in rl_state[module_id]
+                ):
+                    rl_state[module_id]["model_config"] = rl_spec.model_config
+        else:
+            current_state["learner"]["rl_module"]["model_config"] = specs.model_config
         algorithm.learner_group.set_state(current_state)
 
     # Check if there are modules to load from the `module_spec`.
@@ -984,6 +1057,7 @@ def rebuild_learner_group(algorithm: Algorithm, *, load_current_learner_state: b
     for module_id, sub_module_spec in module_specs.items():
         if sub_module_spec.load_state_path:
             rl_module_ckpt_dirs[module_id] = sub_module_spec.load_state_path
+    # Deprecated
     if multi_rl_module_ckpt_dir or rl_module_ckpt_dirs:
         algorithm.learner_group.load_module_state(
             multi_rl_module_ckpt_dir=multi_rl_module_ckpt_dir,

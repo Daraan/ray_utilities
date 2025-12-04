@@ -120,7 +120,7 @@ class SimpleMLPParser(Tap):
     the default initializer defined by `torch` is used.
     """
 
-    vf_share_layers: bool = DefaultModelConfig.vf_share_layers  # True
+    vf_share_layers: bool = True
     """
     Whether encoder layers (defined by `fcnet_hiddens` or `conv_filters`) should be
     shared between policy- and value function.
@@ -130,6 +130,10 @@ class SimpleMLPParser(Tap):
         super().configure()
         self.add_argument("--fcnet_hiddens", nargs="*", type=literal_eval)
         self.add_argument("--head_fcnet_hiddens", nargs="*", type=literal_eval)
+        self.add_argument("--no_vf_share_layers", dest="vf_share_layers", action="store_false", required=False)
+        self.add_argument(
+            "--vf_share_layers", dest="vf_share_layers", action="store_true", default=True, required=False
+        )
 
     def process_args(self) -> None:
         # flatten list of lists
