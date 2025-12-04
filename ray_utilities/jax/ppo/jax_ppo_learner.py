@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from flax.training.train_state import TrainState
     from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
     from ray.rllib.policy.sample_batch import SampleBatch
-    from ray.rllib.utils.typing import ModuleID, ResultDict, TensorType
+    from ray.rllib.utils.typing import ModuleID, Param, ParamDict, ParamRef, ResultDict, TensorType
 
     from ray_utilities.jax.ppo.jax_ppo_module import JaxActorCriticStateDict, JaxPPOModule
     from ray_utilities.typing.jax import type_grad_and_value
@@ -275,10 +275,13 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
         *,
         accumulate_gradients_every: int,  # possibly make book and static
         **kwargs,
-    ) -> tuple[Mapping[ModuleID, JaxActorCriticStateDict], tuple[Any, dict[ModuleID, chex.Numeric], dict[str, Any]]]:
+    ) -> tuple[
+        Mapping[ModuleID, JaxActorCriticStateDict],
+        tuple[Any, dict[ModuleID, chex.Numeric], dict[str, Any], dict[ModuleID, ParamDict] | None],
+    ]:
         # TODO: Could make accumulate_gradients_every a bool -> two different jax-compilations, BUT only when not taking mean  # noqa: E501
         parameters = self._get_state_parameters(states)
-        gradients: dict[ModuleID, dict[Literal["actor", "critic"], Any]]
+        gradients: dict[ModuleID, dict[Literal["actor", "critic"] | ParamRef, Any]]
         (_all_losses_combined, (fwd_out, loss_per_module_do_not_use, compute_loss_aux)), (gradients,) = (
             self._forward_with_grads(
                 parameters,
@@ -289,15 +292,27 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
             )
         )
         if 0:
-            # consider if implementation is necessary
+            # consider if implementation is necessary - we need it to log gradients
             self.postprocess_gradients_for_module
+            # If we want to log gradients do that AFTER this jitted function
             postprocessed_gradients: dict = self.postprocess_gradients(gradients)  # type: ignore
         else:
             postprocessed_gradients = gradients
         new_states = self.apply_gradients(
             postprocessed_gradients, states=states, accumulate_gradients_every=accumulate_gradients_every
         )
-        return new_states, (fwd_out, loss_per_module_do_not_use, compute_loss_aux)
+        return new_states, (
+            fwd_out,
+            loss_per_module_do_not_use,
+            compute_loss_aux,
+            gradients if self.config.log_gradients else None,  # pyright: ignore[reportReturnType]  # "actor" is paramref
+        )
+
+    def get_parameters(self, module: JaxPPOModule | Any) -> Sequence[Param]:
+        # TODO: This is PPO; should move it to a subclass and make this abstract in base
+        logger.warning("JaxLearner.get_parameters called which is not fully implemented", stacklevel=2)
+        # module.states["actor"].params is a dict
+        return [module.states["actor"], module.states["critic"]]
 
     def _generate_curr_coeffs(
         self,
@@ -332,7 +347,7 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
         # Cannot pass SampleBatch as input
         # TODO: fwd_out["default_policy"]["embeddings"] has many keys
         curr_entropy_coeffs, curr_kl_coeffs = self._generate_curr_coeffs()
-        new_states, (fwd_out, loss_per_module, compute_loss_aux) = self._update_jax(
+        new_states, (fwd_out, loss_per_module, compute_loss_aux, maybe_gradients) = self._update_jax(
             states=self.get_jax_states(),
             # Turn sample batch into a dict
             batch={mid: dict(v) for mid, v in batch.items()},
@@ -344,6 +359,8 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
         # TODO: Is this update at the correct location?
         for module_id, new_state in new_states.items():
             self.module[module_id].set_state({"jax_state": new_state})
+        if self.config.log_gradients and maybe_gradients:
+            self.postprocess_gradients(maybe_gradients)
 
         # Log important loss stats.
         for module_id in fwd_out.keys():

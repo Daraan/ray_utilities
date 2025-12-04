@@ -16,9 +16,11 @@ Note:
 
 from __future__ import annotations
 
+import abc
 import logging
 from abc import abstractmethod
 from fnmatch import fnmatch
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 import jax
@@ -43,7 +45,6 @@ if TYPE_CHECKING:
     from ray.rllib.utils.typing import ModuleID, Optimizer, Param, ParamDict, StateDict, TensorType
 
     from ray_utilities.jax.jax_module import JaxActorCriticStateDict, JaxModule, JaxStateDict
-    from ray_utilities.jax.ppo.jax_ppo_module import JaxPPOModule
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +52,9 @@ logger = logging.getLogger(__name__)
 class JaxOptStateWrapper:
     """Need a hashable object to be a valid Optimizer in RLlib Learner."""
 
-    def __init__(self, module: JaxModule):
+    def __init__(self, module: JaxModule, name="default_optimizer"):
         self.module = module
+        self.name = name
 
 
 class JaxLearner(Learner):
@@ -153,42 +155,102 @@ class JaxLearner(Learner):
         config: Optional["AlgorithmConfig"] = None,  # noqa: ARG002
     ) -> None:
         # MAYBE NOT NEEDED
-        super().configure_optimizers_for_module(module_id, config)
+        super().configure_optimizers_for_module(module_id, config or self.config)
         logger.warning("JaxLearner.configure_optimizers_for_module called which is not fully implemented", stacklevel=2)
         module: JaxModule = self._module[module_id]  # type: ignore[assignment]
         # likely do not need these here
-        actor_params, critic_params = self.get_parameters(module)  # Re-enable this line
         # Optimizer is set in init_state
         # TODO: PPO version
-        params = [actor_params, critic_params]
+        params = self.get_parameters(module)
+        # should be a dict like {'actor': optax.OptState, 'critic': optax.OptState} where opt state is a tuple
         states = self.get_jax_states()[module_id]
         opt_states: Sequence[optax.OptState] = tuple(
             state.opt_state for state in states.values() if hasattr(state, "opt_state")
         )
         assert len(params) == len(opt_states)
         # logger.info(f"Module {module_id} has optimizers with states: {opt_states}")
-        # should be a dict like {'actor': optax.OptState, 'critic': optax.OptState} where opt state is a tuple
+
+        # consistent param_refs would be the names of in the states
 
         # commented out to avoid linter errors
-        self.register_optimizer(
-            module_id=module_id,
-            optimizer=JaxOptStateWrapper(module),  # needs to be a hashable
-            params=params,  # needs to be list. NOTE: The parameters change with every iteration!
-            lr_or_lr_schedule=config.lr if config else None,
-        )
-
-    def get_parameters(self, module: JaxPPOModule | Any) -> tuple[Sequence[Param], Sequence[Param]]:
-        # TODO: This is PPO; should move it to a subclass and make this abstract in base
-        logger.warning("JaxLearner.get_parameters called which is not fully implemented", stacklevel=2)
-        # module.states["actor"].params is a dict
-        return list(module.states["actor"].params.values()), list(module.states["critic"].params.values())
+        for name, param in states.items():
+            if param not in params:
+                continue
+            self.register_optimizer(
+                module_id=module_id,
+                optimizer_name=name,
+                optimizer=JaxOptStateWrapper(module, name=name),  # needs to be a hashable
+                params=[name],  # needs to be list, entry will be passed to get_param_ref
+                lr_or_lr_schedule=config.lr if config else None,
+            )
 
     def get_param_ref(self, param: Param) -> Hashable:
+        """Expects the string name of the param in the state dicts and returns this string"""
         # Reference to param: self._params[param_ref] = param
         # param is a list but we need to return a Hashable
-        param_ref = id(param)
-        logger.warning("JaxLearner.get_param_ref called which is not fully implemented")
-        return param_ref
+        logger.warning(
+            "JaxLearner.get_param_ref called which is not fully implemented - it does not support state updates"
+        )
+        return param
+
+    @abc.abstractmethod
+    def get_parameters(self, module: RLModule) -> Sequence[Param]:
+        """Returns the list of parameters of a module.
+        Args:
+            module: The RLModule to extract parameters from.
+        """
+
+    # @override(JaxLearner)
+    def postprocess_gradients(self, gradients_dict: dict[ModuleID, ParamDict]) -> ParamDict:
+        """Applies potential postprocessing operations on the gradients.
+
+        This method is called after gradients have been computed and modifies them
+        before they are applied to the respective module(s) by the optimizer(s).
+        This might include grad clipping by value, norm, or global-norm, or other
+        algorithm specific gradient postprocessing steps.
+
+        This default implementation calls `self.postprocess_gradients_for_module()`
+        on each of the sub-modules in our MultiRLModule: `self.module` and
+        returns the accumulated gradients dicts.
+
+        Args:
+            gradients_dict: A dictionary of gradients in the same (flat) format as
+                self._params. Note that top-level structures, such as module IDs,
+                will not be present anymore in this dict. It will merely map gradient
+                tensor references to gradient tensors.
+
+        Returns:
+            A dictionary with the updated gradients and the exact same (flat) structure
+            as the incoming `gradients_dict` arg.
+        """
+        # The flat gradients dict (mapping param refs to params), returned by this
+        # method.
+        postprocessed_gradients = {}
+
+        for module_id in self.module.keys():
+            # Send a gradients dict for only this `module_id` to the
+            # `self.postprocess_gradients_for_module()` method.
+            module_grads_dict = {}
+            for _optimizer_name, optimizer in self.get_optimizers_for_module(module_id):
+                optim_grads = self.filter_param_dict_for_optimizer(gradients_dict[module_id], optimizer)
+                for ref, grad in optim_grads.items():
+                    assert ref not in module_grads_dict
+                    module_grads_dict[ref] = grad
+
+            # module_config = self.config.get_config_for_module(module_id).copy(copy_frozen=False)
+
+            module_grads_dict = self.postprocess_gradients_for_module(
+                module_id=module_id,
+                # Grad clipping is done by jax. TODO: should do this here for cleaner process and log gradients later.
+                config=SimpleNamespace(log_gradients=True, grad_clip=None),  # pyright: ignore[reportArgumentType]
+                module_gradients_dict=module_grads_dict,
+            )
+            assert isinstance(module_grads_dict, dict)
+
+            # Update our return dict.
+            postprocessed_gradients.update({module_id: module_grads_dict})
+
+        return postprocessed_gradients
 
     def compute_gradients(self, *args, **kwargs) -> ParamDict:  # noqa: ARG002
         # TODO: Can this be its own function?
