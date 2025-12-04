@@ -1,10 +1,10 @@
 # pyright: enableExperimentalFeatures=true
 from __future__ import annotations
 
-from collections.abc import Mapping
 import dataclasses
 import logging
 import math
+from collections.abc import Mapping
 from copy import deepcopy
 from functools import partial
 from types import SimpleNamespace
@@ -44,6 +44,7 @@ from ray_utilities.warn import (
 
 if TYPE_CHECKING:
     from ray.rllib.algorithms import Algorithm
+    from ray.rllib.core.rl_module import RLModuleSpec
     from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
     from ray.rllib.env.env_runner import EnvRunner
     from ray.rllib.env.multi_agent_env_runner import MultiAgentEnvRunner
@@ -62,6 +63,7 @@ if TYPE_CHECKING:
         _NewLogMetricsEvaluationResultsDict,
     )
     from ray_utilities.typing.trainable_return import RewardUpdater
+
 
 logger = logging.getLogger(__name__)
 
@@ -1029,6 +1031,18 @@ def rebuild_learner_group(algorithm: Algorithm, *, load_current_learner_state: b
     current_state = algorithm.learner_group.get_state() if algorithm.learner_group is not None else None
     algorithm.learner_group = algorithm.config.build_learner_group(rl_module_spec=module_spec)
     if load_current_learner_state and current_state is not None:
+        # Replace old module_config with new config in state / or pop?
+        specs = module_spec.rl_module_specs
+        rl_spec: RLModuleSpec
+        if isinstance(specs, dict):
+            for module_id, rl_spec in specs.items():
+                if (
+                    module_id in (rl_state := current_state["learner"]["rl_module"])
+                    and "model_config" in rl_state[module_id]
+                ):
+                    rl_state[module_id]["model_config"] = rl_spec.model_config
+        else:
+            current_state["learner"]["rl_module"]["model_config"] = specs.model_config
         algorithm.learner_group.set_state(current_state)
 
     # Check if there are modules to load from the `module_spec`.
@@ -1043,6 +1057,7 @@ def rebuild_learner_group(algorithm: Algorithm, *, load_current_learner_state: b
     for module_id, sub_module_spec in module_specs.items():
         if sub_module_spec.load_state_path:
             rl_module_ckpt_dirs[module_id] = sub_module_spec.load_state_path
+    # Deprecated
     if multi_rl_module_ckpt_dir or rl_module_ckpt_dirs:
         algorithm.learner_group.load_module_state(
             multi_rl_module_ckpt_dir=multi_rl_module_ckpt_dir,
