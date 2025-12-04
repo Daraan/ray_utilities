@@ -49,6 +49,7 @@ from ray_utilities.constants import (
 from ray_utilities.misc import calc_env_size, get_current_step, resolve_default_eval_metric
 from ray_utilities.misc import trial_name_creator as default_trial_name_creator
 from ray_utilities.nice_logger import ImportantLogger
+from ray_utilities.tune.experiments import set_experiment_key_on_trial
 from ray_utilities.tune.scheduler.add_experiment_keys_mixin import AddExperimentKeysMixin
 from ray_utilities.tune.searcher.constrained_minibatch_search import constrained_minibatch_search
 from ray_utilities.tune.searcher.optuna_searcher import OptunaSearchWithPruner, create_optuna_searcher
@@ -382,6 +383,14 @@ class TunerSetup(TunerCallbackSetup, _TunerSetupBase, Generic[SetupType_co]):
                 # Instead of stopping bad trials, pause them and resume them at the very end
                 hard_stop=True,
             )
+            # patch to add experiment key
+            orig_on_trial_add = scheduler.on_trial_add
+
+            def on_trial_add_with_experiment_key(tune_controller, trial: Trial, *args, **kwargs) -> None:
+                set_experiment_key_on_trial(trial)
+                return orig_on_trial_add(*args, tune_controller=tune_controller, trial=trial, **kwargs)
+
+            scheduler.on_trial_add = on_trial_add_with_experiment_key
         # if scheduler is none use FIFO as default
         if len(stoppers) == 0:
             self._stopper = None

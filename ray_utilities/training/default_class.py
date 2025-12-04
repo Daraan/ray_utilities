@@ -1181,7 +1181,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         try:
             Path(checkpoint_dir, f"{self.config['experiment_key']}_{self._current_step}.marker").touch()
         except (OSError, KeyError, AttributeError) as e:
-            _logger.error("Failed to create checkpoint marker file: %s", e)
+            _logger.error(
+                "Failed to create checkpoint marker file. "
+                "Possibly 'experiment_key' not added to the config - needs Tuner callback: %r",
+                e,
+            )
         return {
             "state": state,  # contains most information
             "algorithm_checkpoint_dir": algorithm_checkpoint_dir,
