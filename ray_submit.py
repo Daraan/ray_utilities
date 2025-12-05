@@ -486,21 +486,17 @@ def write_back(group: str, job_id: str, run_id: str | dict[str, str | dict[str, 
             data = yaml_load(f)
         job_id = job_id.removesuffix(TIMESTAMP_SUFFIX)
 
-        # If group is "all", try to extract the actual group from job_id prefix or from the submission data
+        # Always resolve the actual group by searching for the job_id in the data
         actual_group = group
-        if group == "all":
-            # Try to get the group from the job_id prefix
-            if "_" in job_id:
-                possible_group = job_id.split("_")[0]
-                if possible_group in data:
-                    actual_group = possible_group
-            # If not found, try to get the group from the submission data
-            if actual_group == "all":
-                # Try to find the group from the job's data if present
-                for g in data:
-                    if job_id in data[g]:
-                        actual_group = g
-                        break
+        if group == "all" or group not in data or job_id not in data.get(group, {}):
+            found = False
+            for g, group_dict in data.items():
+                if isinstance(group_dict, dict) and job_id in group_dict:
+                    actual_group = g
+                    found = True
+                    break
+            if not found:
+                raise KeyError(f"Could not resolve actual group for job_id '{job_id}' (group='{group}')")
 
         if "entrypoint_pattern" not in data.get(actual_group, {}):
             data[actual_group][job_id].setdefault("run_ids", {})

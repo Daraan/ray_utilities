@@ -161,13 +161,18 @@ class JaxLearner(Learner):
         # likely do not need these here
         # Optimizer is set in init_state
         # TODO: PPO version
-        params = self.get_parameters(module)
-        # should be a dict like {'actor': optax.OptState, 'critic': optax.OptState} where opt state is a tuple
         states = self.get_jax_states()[module_id]
-        opt_states: Sequence[optax.OptState] = tuple(
-            state.opt_state for state in states.values() if hasattr(state, "opt_state")
-        )
-        assert len(params) == len(opt_states)
+        try:
+            params = self.get_parameters(module)
+        except KeyError as e:
+            logger.exception("Error getting parameters for module %s: %s", module_id, e)
+            params = [s for name, s in states.items() if name != "module_key"]
+        else:
+            opt_states: Sequence[optax.OptState] = tuple(
+                state.opt_state for state in states.values() if hasattr(state, "opt_state")
+            )
+            assert len(params) == len(opt_states)
+        # should be a dict like {'actor': optax.OptState, 'critic': optax.OptState} where opt state is a tuple
         # logger.info(f"Module {module_id} has optimizers with states: {opt_states}")
 
         # consistent param_refs would be the names of in the states

@@ -312,6 +312,7 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
         # TODO: This is PPO; should move it to a subclass and make this abstract in base
         logger.warning("JaxLearner.get_parameters called which is not fully implemented", stacklevel=2)
         # module.states["actor"].params is a dict
+        print("module.states:", module.states)
         return [module.states["actor"], module.states["critic"]]
 
     def _generate_curr_coeffs(
