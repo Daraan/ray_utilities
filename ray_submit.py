@@ -488,7 +488,7 @@ def write_back(group: str, job_id: str, run_id: str | dict[str, str | dict[str, 
 
         # Always resolve the actual group by searching for the job_id in the data
         actual_group = group
-        if group == "all" or group not in data or job_id not in data.get(group, {}):
+        if group == "all":
             found = False
             for g, group_dict in data.items():
                 if isinstance(group_dict, dict) and job_id in group_dict:
@@ -569,7 +569,7 @@ def submit_single_job(job_id: str, settings: dict, args: argparse.Namespace) -> 
     assert CLIENT
 
     # Extract group from settings
-    group = settings.pop("group", args.group)
+    group = settings.get("group", args.group)
     try:
         submission_id_out = CLIENT.submit_job(
             entrypoint=settings["entrypoint"],

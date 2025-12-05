@@ -78,12 +78,15 @@ class _EntropyArgCorrector(RllibDistribution):
         ).entropy(**kwargs)
 
 
-class Normal(_EntropyArgCorrector, distrax.Normal, RLlibToJaxDistribution):
+class Normal(_EntropyArgCorrector, RLlibToJaxDistribution, distrax.Normal):
     def __init__(self, loc: chex.Numeric, scale: chex.Numeric):
+        # problem distrax calls super wihout arguments
+        # super().__init__(loc, scale)
         super().__init__(loc, scale)
         self._dist: distrax.Normal
 
     def _get_jax_distribution(self, *args, **kwargs) -> distrax.Distribution:
+        # return Self?
         return distrax.Normal(*args, **kwargs)
 
     def rsample(
@@ -108,9 +111,55 @@ class Normal(_EntropyArgCorrector, distrax.Normal, RLlibToJaxDistribution):
     def to_deterministic(self) -> Deterministic:
         return Deterministic(loc=self.loc)
 
+    # @override(Distribution)
+    @classmethod
+    def from_logits(cls, logits: tuple[jax.Array, jax.Array], **kwargs) -> Self:
+        loc, log_std = logits
+        scale = jnp.exp(log_std)
+        return cls(loc=loc, scale=scale)
+
 
 if TYPE_CHECKING:
     Normal(1, 0)
+
+
+class Uniform(_EntropyArgCorrector, distrax.Uniform, RLlibToJaxDistribution):
+    def __init__(self, low: chex.Numeric, high: chex.Numeric):
+        super().__init__(low, high)
+        self._dist: distrax.Uniform
+
+    def _get_jax_distribution(self, *args, **kwargs) -> distrax.Distribution:
+        return distrax.Uniform(*args, **kwargs)
+
+    def rsample(
+        self,
+        *,
+        seed: IntLike | chex.PRNGKey,
+        sample_shape: Tuple[int, ...] = (),
+        return_logp: bool = False,
+        **kwargs,
+    ) -> Union[TensorType, Tuple[TensorType, TensorType]]:
+        sample = self._dist.sample(seed=seed, sample_shape=sample_shape, **kwargs)
+        if not return_logp:
+            return sample
+        logp = self._dist.log_prob(sample)
+        return sample, logp
+
+    @staticmethod
+    def required_input_dim(space: gym.Space | gym.spaces.Box, **kwargs) -> int:  # noqa: ARG004
+        assert space.shape is not None
+        return int(np.prod(space.shape, dtype=np.int32))
+
+    def to_deterministic(self) -> Deterministic:
+        return Deterministic(loc=(self.low + self.high) / 2)
+
+    @classmethod
+    def from_logits(cls, logits: chex.Array, **kwargs) -> Self:
+        return cls(logits[:, 0], logits[:, 1])
+
+
+if TYPE_CHECKING:
+    Uniform(0, 1)
 
 
 class Categorical(_EntropyArgCorrector, SupportsLogitsMixin, RLlibToJaxDistribution, distrax.Categorical):

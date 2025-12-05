@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import gymnasium as gym
-from ray_utilities.jax.distributions.jax_distributions import Categorical, Normal, RLlibToJaxDistribution
+from ray_utilities.jax.distributions.jax_distributions import Categorical, RLlibToJaxDistribution, Normal
 
 __all__ = ["GetJaxDistributionsMixin"]
 

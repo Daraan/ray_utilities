@@ -51,6 +51,7 @@ class GetActionsJaxDistr(_GetActions):
                 action_dist_class = sa_rl_module.get_exploration_action_dist_cls()
             else:
                 action_dist_class = sa_rl_module.get_inference_action_dist_cls()
+
             action_dist = action_dist_class.from_logits(
                 batch[Columns.ACTION_DIST_INPUTS],
             )
