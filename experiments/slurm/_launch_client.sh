@@ -406,7 +406,7 @@ MEMORY_FRACTION=$(awk "BEGIN {printf \"%.4f\", ${SLURM_MEM_KB} / ${SYSTEM_MEM_KB
 # Now assume that the memory left by other user processes is ~35%; set the threshold to half of that.
 # Set the usage to max(min(0.35 + MEMORY_FRACTION, 0.85), MEMORY_FRACTION)
 echo "Calculated memory fraction (relative to system): ${MEMORY_FRACTION} (SLURM memory: $(awk "BEGIN {printf \"%.1f\", ${SLURM_MEM_KB} / 1024 / 1024}")GB, System memory: $(awk "BEGIN {printf \"%.1f\", ${SYSTEM_MEM_KB} / 1024 / 1024}")GB)"
-RAY_memory_usage_threshold=$(awk "BEGIN {temp=0.35 + ${MEMORY_FRACTION}; if (temp > 0.85) temp=0.85; if (temp < ${MEMORY_FRACTION}) temp=${MEMORY_FRACTION}; printf \"%.4f\", temp}")
+RAY_memory_usage_threshold=$(awk "BEGIN {temp=0.5 + ${MEMORY_FRACTION}; if (temp > 0.85) temp=0.85; if (temp < ${MEMORY_FRACTION}) temp=${MEMORY_FRACTION}; printf \"%.4f\", temp}")
 echo "Final RAY_memory_usage_threshold set to: ${RAY_memory_usage_threshold}"
 export RAY_memory_usage_threshold
 

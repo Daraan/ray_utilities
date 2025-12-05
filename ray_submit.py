@@ -258,13 +258,30 @@ def get_submissions(
                 failed_combinations.add(combo)
         all_combinations = [combo for combo in all_combinations if combo in failed_combinations]
 
+    run_ids_data = group_data.get("run_ids", {})
     for values in all_combinations:
+        job_id = "_".join(values)
         entry = dict(zip(replace_keys, values))
         entrypoint = pattern
         for k, v in entry.items():
             entrypoint = entrypoint.replace(k, v)
 
-        # Validate that all placeholders have been replaced
+        # Exclude if entrypoint matches any exclude pattern
+        if excludes:
+            if any(excl in entrypoint or excl in job_id for excl in excludes):
+                continue
+
+        # Check run_ids for this combination: skip if any SUCCEEDED
+        run_key = "(" + ", ".join(values).rstrip(", ") + ")"
+        already_succeeded = False
+        if run_key in run_ids_data:
+            for run_info in run_ids_data[run_key].values():
+                if isinstance(run_info, dict) and run_info.get("status") == JobStatus.SUCCEEDED.value:
+                    already_succeeded = True
+                    break
+        if already_succeeded:
+            continue
+
         remaining_placeholders = re.findall(r"<[^>]+>", entrypoint)
         if remaining_placeholders:
             raise ValueError(
@@ -273,12 +290,6 @@ def get_submissions(
                 f"After substitution: {entrypoint}"
             )
 
-        # Exclude if entrypoint matches any exclude pattern
-        if excludes:
-            if any(excl in entrypoint for excl in excludes):
-                continue
-
-        job_id = "_".join(values)
         submissions[job_id] = {
             "entrypoint": entrypoint,
             "group": group,
@@ -421,6 +432,8 @@ def get_all_submissions(
             # Prefix job_id with group name to avoid collisions
             for job_id, settings in group_submissions.items():
                 prefixed_job_id = f"{group_name}_{job_id}"
+                if excludes and any(excl in prefixed_job_id for excl in excludes):
+                    continue
                 all_submissions[prefixed_job_id] = settings
 
         except Exception as e:
@@ -472,33 +485,47 @@ def write_back(group: str, job_id: str, run_id: str | dict[str, str | dict[str, 
         with open(file_path, "r") as f:
             data = yaml_load(f)
         job_id = job_id.removesuffix(TIMESTAMP_SUFFIX)
-        if "entrypoint_pattern" not in data[group]:
-            data[group][job_id].setdefault("run_ids", {})
+
+        # If group is "all", try to extract the actual group from job_id prefix or from the submission data
+        actual_group = group
+        if group == "all":
+            # Try to get the group from the job_id prefix
+            if "_" in job_id:
+                possible_group = job_id.split("_")[0]
+                if possible_group in data:
+                    actual_group = possible_group
+            # If not found, try to get the group from the submission data
+            if actual_group == "all":
+                # Try to find the group from the job's data if present
+                for g in data:
+                    if job_id in data[g]:
+                        actual_group = g
+                        break
+
+        if "entrypoint_pattern" not in data.get(actual_group, {}):
+            data[actual_group][job_id].setdefault("run_ids", {})
             if isinstance(run_id, dict):
                 for experiment_id, run_info in run_id.items():
                     if isinstance(run_info, dict):
-                        # if the current status is a custom written one do not overwrite it
                         if (
-                            _current_status := data[group][job_id]["run_ids"]
+                            _current_status := data[actual_group][job_id]["run_ids"]
                             .get(experiment_id, {})
                             .get("status", JobStatus.RUNNING)
                         ) not in (JobStatus.RUNNING, JobStatus.PENDING, *JOB_END_STATES):
-                            # do not overwrite custom present value
                             run_id = run_id.copy()
                             run_id[experiment_id] = run_info = run_info.copy()  # noqa: PLW2901
                             run_info.pop("status", None)
-                deep_update(data[group][job_id]["run_ids"], run_id)
+                deep_update(data[actual_group][job_id]["run_ids"], run_id)
             else:
-                data[group][job_id]["run_ids"][run_id] = "RUNNING"
+                data[actual_group][job_id]["run_ids"][run_id] = "RUNNING"
         else:
-            # Add a list of lists to a run_id list with the replace_keys as keys
-            data[group].setdefault("run_ids", {})
-            replacement_parts = job_id.removeprefix(group + "_").split("_")
+            data[actual_group].setdefault("run_ids", {})
+            replacement_parts = job_id.removeprefix(actual_group + "_").split("_")
             run_key = "(" + ", ".join(replacement_parts).rstrip(", ") + ")"
             if isinstance(run_id, dict):
-                data[group]["run_ids"].setdefault(run_key, {}).update(run_id)
+                data[actual_group]["run_ids"].setdefault(run_key, {}).update(run_id)
             else:
-                data[group]["run_ids"].setdefault(run_key, {})[run_id] = "RUNNING"
+                data[actual_group]["run_ids"].setdefault(run_key, {})[run_id] = "RUNNING"
         with open(file_path, "w") as f:
             yaml_dump(data, f)
     finally:
@@ -529,8 +556,13 @@ def get_tmux_log_command(job_id: str) -> str:
     return tmux_command
 
 
+_submission_counter = 0
+
+
 def submit_single_job(job_id: str, settings: dict, args: argparse.Namespace) -> str | None:
     if args.test:
+        global _submission_counter  # noqa: PLW0603
+        _submission_counter += 1
         settings = settings.copy()
         settings.pop("run_ids", None)
         settings.pop("group", None)
@@ -542,11 +574,12 @@ def submit_single_job(job_id: str, settings: dict, args: argparse.Namespace) -> 
 
     # Extract group from settings
     group = settings.pop("group", args.group)
-
     try:
         submission_id_out = CLIENT.submit_job(
             entrypoint=settings["entrypoint"],
-            submission_id=settings.get("submission_id", group + "_" + job_id + "_" + TIMESTAMP_SUFFIX),
+            submission_id=settings.get(
+                "submission_id", group + "_" + job_id.removeprefix(group + "_") + "_" + TIMESTAMP_SUFFIX
+            ),
             runtime_env=settings.get(
                 "runtime_env",
                 {"working_dir": ".", "excludes": EXCLUDE_WDIR_FILES},
@@ -819,6 +852,7 @@ if __name__ == "__main__":
     if args.test:
         import sys
 
+        print(f"\n-----------------------\nTest mode: would submit {_submission_counter} jobs.")
         sys.exit(0)
     assert CLIENT
 

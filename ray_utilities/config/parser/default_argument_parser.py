@@ -424,7 +424,7 @@ class PatchArgsMixin(Tap):
                 complete_annotations=complete_annotations,
                 merged_args=merged_args,
             )
-        patched_argv = [original_argv[0], *map(str, new_args), *orig_unknown]
+        patched_argv = [original_argv[0], *map(str, new_args), *orig_unknown, *patch_unknown]
         sys.argv = patched_argv
 
         try:
