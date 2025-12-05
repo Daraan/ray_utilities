@@ -23,6 +23,7 @@ from ray.rllib.connectors.connector_v2 import ConnectorV2
 from ray.rllib.core.columns import Columns
 from ray.rllib.utils.metrics import ALL_MODULES  # pyright: ignore[reportPrivateImportUsage]
 from ray.rllib.utils.postprocessing.episodes import remove_last_ts_from_episodes_and_restore_truncateds
+from ray.util import log_once
 
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 
@@ -114,7 +115,17 @@ class RemoveMaskedSamplesConnector(ConnectorV2):
             for key in module_batch:
                 if key == Columns.LOSS_MASK:
                     continue
-                module_batch[key] = module_batch[key][loss_mask]
+                try:
+                    module_batch[key] = module_batch[key][loss_mask]
+                except TypeError:
+                    # FIXME: Should not get a tuple here
+                    module_batch[key] = tuple(entry[loss_mask] for entry in module_batch[key])
+                except IndexError:
+                    if log_once("Incompatible-shapes-for-maksed-samples"):
+                        _logger.error(
+                            f"Shapes of loss mask and key {key} do not match skipping - hoping for the best: "  # noqa: G004
+                            f"{module_batch[key].shape} vs {loss_mask.shape} #True={sum(loss_mask)} "
+                        )
             module_batch[Columns.LOSS_MASK] = loss_mask[loss_mask]
             num_steps = self._log_and_increase_module_steps(metrics, module_id, module_batch, num_steps)
         # Remove from episodes as well - for correct learner_connector_sum_episodes_length_out logging
