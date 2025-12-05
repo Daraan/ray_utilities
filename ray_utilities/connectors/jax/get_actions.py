@@ -38,6 +38,7 @@ class GetActionsJaxDistr(_GetActions):
         self.key, new_key = jax.random.split(self.key, 2)
         return new_key
 
+    # TODO: Can jit this with explore as statics
     def _get_actions(self, batch: dict, sa_rl_module: RLModule, explore: bool):  # noqa: FBT001 # do not modify interface
         # Action have already been sampled -> Early out.
         if Columns.ACTIONS in batch:
@@ -52,6 +53,7 @@ class GetActionsJaxDistr(_GetActions):
             else:
                 action_dist_class = sa_rl_module.get_inference_action_dist_cls()
 
+            # Could jit this during sampling process
             action_dist = action_dist_class.from_logits(
                 batch[Columns.ACTION_DIST_INPUTS],
             )

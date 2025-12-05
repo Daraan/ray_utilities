@@ -405,7 +405,6 @@ class JaxPPOLearner(RayPPOLearner, JaxLearner):
                 actor_state = states[module_id]["actor"].apply_gradients(grads=actor_grads)
 
                 def update_fn(actor_state=actor_state, actor_grad_accum=actor_grad_accum):
-                    jax.debug.print("Actor applying accumulated gradients")
                     grads = jax.tree_util.tree_map(lambda x: x / accumulate_gradients_every, actor_grad_accum)
                     new_state = actor_state.apply_gradients(
                         grads=grads,

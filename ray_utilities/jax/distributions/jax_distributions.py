@@ -92,7 +92,7 @@ class Normal(_EntropyArgCorrector, RLlibToJaxDistribution, distrax.Normal):
     def rsample(
         self,
         *,
-        seed: IntLike | chex.PRNGKey,  # XXX <-- not RLlib interface
+        seed: IntLike | chex.PRNGKey,  # TODO: not RLlib interface
         sample_shape: Tuple[int, ...] = (),
         return_logp: bool = False,
         **kwargs,
@@ -117,6 +117,50 @@ class Normal(_EntropyArgCorrector, RLlibToJaxDistribution, distrax.Normal):
         loc, log_std = logits
         scale = jnp.exp(log_std)
         return cls(loc=loc, scale=scale)
+
+
+class MultivariateNormalDiag(_EntropyArgCorrector, RLlibToJaxDistribution, distrax.MultivariateNormalDiag):
+    """Multivariate normal distribution with diagonal covariance matrix.
+
+    This distribution is used for multi-dimensional continuous action spaces.
+    It automatically sums entropy and log probabilities across action dimensions.
+    """
+
+    def __init__(self, loc: chex.Array, scale_diag: chex.Array):
+        super().__init__(loc=loc, scale_diag=scale_diag)
+        self._dist: distrax.MultivariateNormalDiag
+
+    def _get_jax_distribution(self, *args, **kwargs) -> distrax.Distribution:
+        return distrax.MultivariateNormalDiag(*args, **kwargs)
+
+    def rsample(
+        self,
+        *,
+        seed: IntLike | chex.PRNGKey,  # TODO: not RLlib interface
+        sample_shape: Tuple[int, ...] = (),
+        return_logp: bool = False,
+        **kwargs,
+    ) -> Union[TensorType, Tuple[TensorType, TensorType]]:
+        if not return_logp:
+            return self._dist.sample(seed=seed, sample_shape=sample_shape, **kwargs)
+        return self._dist.sample_and_log_prob(seed=seed, sample_shape=sample_shape, **kwargs)
+
+    @staticmethod
+    def required_input_dim(space: gym.Space | gym.spaces.Box, **kwargs) -> int:  # noqa: ARG004
+        assert space.shape is not None
+        return int(np.prod(space.shape, dtype=np.int32) * 2)  # loc + scale for each dimension
+
+    def to_deterministic(self) -> Deterministic:
+        return Deterministic(loc=self.loc)
+
+    # @override(Distribution)
+    @classmethod
+    def from_logits(cls, logits: tuple[jax.Array, jax.Array], **kwargs) -> Self:
+        loc, log_std = logits
+        scale_diag = jnp.exp(log_std)
+        # OK : (4, 8) , (8)
+        # NOT OK (128, 8), 128
+        return cls(loc=loc, scale_diag=scale_diag)
 
 
 if TYPE_CHECKING:

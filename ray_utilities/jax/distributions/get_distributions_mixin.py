@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import gymnasium as gym
-from ray_utilities.jax.distributions.jax_distributions import Categorical, RLlibToJaxDistribution, Normal
+from ray_utilities.jax.distributions.jax_distributions import (
+    Categorical,
+    MultivariateNormalDiag,
+    RLlibToJaxDistribution,
+)
 
 __all__ = ["GetJaxDistributionsMixin"]
 
@@ -31,7 +35,7 @@ class GetJaxDistributionsMixin:
         if isinstance(self.action_space, gym.spaces.Discrete):
             return Categorical
         if isinstance(self.action_space, gym.spaces.Box):
-            return Normal
+            return MultivariateNormalDiag
         raise ValueError(
             f"Default action distribution for action space "
             f"{self.action_space} not supported! Either set the "

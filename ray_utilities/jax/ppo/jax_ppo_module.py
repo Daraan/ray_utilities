@@ -73,7 +73,7 @@ class JaxPPOModule(DefaultPPORLModule, JaxModule):
             ),
             "model_config": self.model_config,
         }
-        self.set_state(state)
+        self.update_jax_state(**state["jax_state"])
 
     def _forward(self, batch: dict[str, Any], *, parameters: Mapping[str, Any], **kwargs) -> dict[str, Any]:
         """Default forward pass (used for inference and exploration)."""

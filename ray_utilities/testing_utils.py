@@ -995,8 +995,9 @@ class TestHelpers(unittest.TestCase):
                 self.assertEqual(path1, path2, msg)
                 if path1:  # empty tuple for top-level attributes
                     leaf = path1[-1]
-                    leaf_name = get_leafpath_value(leaf)
-                    if leaf_name in ignore_leaves:
+                    leaf_name: int | str = get_leafpath_value(leaf)
+
+                    if isinstance(leaf_name, str) and leaf_name in ignore_leaves:
                         continue
                 if almost:
                     npt.assert_array_almost_equal(
