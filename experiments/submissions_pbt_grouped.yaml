@@ -124,6 +124,10 @@ pbt_batch_size:
       tws47f2511290010dcbd4:
         status: FAILED
         submission_id: pbt_batch_size_InvertedPendulum-v5_2025-11-29_00:01:12
+      tws47f2512050151ab674:
+        status: SUCCEEDED
+        submission_id:
+          pbt_batch_size_pbt_batch_size_InvertedPendulum-v5_2025-12-05_01:50:53
 pbt_num_envs:
   # This is a comment
   comment: small minibatch_size=256 and train_batch_size=2048
@@ -134,6 +138,24 @@ pbt_num_envs:
       <ENV_TYPE>: <mujoco_envs>
   entrypoint_resources:
     persistent_node: 1
+  run_ids:
+    (HumanoidStandup-v5):
+      tws47f251205015128184:
+        status: SUCCEEDED
+        submission_id:
+          pbt_num_envs_pbt_num_envs_HumanoidStandup-v5_2025-12-05_01:50:53
+    (Humanoid-v5):
+      tws47f2512050151da0e4:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_pbt_num_envs_Humanoid-v5_2025-12-05_01:50:53
+    (Ant-v5):
+      tws47f251205015192f94:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_pbt_num_envs_Ant-v5_2025-12-05_01:50:53
+    (Hopper-v5):
+      tws47f2512050152e72d4:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_pbt_num_envs_Hopper-v5_2025-12-05_01:50:53
 pbt_num_envs_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale
@@ -265,7 +287,7 @@ pbt_lr:
         status: FAILED
         submission_id: pbt_lr_HalfCheetah-v5_2025-11-26_02:17:49
       tws47f251129014074574:
-        status: RUNNING
+        status: SUCCEEDED? reported as failed; maybe incomplete upload
         submission_id: pbt_lr_HalfCheetah-v5_2025-11-29_00:06:29
     (Reacher-v5):
       tws47f2511260233b9984:
@@ -496,7 +518,8 @@ pbt_minibatch_size_2048:
         submission_id: pbt_minibatch_size_2048_Hopper-v5_2025-11-29_12:25:34
     (Walker2d-v5):
       tws47f251126021743e74:
-        status: STOPPED - complete?
+        status: SUCCEEDED
+        status_correct: STOPPED - complete?  # TODO: check
         submission_id: pbt_minibatch_size_2048_Walker2d-v5_2025-11-26_02:17:39
     (HalfCheetah-v5):
       tws47f25112602186ec44:

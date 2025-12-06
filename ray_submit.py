@@ -3,6 +3,8 @@ A script to submit and monitor Ray jobs in bulk based on a YAML configuration fi
 Uses the Ray Job Submission API to submit jobs, track their logs, and update their status in the YAML file.
 """
 
+# ruff: noqa: PLW0603  # allow globals
+
 from __future__ import annotations
 
 import argparse
@@ -58,6 +60,10 @@ EXCLUDE_WDIR_FILES = [
     "ray_submit.py",
     "test",
 ]
+
+# Global variable for tracking running jobs count
+running_jobs_count = 0
+initial_running_jobs = 0
 
 
 def resolve_substitution_value(value: str | list[str], yaml_data: dict) -> list[str]:
@@ -602,14 +608,45 @@ def submit_single_job(job_id: str, settings: dict, args: argparse.Namespace) -> 
         return None
 
 
+def scan_monitor_running_jobs(submissions_file: str) -> dict[str, tuple[str, str]]:
+    """
+    Scan the submissions file for all jobs that are currently RUNNING.
+    Returns a dict mapping submission_id to (group, original_job_id).
+    Updates the global running_jobs_count and initial_running_jobs.
+    """
+    global running_jobs_count, initial_running_jobs
+    with open(submissions_file, "r") as f:
+        data = yaml_load(f)
+    monitor_jobs_tracked: dict[str, tuple[str, str]] = {}
+    for group_name, group_data in data.items():
+        if not isinstance(group_data, dict) or "run_ids" not in group_data:
+            continue
+        run_ids_data = group_data.get("run_ids", {})
+        for run_key, runs in run_ids_data.items():
+            for run_info in runs.values():
+                if isinstance(run_info, dict) and run_info.get("status") == "RUNNING":
+                    submission_id = run_info.get("submission_id")
+                    if not submission_id:
+                        continue
+                    replacement_parts = [p.strip() for p in run_key.strip("()").split(",") if p.strip()]
+                    original_job_id = "_".join(replacement_parts)
+                    monitor_jobs_tracked[submission_id] = (group_name, original_job_id)
+    running_jobs_count = len(monitor_jobs_tracked)
+    initial_running_jobs = running_jobs_count
+    return monitor_jobs_tracked
+
+
 async def monitor_job_statuses(
     jobs_tracked: dict[str, tuple[str, str]],
     task_run_ids: dict[str, str],
     args: argparse.Namespace,
     pending_submissions: list[tuple[str, dict]] | None = None,
 ):
-    """Monitors the statuses of jobs and writes back the final status.
+    """
+    Monitors the statuses of jobs and writes back the final status.
     Prints a summary of (N running, N failed, N other). Failed jobs remain in the list but are not queried anymore.
+    Uses the global running_jobs_count for all running job tracking.
+    Accounts for jobs running before submission + jobs submitted by this script.
     """
     assert CLIENT
     print("Performing only monitoring of job statuses...")
@@ -619,10 +656,13 @@ async def monitor_job_statuses(
         jobs_tracked_left = jobs_tracked.copy()
         final_states: dict[str, JobStatus] = {}
         failed_jobs: dict[str, tuple[str, str]] = {}
+        global running_jobs_count  # , initial_running_jobs
+
+        # running_jobs_count always includes initial_running_jobs + jobs submitted by this script and still running
+        submitted_running_jobs = 0
         while jobs_tracked_left or (pending_submissions and len(pending_submissions) > 0):
             print("-" * 80)
             jobs_to_delete = []
-            running_count = 0
             failed_count = 0
             other_count = 0
             for job_id, group_and_job_id in jobs_tracked_left.items():
@@ -640,7 +680,7 @@ async def monitor_job_statuses(
                 current_time = time.strftime("%Y-%m-%d %H:%M:%S")
                 print(f"[{current_time}] Job {job_id} status: {job_status}.")
                 if job_status == JobStatus.RUNNING:
-                    running_count += 1
+                    submitted_running_jobs += 1
                 elif job_status == JobStatus.FAILED:
                     failed_count += 1
                     failed_jobs[job_id] = group_and_job_id
@@ -661,16 +701,17 @@ async def monitor_job_statuses(
             for job_id in jobs_to_delete:
                 jobs_tracked_left.pop(job_id, None)
 
-            # Print summary
-            print(f"Summary: {running_count} running, {failed_count} failed, {other_count} other.")
+            running_jobs_count = initial_running_jobs + submitted_running_jobs
 
-            # Print failed jobs (do not query them anymore)
+            print(f"Summary: {running_jobs_count} running, {failed_count} failed, {other_count} other.")
+
             if failed_jobs:
                 print("Failed jobs:")
                 for job_id, group_and_job_id in failed_jobs.items():
                     print(f"  {job_id} (group={group_and_job_id[0]}, job={group_and_job_id[1]})")
 
-            if len(jobs_tracked_left) < args.max_jobs and pending_submissions:
+            # Use global running_jobs_count for submission logic
+            if running_jobs_count < args.max_jobs and pending_submissions:
                 submission_id_out = None
                 while pending_submissions and submission_id_out is None:
                     next_job_id, next_settings = pending_submissions.pop(0)
@@ -680,6 +721,8 @@ async def monitor_job_statuses(
                         # Extract group from settings
                         group = next_settings.get("group", args.group)
                         jobs_tracked_left[submission_id_out] = (group, next_job_id)
+                        submitted_running_jobs += 1
+                        running_jobs_count = initial_running_jobs + submitted_running_jobs
 
             if not jobs_tracked_left and not pending_submissions:
                 break
@@ -687,7 +730,7 @@ async def monitor_job_statuses(
             interval = 180
             if pending_submissions:
                 print(
-                    f"Pending submissions: {len(pending_submissions)} / Running {len(jobs_tracked_left)}. "
+                    f"Pending submissions: {len(pending_submissions)} / Running {running_jobs_count}. "
                     "Submit next job? (y) "
                     "| in/decrease max-jobs (+/-) "
                     "| clear pending (clear) "
@@ -707,9 +750,10 @@ async def monitor_job_statuses(
                                 next_job_id, next_settings = pending_submissions.pop(0)
                                 submission_id_out = submit_single_job(next_job_id, next_settings, args)
                                 if submission_id_out:
-                                    # Extract group from settings
                                     group = next_settings.get("group", args.group)
                                     jobs_tracked_left[submission_id_out] = (group, next_job_id)
+                                    submitted_running_jobs += 1
+                                    running_jobs_count = initial_running_jobs + submitted_running_jobs
                             elif choice == "end":
                                 print("Sending Stop to all running processes")
                                 for job_id in jobs_tracked_left:
@@ -824,6 +868,12 @@ if __name__ == "__main__":
         action="store_true",
         help="If set, include jobs with status RUNNING when gathering submissions.",
     )
+    parser.add_argument(
+        "--no-monitor-running",
+        dest="monitor_running",
+        action="store_false",
+        help="Scan for all jobs that are currently RUNNING before submitting new jobs.",
+    )
 
     args = parser.parse_args()
     assert args.address, (
@@ -876,6 +926,34 @@ if __name__ == "__main__":
             sys.exit(0)
 
     else:
+        # Always scan for running jobs if --monitor-running is set and we are submitting jobs
+        assert CLIENT
+        if args.monitor_running:
+            assert args.group != "monitor", "--monitor-running cannot be used in monitor mode."
+            print("Scanning for all currently RUNNING jobs before submitting new jobs...")
+            monitor_jobs_tracked = scan_monitor_running_jobs(args.submissions_file)
+            print(f"Found {running_jobs_count} jobs currently RUNNING.")
+            for submission_id, (group_name, original_job_id) in monitor_jobs_tracked.items():
+                try:
+                    job_status = CLIENT.get_job_status(submission_id)
+                except Exception as e:  # noqa: BLE001
+                    print(f"Failed to get status for job {submission_id}: {e!r}")
+                    continue
+                print(f"Job {submission_id} (group={group_name}, job={original_job_id}) status: {job_status}")
+                if job_status != JobStatus.RUNNING:
+                    write_back(
+                        group_name,
+                        original_job_id,
+                        {
+                            original_job_id: {
+                                "status": job_status.name if hasattr(job_status, "name") else job_status,
+                                "submission_id": submission_id,
+                            }
+                        },
+                        file=args.submissions_file,
+                    )
+            print(f"After scan, {running_jobs_count} jobs are still RUNNING.")
+
         assert args.group, "A group must be specified if not in monitor mode."
 
         if args.group == "all":
@@ -900,8 +978,12 @@ if __name__ == "__main__":
         submissions = list(submissions_dict.items())
 
         if not args.test and args.max_jobs is not None and args.max_jobs > 0:
-            pending_submissions = submissions[args.max_jobs :]
-            submissions = submissions[: args.max_jobs]
+            if running_jobs_count >= args.max_jobs:
+                pending_submissions = submissions
+                submissions = []
+            else:
+                pending_submissions = submissions[max(0, args.max_jobs - running_jobs_count) :]
+                submissions = submissions[: max(0, args.max_jobs - running_jobs_count)]
 
         for job_id, settings in submissions:
             submission_id_out = submit_single_job(job_id, settings, args)
@@ -919,7 +1001,7 @@ if __name__ == "__main__":
         sys.exit(0)
     assert CLIENT
 
-    if not jobs_tracked and not monitor_jobs_tracked:
+    if not jobs_tracked and not monitor_jobs_tracked and not pending_submissions:
         print("No jobs to track or monitor.")
         sys.exit(0)
 
@@ -961,14 +1043,36 @@ if __name__ == "__main__":
         user_input = AsyncInput(loop)
 
         last_tmux_print = time.time()
+
+        # Track initial jobs if monitor_running is enabled
+        initial_job_status: dict[str, str] = {}
+        initial_job_ids = set()
+        if args.monitor_running and monitor_jobs_tracked:
+            initial_job_ids = set(monitor_jobs_tracked.keys())
+
         while async_read_tasks:
             start = time.time()
             collected: dict[str, list[str]] = {job_id: [] for job_id in async_read_tasks}
 
-            # Start input wait
+            # Update initial_running_jobs by checking the status of initial jobs
+            if args.monitor_running and initial_job_ids:
+                still_running = 0
+                for job_id in initial_job_ids:
+                    try:
+                        job_status = CLIENT.get_job_status(job_id)
+                    except Exception:
+                        job_status = "UNKNOWN"
+                    initial_job_status[job_id] = job_status
+                    if job_status == JobStatus.RUNNING:
+                        still_running += 1
+                global initial_running_jobs
+                initial_running_jobs = still_running
+                global running_jobs_count
+                running_jobs_count = initial_running_jobs + len(async_read_tasks)
+
             if pending_submissions:
                 print(
-                    f"Pending submissions: {len(pending_submissions)} / Running {len(async_read_tasks)}. "
+                    f"Pending submissions: {len(pending_submissions)} / Running {running_jobs_count}. "
                     "Submit next job? (y) "
                     "| in/decrease max-jobs (+/-) "
                     "| clear pending (clear) "
@@ -1028,7 +1132,7 @@ if __name__ == "__main__":
 
                         # Restart input wait
                         print(
-                            f"Pending submissions: {len(pending_submissions or [])} / Running {len(async_read_tasks)}. "
+                            f"Pending submissions: {len(pending_submissions or [])} / Running {running_jobs_count}. "
                             "Submit next job? (y) "
                             "| in/decrease max-jobs (+/-) "
                             "| clear pending (clear) "

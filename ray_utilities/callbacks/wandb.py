@@ -44,6 +44,7 @@ try:
     from wandb import Api
 except ImportError:
     pass
+
 from pyarrow.fs import LocalFileSystem
 from tqdm import tqdm
 
@@ -1736,8 +1737,34 @@ def verify_wandb_run_history(
         raise FileNotFoundError(str(experiment_path))
     # TODO: If the run_id a fork is created "from_checkpoint" this does fail
     if ExperimentKey.FORK_SEPARATOR in run_id or (run and FORK_FROM in run.config):
-        # TODO: Slow pattern!
-        progress_files = list(experiment_path.glob(f"**/result*{run_id}.json"))
+        # Limit glob operation to 60 seconds using a thread
+        # Update progress_files iteratively as files are found
+
+        progress_files = []
+        stop_event = threading.Event()
+
+        def glob_files():
+            nonlocal progress_files
+            # Use generator to update progress_files as files are found
+            for f in experiment_path.glob(f"*/result*{run_id}.json"):
+                if stop_event.is_set():
+                    break
+                progress_files.append(f)
+
+        glob_thread = threading.Thread(target=glob_files)
+        glob_thread.start()
+        glob_thread.join(timeout=60)
+        if glob_thread.is_alive():
+            stop_event.set()
+            logger.error(
+                "Timeout: globbing for progress files exceeded 60 seconds for run ID %s in %s "
+                "pattern */result*{%s}.json",
+                run_id,
+                experiment_path,
+                run_id,
+            )
+            # In Python, threads cannot be forcibly killed, so we just log and proceed.
+            # Return whatever files have been found so far.
         if len(progress_files) == 0 and "artifacts" in experiment_path.parts:
             progress_files = list((experiment_path).glob(f"driver_artifacts/**/result*{run_id}.json"))
     else:

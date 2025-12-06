@@ -79,7 +79,27 @@ pbt_batch_size:
       tws47f2511300105b71f4:
         status: SUCCEEDED
         submission_id: pbt_batch_size_Walker2d-v5_2025-11-30_01:03:59
-# Add base, large, and base_large variants for batch_size
+    (InvertedDoublePendulum-v5):
+      tws47f251205034294d94:
+        status: SUCCEEDED
+        submission_id:
+          pbt_batch_size__InvertedDoublePendulum-v5_2025-12-05_03:41:32
+    (Swimmer-v5):
+      tws47f2512050342d3484:
+        status: SUCCEEDED
+        submission_id: pbt_batch_size__Swimmer-v5_2025-12-05_03:41:32
+    (Reacher-v5):
+      tws47f25120503420fe74:
+        status: SUCCEEDED
+        submission_id: pbt_batch_size__Reacher-v5_2025-12-05_03:41:32
+    (HalfCheetah-v5):
+      tws47f25120503427ef14:
+        status: SUCCEEDED
+        submission_id: pbt_batch_size__HalfCheetah-v5_2025-12-05_03:41:32
+    (InvertedPendulum-v5):
+      tws47f2512061613810b4:
+        status: RUNNING
+        submission_id: pbt_batch_size_InvertedPendulum-v5_2025-12-06_16:12:58
 pbt_batch_size_base:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -89,6 +109,21 @@ pbt_batch_size_base:
   entrypoint_resources:
     persistent_node: 1
 
+  run_ids:
+    (LunarLander-v3):
+      tws47f251205065722324:
+        status: STOPPED
+        submission_id: pbt_batch_size_base_LunarLander-v3_2025-12-05_06:57:32
+      tws47f2512050715a7b84:
+        status: SUCCEEDED
+        submission_id: pbt_batch_size_base_LunarLander-v3_2025-12-05_07:15:18
+    (Acrobot-v1):
+      tws47f2512050658a6544:
+        status: STOPPED
+        submission_id: pbt_batch_size_base_Acrobot-v1_2025-12-05_06:57:32
+      tws47f25120507157e0c4:
+        status: SUCCEEDED
+        submission_id: pbt_batch_size_base_Acrobot-v1_2025-12-05_07:15:18
 pbt_batch_size_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -178,6 +213,36 @@ pbt_minibatch_size_8192:
         status: SUCCEEDED
         submission_id: pbt_minibatch_size_8192_Walker2d-v5_2025-11-30_01:52:07
 
+    (HalfCheetah-v5):
+      tws47f25120506589e6c4:
+        status: STOPPED
+        submission_id:
+          pbt_minibatch_size_8192_HalfCheetah-v5_2025-12-05_06:57:32
+      tws47f2512050715fd594:
+        status: FAILED
+        submission_id:
+          pbt_minibatch_size_8192_HalfCheetah-v5_2025-12-05_07:15:18
+    (Reacher-v5):
+      tws47f251205065876454:
+        status: STOPPED
+        submission_id: pbt_minibatch_size_8192_Reacher-v5_2025-12-05_06:57:32
+      tws47f2512050717647b4:
+        status: RUNNING
+        submission_id: pbt_minibatch_size_8192_Reacher-v5_2025-12-05_07:15:18
+    (Swimmer-v5):
+      tws47f2512051147b93d4:
+        status: SUCCEEDED
+        submission_id: pbt_minibatch_size_8192_Swimmer-v5_2025-12-05_07:15:18
+    (InvertedDoublePendulum-v5):
+      tws47f2512051506fcc74:
+        status: SUCCEEDED
+        submission_id:
+          pbt_minibatch_size_8192_InvertedDoublePendulum-v5_2025-12-05_07:15:18
+    (InvertedPendulum-v5):
+      tws47f2512051555750d4:
+        status: SUCCEEDED
+        submission_id:
+          pbt_minibatch_size_8192_InvertedPendulum-v5_2025-12-05_07:15:18
 pbt_minibatch_size_base:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -187,6 +252,16 @@ pbt_minibatch_size_base:
   entrypoint_resources:
     persistent_node: 1
 
+  run_ids:
+    (Acrobot-v1):
+      tws47f251205164631c94:
+        status: SUCCEEDED
+        submission_id: pbt_minibatch_size_base_Acrobot-v1_2025-12-05_07:15:18
+    (LunarLander-v3):
+      tws47f251205165399f14:
+        status: SUCCEEDED
+        submission_id:
+          pbt_minibatch_size_base_LunarLander-v3_2025-12-05_07:15:18
 pbt_minibatch_size_base_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -210,6 +285,44 @@ pbt_num_envs:
   entrypoint_resources:
     persistent_node: 1
 # Add base and base_large variants for num_envs_per_env_runner
+  run_ids:
+    (Humanoid-v5):
+      tws47f2512051707de674:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_Humanoid-v5_2025-12-05_07:15:18
+    (Ant-v5):
+      tws47f25120517088d664:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_Ant-v5_2025-12-05_07:15:18
+    (Hopper-v5):
+      tws47f2512051712ddb04:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_Hopper-v5_2025-12-05_07:15:18
+    (Walker2d-v5):
+      tws47f251205172413184:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_Walker2d-v5_2025-12-05_07:15:18
+    (HalfCheetah-v5):
+      tws47f251205182720294:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_HalfCheetah-v5_2025-12-05_07:15:18
+    (Reacher-v5):
+      tws47f251205195157c24:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_Reacher-v5_2025-12-05_07:15:18
+    (Swimmer-v5):
+      tws47f251205195638b74:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_Swimmer-v5_2025-12-05_07:15:18
+    (InvertedDoublePendulum-v5):
+      tws47f2512052015e4364:
+        status: SUCCEEDED
+        submission_id:
+          pbt_num_envs_InvertedDoublePendulum-v5_2025-12-05_07:15:18
+    (InvertedPendulum-v5):
+      tws47f251205203460484:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_InvertedPendulum-v5_2025-12-05_07:15:18
 pbt_num_envs_base:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -219,6 +332,11 @@ pbt_num_envs_base:
   entrypoint_resources:
     persistent_node: 1
 
+  run_ids:
+    (Acrobot-v1):
+      tws47f2512052137109c4:
+        status: SUCCEEDED
+        submission_id: pbt_num_envs_base_Acrobot-v1_2025-12-05_21:36:54
 pbt_num_envs_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale
@@ -316,6 +434,12 @@ pbt_lr:
     substitutions:
       <TUNE_PARAM>: lr
       <ENV_TYPE>: <mujoco_envs>
+  run_ids:
+    (Reacher-v5):
+      tws47f25120608322b3b4:
+        status: FAILED - partial success but not all uploaded complete
+        note: reported as failed; maybe not all trials until the end
+        submission_id: pbt_lr_Reacher-v5_2025-11-30_01:20:48
 pbt_lr_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale  - need to repeat because of 2 top groups
