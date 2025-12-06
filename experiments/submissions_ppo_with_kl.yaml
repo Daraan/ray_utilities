@@ -124,6 +124,10 @@ pbt_batch_size_base:
       tws47f25120507157e0c4:
         status: SUCCEEDED
         submission_id: pbt_batch_size_base_Acrobot-v1_2025-12-05_07:15:18
+    (CartPole-v1):
+      tws47f2512061641c4e34:
+        status: SUCCEEDED
+        submission_id: pbt_batch_size_base_CartPole-v1_2025-12-06_16:40:33
 pbt_batch_size_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -179,6 +183,36 @@ pbt_minibatch_size_2048:
       tws47f25113001075aec4:
         status: SUCCEEDED
         submission_id: pbt_minibatch_size_2048_Walker2d-v5_2025-11-30_01:05:03
+    (HalfCheetah-v5):
+      tws47f2512061642c41e4:
+        status: SUCCEEDED
+        submission_id:
+          pbt_minibatch_size_2048_HalfCheetah-v5_2025-12-06_16:40:33
+    (Reacher-v5):
+      tws47f2512061858f9ea4:
+        status: SUCCEEDED
+        submission_id: pbt_minibatch_size_2048_Reacher-v5_2025-12-06_16:40:33
+    (Swimmer-v5):
+      tws47f251206195907804:
+        status: RUNNING
+        submission_id: pbt_minibatch_size_2048_Swimmer-v5_2025-12-06_16:40:33
+      Swimmer-v5:
+        status: SUCCEEDED
+        submission_id: pbt_minibatch_size_2048_Swimmer-v5_2025-12-06_16:40:33
+    (InvertedDoublePendulum-v5):
+      tws47f251206200449644:
+        status: RUNNING
+        submission_id:
+          pbt_minibatch_size_2048_InvertedDoublePendulum-v5_2025-12-06_16:40:33
+      InvertedDoublePendulum-v5:
+        status: SUCCEEDED
+        submission_id:
+          pbt_minibatch_size_2048_InvertedDoublePendulum-v5_2025-12-06_16:40:33
+    (InvertedPendulum-v5):
+      tws47f2512062006c3aa4:
+        status: SUCCEEDED
+        submission_id:
+          pbt_minibatch_size_2048_InvertedPendulum-v5_2025-12-06_16:40:33
 pbt_minibatch_size_8192:
   comment: tune minibatch_size with fixed train_batch_size_per_learner=8192
   entrypoint_resources:
@@ -222,12 +256,19 @@ pbt_minibatch_size_8192:
         status: FAILED
         submission_id:
           pbt_minibatch_size_8192_HalfCheetah-v5_2025-12-05_07:15:18
+      tws47f251206233396404:
+        status: RUNNING
+        submission_id:
+          pbt_minibatch_size_8192_HalfCheetah-v5_2025-12-06_23:33:15
     (Reacher-v5):
       tws47f251205065876454:
         status: STOPPED
         submission_id: pbt_minibatch_size_8192_Reacher-v5_2025-12-05_06:57:32
       tws47f2512050717647b4:
         status: RUNNING
+        submission_id: pbt_minibatch_size_8192_Reacher-v5_2025-12-05_07:15:18
+      Reacher-v5:
+        status: FAILED
         submission_id: pbt_minibatch_size_8192_Reacher-v5_2025-12-05_07:15:18
     (Swimmer-v5):
       tws47f2512051147b93d4:
@@ -262,6 +303,10 @@ pbt_minibatch_size_base:
         status: SUCCEEDED
         submission_id:
           pbt_minibatch_size_base_LunarLander-v3_2025-12-05_07:15:18
+    (CartPole-v1):
+      tws47f251206233358dc4:
+        status: RUNNING
+        submission_id: pbt_minibatch_size_base_CartPole-v1_2025-12-06_23:33:15
 pbt_minibatch_size_base_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -425,6 +470,11 @@ pbt_lr_base:
     substitutions:
       <TUNE_PARAM>: lr
       <ENV_TYPE>: <basic_envs>
+  run_ids:
+    (CartPole-v1):
+      tws47f25120622493ac14:
+        status: RUNNING
+        submission_id: pbt_lr_base_CartPole-v1_2025-12-06_22:48:06
 pbt_lr:
   comment: spread lr - need to repeat because of 2 top groups
   entrypoint_resources:
