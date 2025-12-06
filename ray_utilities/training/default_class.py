@@ -805,6 +805,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             )
             return super().train()
         max_iterations = min(
+            64,
             budget["iterations_per_step_size"][step_idx],
             (
                 iterations

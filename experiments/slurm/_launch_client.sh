@@ -413,6 +413,7 @@ export RAY_memory_usage_threshold
 
 # Connect this node to the Ray cluster as a worker
 echo "Connecting as Ray worker..."
+ulimit -n 100000
 if [ "${RUN_PYTHON_SCRIPT}" = "false" ]; then
     # Worker-only mode: use --block to keep ray start running
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 from dataclasses import is_dataclass
 from typing import TYPE_CHECKING, Any, Mapping, Optional
 
@@ -167,7 +168,10 @@ class JaxPPOModule(DefaultPPORLModule, JaxModule):
         #    batch[Columns.VF_PREDS] = np.asarray(vf_out)
         return vf_out
 
+    # def update_jax_state(self, **kwargs) -> None:
+    #     # missing ABC
+
 
 # Check ABC
 if TYPE_CHECKING:
-    JaxPPOModule()
+    JaxPPOModule()  # pyright: ignore[reportAbstractUsage]

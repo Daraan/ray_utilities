@@ -1747,9 +1747,10 @@ def verify_wandb_run_history(
             progress_files = list((experiment_path).glob(f"driver_artifacts/*id={run_id}*/result.json"))
     if len(progress_files) != 1:
         logger.error(
-            "Expected exactly one progress file for run ID %s in experiment path %s, found %d: %s"
+            "Expected exactly one progress file for run ID %s neither in output dir %s nor (potential) backup: %s, found %d: %s"
             "\n- Was it moved to backup and restored from there?",
             run_id,
+            output_dir,
             experiment_path,
             len(progress_files),
             progress_files,

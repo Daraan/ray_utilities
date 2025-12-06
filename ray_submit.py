@@ -91,6 +91,7 @@ def get_submissions(
     ignore_node_ids: Collection[str] = (),
     ignore_hostnames: Collection[str] = (),
     excludes: list[str] | None = None,
+    include_running: bool = False,
 ) -> dict[str, dict]:
     """
     Get job submissions for a group.
@@ -274,13 +275,17 @@ def get_submissions(
         # Check run_ids for this combination: skip if any SUCCEEDED
         run_key = "(" + ", ".join(values).rstrip(", ") + ")"
         already_succeeded = False
+        already_running = False
         if run_key in run_ids_data:
             for run_info in run_ids_data[run_key].values():
-                if isinstance(run_info, dict) and run_info.get("status") == JobStatus.SUCCEEDED.value:
-                    already_succeeded = True
-                    break
-        if already_succeeded:
-            continue
+                if isinstance(run_info, dict):
+                    if run_info.get("status") == JobStatus.SUCCEEDED.value:
+                        already_succeeded = True
+                        break
+                    if not include_running and run_info.get("status") == JobStatus.RUNNING.value:
+                        already_running = True
+            if already_succeeded or already_running:
+                continue
 
         remaining_placeholders = re.findall(r"<[^>]+>", entrypoint)
         if remaining_placeholders:
@@ -397,6 +402,7 @@ def get_all_submissions(
     ignore_node_ids: Collection[str] = (),
     ignore_hostnames: Collection[str] = (),
     excludes: list[str] | None = None,
+    include_running: bool = False,
 ) -> dict[str, dict]:
     """
     Get submissions from all valid groups in the YAML file.
@@ -427,6 +433,7 @@ def get_all_submissions(
                 ignore_node_ids=ignore_node_ids,
                 ignore_hostnames=ignore_hostnames,
                 excludes=excludes,
+                include_running=include_running,
             )
 
             # Prefix job_id with group name to avoid collisions
@@ -601,7 +608,9 @@ async def monitor_job_statuses(
     args: argparse.Namespace,
     pending_submissions: list[tuple[str, dict]] | None = None,
 ):
-    """Monitors the statuses of jobs and writes back the final status."""
+    """Monitors the statuses of jobs and writes back the final status.
+    Prints a summary of (N running, N failed, N other). Failed jobs remain in the list but are not queried anymore.
+    """
     assert CLIENT
     print("Performing only monitoring of job statuses...")
     loop = asyncio.get_running_loop()
@@ -609,10 +618,18 @@ async def monitor_job_statuses(
     try:
         jobs_tracked_left = jobs_tracked.copy()
         final_states: dict[str, JobStatus] = {}
+        failed_jobs: dict[str, tuple[str, str]] = {}
         while jobs_tracked_left or (pending_submissions and len(pending_submissions) > 0):
             print("-" * 80)
             jobs_to_delete = []
+            running_count = 0
+            failed_count = 0
+            other_count = 0
             for job_id, group_and_job_id in jobs_tracked_left.items():
+                # If job previously failed, skip querying but keep in list
+                if job_id in failed_jobs:
+                    failed_count += 1
+                    continue
                 try:
                     job_status = CLIENT.get_job_status(job_id)
                 except RuntimeError as e:
@@ -622,6 +639,13 @@ async def monitor_job_statuses(
                     job_status = final_states.get(job_id, "UNKNOWN (Deleted)")
                 current_time = time.strftime("%Y-%m-%d %H:%M:%S")
                 print(f"[{current_time}] Job {job_id} status: {job_status}.")
+                if job_status == JobStatus.RUNNING:
+                    running_count += 1
+                elif job_status == JobStatus.FAILED:
+                    failed_count += 1
+                    failed_jobs[job_id] = group_and_job_id
+                else:
+                    other_count += 1
                 if job_status in JOB_END_STATES:
                     job_status = cast("JobStatus", job_status)
                     final_states[job_id] = job_status
@@ -636,6 +660,15 @@ async def monitor_job_statuses(
                     jobs_to_delete.append(job_id)
             for job_id in jobs_to_delete:
                 jobs_tracked_left.pop(job_id, None)
+
+            # Print summary
+            print(f"Summary: {running_count} running, {failed_count} failed, {other_count} other.")
+
+            # Print failed jobs (do not query them anymore)
+            if failed_jobs:
+                print("Failed jobs:")
+                for job_id, group_and_job_id in failed_jobs.items():
+                    print(f"  {job_id} (group={group_and_job_id[0]}, job={group_and_job_id[1]})")
 
             if len(jobs_tracked_left) < args.max_jobs and pending_submissions:
                 submission_id_out = None
@@ -655,7 +688,10 @@ async def monitor_job_statuses(
             if pending_submissions:
                 print(
                     f"Pending submissions: {len(pending_submissions)} / Running {len(jobs_tracked_left)}. "
-                    "Submit next job? (y/n): ",
+                    "Submit next job? (y) "
+                    "| in/decrease max-jobs (+/-) "
+                    "| clear pending (clear) "
+                    "| stop jobs (end) or (x2): ",
                     end="",
                     flush=True,
                 )
@@ -664,14 +700,38 @@ async def monitor_job_statuses(
                     done, _ = await asyncio.wait([input_future], timeout=interval, return_when=asyncio.FIRST_COMPLETED)
                     if input_future in done:
                         result = input_future.result()
-                        if result and result.strip().lower() == "y":
-                            print("Submitting next job manually...")
-                            next_job_id, next_settings = pending_submissions.pop(0)
-                            submission_id_out = submit_single_job(next_job_id, next_settings, args)
-                            if submission_id_out:
-                                # Extract group from settings
-                                group = next_settings.get("group", args.group)
-                                jobs_tracked_left[submission_id_out] = (group, next_job_id)
+                        if result:
+                            choice = result.strip().lower()
+                            if choice == "y":
+                                print("Submitting next job manually...")
+                                next_job_id, next_settings = pending_submissions.pop(0)
+                                submission_id_out = submit_single_job(next_job_id, next_settings, args)
+                                if submission_id_out:
+                                    # Extract group from settings
+                                    group = next_settings.get("group", args.group)
+                                    jobs_tracked_left[submission_id_out] = (group, next_job_id)
+                            elif choice == "end":
+                                print("Sending Stop to all running processes")
+                                for job_id in jobs_tracked_left:
+                                    CLIENT.stop_job(job_id)
+                                jobs_tracked_left = {}
+                            elif choice == "x2":
+                                print("Sending Stop x2 to all running processes and exiting monitoring.")
+                                for job_id in jobs_tracked_left:
+                                    CLIENT.stop_job(job_id)
+                                time.sleep(2)
+                                for job_id in jobs_tracked_left:
+                                    CLIENT.stop_job(job_id)
+                            elif choice == "clear":
+                                print("Not submitting further jobs and clearing pending submissions.")
+                                pending_submissions.clear()
+                            elif choice == "-":
+                                print("Reducing number of concurrent jobs by 1.")
+                                args.max_jobs = max(1, args.max_jobs - 1)
+                            elif choice == "+":
+                                print("Increasing number of concurrent jobs by 1.")
+                                args.max_jobs += 1
+
                         print("\r\033[K", end="", flush=True)
                     else:
                         input_future.cancel()
@@ -759,6 +819,11 @@ if __name__ == "__main__":
         default=[],
         help="Exclude submissions whose entrypoint contains any of these patterns.",
     )
+    parser.add_argument(
+        "--include-running",
+        action="store_true",
+        help="If set, include jobs with status RUNNING when gathering submissions.",
+    )
 
     args = parser.parse_args()
     assert args.address, (
@@ -820,6 +885,7 @@ if __name__ == "__main__":
                 ignore_node_ids=args.ignore_nodes,
                 ignore_hostnames=args.ignore_hostnames,
                 excludes=args.excludes,
+                include_running=args.include_running,
             )
         else:
             submissions_dict = get_submissions(
@@ -829,6 +895,7 @@ if __name__ == "__main__":
                 ignore_node_ids=args.ignore_nodes,
                 ignore_hostnames=args.ignore_hostnames,
                 excludes=args.excludes,
+                include_running=args.include_running,
             )
         submissions = list(submissions_dict.items())
 
@@ -902,7 +969,10 @@ if __name__ == "__main__":
             if pending_submissions:
                 print(
                     f"Pending submissions: {len(pending_submissions)} / Running {len(async_read_tasks)}. "
-                    "Submit next job? (y/n): ",
+                    "Submit next job? (y) "
+                    "| in/decrease max-jobs (+/-) "
+                    "| clear pending (clear) "
+                    "| stop jobs (end) or (x2): ",
                     end="",
                     flush=True,
                 )
@@ -922,14 +992,47 @@ if __name__ == "__main__":
                 if input_future in done:
                     try:
                         result = input_future.result()
-                        if result and result.strip().lower() == "y":
-                            print("Submitting next job manually...")
-                            if not submit_next():
-                                print("No more pending jobs.")
+                        if result:
+                            choice = result.strip().lower()
+                            if choice == "y":
+                                print("Submitting next job manually...")
+                                if not submit_next():
+                                    print("No more pending jobs.")
+                            elif choice == "end":
+                                print("Sending Stop to all running processes")
+                                for job_id in async_read_tasks.keys():
+                                    CLIENT.stop_job(job_id)
+                                async_read_tasks = {}
+                                if pending_submissions:
+                                    pending_submissions.clear()
+                            elif choice == "x2":
+                                print("Sending Stop x2 to all running processes and exiting monitoring.")
+                                for job_id in async_read_tasks.keys():
+                                    CLIENT.stop_job(job_id)
+                                time.sleep(2)
+                                for job_id in async_read_tasks.keys():
+                                    CLIENT.stop_job(job_id)
+                                async_read_tasks = {}
+                                if pending_submissions:
+                                    pending_submissions.clear()
+                            elif choice == "clear":
+                                print("Not submitting further jobs and clearing pending submissions.")
+                                if pending_submissions:
+                                    pending_submissions.clear()
+                            elif choice == "-":
+                                print("Reducing number of concurrent jobs by 1.")
+                                args.max_jobs = max(1, args.max_jobs - 1)
+                            elif choice == "+":
+                                print("Increasing number of concurrent jobs by 1.")
+                                args.max_jobs += 1
+
                         # Restart input wait
                         print(
                             f"Pending submissions: {len(pending_submissions or [])} / Running {len(async_read_tasks)}. "
-                            "Submit next job? (y/n): ",
+                            "Submit next job? (y) "
+                            "| in/decrease max-jobs (+/-) "
+                            "| clear pending (clear) "
+                            "| stop jobs (end) or (x2): ",
                             end="",
                             flush=True,
                         )
