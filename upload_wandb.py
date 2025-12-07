@@ -513,6 +513,7 @@ if __name__ == "__main__":
         fork_file_present = bool(list(first_arg_path.glob("pbt_fork_data*")))
         if fork_file_present:
             args.no_monitor = True
+        # New directory format that differs from wanb project names
     elif first_arg_path.suffix == ".yaml":
         assert first_arg_path.exists(), f"YAML file {first_arg_path} does not exist."
     assert args.run_id is not None or (args.command == "verify" and first_arg_path.suffix == ".yaml"), (

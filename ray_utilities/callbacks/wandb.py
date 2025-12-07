@@ -38,13 +38,6 @@ import pandas as pd
 import ray
 import ray.exceptions
 import tree
-
-try:
-    import wandb.errors
-    from wandb import Api
-except ImportError:
-    pass
-
 from pyarrow.fs import LocalFileSystem
 from tqdm import tqdm
 
@@ -58,6 +51,12 @@ from ray_utilities.misc import (
     get_trials_from_tuner,
 )
 from ray_utilities.nice_logger import ImportantLogger
+
+try:
+    import wandb.errors
+    from wandb import Api
+except ImportError:
+    pass
 
 if TYPE_CHECKING:
     import wandb  # noqa: TC004
@@ -88,6 +87,9 @@ def get_wandb_failed_upload_file() -> str:
 
 
 _wandb_api = None
+
+MIN_TOTAL_STEPS = int(os.environ.get("MIN_TOTAL_STEPS", "1_100_000"))
+"Vor experiment verification"
 
 
 def wandb_api() -> Api:
@@ -1348,20 +1350,49 @@ class RunNotFound(RunWithVerificationFailures):
         super().__init__(run_id, project=project, group=group, name=name or "RunNotFound")
 
 
-def default_experiment_validator(experiment_data: dict[str, Any]) -> None | _FailureTuple:
-    if any(exp["current_step"] > 1_000_000 for exp in experiment_data.values()):
-        return None
+def default_experiment_validator(
+    experiment_data: dict[str, Any], online_history_data: dict[str, Any], trial_dir_max_step: dict[str, Any]
+) -> tuple[_FailureTuple, ...] | None:
+    if len(experiment_data) != len(online_history_data):
+        fail1 = _FailureTuple(
+            metric="Number of runs does not match",
+            offline_value=len(experiment_data),
+            online_value=len(online_history_data),
+            type=VerificationFailure.ONLINE_HISTORY_INCOMPLETE,
+        )
+    else:
+        fail1 = None
+
+    trial_failures = []
+    for tdir, max_step in trial_dir_max_step.items():
+        if max_step is None:
+            continue
+        if max_step < MIN_TOTAL_STEPS:
+            trial_failures.append(
+                _FailureTuple(
+                    metric=f"Trial dir {tdir} has less than 1M steps",
+                    offline_value=max_step,
+                    online_value="N/A",
+                    type=VerificationFailure.OFFLINE_HISTORY_BROKEN,
+                )
+            )
+            break
+    trial_step_failures: tuple[_FailureTuple, ...] = tuple(trial_failures)
+
+    if any(exp["current_step"] > MIN_TOTAL_STEPS for exp in experiment_data.values()):
+        return (fail1, *trial_step_failures) if fail1 else (trial_step_failures or None)
     try:
         max_off_value = max(exp["current_step"] for exp in experiment_data.values())
     except ValueError:
         # empty sequence
         max_off_value = "empty sequence - no data"
-    return _FailureTuple(
+    fail2 = _FailureTuple(
         metric="No experiment with > 1M steps",
         offline_value=max_off_value,
         online_value="max(offline, online) checked",
         type=VerificationFailure.EXPERIMENT_INCOMPLETE,
     )
+    return (fail2, fail1, *trial_step_failures) if fail1 else (fail2, *trial_step_failures)
 
 
 def verify_wandb_runs(
@@ -1375,7 +1406,9 @@ def verify_wandb_runs(
     run_per_page: int = 32,
     group_glob: str = "*",
     experiment_results: Optional[dict[str, dict[str, Any]]] = None,
-    experiment_validator: Optional[Callable[[dict[str, Any]], None | _FailureTuple]] = default_experiment_validator,
+    experiment_validator: Optional[
+        Callable[[dict[str, Any], dict[str, Any], dict[str, Any]], None | tuple[_FailureTuple, ...]]
+    ] = default_experiment_validator,
     use_tqdm: bool | None = None,
 ) -> FailureDictType:
     if output_dir is None:
@@ -1387,7 +1420,10 @@ def verify_wandb_runs(
     runs: Runs | Sequence[Run]
     if single_experiment:
         try:
-            run = api.run(f"{entity}/{project}/{single_experiment}")
+            try:
+                run = api.run(f"{entity}/{project}/{single_experiment}")
+            except ValueError:
+                run = api.run(f"{entity}/{project.removesuffix('-PPO').removesuffix('-DQN')}/{single_experiment}")
         except wandb.errors.CommError as e:
             if "Could not find run" in str(e):
                 logger.error(
@@ -1396,20 +1432,35 @@ def verify_wandb_runs(
                     entity,
                     single_experiment,
                 )
-                return {
-                    RunNotFound(
-                        single_experiment, project=project, group=group_glob if group_glob != "*" else None
-                    ): Exception("No corresponding online wandb run found.")
-                }
+                if ".parent" in single_experiment:
+                    logger.warning("Tried to verify a .parent.json file")
+                else:
+                    return {
+                        RunNotFound(
+                            single_experiment, project=project, group=group_glob if group_glob != "*" else None
+                        ): Exception("No corresponding online wandb run found.")
+                    }
             raise
         runs = [run]
     else:
-        runs = api.runs(f"{entity}/{project}", filters={"config.experiment_id": experiment_id}, per_page=run_per_page)
+        try:
+            runs = api.runs(
+                f"{entity}/{project}", filters={"config.experiment_id": experiment_id}, per_page=run_per_page
+            )
+            # NOTE: Runs is async on demand iterator, check if project is old or new layout with - Algorithm
+            runs[0]  # noqa
+        except ValueError:
+            runs = api.runs(
+                f"{entity}/{project.removesuffix('-PPO').removesuffix('-DQN')}",
+                filters={"config.experiment_id": experiment_id},
+                per_page=run_per_page,
+            )
     verify_results: FailureDictType = {}
     logged_tb_once = False
     # Check offline data
     # Get runs in output_dir
     offline_run_ids = set()
+    not_all_runs_complete = None
     if output_dir is not None:
         # Supports tmpdir with driver_artifacts subdir
         offline_results = list(Path(output_dir).glob("*" + experiment_id + "/**/result*.json"))
@@ -1455,8 +1506,16 @@ def verify_wandb_runs(
                     except EOFError:
                         # non-interactive
                         logger.info("No input available, skipping full subdir search.")
-        if not single_experiment and len(offline_results) != len(runs):
-            logger.error("Offline results count %d does not match wandb runs %d", len(offline_results), len(runs))
+        not_all_runs_complete = False
+        offline_results_without_parent = sum(1 for path in offline_results if "parent" not in path.name)
+        trial_dirs = {p.parent for p in offline_results}
+        # For each trial dir we need one experiment that has been trained until the end >1.1M steps
+        # TODO: still some run might still be incomplete. For each trial dir we need one run trained until end
+        if not single_experiment and offline_results_without_parent != len(runs):
+            logger.error(
+                "Offline results count %d does not match wandb runs %d", offline_results_without_parent, len(runs)
+            )
+            not_all_runs_complete = True
         elif not single_experiment and verbose > 2:
             logger.info("🟢 Number of offline runs to online runs match")
         elif single_experiment and len(offline_results) != 1:
@@ -1475,8 +1534,11 @@ def verify_wandb_runs(
                     single_experiment,
                     offline_results,
                 )
+        run_id_to_trial_map = {}
         if single_experiment:
             offline_run_ids = {run.id}  # pyright: ignore[reportPossiblyUnboundVariable]
+            if offline_results:
+                run_id_to_trial_map[run.id] = next(iter(offline_results)).parent  # pyright: ignore[reportPossiblyUnboundVariable]
         else:
             unknown_count = 0
             for offline_path in offline_results:
@@ -1493,9 +1555,13 @@ def verify_wandb_runs(
                 else:
                     run_id = offline_path.stem.rsplit("-", 1)[-1]
                 offline_run_ids.add(run_id)
+                run_id_to_trial_map[run_id] = offline_path.parent
     else:
         logger.warning("No output_dir provided, cannot check for offline wandb data.")
+        run_id_to_trial_map = {}
     all_experiment_results = experiment_results if experiment_results is not None else {}
+    online_history_data = {k: {} for k in all_experiment_results.keys()}
+    trial_dir_max_step = {k: {} for k in all_experiment_results.keys()}
     if use_tqdm is None:
         use_tqdm = sys.argv[0] in ("", "upload_wandb.py")
     for run in tqdm(runs, desc=f"Verifying {experiment_id}", unit="runs", disable=not use_tqdm):
@@ -1508,8 +1574,18 @@ def verify_wandb_runs(
                 output_dir=output_dir,
                 verbose=verbose,
                 experiment_data=all_experiment_results.setdefault(experiment_id, {}),
+                online_history_data=online_history_data.setdefault(experiment_id, {}),
             )
             verify_results[run] = failures
+            if run.id in run_id_to_trial_map:
+                trial_dir_max_step.setdefault(experiment_id, {})
+                trial_dir_max_step[experiment_id][run_id_to_trial_map[run.id]] = max(
+                    trial_dir_max_step[experiment_id].get(run_id_to_trial_map[run.id], 0),
+                    all_experiment_results[experiment_id][run.id]["current_step"],
+                    online_history_data[experiment_id][run.id].current_step.max(),
+                )
+            else:
+                logger.warning("No trial dir found for run id %s to update max step.", run.id)
         except BdbQuit:
             raise
         except Exception as e:  # noqa: PERF203
@@ -1563,16 +1639,32 @@ def verify_wandb_runs(
         else:
             ImportantLogger.important_info(logger, "Wandb run %s (%s) history verified successfully.", run.id, run.url)
     if not single_experiment and all_experiment_results and experiment_validator:
-        experiment_level_failure = experiment_validator(all_experiment_results[experiment_id])
+        experiment_level_failure = experiment_validator(
+            all_experiment_results[experiment_id], online_history_data[experiment_id], trial_dir_max_step[experiment_id]
+        )
         if experiment_level_failure:
             logger.error(
                 "Experiment-level validation for experiment_id %s failed: %s",
                 experiment_id,
                 experiment_level_failure,
             )
+            for i, failure in enumerate(experiment_level_failure):
+                verify_results[
+                    RunWithVerificationFailures(
+                        experiment_id, project, name=f"ExperimentLevel {i}", experiment_level=True
+                    )
+                ] = [failure]
+        elif not_all_runs_complete:
             verify_results[
                 RunWithVerificationFailures(experiment_id, project, name="ExperimentLevel", experiment_level=True)
-            ] = [experiment_level_failure]
+            ] = [
+                _FailureTuple(
+                    "Not all runs completed",
+                    len(all_experiment_results[experiment_id]),
+                    len(online_history_data[experiment_id]),
+                    type=VerificationFailure.EXPERIMENT_INCOMPLETE,
+                )
+            ]
         else:
             ImportantLogger.important_info(
                 logger,
@@ -1622,6 +1714,7 @@ def verify_wandb_run_history(
     run: Run,
     verbose: int = 10,
     experiment_data: Optional[dict[str, dict[str, float]]] = None,
+    online_history_data: Optional[dict[str, pd.DataFrame]] = None,
 ) -> list[_FailureTuple]: ...
 
 
@@ -1636,6 +1729,7 @@ def verify_wandb_run_history(
     run: Optional[Run] = None,
     verbose: int = 10,
     experiment_data: Optional[dict[str, dict[str, float]]] = None,
+    online_history_data: Optional[dict[str, pd.DataFrame]] = None,
 ) -> list[_FailureTuple]: ...
 
 
@@ -1650,6 +1744,7 @@ def verify_wandb_run_history(
     verbose: int = 10,
     group_glob: str = "*",
     experiment_data: Optional[dict[str, dict[str, float]]] = None,
+    online_history_data: Optional[dict[str, pd.DataFrame]] = None,
 ) -> list[_FailureTuple]:
     """Verify the online wandb history against the offline JSON file.
 
@@ -1965,4 +2060,6 @@ def verify_wandb_run_history(
             )
         if experiment_data is not None:
             experiment_data.setdefault(run_id, {})[metric_name] = max(offline_value, online_value)
+    if online_history_data is not None:
+        online_history_data[run_id] = online_history
     return failures
