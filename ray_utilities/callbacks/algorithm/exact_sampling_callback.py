@@ -4,8 +4,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from ray.rllib.algorithms.callbacks import DefaultCallbacks
-from typing_extensions import deprecated
 
 from ray_utilities.constants import NUM_ENV_STEPS_PASSED_TO_LEARNER, NUM_ENV_STEPS_PASSED_TO_LEARNER_LIFETIME
 
@@ -38,7 +36,6 @@ def _remove_or_trim_samples(samples: list[EpisodeType], total_samples: int, exac
     lengths = [len(sae) for sae in samples]
     exact_matches = [idx if length == diff else False for idx, length in enumerate(lengths)]
     # If there is a sample with exact length, remove it. Appears to be the most likely case.
-    matching_done_sample_idx = None
     if exact_matches:
         # Look for a not done episode first.
         for idx in exact_matches:
@@ -51,9 +48,6 @@ def _remove_or_trim_samples(samples: list[EpisodeType], total_samples: int, exac
                 )
                 samples.pop(idx)
                 return
-        matching_done_sample_idx = next((i for i, s in enumerate(samples) if s.is_done), None)
-    assert not any(exact_matches) or exact_matches[0] == 0
-
     # Now find samples that are not done and have enough timesteps to trim, but at least one more
     # Not done episodes are likely(?) at the back, reverse iterate
     for i, sample in enumerate(reversed(samples), start=1):
@@ -77,50 +71,63 @@ def _remove_or_trim_samples(samples: list[EpisodeType], total_samples: int, exac
             if trimmed >= diff:
                 return
             min_trim -= max_trim  # reduce
+
     # if there are (now) some samples with length 1, we can maybe remove them:
-    # TODO: Test if its okay to pop samples
     len_samples = len(samples)  # at start
     for i, sample in enumerate(reversed(samples), start=1):
         if not sample.is_done and len(sample) == 1:
             assert len(samples.pop(len_samples - i)) == 1
-            logger.debug("Removed a sample with length 1: %s", sample)
+            logger.debug("Removed a sample with length 1: %s. Need to trim %d/%d", sample, trimmed, diff)
             trimmed += 1
             if trimmed >= diff:
                 return
-    # Out of options need to trim /remove a done episode if it has enough timesteps.
-    # We had one with exact length but as we might have trimmed already it might not match again:
-    if matching_done_sample_idx is not None and len(samples[matching_done_sample_idx]) == diff:
-        logger.info("Had to remove a done sample with exact length %d: %s", diff, samples[matching_done_sample_idx])
-        samples.pop(matching_done_sample_idx)
+
+    # Calculate remaining amount to trim after all previous operations
+    remaining_to_trim = diff - trimmed
+
+    # Out of options need to trim/remove a done episode if it has enough timesteps. Check if we can remove any episode
+    exact_idx = next((idx for idx, sample in enumerate(samples) if len(sample) == remaining_to_trim), None)
+    if exact_idx is not None:
+        logger.debug(
+            "Removing a done sample with exact length %d: %s.",
+            remaining_to_trim,
+            samples[exact_idx],
+        )
+        samples.pop(exact_idx)
         return
+
+    # Need to trim done episodes which are longer; try to find one that is long enough
     for i, sample in enumerate(samples):
-        if len(sample) >= diff + 1:
-            logger.info("Had to trim one done episode: %s by %d", sample, diff)
-            samples[i] = sample[diff:]  # keep end of episode slice away at start
+        if len(sample) >= remaining_to_trim + 1:
+            logger.info("Had to trim one done episode by %d: %s", remaining_to_trim, sample)
+            samples[i] = sample[remaining_to_trim:]  # keep end of episode slice away at start
             assert len(samples[i]) > 0
-            # NOTE: Settings is terminated=False will raise an error on assertion that it
+            # NOTE: Settings is_terminated=False will raise an error on assertion that it
             # is done (episode is tracked in done episodes)
             # sample.is_terminated = False
             return
+
     # need to trim multiple episodes
-    trimmed = 0
+    # Use remaining_to_trim for final trimming phase
     for i, sample in enumerate(samples):
-        if len(sample) > 1:
-            max_trim = max(1, min(diff - trimmed, len(sample) - 1))  # at least one timestep should remain, never be 0
-            logger.warning("Had to trim a done episode (one of multiple): %s by %d.", sample, max_trim)
-            samples[i] = sample[max_trim:]
-            assert len(samples[i]) > 0
-            # sample.is_terminated = False
-            trimmed += max_trim
-            if trimmed >= diff:
-                return
-            diff -= max_trim
-    logger.warning(
-        "Could not trim enough samples to match exact timesteps %s. Total samples before: %s, after: %s.",
-        exact_timesteps,
-        _total_samples_before,
-        total_samples,
-    )
+        if len(sample) > 1 and remaining_to_trim > 0:
+            max_trim = min(remaining_to_trim, len(sample) - 1)  # at least one timestep should remain
+            if max_trim > 0:  # Only trim if we actually can
+                logger.warning("Had to trim a done episode (one of multiple): %s by %d.", sample, max_trim)
+                samples[i] = sample[max_trim:]
+                assert len(samples[i]) > 0
+                # sample.is_terminated = False
+                remaining_to_trim -= max_trim
+                if remaining_to_trim <= 0:
+                    return
+
+    if remaining_to_trim > 0:
+        logger.warning(
+            "Could not trim enough samples to match exact timesteps %s. Total samples before: %s, still need to trim: %s.",
+            exact_timesteps,
+            _total_samples_before,
+            remaining_to_trim,
+        )
 
 
 def exact_sampling_callback(
@@ -155,7 +162,8 @@ def exact_sampling_callback(
                 _total_samples_before,
                 total_samples,
             )
-            samples = [sample for sample in samples if len(sample) > 0]
+            samples[:] = [sample for sample in samples if len(sample) > 0]
+
     if total_samples != exact_timesteps:
         logger.error(
             "Total samples %s does not match exact timesteps %s. Some calculations might be off. "

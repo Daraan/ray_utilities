@@ -1448,7 +1448,8 @@ def verify_wandb_runs(
                 f"{entity}/{project}", filters={"config.experiment_id": experiment_id}, per_page=run_per_page
             )
             # NOTE: Runs is async on demand iterator, check if project is old or new layout with - Algorithm
-            runs[0]  # noqa
+            if len(runs) > 0:
+                runs[0]  # noqa
         except ValueError:
             runs = api.runs(
                 f"{entity}/{project.removesuffix('-PPO').removesuffix('-DQN')}",
@@ -1508,7 +1509,6 @@ def verify_wandb_runs(
                         logger.info("No input available, skipping full subdir search.")
         not_all_runs_complete = False
         offline_results_without_parent = sum(1 for path in offline_results if "parent" not in path.name)
-        trial_dirs = {p.parent for p in offline_results}
         # For each trial dir we need one experiment that has been trained until the end >1.1M steps
         # TODO: still some run might still be incomplete. For each trial dir we need one run trained until end
         if not single_experiment and offline_results_without_parent != len(runs):

@@ -15,10 +15,10 @@ submit_pattern: >
   # Example for direct CLI
   ray job submit --working-dir "." --entrypoint-memory 3000000000  --entrypoint-num-cpus
   0.66 --entrypoint-resources '{"persistent_node":1}'
-  --submission-id pbt_batch_size_mlp-xxxxxxxxx_restore -- \  python  experiments/tune_with_scheduler.py
+  --submission-id pbt_batch_size_mlp-xxxxxxxxx_restore -- \  python  experiments/sympol_pbt.py
   --restore_path yyyyy  --hostname_selector '!in(dws-login-01,dws-login-02)'
 
-  --submission-id pbt_batch_size_InvertedDoublePendulum-v5_7435_restore -- python  experiments/tune_with_scheduler.py
+  --submission-id pbt_batch_size_InvertedDoublePendulum-v5_7435_restore -- python  experiments/sympol_pbt.py
   --restore_path /home/dsperber/master/repos/ray_utilities/outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:batch_size/Default-mlp-InvertedPendulum-v5-tws47f25112200240e674
   --hostname_selector '!in(dws-login-01,dws-login-02)'
 notes: |
@@ -64,6 +64,18 @@ sympol_pbt_batch_size_base:
       sp87c6251205162313004:
         status: SUCCEEDED
         submission_id: sympol_pbt_batch_size_base_Acrobot-v1_2025-12-05_15:52:30
+      sp87c62512050716d8804:
+        status: FAILED
+        submission_id: sympol_pbt_batch_size_base_Acrobot-v1_2025-12-05_07:15:09
+      sp87c62512050509b0c04:
+        status: FAILED
+        submission_id: sympol_pbt_batch_size_base_Acrobot-v1_2025-12-05_05:08:44
+      sp87c62512050508337a4:
+        status: STOPPED
+        submission_id: sympol_pbt_batch_size_base_Acrobot-v1_2025-12-05_05:07:31
+      sp87c62512050449b5ac4:
+        status: FAILED
+        submission_id: sympol_pbt_batch_size_base_Acrobot-v1_2025-12-05_04:49:09
     (LunarLander-v3):
       sp87c6251205071523e54:
         status: FAILED
@@ -73,6 +85,22 @@ sympol_pbt_batch_size_base:
         status: SUCCEEDED
         submission_id:
           sympol_pbt_batch_size_base_LunarLander-v3_2025-12-05_15:52:30
+      sp87c6251205050987774:
+        status: FAILED
+        submission_id:
+          sympol_pbt_batch_size_base_LunarLander-v3_2025-12-05_05:08:44
+      sp87c62512050507ed284:
+        status: STOPPED
+        submission_id:
+          sympol_pbt_batch_size_base_LunarLander-v3_2025-12-05_05:07:31
+      sp87c6251205044958524:
+        status: STOPPED
+        submission_id:
+          sympol_pbt_batch_size_base_LunarLander-v3_2025-12-05_04:49:09
+      sp87c62512050158eb414:
+        status: STOPPED
+        submission_id:
+          pbt_batch_size_base_pbt_batch_size_base_LunarLander-v3_2025-12-05_01:58:18
     (CartPole-v1):
       sp87c62512051553e9c84:
         status: SUCCEEDED
@@ -91,31 +119,79 @@ sympol_pbt_batch_size:
       sp87c625120521264ffa4:
         status: SUCCEEDED
         submission_id: sympol_pbt_batch_size_Humanoid-v5_2025-12-05_21:26:08
+      sp87c625120505096e2e4:
+        status: STOPPED
+        submission_id: sympol_pbt_batch_size_Humanoid-v5_2025-12-05_05:08:44
+      sp87c6251205044950644:
+        status: STOPPED
+        submission_id: sympol_pbt_batch_size_Humanoid-v5_2025-12-05_04:49:09
     (Ant-v5):
       sp87c62512052238cff44:
-        status: RUNNING
+        status: FAILED
         submission_id: sympol_pbt_batch_size_Ant-v5_2025-12-05_22:37:50
+      sp87c62512070018f6114:
+        status: RUNNING
+        note: TODO Restore
+        submission_id: sympol_pbt_batch_size_Ant-v5_2025-12-06_23:32:43
+      sp87c62512050451e2f64:
+        status: STOPPED
+        submission_id: sympol_pbt_batch_size_Ant-v5_2025-12-05_04:49:09
+      sp87c6251205015966bf4:
+        status: STOPPED
+        submission_id: pbt_batch_size_pbt_batch_size_Ant-v5_2025-12-05_01:58:18
     (Walker2d-v5):
       sp87c62512052243dbd74:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: sympol_pbt_batch_size_Walker2d-v5_2025-12-05_22:37:50
+      Walker2d-v5:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_batch_size_Walker2d-v5_2025-12-05_22:37:50
+      sp87c62512050451dba44:
+        status: STOPPED
+        submission_id: sympol_pbt_batch_size_Walker2d-v5_2025-12-05_04:49:09
+      sp87c62512050159b7484:
+        status: STOPPED
+        submission_id:
+          pbt_batch_size_pbt_batch_size_Walker2d-v5_2025-12-05_01:58:18
     (InvertedPendulum-v5):
       sp87c625120606117c794:
-        status: RUNNING
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_batch_size_InvertedPendulum-v5_2025-12-05_22:37:50
+      InvertedPendulum-v5:
+        status: SUCCEEDED
         submission_id:
           sympol_pbt_batch_size_InvertedPendulum-v5_2025-12-05_22:37:50
     (Swimmer-v5):
       sp87c62512052254c1d94:
         status: RUNNING
         submission_id: sympol_pbt_batch_size_Swimmer-v5_2025-12-05_22:37:50
+      sp87c625120502048d124:
+        status: STOPPED
+        submission_id:
+          pbt_batch_size_pbt_batch_size_Swimmer-v5_2025-12-05_01:58:18
     (HalfCheetah-v5):
       sp87c62512052245ff3e4:
-        status: RUNNING
+        status: FAILED
         submission_id: sympol_pbt_batch_size_HalfCheetah-v5_2025-12-05_22:37:50
+      sp87c62512050452c2c04:
+        status: STOPPED
+        submission_id: sympol_pbt_batch_size_HalfCheetah-v5_2025-12-05_04:49:09
+      sp87c6251205015913114:
+        status: STOPPED
+        submission_id:
+          pbt_batch_size_pbt_batch_size_HalfCheetah-v5_2025-12-05_01:58:18
     (Reacher-v5):
       sp87c6251205224924524:
         status: SUCCEEDED
         submission_id: sympol_pbt_batch_size_Reacher-v5_2025-12-05_22:37:50
+      sp87c62512050452ca224:
+        status: STOPPED
+        submission_id: sympol_pbt_batch_size_Reacher-v5_2025-12-05_04:49:09
+      sp87c62512050203d8c24:
+        status: STOPPED
+        submission_id:
+          pbt_batch_size_pbt_batch_size_Reacher-v5_2025-12-05_01:58:18
     (InvertedDoublePendulum-v5):
       sp87c6251206030573604:
         status: SUCCEEDED
@@ -123,7 +199,7 @@ sympol_pbt_batch_size:
           sympol_pbt_batch_size_InvertedDoublePendulum-v5_2025-12-05_22:37:50
     (Hopper-v5):
       sp87c62512061459508d4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: sympol_pbt_batch_size_Hopper-v5_2025-12-06_14:59:30
 sympol_pbt_minibatch_size_2048:
   comment: tune minibatch_size with fixed train_batch_size_per_learner=2048
@@ -139,11 +215,11 @@ sympol_pbt_minibatch_size_2048:
   run_ids:
     (Ant-v5):
       sp87c625120606268afb4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: sympol_pbt_minibatch_size_2048_Ant-v5_2025-12-05_22:37:50
     (Humanoid-v5):
       sp87c62512060625819b4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           sympol_pbt_minibatch_size_2048_Humanoid-v5_2025-12-05_22:37:50
       Humanoid-v5:
@@ -152,12 +228,16 @@ sympol_pbt_minibatch_size_2048:
           sympol_pbt_minibatch_size_2048_Humanoid-v5_2025-12-05_22:37:50
     (Walker2d-v5):
       sp87c62512060627048c4:
-        status: RUNNING
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_minibatch_size_2048_Walker2d-v5_2025-12-05_22:37:50
+      Walker2d-v5:
+        status: SUCCEEDED
         submission_id:
           sympol_pbt_minibatch_size_2048_Walker2d-v5_2025-12-05_22:37:50
     (HalfCheetah-v5):
       sp87c6251206062735474:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           sympol_pbt_minibatch_size_2048_HalfCheetah-v5_2025-12-05_22:37:50
     (Reacher-v5):
@@ -167,14 +247,24 @@ sympol_pbt_minibatch_size_2048:
           sympol_pbt_minibatch_size_2048_Reacher-v5_2025-12-05_22:37:50
     (Hopper-v5):
       sp87c62512061501629b4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           sympol_pbt_minibatch_size_2048_Hopper-v5_2025-12-06_14:59:30
     (Swimmer-v5):
       sp87c625120615355b224:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           sympol_pbt_minibatch_size_2048_Swimmer-v5_2025-12-06_14:59:30
+    (InvertedDoublePendulum-v5):
+      sp87c62512061844dfe14:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_minibatch_size_2048_InvertedDoublePendulum-v5_2025-12-06_14:59:30
+    (InvertedPendulum-v5):
+      sp87c625120620531ea24:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_minibatch_size_2048_InvertedPendulum-v5_2025-12-06_14:59:30
 sympol_pbt_minibatch_size_8192_base:
   comment: tune minibatch_size with fixed train_batch_size_per_learner=8192
   entrypoint_resources:
@@ -196,6 +286,10 @@ sympol_pbt_minibatch_size_8192_base:
         status: SUCCEEDED
         submission_id:
           sympol_pbt_minibatch_size_8192_base_CartPole-v1_2025-12-05_15:52:30
+      sp87c62512041952b8814:
+        status: FAILED
+        submission_id:
+          pbt_minibatch_size_8192_base_CartPole-v1_2025-12-04_19:52:38
     (Acrobot-v1):
       sp87c62512051923c0d34:
         status: SUCCEEDED
@@ -241,6 +335,9 @@ sympol_pbt_minibatch_size_8192:
         status: SUCCEEDED
         submission_id:
           sympol_pbt_minibatch_size_8192_Hopper-v5_2025-12-05_16:26:36
+      sp87c6251204194390d54:
+        status: FAILED
+        submission_id: pbt_minibatch_size_8192_Hopper-v5_2025-12-04_19:42:30
     (Walker2d-v5):
       sp87c62512052010fcae4:
         status: SUCCEEDED
@@ -251,6 +348,47 @@ sympol_pbt_minibatch_size_8192:
         status: SUCCEEDED
         submission_id:
           sympol_pbt_minibatch_size_8192_HalfCheetah-v5_2025-12-05_16:26:36
+    (Reacher-v5):
+      sp87c625120621383abb4:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_minibatch_size_8192_Reacher-v5_2025-12-06_14:59:30
+      sp87c625120604078ea54:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_minibatch_size_8192_Reacher-v5_2025-12-05_16:26:36
+    (InvertedDoublePendulum-v5):
+      sp87c6251207002556284:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_minibatch_size_8192_InvertedDoublePendulum-v5_2025-12-06_23:32:43
+      sp87c625120622393cd94:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_minibatch_size_8192_InvertedDoublePendulum-v5_2025-12-06_14:59:30
+    (Swimmer-v5):
+      sp87c625120700211da84:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_minibatch_size_8192_Swimmer-v5_2025-12-06_23:32:43
+      sp87c6251206215639544:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_minibatch_size_8192_Swimmer-v5_2025-12-06_14:59:30
+      sp87c62512060601375b4:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_minibatch_size_8192_Swimmer-v5_2025-12-05_16:26:36
+    (InvertedPendulum-v5):
+      sp87c6251206224416244:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_minibatch_size_8192_InvertedPendulum-v5_2025-12-06_14:59:30
+    (Pusher-v5):
+      sp87c625120615021be04:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_minibatch_size_8192_Pusher-v5_2025-12-05_16:26:36
 sympol_pbt_num_envs:
   # This is a comment
   comment: small minibatch_size=256 and train_batch_size=2048
@@ -286,6 +424,19 @@ sympol_pbt_lr_base:
     substitutions:
       <TUNE_PARAM>: lr
       <ENV_TYPE>: <basic_envs>
+  run_ids:
+    (LunarLander-v3):
+      sp87c62512070457f1b34:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_lr_base_LunarLander-v3_2025-12-06_23:32:43
+    (Acrobot-v1):
+      sp87c6251207045408f14:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_lr_base_Acrobot-v1_2025-12-06_23:32:43
+    (CartPole-v1):
+      sp87c6251207025752854:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_lr_base_CartPole-v1_2025-12-06_23:32:43
 sympol_pbt_lr:
   comment: spread lr - need to repeat because of 2 top groups
   entrypoint_resources:
@@ -295,6 +446,44 @@ sympol_pbt_lr:
     substitutions:
       <TUNE_PARAM>: lr
       <ENV_TYPE>: <mujoco_envs>
+  run_ids:
+    (Swimmer-v5):
+      sp87c62512071159a51f4:
+        status: RUNNING
+        submission_id: sympol_pbt_lr_Swimmer-v5_2025-12-06_23:32:43
+    (Reacher-v5):
+      sp87c62512070930106c4:
+        status: FAILED
+        submission_id: sympol_pbt_lr_Reacher-v5_2025-12-06_23:32:43
+    (HalfCheetah-v5):
+      sp87c625120708572cf44:
+        status: RUNNING
+        submission_id: sympol_pbt_lr_HalfCheetah-v5_2025-12-06_23:32:43
+    (Walker2d-v5):
+      sp87c625120708033c004:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_lr_Walker2d-v5_2025-12-06_23:32:43
+    (Hopper-v5):
+      sp87c625120707576bcf4:
+        status: FAILED
+        submission_id: sympol_pbt_lr_Hopper-v5_2025-12-06_23:32:43
+    (Ant-v5):
+      sp87c6251207063675614:
+        status: RUNNING
+        submission_id: sympol_pbt_lr_Ant-v5_2025-12-06_23:32:43
+    (Humanoid-v5):
+      sp87c6251207053084564:
+        status: RESTORED
+        submission_id: sympol_pbt_lr_Humanoid-v5_2025-12-06_23:32:43
+    (InvertedPendulum-v5):
+      sp87c62512071312da254:
+        status: RUNNING
+        submission_id: sympol_pbt_lr_InvertedPendulum-v5_2025-12-06_23:32:43
+    (InvertedDoublePendulum-v5):
+      sp87c6251207124442634:
+        status: RUNNING
+        submission_id:
+          sympol_pbt_lr_InvertedDoublePendulum-v5_2025-12-06_23:32:43
 sympol_pbt_lr_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale  - need to repeat because of 2 top groups
