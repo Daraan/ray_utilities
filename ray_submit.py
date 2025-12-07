@@ -721,7 +721,12 @@ def submit_single_job(
     else:
         if track_for_run_id:
             # Start tracking logs to extract run_id
-            asyncio.create_task(
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            task = loop.create_task(
                 track_job_for_run_id(
                     CLIENT,
                     submission_id_out,
@@ -730,7 +735,12 @@ def submit_single_job(
                     args.submissions_file,
                 )
             )
+            background_tasks.add(task)
+            task.add_done_callback(background_tasks.discard)
         return submission_id_out
+
+
+background_tasks = set()
 
 
 def scan_monitor_running_jobs(submissions_file: str) -> dict[str, tuple[str, str]]:
@@ -943,6 +953,103 @@ class AsyncInput:
             self.future.cancel()
 
 
+def collect_restore_jobs(yaml_file: str) -> list[dict]:
+    """
+    Scan the YAML file for jobs with status: RESTORE and collect their info.
+
+    Returns:
+        List of dicts with keys: group, env, run_id, old_submission_id, restore_folder, entrypoint, submission_id
+    """
+    with open(yaml_file, "r") as f:
+        data = yaml_load(f)
+
+    restore_jobs = {}
+    for group_name, group_data in data.items():
+        if not isinstance(group_data, dict):
+            continue
+        entrypoint_pattern = None
+        # Try to get entrypoint pattern for this group
+        if "entrypoint_pattern" in group_data:
+            ep_pat = group_data["entrypoint_pattern"]
+            if isinstance(ep_pat, dict):
+                pattern_key = ep_pat.get("pattern")
+                if pattern_key and pattern_key in data:
+                    entrypoint_pattern = data[pattern_key]
+                elif pattern_key:
+                    entrypoint_pattern = pattern_key
+            elif isinstance(ep_pat, str):
+                entrypoint_pattern = ep_pat
+        # Fallback: try to get entrypoint from first job
+        if not entrypoint_pattern:
+            for job in group_data.values():
+                if isinstance(job, dict) and "entrypoint" in job:
+                    entrypoint_pattern = job["entrypoint"]
+                    break
+
+        run_ids = group_data.get("run_ids", {})
+        for env_key, runs in run_ids.items():
+            # env_key: (ENV_NAME)
+            env = env_key.strip("()")
+            for run_id, run_info in runs.items():
+                if isinstance(run_info, dict) and run_info.get("status") == "RESTORE":
+                    old_submission_id = run_info.get("submission_id", "")
+                    # Find restore folder
+                    restore_glob = f"outputs/shared/experiments/*{env}*/*/*-{run_id}*"
+                    restore_folders = [Path(p).absolute() for p in Path(".").glob(restore_glob)]
+                    restore_folder = str(restore_folders[0]) if restore_folders else ""
+                    # Compose entrypoint
+                    entrypoint_py = None
+                    # Try to extract python file from entrypoint_pattern
+                    if entrypoint_pattern:
+                        m = re.search(r"python\s+([^\s]+\.py)", entrypoint_pattern)
+                        entrypoint_py = m.group(1) if m else None
+                    entrypoint = (
+                        f"python {entrypoint_py} --restore_path {restore_folder}"
+                        if entrypoint_py and restore_folder
+                        else None
+                    )
+                    submission_id = (
+                        f"{old_submission_id}_restore_{TIMESTAMP_SUFFIX}"
+                        if old_submission_id
+                        else f"restore_{env}_{run_id}_{TIMESTAMP_SUFFIX}"
+                    )
+                    restore_jobs[submission_id] = {
+                        "group": group_name,
+                        "env": env,
+                        "run_id": run_id,
+                        "old_submission_id": old_submission_id,
+                        "restore_folder": restore_folder,
+                        "entrypoint": entrypoint,
+                        "submission_id": submission_id,
+                    }
+    return restore_jobs
+
+
+def submit_restore_jobs(yaml_file: str, client: JobSubmissionClient):
+    """
+    Submit all jobs with status: RESTORE found in the yaml file.
+    """
+    jobs = collect_restore_jobs(yaml_file)
+    for job in jobs:
+        if not job["entrypoint"]:
+            print(f"Cannot submit restore job for env={job['env']} run_id={job['run_id']}: missing entrypoint.")
+            continue
+        print(f"Submitting restore job: {job['submission_id']}")
+        try:
+            submission_id_out = client.submit_job(
+                entrypoint=job["entrypoint"],
+                submission_id=job["submission_id"],
+                runtime_env={"working_dir": ".", "excludes": EXCLUDE_WDIR_FILES},
+                entrypoint_num_cpus=0.33,
+                entrypoint_num_gpus=0,
+                entrypoint_memory=int(4.5 * 1000 * 1000 * 1000),
+                entrypoint_resources={"persistent_node": 1},
+                metadata=None,
+            )
+        except Exception as e:
+            print(f"Failed to submit restore job {job['submission_id']}: {e}")
+
+
 if __name__ == "__main__":
     os.environ["RAY_UTILITIES_NO_TQDM"] = "1"
     parser = argparse.ArgumentParser()
@@ -1100,6 +1207,10 @@ if __name__ == "__main__":
                 excludes=args.excludes,
                 include_running=args.include_running,
             )
+        elif args.group == "restore":
+            print("Submitting all jobs with status: RESTORE")
+            submissions_dict = collect_restore_jobs(args.submissions_file)
+            # submit_restore_jobs(args.submissions_file, CLIENT)
         else:
             submissions_dict = get_submissions(
                 args.group,
@@ -1156,6 +1267,7 @@ if __name__ == "__main__":
 
         def submit_next():
             nonlocal recent_failed_timestamps
+            global running_jobs_count
             assert CLIENT
             now = time.time()
             # Remove failures older than 20 seconds
@@ -1177,6 +1289,7 @@ if __name__ == "__main__":
                     monitor_jobs_tracked[submission_id_out] = (group, next_job_id)
                     async_read_tasks[submission_id_out] = asyncio.create_task(get_next(jobs_tracked[submission_id_out]))
                     last_outputs[submission_id_out] = []
+                    running_jobs_count += 1
                     return True
             time.sleep(10)
             return False
@@ -1261,11 +1374,11 @@ if __name__ == "__main__":
                                 if not submit_next():
                                     print("No more pending jobs.")
                                 break
-                            elif choice == "+":
+                            if choice == "+":
                                 print("Increasing number of concurrent jobs by 1.")
                                 args.max_jobs += 1
                                 break
-                            elif choice == "-":
+                            if choice == "-":
                                 print("Reducing number of concurrent jobs by 1.")
                                 args.max_jobs = max(1, args.max_jobs - 1)
                                 break
@@ -1490,6 +1603,9 @@ if __name__ == "__main__":
             sys.exit(1)
         if choice == "clear":
             pending_submissions = []
-        asyncio.run(
-            monitor_job_statuses(monitor_jobs_tracked, task_run_ids, args, pending_submissions=pending_submissions)
-        )
+        try:
+            asyncio.run(
+                monitor_job_statuses(monitor_jobs_tracked, task_run_ids, args, pending_submissions=pending_submissions)
+            )
+        except KeyboardInterrupt:
+            print("\n\n\n\n########################## Second Keyboard Interrupt Detected #########################\n")

@@ -1607,7 +1607,7 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
                     for (trial, parent_step), time_data in self._fork_time_data.items()
                     for parent, step in ([parent_step] if parent_step else [(None, None)])
                 },
-                "fork_data_file": str(self._fork_data_file) if self._fork_data_file else None,
+                # "fork_data_file": str(self._fork_data_file) if self._fork_data_file else None,
                 "num_samples": self._num_samples,
                 "seen_config_hashes": list(self._seen_config_hashes),
                 "prune_late_trials": self.prune_late_trials,
@@ -1875,7 +1875,7 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
 
         # Restore fork_data_file
         fork_data_file_str = state.get("fork_data_file")
-        self._fork_data_file = Path(fork_data_file_str) if fork_data_file_str else None
+        self._fork_data_file = None
 
         self._num_samples = state.get("num_samples", 1)
         self._seen_config_hashes = set(state.get("seen_config_hashes", []))

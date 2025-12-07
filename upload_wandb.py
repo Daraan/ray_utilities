@@ -562,7 +562,11 @@ if __name__ == "__main__":
                     )
                     local_failures = {}  # just to be bound
                     for future in done:
-                        project, group_name, experiment_id, local_failures, local_group_mapping = future.result()
+                        try:
+                            project, group_name, experiment_id, local_failures, local_group_mapping = future.result()
+                        except Exception as e:
+                            logger.error("Error occurred while verifying job %s: %s", future_to_job[future], e)
+                            continue
                         group_mapping.update(local_group_mapping)
                         if not local_failures:
                             local_failures = {experiment_id: "none"}
