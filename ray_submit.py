@@ -479,7 +479,14 @@ def deep_update(original: dict, updates: dict) -> dict:
     return original
 
 
-def write_back(group: str, job_id: str, run_id: str | dict[str, str | dict[str, str]], *, file: str | Path):
+def write_back(
+    group: str,
+    job_id: str,
+    run_id: str | dict[str, str | dict[str, str]],
+    *,
+    file: str | Path,
+    is_restore: bool = False,
+):
     file_path = Path(file)
     lock_file = file_path.with_suffix(file_path.suffix + ".lock")
 
@@ -500,7 +507,10 @@ def write_back(group: str, job_id: str, run_id: str | dict[str, str | dict[str, 
 
         with open(file_path, "r") as f:
             data = yaml_load(f)
-        job_id = re.sub(r"_\d{4}-\d{2}-\d{2}_\d{2}:\d{2}:\d{2}$", "", job_id)
+
+        # Don't remove timestamp suffix for restore jobs
+        if not is_restore:
+            job_id = re.sub(r"_\d{4}-\d{2}-\d{2}_\d{2}:\d{2}:\d{2}$", "", job_id)
 
         # Always resolve the actual group by searching for the job_id in the data
         actual_group = group
@@ -533,8 +543,16 @@ def write_back(group: str, job_id: str, run_id: str | dict[str, str | dict[str, 
                 data[actual_group][job_id]["run_ids"][run_id] = "RUNNING"
         else:
             data[actual_group].setdefault("run_ids", {})
-            replacement_parts = job_id.removeprefix(actual_group + "_").split("_")
-            run_key = "(" + ", ".join(replacement_parts).rstrip(", ") + ")"
+
+            if is_restore:
+                # For restore jobs, use just the environment name as run_key
+                # Extract environment from job_id (assuming format like "group_env")
+                env_name = job_id.removeprefix(actual_group + "_").split("_")[0]
+                run_key = f"({env_name})"
+            else:
+                replacement_parts = job_id.removeprefix(actual_group + "_").split("_")
+                run_key = "(" + ", ".join(replacement_parts).rstrip(", ") + ")"
+
             if isinstance(run_id, dict):
                 current_runs = data[actual_group]["run_ids"].get(run_key, {})
                 for run_key_id, run_info in run_id.items():
@@ -585,22 +603,31 @@ def write_back(group: str, job_id: str, run_id: str | dict[str, str | dict[str, 
             os.remove(lock_file)
 
 
-def extract_run_id_from_logs(log_lines: list[str]) -> str | None:
+def extract_run_id_from_logs(log_lines: list[str], *, is_restore: bool = False) -> str | None:
     """
     Extract the run ID from job log lines.
 
     Args:
         log_lines: List of log lines to scan
+        is_restore: If True, look for restore pattern "Restoring RUN_ID from <old_id> to <NEW_ID>"
 
     Returns:
         The run ID if found, None otherwise
     """
-    for line in log_lines:
-        if "Run ID:" in line:
-            # NOTE: Currently the ID always ends with 4 the version number
-            run_id_match = re.search(r"Run ID:\s*([a-zA-Z0-9]+)", line)
-            if run_id_match:
-                return run_id_match.group(1)
+    if is_restore:
+        # Look for restore pattern: "Restoring RUN_ID from <old_id> to <NEW_ID>"
+        for line in log_lines:
+            if "Restoring RUN_ID from" in line:
+                restore_match = re.search(r"Restoring RUN_ID from [a-zA-Z0-9]+ to ([a-zA-Z0-9]+)", line)
+                if restore_match:
+                    return restore_match.group(1)
+    else:
+        for line in log_lines:
+            if "Run ID:" in line:
+                # NOTE: Currently the ID always ends with 4 the version number
+                run_id_match = re.search(r"Run ID:\s*([a-zA-Z0-9]+)", line)
+                if run_id_match:
+                    return run_id_match.group(1)
     return None
 
 
@@ -627,7 +654,14 @@ def get_tmux_log_command(job_id: str) -> str:
 
 
 async def track_job_for_run_id(
-    client: JobSubmissionClient, submission_id: str, group: str, original_job_id: str, submissions_file: str
+    client: JobSubmissionClient,
+    submission_id: str,
+    group: str,
+    original_job_id: str,
+    submissions_file: str,
+    *,
+    is_restore: bool = False,
+    original_run_id: str | None = None,
 ) -> str | None:
     """
     Track a job's logs to extract the run_id and update the submissions file.
@@ -638,6 +672,8 @@ async def track_job_for_run_id(
         group: The group name for write_back
         original_job_id: The original job ID for write_back
         submissions_file: Path to submissions file
+        is_restore: If True, this is a restore job
+        original_run_id: For restore jobs, the original run_id to preserve
 
     Returns:
         The extracted run_id if found, None otherwise
@@ -651,7 +687,7 @@ async def track_job_for_run_id(
             log_lines.append(line)
 
             # Try to extract run_id from current batch
-            run_id = extract_run_id_from_logs(log_lines)
+            run_id = extract_run_id_from_logs(log_lines, is_restore=is_restore)
             if run_id:
                 print(f"Extracted run_id {run_id} for submission {submission_id}")
                 # Update with proper run_id and RUNNING status
@@ -660,6 +696,7 @@ async def track_job_for_run_id(
                     original_job_id,
                     {run_id: {"status": "RUNNING", "submission_id": submission_id}},
                     file=submissions_file,
+                    is_restore=is_restore,
                 )
                 return run_id
 
@@ -679,7 +716,13 @@ _submission_counter = 0
 
 
 def submit_single_job(
-    job_id: str, settings: dict, args: argparse.Namespace, track_for_run_id: bool = True
+    job_id: str,
+    settings: dict,
+    args: argparse.Namespace,
+    *,
+    track_for_run_id: bool = True,
+    is_restore: bool = False,
+    original_run_id: str | None = None,
 ) -> str | None:
     if args.test:
         global _submission_counter  # noqa: PLW0603
@@ -733,6 +776,8 @@ def submit_single_job(
                     group,
                     job_id,
                     args.submissions_file,
+                    is_restore=is_restore,
+                    original_run_id=original_run_id,
                 )
             )
             background_tasks.add(task)
@@ -829,7 +874,12 @@ async def monitor_job_statuses(
                         write_back(
                             group,
                             original_job_id,
-                            {run_id: {"status": job_status.name, "submission_id": job_id}},
+                            {
+                                run_id: {
+                                    "status": job_status.name if not isinstance(job_status, str) else job_status,
+                                    "submission_id": job_id,
+                                }
+                            },
                             file=args.submissions_file,
                         )
                     jobs_to_delete.append(job_id)
@@ -953,12 +1003,12 @@ class AsyncInput:
             self.future.cancel()
 
 
-def collect_restore_jobs(yaml_file: str) -> list[dict]:
+def collect_restore_jobs(yaml_file: str) -> dict[str, dict]:
     """
     Scan the YAML file for jobs with status: RESTORE and collect their info.
 
     Returns:
-        List of dicts with keys: group, env, run_id, old_submission_id, restore_folder, entrypoint, submission_id
+        Dict of dicts with keys: group, env, run_id, old_submission_id, restore_folder, entrypoint, submission_id
     """
     with open(yaml_file, "r") as f:
         data = yaml_load(f)
@@ -1021,33 +1071,9 @@ def collect_restore_jobs(yaml_file: str) -> list[dict]:
                         "restore_folder": restore_folder,
                         "entrypoint": entrypoint,
                         "submission_id": submission_id,
+                        "is_restore": True,  # Flag to identify restore jobs
                     }
     return restore_jobs
-
-
-def submit_restore_jobs(yaml_file: str, client: JobSubmissionClient):
-    """
-    Submit all jobs with status: RESTORE found in the yaml file.
-    """
-    jobs = collect_restore_jobs(yaml_file)
-    for job in jobs:
-        if not job["entrypoint"]:
-            print(f"Cannot submit restore job for env={job['env']} run_id={job['run_id']}: missing entrypoint.")
-            continue
-        print(f"Submitting restore job: {job['submission_id']}")
-        try:
-            submission_id_out = client.submit_job(
-                entrypoint=job["entrypoint"],
-                submission_id=job["submission_id"],
-                runtime_env={"working_dir": ".", "excludes": EXCLUDE_WDIR_FILES},
-                entrypoint_num_cpus=0.33,
-                entrypoint_num_gpus=0,
-                entrypoint_memory=int(4.5 * 1000 * 1000 * 1000),
-                entrypoint_resources={"persistent_node": 1},
-                metadata=None,
-            )
-        except Exception as e:
-            print(f"Failed to submit restore job {job['submission_id']}: {e}")
 
 
 if __name__ == "__main__":
@@ -1173,11 +1199,6 @@ if __name__ == "__main__":
                 except Exception as e:  # noqa: BLE001
                     print(f"Failed to get status for job {submission_id}: {e!r}")
                     continue
-                print(
-                    f"Job {submission_id} (group={group_name}, job={original_job_id}) status: {job_status}",
-                    "Running",
-                    actual_running,
-                )
                 if job_status == JobStatus.RUNNING:
                     actual_running += 1
                 else:
@@ -1191,8 +1212,14 @@ if __name__ == "__main__":
                                 "submission_id": submission_id,
                             }
                         },
+                        # is_restore=args.group == "restore",
                         file=args.submissions_file,
                     )
+                print(
+                    f"Job {submission_id} (group={group_name}, job={original_job_id}) status: {job_status}",
+                    "Running",
+                    actual_running,
+                )
             running_jobs_count = actual_running
             print(f"After scan, {running_jobs_count} jobs are still RUNNING.")
 
@@ -1335,16 +1362,16 @@ if __name__ == "__main__":
 
             # If async_read_tasks is empty but there are initial jobs running, wait for user input or job completion
             if not async_read_tasks and args.monitor_running and initial_running_jobs > 0:
-                print(
-                    f"Pending submissions: {len(pending_submissions or [])} / Running {running_jobs_count}/{args.max_jobs}. "
-                    "No jobs are being tracked for output. Waiting for at least one job to finish or user input. "
-                    "Submit next job? (y) | in/decrease max-jobs (+/-): ",
-                    end="",
-                    flush=True,
-                )
-                input_future = user_input.start()
                 # Wait for either user input or a job to finish
                 while True:
+                    input_future = user_input.start()
+                    print(
+                        f"Pending submissions: {len(pending_submissions or [])} / Running {running_jobs_count}/{args.max_jobs}. "
+                        "No jobs are being tracked for output. Waiting for at least one job to finish or user input. "
+                        "Submit next job? (y) | in/decrease max-jobs (+/-): ",
+                        end="",
+                        flush=True,
+                    )
                     # Check if any initial jobs have finished
                     still_running = 0
                     for job_id in initial_job_ids:
@@ -1361,7 +1388,9 @@ if __name__ == "__main__":
                         submit_next()
                         break
                     # Check for user input
-                    done, _ = await asyncio.wait([input_future], timeout=interval, return_when=asyncio.FIRST_COMPLETED)
+                    done, _ = await asyncio.wait(
+                        [input_future], timeout=max(30, interval * 4), return_when=asyncio.FIRST_COMPLETED
+                    )
                     if input_future in done:
                         try:
                             result = input_future.result()
@@ -1504,7 +1533,7 @@ if __name__ == "__main__":
                                             {
                                                 run_id: {
                                                     "status": (
-                                                        job_status.name if hasattr(job_status, "name") else job_status
+                                                        job_status.name if hasattr(job_status, "name") else job_status  # pyright: ignore[reportAttributeAccessIssue]
                                                     ),
                                                     "submission_id": job_id,
                                                 }
@@ -1534,7 +1563,7 @@ if __name__ == "__main__":
 
                     if job_id not in task_run_ids:
                         # Use refactored function to extract run ID
-                        run_id = extract_run_id_from_logs(lines)
+                        run_id = extract_run_id_from_logs(lines, is_restore=args.group == "restore")
                         if run_id:
                             task_run_ids[job_id] = run_id
                             group, original_job_id = monitor_jobs_tracked[job_id]

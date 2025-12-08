@@ -1639,9 +1639,27 @@ def verify_wandb_runs(
         else:
             ImportantLogger.important_info(logger, "Wandb run %s (%s) history verified successfully.", run.id, run.url)
     if not single_experiment and all_experiment_results and experiment_validator:
-        experiment_level_failure = experiment_validator(
-            all_experiment_results[experiment_id], online_history_data[experiment_id], trial_dir_max_step[experiment_id]
-        )
+        if experiment_id not in trial_dir_max_step:
+            logger.warning("No trial dir max step data found for experiment_id %s", experiment_id)
+        try:
+            experiment_level_failure = experiment_validator(
+                all_experiment_results[experiment_id],
+                online_history_data[experiment_id],
+                trial_dir_max_step.get(experiment_id, {}),
+            )
+        except KeyError as ke:
+            logger.exception(
+                "Experiment-level validation for experiment_id %s failed due to missing data: %s",
+                experiment_id,
+                str(ke),
+            )
+            experiment_level_failure = None
+            if all_experiment_results.get(experiment_id) or online_history_data.get(experiment_id):
+                experiment_level_failure = experiment_validator(
+                    all_experiment_results.get(experiment_id, {}),
+                    online_history_data.get(experiment_id, {}),
+                    trial_dir_max_step.get(experiment_id, {}),
+                )
         if experiment_level_failure:
             logger.error(
                 "Experiment-level validation for experiment_id %s failed: %s",

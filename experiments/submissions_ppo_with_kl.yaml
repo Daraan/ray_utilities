@@ -204,6 +204,7 @@ pbt_batch_size_large:
     (Ant-v5):
       tws47f2512071317ad554:
         status: RUNNING
+        notes: TODO - restore
         submission_id: pbt_batch_size_large_Ant-v5_2025-12-07_01:22:34
       pbt_batch_size_large_Ant-v5_2025-12-07_00:56:36:
         status: FAILED
@@ -292,6 +293,11 @@ pbt_minibatch_size_2048:
         status: SUCCEEDED
         submission_id:
           pbt_minibatch_size_2048_InvertedPendulum-v5_2025-12-06_16:40:33
+    (Pusher-v5):
+      tws47f251207210179374:
+        status: SUCCEEDED-
+        note: wandb verifican failed
+        submission_id: pbt_minibatch_size_2048_Pusher-v5_2025-12-07_21:00:59
 pbt_minibatch_size_8192:
   comment: tune minibatch_size with fixed train_batch_size_per_learner=8192
   entrypoint_resources:
@@ -368,6 +374,10 @@ pbt_minibatch_size_8192:
         status: SUCCEEDED
         submission_id:
           pbt_minibatch_size_8192_InvertedPendulum-v5_2025-12-05_07:15:18
+    (Pusher-v5):
+      tws47f251207210192f14:
+        status: RUNNING
+        submission_id: pbt_minibatch_size_8192_Pusher-v5_2025-12-07_21:00:59
 pbt_minibatch_size_base:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -455,6 +465,10 @@ pbt_num_envs:
       tws47f251205203460484:
         status: SUCCEEDED
         submission_id: pbt_num_envs_InvertedPendulum-v5_2025-12-05_07:15:18
+    (Pusher-v5):
+      tws47f251207210191914:
+        status: RUNNING
+        submission_id: pbt_num_envs_Pusher-v5_2025-12-07_21:00:59
 pbt_num_envs_base:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -592,6 +606,11 @@ pbt_lr:
       tws47f25120608322b3b4:
         status: FAILED
         submission_id: pbt_lr_Reacher-v5_2025-12-05_21:36:54
+      tws47f2512072225006e4:
+        status: RUNNING
+        submission_id0: pbt_lr_Reacher-v5_2025-12-07_21:00:59
+        submission_id:
+          pbt_lr_Reacher-v5_2025-12-07_21:00:59_restore_2025-12-08_01:06:38
     (InvertedDoublePendulum-v5):
       tws47f2512060941ba724:
         status: SUCCEEDED
@@ -604,6 +623,39 @@ pbt_lr:
       tws47f25120606266af24:
         status: SUCCEEDED
         submission_id: pbt_lr_Humanoid-v5_2025-12-05_21:36:54
+    (Walker2d-v5):
+      tws47f25120721013d384:
+        status: RUNNING
+        submission_id: pbt_lr_Walker2d-v5_2025-12-07_21:00:59
+    (HalfCheetah-v5):
+      tws47f251207210174204:
+        status: RUNNING
+        submission_id: pbt_lr_HalfCheetah-v5_2025-12-07_21:00:59
+    (Swimmer-v5):
+      tws47f251207223023b54:
+        status: RESTORE
+        submission_id: pbt_lr_Swimmer-v5_2025-12-07_21:00:59
+    (Pusher-v5):
+      tws47f251207224126a94:
+        status: RESTORE
+        submission_id: pbt_lr_Pusher-v5_2025-12-07_21:00:59
+    (InvertedPendulum-v5):
+      tws47f2512072311b8014:
+        status: RUNNING
+        submission_id: pbt_lr_InvertedPendulum-v5_2025-12-07_21:00:59
+      InvertedPendulum-v5:
+        status: FAILED
+        submission_id: pbt_lr_InvertedPendulum-v5_2025-12-07_21:00:59
+    (Swimmer-v5, 2025-12-07, 21:00:59, restore):
+      tws47f2512080125621b4:
+        status: RUNNING
+        submission_id:
+          pbt_lr_Swimmer-v5_2025-12-07_21:00:59_restore_2025-12-08_01:06:38
+    (Pusher-v5, 2025-12-07, 21:00:59, restore):
+      tws47f2512080126cc8a4:
+        status: RUNNING
+        submission_id:
+          pbt_lr_Pusher-v5_2025-12-07_21:00:59_restore_2025-12-08_01:06:38
 pbt_lr_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale  - need to repeat because of 2 top groups
@@ -705,6 +757,15 @@ pbt_clip_param_base:
       <TUNE_PARAM>: clip_param
       <ENV_TYPE>: <basic_envs>
 # Add large and base_large variants for clip_param
+  run_ids:
+    (Acrobot-v1):
+      tws47f25120723437fa44:
+        status: RUNNING
+        submission_id: pbt_clip_param_base_Acrobot-v1_2025-12-07_21:00:59
+    (LunarLander-v3):
+      tws47f25120723496cb44:
+        status: RUNNING
+        submission_id: pbt_clip_param_base_LunarLander-v3_2025-12-07_21:00:59
 pbt_clip_param_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -758,6 +819,27 @@ pbt_clip_param:
       tws47f25113002141f594:
         status: SUCCEEDED
         submission_id: pbt_clip_param_Walker2d-v5_2025-11-30_02:13:52
+    (HalfCheetah-v5):
+      tws47f2512072355fe1a4:
+        status: RUNNING
+        submission_id: pbt_clip_param_HalfCheetah-v5_2025-12-07_21:00:59
+    (Reacher-v5):
+      tws47f25120723586df44:
+        status: RUNNING
+        submission_id: pbt_clip_param_Reacher-v5_2025-12-07_21:00:59
+    (Swimmer-v5):
+      tws47f251208003366444:
+        status: RUNNING
+        submission_id: pbt_clip_param_Swimmer-v5_2025-12-07_21:00:59
+    (Pusher-v5):
+      tws47f25120800533d194:
+        status: RUNNING
+        submission_id: pbt_clip_param_Pusher-v5_2025-12-07_21:00:59
+    (InvertedDoublePendulum-v5):
+      tws47f25120801409b594:
+        status: RUNNING
+        submission_id:
+          pbt_clip_param_InvertedDoublePendulum-v5_2025-12-07_21:00:59
 pbt_entropy_coeff_base:
   # TODO: Change to base
   <ENV_TYPE>:

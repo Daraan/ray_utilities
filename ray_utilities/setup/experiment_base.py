@@ -1665,6 +1665,8 @@ class ExperimentSetupBase(
                 restore_file = path / RESTORE_FILE_NAME
             else:
                 restore_file = path
+            if "experiment_state" in path.name:
+                restore_file = path.parent / RESTORE_FILE_NAME
             if not restore_file.exists():
                 # assume RUN_ID is in the path
                 run_id_candidate = path.name.split("-")[-1]
