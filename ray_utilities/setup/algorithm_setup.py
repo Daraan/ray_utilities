@@ -158,9 +158,20 @@ class AlgorithmSetup(
 
         learner_class = None
         # Use gradient accumulation learner for both PPO and DQN
-        if (args.algorithm == "ppo" or (args.algorithm == "default" and issubclass(cls.config_class, PPOConfig))) and (
-            args.accumulate_gradients_every > 1 or args.dynamic_batch
-        ):
+        if args.tune and "kl_coeff" in args.tune:
+            assert args.algorithm in ("ppo", "default"), "kl_coeff tuning only supported for PPO algorithm"
+            from ray_utilities.learners.static_kl_coeff_learner import (  # noqa: PLC0415
+                StaticKLCoeffPPOTorchLearner,
+                StaticKLCoeffPPOTorchLearnerWithGradAccum,
+            )
+
+            if args.accumulate_gradients_every > 1 or args.dynamic_batch:
+                learner_class = StaticKLCoeffPPOTorchLearnerWithGradAccum
+            else:
+                learner_class = StaticKLCoeffPPOTorchLearner
+        elif (
+            args.algorithm == "ppo" or (args.algorithm == "default" and issubclass(cls.config_class, PPOConfig))
+        ) and (args.accumulate_gradients_every > 1 or args.dynamic_batch):
             # import lazy as currently not used elsewhere
             from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import (  # noqa: PLC0415
                 PPOTorchLearnerWithGradientAccumulation,

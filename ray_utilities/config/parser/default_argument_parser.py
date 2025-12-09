@@ -837,9 +837,6 @@ class PPOArgumentParser(_BaseRLlibArgumentParser):
     num_epochs: int = 30
     """Number of SGD epochs to run per training batch"""
 
-    use_kl_loss: bool = False
-    """Whether to use KL divergence loss in the PPO objective."""
-
     entropy_coeff: float = 0.01
     """Coefficient for the entropy regularization term in the PPO objective."""
 
@@ -857,6 +854,12 @@ class PPOArgumentParser(_BaseRLlibArgumentParser):
         For higher rewards this should also be higher
     """
 
+    use_kl_loss: bool = False
+    """Whether to use KL divergence loss in the PPO objective."""
+
+    kl_coeff: float = 0.2
+    """Coefficient for the KL divergence loss in the PPO objective. Requires use_kl_loss to have effect."""
+
     _ppo_specific_tune_choices = (
         "minibatch_size",
         "num_epochs",
@@ -865,20 +868,12 @@ class PPOArgumentParser(_BaseRLlibArgumentParser):
         "clip_param",
         "vf_clip_param",
         "vf_loss_coeff",
+        "kl_coeff",
     )  # type: ClassVar
 
     @classmethod
     def _add_tune_parameters(cls) -> None:
-        cls._valid_tune_choices.update(
-            {
-                "minibatch_size",
-                "minibatch_scale",
-                "entropy_coeff",
-                "clip_param",
-                "vf_clip_param",
-                "vf_loss_coeff",
-            }
-        )
+        cls._valid_tune_choices.update(cls._ppo_specific_tune_choices)
         super()._add_tune_parameters()
 
     def configure(self) -> None:

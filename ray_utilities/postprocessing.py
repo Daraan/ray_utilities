@@ -75,8 +75,8 @@ from typing import (
 
 import numpy as np
 from ray.air.integrations.comet import CometLoggerCallback
+from ray.rllib.algorithms.ppo.ppo import LEARNER_RESULTS_CURR_KL_COEFF_KEY
 from ray.rllib.core import DEFAULT_AGENT_ID, DEFAULT_MODULE_ID
-from ray.tune.result import EPISODE_REWARD_MEAN
 from ray.rllib.utils.metrics import (
     ALL_MODULES,  # pyright: ignore[reportPrivateImportUsage]
     CONNECTOR_PIPELINE_TIMER,
@@ -111,6 +111,7 @@ from ray.rllib.utils.metrics import (
     TIMERS,
     WEIGHTS_SEQ_NO,  # Sequence Number of weights currently used. Increased +1 per update.
 )
+from ray.tune.result import EPISODE_REWARD_MEAN
 from typing_extensions import TypeVar
 
 from ray_utilities.constants import (
@@ -606,6 +607,14 @@ def create_log_metrics(
         effective_train_batch_size = result["config"]["train_batch_size_per_learner"] * grad_accum
 
     current_step = get_current_step(result)
+    tune_params: Any = (
+        {param: result["config"][param] for param in tune_choices if param in result["config"]} if tune_choices else {}
+    )
+    if "kl_coeff" in tune_choices:
+        # get current coeff from learner results
+        curr_kl_coeff: float = result[LEARNER_RESULTS][DEFAULT_MODULE_ID][LEARNER_RESULTS_CURR_KL_COEFF_KEY]  # pyright: ignore[reportAssignmentType]
+        if not math.isclose(curr_kl_coeff, tune_params["kl_coeff"], abs_tol=5e-7):
+            tune_params["curr_kl_coeff"] = curr_kl_coeff  # Should be equal!
     metrics: LogMetricsDict = {
         ENV_RUNNER_RESULTS: {
             EPISODE_RETURN_MEAN: result[ENV_RUNNER_RESULTS].get(
@@ -621,6 +630,7 @@ def create_log_metrics(
         "done": result["done"],
         # NOTE: The first four entries here can show up as progress report
         CURRENT_STEP: current_step,
+        **(cast("LogMetricsDict", tune_params)),  # typing hack
         "batch_size": result["config"]["_train_batch_size_per_learner"],
         "minibatch_size": result["config"]["minibatch_size"],
         # While this could be a config parameter, we can also just calculate it here
@@ -634,10 +644,7 @@ def create_log_metrics(
         EPISODE_REWARD_MEAN: eval_ema if not math.isnan(eval_ema) else eval_mean,
         # add tuned hyperparam value
     }
-    # Add tuned parameters
-    if tune_choices:
-        tune_params = {param: result["config"][param] for param in tune_choices if param in result["config"]}
-        metrics.update(tune_params)  # pyright: ignore
+
     if (grad_accum := result["config"]["learner_config_dict"].get("accumulate_gradients_every", None)) is not None:
         metrics["accumulate_gradients_every"] = grad_accum
 

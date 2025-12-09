@@ -402,7 +402,7 @@ def create_algorithm_config(
             vf_loss_coeff=args.get("vf_loss_coeff", 1.0),  # rllib default is 1.0
             vf_clip_param=args.get("vf_clip_param", 10),  # rllib default is 10
             # vf_clip_param=10,
-            use_kl_loss=args.get("use_kl_loss", False),
+            use_kl_loss=args.get("use_kl_loss", False) or (bool(args["tune"]) and "kl_coeff" in args["tune"]),
             use_gae=True,  # Must be true to use "truncate_episodes"
             # As long as this is not fully deprecated keep it here.
             vf_share_layers=args.get("vf_share_layers", True),

@@ -113,6 +113,9 @@ def should_skip_update(submission_id: str) -> bool:
     return False
 
 
+RE_TIMESTAMP = r"\d{4}-\d{2}-\d{2}_\d{2}:\d{2}:\d{2}"
+
+
 def parse_job_id(job_id: str) -> tuple[str, str]:
     """
     Parse a job ID to extract group and environment.
@@ -130,7 +133,15 @@ def parse_job_id(job_id: str) -> tuple[str, str]:
     # Environment is always of form (\w|\d)+-v\d+
     match = re.match(r"^(.+?)_([A-Za-z0-9]+-v\d+)_\d{4}-\d{2}-\d{2}_\d{2}:\d{2}:\d{2}$", job_id)
     if not match:
-        raise ValueError(f"Cannot parse job ID format: {job_id}")
+        # is it restore
+        if "restore" in job_id:
+            match = re.match(
+                r"^(.+?)_([A-Za-z0-9]+-v\d+)_" + RE_TIMESTAMP + r"_restore_\d{4}-\d{2}-\d{2}_\d{2}:\d{2}:\d{2}$", job_id
+            )
+            if not match:
+                raise ValueError(f"Cannot parse job ID format: {job_id}")
+        else:
+            raise ValueError(f"Cannot parse job ID format: {job_id}")
 
     group = match.group(1)
     environment = match.group(2)
@@ -240,9 +251,10 @@ async def update_job_status(
                     "Job %s %s appears to be deleted or not available, cannot get run ID", job_id, job_status
                 )
                 return False
+            run_id = None
         except Exception as e:
             logger.error("Failed to get run ID for job %s: %r", job_id, e)
-            breakpoint()
+            raise
         if not run_id:
             logger.warning("Could not extract run ID for job %s", job_id)
             # Use job_id as fallback for run_id
@@ -356,6 +368,7 @@ async def main():
             continue
 
         # Determine submissions file for this job
+        job_info = None
         if args.submissions_file == "match":
             job_info = ALL_JOBS.get(job_id)
             if not job_info:

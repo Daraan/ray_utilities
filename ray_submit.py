@@ -752,7 +752,7 @@ def submit_single_job(
             entrypoint_num_gpus=settings.get("entrypoint_num_gpus", 0),
             # While most of the time the jobs do not need that much memory there is a spike at the end
             # possibly related to Wandb & Comet logging finalization.
-            entrypoint_memory=int(settings.get("entrypoint_memory", 4.5 * 1000 * 1000 * 1000)),
+            entrypoint_memory=int(settings.get("entrypoint_memory", 4 * 1000 * 1000 * 1000)),
             entrypoint_resources=settings.get("entrypoint_resources", {"persistent_node": 1}),
             metadata=settings.get("metadata", None),
         )

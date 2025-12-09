@@ -1550,7 +1550,7 @@ def verify_wandb_runs(
                         logger.error("Could not extract trial_id from offline path %s", offline_path)
                         run_id = f"unknown-{unknown_count}"
                         unknown_count += 1
-                elif offline_path.name.endswith("patched.json"):
+                elif offline_path.name.endswith(("patched.json", "parent.json")):
                     continue  # assume there is a normal result file as well
                 else:
                     run_id = offline_path.stem.rsplit("-", 1)[-1]
