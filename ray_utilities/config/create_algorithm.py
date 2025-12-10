@@ -24,6 +24,7 @@ complex algorithm setup scenarios.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from typing import TYPE_CHECKING, Any, Callable, Final, Literal, Optional, TypeVar, cast
 
@@ -207,9 +208,12 @@ def create_algorithm_config(
         # increase time in case of debugging the sampler
         config.env_runners(sample_timeout_s=1000)
     try:
+        vector_mode = VectorizeMode.ASYNC if args["num_envs_per_env_runner"] > 1 else VectorizeMode.SYNC
+        if "GYM_SYNC_VECTOR_MODE" in os.environ:
+            vector_mode = VectorizeMode.SYNC
         config.env_runners(
             # experimental
-            gym_env_vectorize_mode=(VectorizeMode.ASYNC if args["num_envs_per_env_runner"] > 1 else VectorizeMode.SYNC),  # pyright: ignore[reportArgumentType]
+            gym_env_vectorize_mode=vector_mode,  # pyright: ignore[reportArgumentType]
         )
     except TypeError:
         logger.error("Current ray version does not support AlgorithmConfig.env_runners(gym_env_vectorize_mode=...)")
@@ -405,7 +409,7 @@ def create_algorithm_config(
             use_kl_loss=args.get("use_kl_loss", False) or (bool(args["tune"]) and "kl_coeff" in args["tune"]),
             use_gae=True,  # Must be true to use "truncate_episodes"
             # As long as this is not fully deprecated keep it here.
-            vf_share_layers=args.get("vf_share_layers", True),
+            vf_share_layers=args.get("vf_share_layers", False),
         )
     elif algorithm_type == "dqn":
         assert isinstance(config, DQNConfig)
@@ -446,7 +450,7 @@ def create_algorithm_config(
         # Workaround for https://github.com/ray-project/ray/issues/58715 avoid no sync mishaps
         from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig  # noqa: PLC0415
 
-        model_config["vf_share_layers"] = DefaultModelConfig.vf_share_layers
+        model_config["vf_share_layers"] = DefaultModelConfig.vf_share_layers if algorithm_type != "ppo" else False
     # Create a single agent RL module spec.
     # Note: legacy keys are updated below
     module_spec = RLModuleSpec(

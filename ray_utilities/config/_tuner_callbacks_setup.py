@@ -211,6 +211,9 @@ class TunerCallbackSetup(_TunerCallbackSetupBase):
             auto_metric_step_rate=10,  # How often batch metrics are logged. Default 10
             auto_histogram_epoch_rate=1,  # How often histograms are logged. Default 1
             parse_args=False,
+            display_summary_level=(
+                0 if args.command_str == "pbt" and (not args.comet or "upload" not in args.comet) else 1
+            ),
             log_git_metadata=not args.test,  # disabled by rllib; might cause throttling -> needed for Reproduce button
             log_git_patch=False,
             log_graph=False,  # computation graph, Default True

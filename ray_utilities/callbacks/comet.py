@@ -196,17 +196,27 @@ def get_default_workspace() -> str:
 
 
 @contextmanager
-def _catch_comet_offline_logger():
+def _catch_comet_offline_logger(*, disable_print: bool | None = None):
     """Context manager to temporarily add a stream handler to the comet_ml logger and yield the log stream."""
     from comet_ml.offline import LOGGER as COMET_LOGGER
 
     log_stream = io.StringIO()
     handler = logging.StreamHandler(log_stream)
+    if disable_print is True or (disable_print is None and "DISABLE_COMET_SUMMARY_PRINT" in os.environ):
+        # disable existing loggers
+        comet_handlers = COMET_LOGGER.handlers
+        levels = {}
+        for handler in comet_handlers:
+            levels[handler] = handler.level
+            COMET_LOGGER.setLevel(logging.WARNING)
     COMET_LOGGER.addHandler(handler)
     try:
         yield log_stream
     finally:
         COMET_LOGGER.removeHandler(handler)
+        # Reset levels
+        for handler in COMET_LOGGER.handlers:
+            handler.setLevel(levels[handler])
 
 
 def comet_upload_offline_experiments(tracker: Optional[CometArchiveTracker] = None):

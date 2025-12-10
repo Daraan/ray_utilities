@@ -943,7 +943,6 @@ async def monitor_job_statuses(
         jobs_tracked_left = jobs_tracked.copy()
         final_states: dict[str, JobStatus] = {}
         failed_jobs: dict[str, tuple[str, str]] = {}
-        global running_jobs_count
 
         while jobs_tracked_left or (pending_submissions and len(pending_submissions) > 0):
             print("-" * 80)
@@ -1243,7 +1242,13 @@ if __name__ == "__main__":
         "--excludes",
         nargs="+",
         default=[],
-        help="Exclude submissions whose entrypoint contains any of these patterns.",
+        help="Exclude submissions whose entrypoint or submission_id contains any of these patterns.",
+    )
+    parser.add_argument(
+        "--includes",
+        nargs="+",
+        default=[],
+        help="Only include submissions whose entrypoint or submission_id contains any of these patterns.",
     )
     parser.add_argument(
         "--include-running",
@@ -1379,6 +1384,12 @@ if __name__ == "__main__":
                 excludes=args.excludes,
                 include_running=args.include_running,
             )
+        if args.includes:
+            submissions_dict = {
+                job_id: settings
+                for job_id, settings in submissions_dict.items()
+                if any(inc in settings.get("entrypoint", "") or inc in job_id for inc in args.includes)
+            }
         submissions = list(submissions_dict.items())
 
         if not args.test and args.max_jobs is not None and args.max_jobs > 0:
@@ -1438,7 +1449,7 @@ if __name__ == "__main__":
                 )
                 args.max_jobs = max(1, running_jobs_count)
                 return False
-            while pending_submissions:
+            while pending_submissions and running_jobs_count < args.max_jobs:
                 next_job_id, next_settings = pending_submissions.pop(0)
                 submission_id_out = submit_single_job(next_job_id, next_settings, args, track_for_run_id=False)
                 if submission_id_out:

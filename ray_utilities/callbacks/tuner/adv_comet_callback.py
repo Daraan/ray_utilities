@@ -608,6 +608,7 @@ class AdvCometLoggerCallback(
                     self._processes.append(process)
 
     def on_experiment_end(self, trials: list[Trial], **info):
+        # Suppress output
         super().on_experiment_end(trials, **info)
         # if there are any trials left (maybe because of an error and log_trial_end was not called)
         for experiment in self._trial_experiments.values():
