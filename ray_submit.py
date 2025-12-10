@@ -848,6 +848,8 @@ def submit_single_job(
         print(f"Failed to submit job {job_id}: {e}, settings: {settings}")
         return None
     else:
+        global running_jobs_count
+        running_jobs_count += 1
         if track_for_run_id:
             # Start tracking logs to extract run_id
             try:
@@ -1051,6 +1053,7 @@ async def monitor_job_statuses(
                                 if submission_id_out:
                                     group = next_settings.get("group", args.group)
                                     jobs_tracked_left[submission_id_out] = (group, next_job_id)
+                                    print("Submitted ", submission_id_out)
                             elif choice == "end":
                                 print("Sending Stop to all running processes")
                                 for job_id in jobs_tracked_left:
@@ -1413,7 +1416,10 @@ if __name__ == "__main__":
     if args.test:
         import sys
 
-        print(f"\n-----------------------\nTest mode: would submit {_submission_counter} jobs.")
+        print(
+            f"\n-----------------------\nTest mode: would submit {_submission_counter} jobs. "
+            f"Currently running: {running_jobs_count}"
+        )
         sys.exit(0)
     assert CLIENT
 
@@ -1435,7 +1441,7 @@ if __name__ == "__main__":
         async def get_next(aiterator):
             return await aiterator.__anext__()
 
-        def submit_next():
+        def submit_next(*, force: bool = False):
             nonlocal recent_failed_timestamps
             global running_jobs_count
             assert CLIENT
@@ -1449,7 +1455,8 @@ if __name__ == "__main__":
                 )
                 args.max_jobs = max(1, running_jobs_count)
                 return False
-            while pending_submissions and running_jobs_count < args.max_jobs:
+            while pending_submissions and (force or running_jobs_count < args.max_jobs):
+                force = False
                 next_job_id, next_settings = pending_submissions.pop(0)
                 submission_id_out = submit_single_job(next_job_id, next_settings, args, track_for_run_id=False)
                 if submission_id_out:
@@ -1538,8 +1545,10 @@ if __name__ == "__main__":
                             choice = result.strip().lower()
                             if choice == "y":
                                 print("Submitting next job manually...")
-                                if not submit_next():
+                                if not submit_next(force=True):
                                     print("No more pending jobs.")
+                                else:
+                                    print("Submitted next job.")
                                 break
                             if choice == "+":
                                 print("Increasing number of concurrent jobs by 1.")
@@ -1591,8 +1600,10 @@ if __name__ == "__main__":
                             choice = result.strip().lower()
                             if choice == "y":
                                 print("Submitting next job manually...")
-                                if not submit_next():
+                                if not submit_next(force=True):
                                     print("No more pending jobs.")
+                                else:
+                                    print("Submitted next job")
                             elif choice == "end":
                                 print("Sending Stop to all running processes")
                                 for job_id in async_read_tasks.keys():
@@ -1718,7 +1729,7 @@ if __name__ == "__main__":
                             group, original_job_id = monitor_jobs_tracked[job_id]
 
                             # Update the global mapping
-                            if args.group == "restore" or (submission_id and "restore" in submission_id):
+                            if args.group == "restore" or (job_id and "restore" in job_id):
                                 env_name = original_job_id.removeprefix(group + "_").split("_")[0]
                                 run_key = f"({env_name})"
                             else:

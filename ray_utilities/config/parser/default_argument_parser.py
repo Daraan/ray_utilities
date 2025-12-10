@@ -779,6 +779,13 @@ class TuneableParameters(Tap):
 
     def configure(self) -> None:
         self._add_tune_parameters()
+        self.add_argument(
+            "--tune",
+            nargs="+",
+            default=False,
+            choices=self._valid_tune_choices,
+            type=_parse_tune_choices,
+        )
         super().configure()
 
 
@@ -816,6 +823,12 @@ class _BaseRLlibArgumentParser(TuneableParameters, _EnvRunnerParser):
             "-lr",
             type=_parse_lr,
         )
+
+    @classmethod
+    def _add_tune_parameters(cls) -> None:
+        """Add tunable parameter arguments to the parser. This method should extend _valid_tune_choices"""
+        cls._valid_tune_choices.update(("gamma", "lr", "grad_clip", "batch_size"))
+        super()._add_tune_parameters()
 
 
 class PPOArgumentParser(_BaseRLlibArgumentParser):
@@ -1625,9 +1638,6 @@ class OptunaArgumentParser(TuneableParameters, GoalParser, Tap):
             [
                 "all",
                 "accumulate_gradients_every",
-                "batch_size",
-                "lr",
-                "grad_clip",
                 "num_envs_per_env_runner",
                 "test",
             ]
@@ -1636,13 +1646,6 @@ class OptunaArgumentParser(TuneableParameters, GoalParser, Tap):
 
     def configure(self) -> None:
         super().configure()
-        self.add_argument(
-            "--tune",
-            nargs="+",
-            default=False,
-            choices=self._valid_tune_choices,
-            type=_parse_tune_choices,
-        )
 
     def process_args(self) -> None:
         super().process_args()

@@ -132,15 +132,17 @@ class SimpleMLPParser(Tap):
         self.add_argument("--head_fcnet_hiddens", nargs="*", type=literal_eval)
         self.add_argument("--no_vf_share_layers", dest="vf_share_layers", action="store_false", required=False)
         self.add_argument(
-            "--vf_share_layers", dest="vf_share_layers", action="store_true", default=True, required=False
+            "--vf_share_layers", dest="vf_share_layers", action="store_true", default=False, required=False
         )
 
     def process_args(self) -> None:
         # flatten list of lists
         self.fcnet_hiddens = tree.flatten(self.fcnet_hiddens)
         self.head_fcnet_hiddens = tree.flatten(self.head_fcnet_hiddens)
-        import sys  # XXX
+        import sys, os  # XXX
 
+        if "DEBUG" in os.environ:
+            breakpoint()
         if "--no_vf_share_layers" in sys.argv:
             assert not self.vf_share_layers
         super().process_args()

@@ -53,7 +53,7 @@ default_distributions: dict[str, DistributionDefinition] = {
     "gamma": {"grid_search": [0.8, 0.85, 0.9, 0.95, 0.99, 0.999, 0.9999]},
     "lr": {"grid_search": sorted([*np.round(np.logspace(np.log2(5e-8), np.log2(0.0015), num=10, base=2), 8), 1e-4])},
     "batch_size": {"grid_search": [128, 256, 512, 1024, 2048, 4096, 8192, 8192 * 2]},
-    "grad_clip": {"grid_search": [0.1, 0.5, 1.0, 10.0, 40.0, 1000, None]},
+    "grad_clip": {"grid_search": [0.1, 0.5, 1.0, 10.0, 40.0, 1000.0, None]},
     # NOTE: Upperbound of accumulate_gradients_every num_epochs * train_batch_size_per_learner / minibatch_size
     "accumulate_gradients_every": {
         "grid_search": [2**i for i in list(range(int(log2(MAX_DYNAMIC_BATCH_SIZE / ACCUMULATION_BATCH_SIZE_BASE)) + 1))]
@@ -75,7 +75,7 @@ default_distributions: dict[str, DistributionDefinition] = {
     },
     "vf_loss_coeff": {"grid_search": [*np.linspace(0.1, 1.0, num=7).tolist(), 0.0, 1.25, 1.5]},
     # vf_clip_param - default 10 - clips in [0, vf_clip_param] - should be tuned for each env
-    "vf_clip_param": {"grid_search": [1, 5, 10, 25, 50, 75, 100, 500, 1000]},
+    "vf_clip_param": {"grid_search": [0.05, 0.125, 0.33, 1.0, 2.0, 10.0, 100.0]},
     # kl_coeff if use_kl_loss; default is 0.2, target is 0.1
     "kl_coeff": {"grid_search": [0.025, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3]},
     # endregion PPO

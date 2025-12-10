@@ -30,12 +30,20 @@ def _match_sympol(job: JobDetails) -> bool:
     return bool((job.submission_id and "sympol" in job.submission_id) or "sympol" in job.entrypoint)
 
 
+def _match_fine(job: JobDetails) -> bool:
+    return bool(
+        ("--tag:pbt-fine" in job.entrypoint or "pbt_fine" in (job.submission_id or ""))
+        and "sympol" not in job.entrypoint
+    )
+
+
 def _match_ppo_with_kl(job: JobDetails) -> bool:
     return bool("--use_kl_loss" in job.entrypoint and "sympol" not in job.entrypoint)
 
 
 file_matcher: dict[str, Matcher] = {
     "experiments/submissions_sympol.yaml": _match_sympol,
+    "experiments/pbt_fine_base.yaml": _match_fine,
     "experiments/submissions_ppo_with_kl.yaml": _match_ppo_with_kl,
 }
 default_file = "experiments/submissions_pbt_grouped.yaml"

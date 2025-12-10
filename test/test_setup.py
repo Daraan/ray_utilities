@@ -1047,7 +1047,7 @@ class TestMLPSetup(InitRay, num_cpus=4):
         # NOTE: This test assumes on vf_share_layers=True, which creates the shared module.encoder.encoder
 
         for args in iter_cases(cases):
-            with patch_args(*args):
+            with patch_args(*args, "--vf_share_layers"):
                 setup = MLPSetup()
             algo = setup.build_algo()
             module: DefaultPPOTorchRLModule = algo.get_module()  # pyright: ignore[reportAssignmentType]

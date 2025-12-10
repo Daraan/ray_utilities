@@ -1292,7 +1292,8 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
         """
         score = super()._save_trial_state(state, time, cast("dict", result), trial)
         # Save training iteration for the step for loggers like WandB / Comet
-        state.last_training_iteration = result[TRAINING_ITERATION]  # pyright: ignore[reportAttributeAccessIssue]
+        # Trial might have never run, store 0
+        state.last_training_iteration = result.get(TRAINING_ITERATION, 0)  # pyright: ignore[reportAttributeAccessIssue]
         try:
             state.current_env_steps = get_current_step(result)  # pyright: ignore[reportArgumentType, reportAttributeAccessIssue]
         except KeyError:
