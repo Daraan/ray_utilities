@@ -137,6 +137,40 @@ handle_timeout() {
     elif [ -n "${PYTHON_PID}" ] && kill -0 "${PYTHON_PID}" 2>/dev/null; then
         echo "Forwarding SIGUSR1 to Python process (PID: ${PYTHON_PID})"
         kill -SIGUSR1 "${PYTHON_PID}"
+    elif [ -z "${PYTHON_PID}" ]; then
+        USER_PROCS=$(pgrep -u "$(id -u)" -f python || true)
+        FILTERED_PROCS=""
+        for pid in $USER_PROCS; do
+            # Check if the process command line contains 'python' and does NOT contain 'site-packages'
+            if ! tr '\0' '\n' < /proc/$pid/cmdline | grep -q -e 'site-packages' -e "bin/"; then
+                FILTERED_PROCS="$FILTERED_PROCS $pid"
+            fi
+        done
+        FILTERED_PROCS=$(echo "$FILTERED_PROCS" | xargs)  # Trim whitespace
+        if [ -n "${FILTERED_PROCS}" ]; then
+            echo "Sending SIGUSR1 to user python processes (not in bin or site-packages) / should only be training scripts ${FILTERED_PROCS}"
+            # This will be fetched by tuners to trigger checkpoint saving
+            kill -SIGUSR1 ${FILTERED_PROCS}
+            sleep 400
+            # Send SIGUSR2 to all processes matching 'ray::*Trainable' that are not in state "S"
+            RAY_TRAINABLE_PIDS=$(pgrep -u "$(id -u)" -f 'ray::.*Trainable' || true)
+            for pid in $RAY_TRAINABLE_PIDS; do
+                # Check process state (column 3 in /proc/<pid>/stat)
+                PROC_STATE=$(awk '{print $3}' /proc/"$pid"/stat 2>/dev/null || echo "")
+                if [ "$PROC_STATE" != "S" ]; then
+                    echo "Sending SIGUSR2 to ray::*Trainable process $pid (state: $PROC_STATE)"
+                    kill -SIGUSR2 "$pid"
+                else
+                    echo "Skipping ray::*Trainable process $pid (state: $PROC_STATE)"
+                fi
+            done
+            echo "Stopping ray cluster in 100 seconds..."
+            sleep 100
+            echo "Stopping ray cluster now."
+            ray stop --grace-period 40 || true
+        else
+            echo "Warning: No user python processes found to signal (excluding site-packages)"
+        fi
     else
         echo "Warning: Python process not found or already terminated"
     fi

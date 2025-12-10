@@ -693,7 +693,17 @@ class TopPBTTrialScheduler(AddExperimentKeysMixin, RunSlowTrialsFirstMixin, Popu
                 last_time = metadata[self._time_attr]
             elif trial.last_result:
                 # NOTE: This result could be from BEFORE the perturbation update and be out of sync with the checkpoint
-                last_time = trial.last_result[self._time_attr]
+                try:
+                    last_time = trial.last_result[self._time_attr]
+                except KeyError:
+                    # If we restore before the first perturbation not all trials might have been run
+                    if trial.checkpoint is not None:
+                        logger.error(
+                            "Failed to access time attribute '%s' in last_result for trial %s. Assuming last train time was never.",
+                            self._time_attr,
+                            trial,
+                        )
+                    last_time = 0
             _trial_status_set = self._update_trial_states_after_unpickle(trial, last_time=last_time)
             # CRITICAL - most trials do not load their perturbed checkpoint but the checkpoint BEFORE perturbation
             # -> save and load checkpoint paths after perturbation

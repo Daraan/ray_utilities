@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from copy import deepcopy
 import itertools
 import os
 import re
@@ -19,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 from pprint import pformat
-from typing import AsyncIterator, Collection, cast
+from typing import AsyncIterator, Collection, Sequence, cast
 
 from ray.job_submission import JobStatus, JobSubmissionClient
 
@@ -63,9 +64,63 @@ EXCLUDE_WDIR_FILES = [
     "test",
 ]
 
+GroupName = str
+EnvironmentKey = str
+RunID = str
+SubmissionID = str
+
 # Global variable for tracking running jobs count
 running_jobs_count = 0
 initial_running_jobs = 0
+
+# Global mapping of submission_id to (group, run_key, run_id)
+submission_id_to_run_id: dict[str, tuple[GroupName, EnvironmentKey, RunID]] = {}
+
+
+def build_submission_id_mapping(submissions_file: str) -> dict[str, tuple[GroupName, EnvironmentKey, RunID]]:
+    """
+    Scan the YAML file and build a mapping of submission_id to (group, run_key, run_id).
+
+    This allows us to look up the correct run_id when we only have a submission_id,
+    preventing the creation of duplicate entries with environment names as keys.
+
+    Args:
+        submissions_file: Path to the YAML file
+
+    Returns:
+        Dict mapping submission_id to tuple of (group_name, run_key, run_id)
+    """
+    mapping = {}
+
+    with open(submissions_file, "r") as f:
+        data = yaml_load(f)
+
+    for group_name, group_data in data.items():
+        if not isinstance(group_data, dict) or "run_ids" not in group_data:
+            continue
+
+        run_ids_data = group_data.get("run_ids", {})
+        for run_key, runs in run_ids_data.items():
+            if not isinstance(runs, dict):
+                continue
+
+            for run_id, run_info in runs.items():
+                if not isinstance(run_info, dict):
+                    continue
+
+                # Check for single submission_id
+                submission_id = run_info.get("submission_id")
+                if submission_id:
+                    mapping[submission_id] = (group_name, run_key, run_id)
+
+                # Check for submission_ids list
+                submission_ids = run_info.get("submission_ids")
+                if isinstance(submission_ids, list):
+                    for sid in submission_ids:
+                        if sid:
+                            mapping[sid] = (group_name, run_key, run_id)
+
+    return mapping
 
 
 def resolve_substitution_value(value: str | list[str], yaml_data: dict) -> list[str]:
@@ -507,6 +562,7 @@ def write_back(
 
         with open(file_path, "r") as f:
             data = yaml_load(f)
+        backup = deepcopy(data)
 
         # Don't remove timestamp suffix for restore jobs
         if not is_restore:
@@ -557,6 +613,16 @@ def write_back(
                 current_runs = data[actual_group]["run_ids"].get(run_key, {})
                 for run_key_id, run_info in run_id.items():
                     if isinstance(run_info, dict):
+                        # Try to find the correct run_id using submission_id from the global mapping
+                        submission_id_from_info = run_info.get("submission_id")
+                        if submission_id_from_info and submission_id_from_info in submission_id_to_run_id:
+                            mapped_group, mapped_run_key, mapped_run_id = submission_id_to_run_id[
+                                submission_id_from_info
+                            ]
+                            # Verify this is the correct group and run_key
+                            if mapped_group == actual_group and mapped_run_key == run_key:
+                                # Use the mapped run_id instead of the provided one
+                                run_key_id = mapped_run_id  # noqa: PLW2901
                         current_run_data = current_runs.get(run_key_id, {})
                         current_status = (
                             current_run_data.get("status", "RUNNING")
@@ -577,6 +643,10 @@ def write_back(
                             run_id[run_key_id] = run_info = run_info.copy()  # noqa: PLW2901
                             run_info.pop("status", None)
 
+                        # Update the global mapping with this submission_id
+                        if submission_id_from_info:
+                            submission_id_to_run_id[submission_id_from_info] = (actual_group, run_key, run_key_id)
+
                 data[actual_group]["run_ids"].setdefault(run_key, {})
                 deep_update(data[actual_group]["run_ids"][run_key], run_id)
             else:
@@ -595,8 +665,14 @@ def write_back(
                     return
 
                 data[actual_group]["run_ids"].setdefault(run_key, {})[run_id] = "RUNNING"
-        with open(file_path, "w") as f:
-            yaml_dump(data, f)
+        try:
+            with open(file_path, "w") as f:
+                yaml_dump(data, f)
+        except Exception as e:
+            print(f"Error writing back to {file_path}: {e}")
+            with open(file_path, "w") as f:
+                yaml_dump(backup, f)
+
     finally:
         # Release lock
         if lock_file.exists():
@@ -698,6 +774,16 @@ async def track_job_for_run_id(
                     file=submissions_file,
                     is_restore=is_restore,
                 )
+
+                # Update the global mapping
+                if is_restore:  # XXX: Could add or "restore" in submission_id
+                    env_name = original_job_id.removeprefix(group + "_").split("_")[0]
+                    run_key = f"({env_name})"
+                else:
+                    replacement_parts = original_job_id.removeprefix(group + "_").split("_")
+                    run_key = "(" + ", ".join(replacement_parts).rstrip(", ") + ")"
+                submission_id_to_run_id[submission_id] = (group, run_key, run_id)
+
                 return run_id
 
             # Stop after collecting enough lines
@@ -788,13 +874,35 @@ def submit_single_job(
 background_tasks = set()
 
 
+def get_all_job_statuses(client: JobSubmissionClient) -> dict[str, JobStatus | str]:
+    """
+    Get the status of all jobs from the Ray cluster.
+
+    Returns:
+        Dict mapping submission_id to job status
+    """
+    all_jobs = client.list_jobs()
+    status_dict = {}
+    count_running = 0
+    for job_status in all_jobs:
+        status = job_status.status
+        if status == JobStatus.RUNNING:
+            count_running += 1
+        if not job_status.submission_id:
+            continue
+        status_dict[job_status.submission_id] = status.value
+    global running_jobs_count
+    running_jobs_count = count_running
+    return status_dict
+
+
 def scan_monitor_running_jobs(submissions_file: str) -> dict[str, tuple[str, str]]:
     """
     Scan the submissions file for all jobs that are currently RUNNING.
     Returns a dict mapping submission_id to (group, original_job_id).
-    Updates the global running_jobs_count and initial_running_jobs.
+    Updates the global initial_running_jobs.
     """
-    global running_jobs_count, initial_running_jobs
+    global initial_running_jobs
     with open(submissions_file, "r") as f:
         data = yaml_load(f)
     monitor_jobs_tracked: dict[str, tuple[str, str]] = {}
@@ -811,8 +919,7 @@ def scan_monitor_running_jobs(submissions_file: str) -> dict[str, tuple[str, str
                     replacement_parts = [p.strip() for p in run_key.strip("()").split(",") if p.strip()]
                     original_job_id = "_".join(replacement_parts)
                     monitor_jobs_tracked[submission_id] = (group_name, original_job_id)
-    running_jobs_count = len(monitor_jobs_tracked)
-    initial_running_jobs = running_jobs_count
+    initial_running_jobs = len(monitor_jobs_tracked)
     return monitor_jobs_tracked
 
 
@@ -836,29 +943,34 @@ async def monitor_job_statuses(
         jobs_tracked_left = jobs_tracked.copy()
         final_states: dict[str, JobStatus] = {}
         failed_jobs: dict[str, tuple[str, str]] = {}
-        global running_jobs_count  # , initial_running_jobs
+        global running_jobs_count
 
-        # running_jobs_count always includes initial_running_jobs + jobs submitted by this script and still running
         while jobs_tracked_left or (pending_submissions and len(pending_submissions) > 0):
             print("-" * 80)
+
+            # Get all job statuses in one call
+            all_job_statuses = get_all_job_statuses(CLIENT)
+
             jobs_to_delete = []
             failed_count = 0
             other_count = 0
             running_count = 0
+
             for job_id, group_and_job_id in jobs_tracked_left.items():
                 # If job previously failed, skip querying but keep in list
                 if job_id in failed_jobs:
                     failed_count += 1
                     continue
-                try:
-                    job_status = CLIENT.get_job_status(job_id)
-                except RuntimeError as e:
-                    # If we delete a job it does not show up anymore
-                    if "does not exist" not in str(e):
-                        raise
+
+                # Get status from the bulk list
+                job_status = all_job_statuses.get(job_id)
+                if job_status is None:
+                    # Job not in list, either doesn't exist or was deleted
                     job_status = final_states.get(job_id, "UNKNOWN (Deleted)")
+
                 current_time = time.strftime("%Y-%m-%d %H:%M:%S")
                 print(f"[{current_time}] Job {job_id} status: {job_status}.")
+
                 if job_status == JobStatus.RUNNING:
                     running_count += 1
                 elif job_status == JobStatus.FAILED:
@@ -866,10 +978,16 @@ async def monitor_job_statuses(
                     failed_jobs[job_id] = group_and_job_id
                 else:
                     other_count += 1
+
                 if job_status in JOB_END_STATES:
                     job_status = cast("JobStatus", job_status)
                     final_states[job_id] = job_status
-                    if run_id := task_run_ids.get(job_id):
+                    # Try to get run_id from task_run_ids or from the global mapping
+                    run_id = task_run_ids.get(job_id)
+                    if not run_id and job_id in submission_id_to_run_id:
+                        _, _, run_id = submission_id_to_run_id[job_id]
+
+                    if run_id:
                         group, original_job_id = group_and_job_id
                         write_back(
                             group,
@@ -883,10 +1001,9 @@ async def monitor_job_statuses(
                             file=args.submissions_file,
                         )
                     jobs_to_delete.append(job_id)
+
             for job_id in jobs_to_delete:
                 jobs_tracked_left.pop(job_id, None)
-
-            running_jobs_count = running_count
 
             print(f"Summary: {running_jobs_count} running, {failed_count} failed, {other_count} other.")
 
@@ -906,8 +1023,6 @@ async def monitor_job_statuses(
                         # Extract group from settings
                         group = next_settings.get("group", args.group)
                         jobs_tracked_left[submission_id_out] = (group, next_job_id)
-                        running_count += 1
-                        running_jobs_count = running_count
 
             if not jobs_tracked_left and not pending_submissions:
                 break
@@ -937,8 +1052,6 @@ async def monitor_job_statuses(
                                 if submission_id_out:
                                     group = next_settings.get("group", args.group)
                                     jobs_tracked_left[submission_id_out] = (group, next_job_id)
-                                    running_count += 1
-                                    running_jobs_count = running_count
                             elif choice == "end":
                                 print("Sending Stop to all running processes")
                                 for job_id in jobs_tracked_left:
@@ -1003,10 +1116,12 @@ class AsyncInput:
             self.future.cancel()
 
 
-def collect_restore_jobs(yaml_file: str) -> dict[str, dict]:
+def collect_restore_jobs(yaml_file: str, excludes: Sequence[str] = ()) -> dict[str, dict]:
     """
     Scan the YAML file for jobs with status: RESTORE and collect their info.
-
+    Args:
+        yaml_file: Path to the YAML submissions file
+        excludes: List of patterns to exclude from restore jobs
     Returns:
         Dict of dicts with keys: group, env, run_id, old_submission_id, restore_folder, entrypoint, submission_id
     """
@@ -1016,6 +1131,8 @@ def collect_restore_jobs(yaml_file: str) -> dict[str, dict]:
     restore_jobs = {}
     for group_name, group_data in data.items():
         if not isinstance(group_data, dict):
+            continue
+        if any(excl in group_name for excl in excludes):
             continue
         entrypoint_pattern = None
         # Try to get entrypoint pattern for this group
@@ -1035,6 +1152,8 @@ def collect_restore_jobs(yaml_file: str) -> dict[str, dict]:
                 if isinstance(job, dict) and "entrypoint" in job:
                     entrypoint_pattern = job["entrypoint"]
                     break
+        if entrypoint_pattern and any(excl in entrypoint_pattern for excl in excludes):
+            continue
 
         run_ids = group_data.get("run_ids", {})
         for env_key, runs in run_ids.items():
@@ -1063,6 +1182,11 @@ def collect_restore_jobs(yaml_file: str) -> dict[str, dict]:
                         if old_submission_id
                         else f"restore_{env}_{run_id}_{TIMESTAMP_SUFFIX}"
                     )
+                    if any(excl in submission_id for excl in excludes) or any(
+                        excl in (entrypoint or "") for excl in excludes
+                    ):
+                        continue
+
                     restore_jobs[submission_id] = {
                         "group": group_name,
                         "env": env,
@@ -1149,12 +1273,17 @@ if __name__ == "__main__":
             sys.exit(1)
         CLIENT = None
 
+    # Build the submission_id to run_id mapping from the YAML file
+    submission_id_to_run_id = build_submission_id_mapping(args.submissions_file)
+    print(f"Loaded {len(submission_id_to_run_id)} submission_id mappings from YAML file")
+
     jobs_tracked: dict[str, AsyncIterator[str]] = {}
     # For monitor mode, this will be dict[submission_id, tuple[group, original_job_id]]
     # For submission mode, this will be dict[submission_id, tuple[group, original_job_id]]
     monitor_jobs_tracked: dict[str, tuple[str, str]] = {}
-    task_run_ids = {}
+    task_run_ids: dict[SubmissionID, RunID] = {}
     pending_submissions: list[tuple[str, dict]] = []
+    submitted_any = False
 
     if args.group == "monitor":
         monitor_groups = set(args.monitor_group)
@@ -1191,14 +1320,18 @@ if __name__ == "__main__":
             assert args.group != "monitor", "--monitor-running cannot be used in monitor mode."
             print("Scanning for all currently RUNNING jobs before submitting new jobs...")
             monitor_jobs_tracked = scan_monitor_running_jobs(args.submissions_file)
-            # Query actual status for each job and update running_jobs_count accordingly
+
+            # Get all job statuses in one call
+            all_job_statuses = get_all_job_statuses(CLIENT)
+
+            # Query actual status for each job
             actual_running = 0
             for submission_id, (group_name, original_job_id) in monitor_jobs_tracked.items():
-                try:
-                    job_status = CLIENT.get_job_status(submission_id)
-                except Exception as e:  # noqa: BLE001
-                    print(f"Failed to get status for job {submission_id}: {e!r}")
+                job_status = all_job_statuses.get(submission_id)
+                if job_status is None:
+                    print(f"Job {submission_id} not found in cluster jobs list.")
                     continue
+
                 if job_status == JobStatus.RUNNING:
                     actual_running += 1
                 else:
@@ -1208,11 +1341,11 @@ if __name__ == "__main__":
                         original_job_id,
                         {
                             original_job_id: {
-                                "status": job_status.name if hasattr(job_status, "name") else job_status,
+                                "status": job_status.name if hasattr(job_status, "name") else job_status,  # pyright: ignore[reportAttributeAccessIssue]
                                 "submission_id": submission_id,
                             }
                         },
-                        # is_restore=args.group == "restore",
+                        is_restore="restore" in submission_id,
                         file=args.submissions_file,
                     )
                 print(
@@ -1220,7 +1353,6 @@ if __name__ == "__main__":
                     "Running",
                     actual_running,
                 )
-            running_jobs_count = actual_running
             print(f"After scan, {running_jobs_count} jobs are still RUNNING.")
 
         assert args.group, "A group must be specified if not in monitor mode."
@@ -1236,8 +1368,7 @@ if __name__ == "__main__":
             )
         elif args.group == "restore":
             print("Submitting all jobs with status: RESTORE")
-            submissions_dict = collect_restore_jobs(args.submissions_file)
-            # submit_restore_jobs(args.submissions_file, CLIENT)
+            submissions_dict = collect_restore_jobs(args.submissions_file, excludes=args.excludes)
         else:
             submissions_dict = get_submissions(
                 args.group,
@@ -1261,6 +1392,7 @@ if __name__ == "__main__":
         for job_id, settings in submissions:
             submission_id_out = submit_single_job(job_id, settings, args)
             if submission_id_out:
+                submitted_any = True
                 jobs_tracked[submission_id_out] = CLIENT.tail_job_logs(submission_id_out)  # pyright: ignore[reportOptionalMemberAccess]
                 # Extract group from settings or use args.group as fallback
                 group = settings.get("group", args.group)
@@ -1337,7 +1469,6 @@ if __name__ == "__main__":
         if args.monitor_running and monitor_jobs_tracked:
             initial_job_ids = set(monitor_jobs_tracked.keys())
 
-        global running_jobs_count
         recent_failed_timestamps: list[float] = []
 
         while True:
@@ -1346,19 +1477,17 @@ if __name__ == "__main__":
 
             # Update initial_running_jobs by checking the status of initial jobs
             if args.monitor_running and initial_job_ids:
+                # Get all job statuses in one call
+                all_job_statuses = get_all_job_statuses(CLIENT)
+
                 still_running = 0
                 for job_id in initial_job_ids:
-                    try:
-                        job_status = CLIENT.get_job_status(job_id)
-                    except Exception:
-                        job_status = "UNKNOWN"
+                    job_status = all_job_statuses.get(job_id, "UNKNOWN")
                     initial_job_status[job_id] = job_status
                     if job_status == JobStatus.RUNNING:
                         still_running += 1
                 global initial_running_jobs
                 initial_running_jobs = still_running
-                global running_jobs_count
-                running_jobs_count = initial_running_jobs + len(async_read_tasks)
 
             # If async_read_tasks is empty but there are initial jobs running, wait for user input or job completion
             if not async_read_tasks and args.monitor_running and initial_running_jobs > 0:
@@ -1372,17 +1501,15 @@ if __name__ == "__main__":
                         end="",
                         flush=True,
                     )
-                    # Check if any initial jobs have finished
+                    # Check if any initial jobs have finished - use bulk call
+                    all_job_statuses = get_all_job_statuses(CLIENT)
+
                     still_running = 0
                     for job_id in initial_job_ids:
-                        try:
-                            job_status = CLIENT.get_job_status(job_id)
-                        except Exception:  # noqa: BLE001
-                            job_status = "UNKNOWN"
+                        job_status = all_job_statuses.get(job_id, "UNKNOWN")
                         if job_status == JobStatus.RUNNING:
                             still_running += 1
                     initial_running_jobs = still_running
-                    running_jobs_count = initial_running_jobs
                     if initial_running_jobs < min(args.max_jobs, len(initial_job_ids)):
                         print("\nAt least one initial job finished. Continuing...")
                         submit_next()
@@ -1412,6 +1539,10 @@ if __name__ == "__main__":
                                 args.max_jobs = max(1, args.max_jobs - 1)
                                 break
                         print("\r\033[K", end="", flush=True)
+                    elif running_jobs_count < args.max_jobs:
+                        print("\nAt least one initial job finished. Continuing...")
+                        submit_next()
+                        break
                     else:
                         input_future.cancel()
                         print()
@@ -1492,6 +1623,8 @@ if __name__ == "__main__":
                         input_future = user_input.start()
                     except Exception:  # noqa: BLE001
                         pass
+                elif running_jobs_count < args.max_jobs:
+                    submit_next()
 
                 for done_task in done:
                     if done_task == input_future:
@@ -1508,23 +1641,28 @@ if __name__ == "__main__":
                                 async_read_tasks[job_id] = asyncio.create_task(get_next(jobs_tracked[job_id]))
                             except StopAsyncIteration:
                                 # Track failed jobs for recent failure window
-                                try:
-                                    job_status = CLIENT.get_job_status(job_id)
-                                except Exception:
-                                    job_status = "UNKNOWN (Deleted)"
+                                # Get status from bulk call
+                                all_job_statuses = get_all_job_statuses(CLIENT)
+                                job_status = all_job_statuses.get(job_id, "UNKNOWN (Deleted)")
                                 async_read_tasks.pop(job_id, None)
                             else:
-                                try:
-                                    job_status = CLIENT.get_job_status(job_id)
-                                except Exception as e:  # noqa: BLE001
-                                    print(f"Failed to get status for job {job_id}: {e}")
+                                # Get status from bulk call
+                                all_job_statuses = get_all_job_statuses(CLIENT)
+                                job_status = all_job_statuses.get(job_id)
+                                if job_status is None:
+                                    print(f"Job {job_id} not found in cluster jobs list")
                                     break
 
                             if job_status in JOB_END_STATES:
                                 assert job_status is not None
                                 if job_status == JobStatus.FAILED:
                                     recent_failed_timestamps.append(time.time())
-                                if run_id := task_run_ids.get(job_id):
+                                # Try to get run_id from task_run_ids or from the global mapping
+                                run_id = task_run_ids.get(job_id)
+                                if not run_id and job_id in submission_id_to_run_id:
+                                    _, _, run_id = submission_id_to_run_id[job_id]
+
+                                if run_id:
                                     try:
                                         group, original_job_id = monitor_jobs_tracked[job_id]
                                         write_back(
@@ -1543,8 +1681,8 @@ if __name__ == "__main__":
                                     except TimeoutError:
                                         pass
                                 async_read_tasks.pop(job_id, None)
-
-                                submit_next()
+                                if running_jobs_count < args.max_jobs:
+                                    submit_next()
                             break
             # Print outputs for all jobs after interval
             for job_id, lines in collected.items():
@@ -1567,6 +1705,16 @@ if __name__ == "__main__":
                         if run_id:
                             task_run_ids[job_id] = run_id
                             group, original_job_id = monitor_jobs_tracked[job_id]
+
+                            # Update the global mapping
+                            if args.group == "restore" or (submission_id and "restore" in submission_id):
+                                env_name = original_job_id.removeprefix(group + "_").split("_")[0]
+                                run_key = f"({env_name})"
+                            else:
+                                replacement_parts = original_job_id.removeprefix(group + "_").split("_")
+                                run_key = "(" + ", ".join(replacement_parts).rstrip(", ") + ")"
+                            submission_id_to_run_id[job_id] = (group, run_key, run_id)
+
                             try:
                                 write_back(
                                     group,
@@ -1597,7 +1745,8 @@ if __name__ == "__main__":
             print(f"\n\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Final Out: {job_id} ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n\n")
             print("".join(lines[-1900 // len(last_outputs) :]))
 
-    print("Starting job output in 10 seconds...")
+    if submitted_any:
+        print("Starting job output in 10 seconds...")
     print("You can follow all jobs individually in separate tmux sessions using the following commands:")
     tmux_commands = [get_tmux_log_command(job_id) for job_id in jobs_tracked]
     print("\n".join(tmux_commands))

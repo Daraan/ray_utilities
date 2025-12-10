@@ -16,6 +16,7 @@ import logging
 import os
 import pathlib
 import pickle
+import signal
 import sys
 import time
 from abc import ABCMeta
@@ -302,6 +303,27 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
     cls_model_config: ClassVar[Optional[dict[str, Any] | DefaultModelConfig]] = None
 
+    # SIGUSR2 termination flag
+    _termination_signal_received: bool = False
+
+    @classmethod
+    def _install_signal_handler(cls):
+        """Install a SIGUSR2 handler to set the _termination_signal_received flag."""
+
+        def _handler(signum, frame):
+            _logger.warning("SIGUSR2 received: setting _termination_signal_received flag.")
+            cls._termination_signal_received = True
+
+        try:
+            signal.signal(signal.SIGUSR2, _handler)
+        except Exception as e:
+            _logger.error("Failed to install SIGUSR2 handler: %s", e)
+
+    @classmethod
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls._install_signal_handler()
+
     try:
         # Checkpointable has metdata filename filename as "metadata.json"; but train ".metadata.json"
         # NOTE: This conflicts if one uses Checkpoint.set_metadata
@@ -499,6 +521,9 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
 
         self._buffer_steps_left: int = 0
         """Time left in buffered training in case timeout was reached while we still wanted to buffer"""
+
+        # Install the SIGUSR2 signal handler
+        type(self)._install_signal_handler()
 
     @property
     def algorithm(self) -> _AlgorithmType:
@@ -786,7 +811,11 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             # rebuild_learner_group(self.algorithm)
             sync_env_runner_states_after_reload(self.algorithm)
             self._is_in_reset_state = False
-        if self._during_buffered_training or self.config.get("cli_args", {}).get("buffer_length") != "auto":
+        if (
+            self._during_buffered_training
+            or self._termination_signal_received
+            or self.config.get("cli_args", {}).get("buffer_length") != "auto"
+        ):
             return super().train()
         # train buffered
         budget = split_timestep_budget(
@@ -1988,8 +2017,8 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         return restored
 
 
-if TYPE_CHECKING:
-    TrainableBase()  # check ABC
+if TYPE_CHECKING:  # check ABC
+    TrainableBase()  # noqa: F821
 
 
 class _TrainableSubclassMeta(ABCMeta):
@@ -2119,15 +2148,21 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
         # HACK: For ray < 2.50.0 where result is copied in for the callbacks
         # see for example: https://github.com/ray-project/ray/pull/55527
         if (  # When we are doing pbt let pbt handle the checkpointing
-            not (
-                "pbt" in (self.config.get("experiment_group") or "").lower()
-                or "pbt" == self.config.get("cli_args", {}).get("command_str", "")
+            (
+                (
+                    not (
+                        "pbt" in (self.config.get("experiment_group") or "").lower()
+                        or "pbt" == self.config.get("cli_args", {}).get("command_str", "")
+                    )
+                    and TUNE_RESULT_IS_A_COPY  # 2.50 + we handle checkpoints with a real callback
+                    and self._setup.args.checkpoint_frequency_unit == "steps"  # type: ignore
+                    and self._setup.args.checkpoint_frequency  # type: ignore
+                    and (_steps_since_last_checkpoint := self._current_step - self._last_checkpoint_step)
+                    >= self._setup.args.checkpoint_frequency
+                )
+                # Checkpoint when we got a termination signal
+                or self._termination_signal_received
             )
-            and TUNE_RESULT_IS_A_COPY  # 2.50 + we handle checkpoints with a real callback
-            and self._setup.args.checkpoint_frequency_unit == "steps"  # type: ignore
-            and self._setup.args.checkpoint_frequency  # type: ignore
-            and (_steps_since_last_checkpoint := self._current_step - self._last_checkpoint_step)
-            >= self._setup.args.checkpoint_frequency
             and (self._iterations_since_restore - self._last_checkpoint_iteration)
             >= 24  # avoid too frequent checkpointing
         ):
@@ -2135,7 +2170,7 @@ class DefaultTrainable(TrainableBase[_ParserType, _ConfigType, _AlgorithmType]):
                 "Creating checkpoint at step %s as last checkpoint was at step %s, difference %s >= %s (frequency)",
                 self._current_step,
                 self._last_checkpoint_step if self._last_checkpoint_step >= 0 else "Never",
-                _steps_since_last_checkpoint,
+                locals().get("_steps_since_last_checkpoint", "N/A"),
                 self._setup.args.checkpoint_frequency,
             )
             self._last_checkpoint_iteration = self._iteration  # iteration might be off by 1 as set after return
