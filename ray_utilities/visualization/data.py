@@ -2,12 +2,24 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import cast
+from typing import cast, TYPE_CHECKING
 
+import base62
+import matplotlib as mpl
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
+from matplotlib import patheffects
+import numpy as np
 import pandas as pd
 import seaborn as sns
+from matplotlib import cm
 from tqdm import tqdm
+from typing_extensions import Final
+
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
+    from matplotlib.figure import Figure
 
 PATHS = [Path("outputs/experiments/shared"), Path("outputs/experiments/shared_backup")]
 
@@ -20,16 +32,42 @@ DROP_COLUMNS = [
     ("config", "cli_args", "perturbation_factors"),
     ("config", "cli_args", "comment"),
     ("config", "cli_args", "head_fcnet_hiddens"),
+    ("config", "cli_args", "tune"),
     ("config", "_config_files"),
     # Maybe want to keep but not hashable
     ("config", "fork_from", "parent_time"),
 ]
+
+LOG_SETTINGS = {"lr"}
+
+nan: Final = float("nan")
 
 # Experiment output directory structure is - if sorted in groups else one level higher
 
 # Project/group/Name*run_id/
 
 logger = logging.getLogger(__name__)
+
+# Set seaborn and matplotlib style for publication-quality plots
+# sns.set_theme()
+sns.set_theme(
+    style="dark",
+    context="talk",
+    rc={
+        "axes.grid": False,  # Disable all grid lines
+        "axes.spines.top": False,
+        "axes.spines.right": True,
+        "axes.titleweight": "bold",
+        "axes.labelweight": "bold",
+        "axes.labelsize": 12,
+        "axes.titlesize": 14,
+        "xtick.direction": "out",
+        "ytick.direction": "out",
+        "legend.frameon": False,
+    },
+)
+
+# mpl.rcParams["savefig.facecolor"] = "#f7f7f7"
 
 
 def load_run_data(offline_run: str | Path, experiment_dir=None):
@@ -63,7 +101,6 @@ def load_run_data(offline_run: str | Path, experiment_dir=None):
     for result_file in tqdm(result_files):
         df = pd.read_json(result_file, lines=True)
         # Drop unwanted columns if they exist
-        df = df.drop(columns=[col for col in DROP_COLUMNS if col in df.columns], errors="ignore")
         # Flatten nested dict columns and convert to MultiIndex
         # ptimes = df[("config", "fork_from", "parent_time")]
         # mask = ~ptimes.isna()
@@ -71,6 +108,7 @@ def load_run_data(offline_run: str | Path, experiment_dir=None):
         # df.loc[mask.values, ("config", "fork_from", "parent_time")] = ptimes[mask.values].map(str).values
         df = pd.json_normalize(df.to_dict(orient="records"), sep="/")
         df.columns = pd.MultiIndex.from_tuples([tuple(col.split("/")) for col in df.columns])
+        df = df.sort_index(axis=1).drop(columns=DROP_COLUMNS, errors="ignore")
         # df.columns = pd.MultiIndex.from_tuples(cast("list[tuple[str, ...]]", df.columns))
         experiment_key = df.config.experiment_key.iloc[-1].item()
         assert result_file.name == "result.json" or experiment_key in result_file.name, (
@@ -79,6 +117,18 @@ def load_run_data(offline_run: str | Path, experiment_dir=None):
         run_data[experiment_key] = df
     logger.info(f"Loaded data for run {offline_run} with {len(run_data.keys())} experiments")  # noqa: G004
     return run_data
+
+
+def __base62_sort_key(s: str) -> int:
+    if not isinstance(s, str):
+        return s
+    if s.endswith("Z"):
+        return 0
+    return base62.decode(s.split("S", 1)[-1])
+
+
+def _base62_sort_key(s: pd.Index):
+    return s.map(__base62_sort_key)
 
 
 def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
@@ -96,8 +146,7 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
         if isinstance(df.columns, pd.MultiIndex):
             mask = [not any(lvl == "run_id" for lvl in col) for col in df.columns]
             return df.loc[:, mask]
-        else:
-            return df.drop(columns=["run_id"], errors="ignore")
+        return df.drop(columns=["run_id"], errors="ignore")
 
     dfs: list[pd.DataFrame] = []
     for df in dataframes.values():
@@ -112,7 +161,10 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
         df_clean = df_clean.set_index(idx_name, drop=True)
         dfs.append(df_clean)
 
-    combined_df = pd.concat(dfs, keys=dataframes.keys(), names=["run_id", "training_iteration"])
+    combined_df = pd.concat(dfs, keys=dataframes.keys(), names=["run_id", "training_iteration"]).sort_index(
+        key=_base62_sort_key
+    )
+    shape_before = combined_df.shape
     try:
         combined_df = combined_df.drop_duplicates(keep="first")
     except TypeError:
@@ -129,6 +181,7 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
                 [("config", *col) if isinstance(col, tuple) else ("config", col) for col in configs.columns]
             )
         combined_df = pd.concat([combined_df, configs], axis=1)
+    logger.debug("Removing duplicates changed the shape from %s to %s", shape_before, combined_df.shape)
 
     # Reset only the outermost 'run_id' index, not all levels
     # combined_df = combined_df.reset_index(level=0)
@@ -136,22 +189,117 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
     # index_names = [n for n in combined_df.index.names if n != "run_id"]
     # combined_df = combined_df.set_index(["run_id", "training_iteration"], drop=True)
     # combined_df = combined_df.reorder_levels(["run_id", *index_names])
-    return combined_df
+    continued_runs = which_continued(combined_df)
+    main_branch_mask = np.zeros_like(
+        combined_df.index, dtype=bool
+    )  # combined_df.index.get_level_values("run_id").isin(continued_runs.index)
+    # BUT when the run a fork is no longer continued we may NOT set it to True in their last pbt_epoch
+    last_pbt_epoch = combined_df[("config", "pbt_epoch")].groupby(level="run_id").max()
+    for run_id in continued_runs.index:
+        if run_id in last_pbt_epoch.index:
+            # Set to true were we have a continued run but not where it has its max pbt_epoch
+            run_mask = (combined_df.index.get_level_values("run_id") == run_id) & (
+                combined_df.config.pbt_epoch != last_pbt_epoch.loc[run_id]
+            ).to_numpy().flatten()
+            main_branch_mask[run_mask] = True
+        else:
+            assert False
+
+    combined_df.loc[:, ("config", "__pbt_main_branch__")] = main_branch_mask
+
+    return combined_df.sort_index(axis=1)
 
 
-TEST = True
+def make_cmap(
+    values,
+    name: str = "viridis",
+    *,
+    log: bool = False,
+):
+    # Create a continuous colormap for the group_stat (logarithmic scale)
+    if log:
+        norm = mcolors.LogNorm(
+            vmin=values.replace(0, float("nan")).min(),
+            vmax=values.max(),
+        )
+    else:
+        norm = mcolors.Normalize(
+            vmin=values.min(),
+            vmax=values.max(),
+        )
+    cmap = cm.get_cmap(name)
+
+    # Map group_stat values to colors
+    unique_stats = values.unique()
+    color_map = {val: mcolors.to_hex(cmap(norm(val))) for val in unique_stats if val > 0}
+    # For zero or negative values, fallback to a default color
+    for val in unique_stats:
+        if log and val <= 0:
+            color_map[val] = "#cccccc"
+    return color_map, cmap, norm
+
+
+def which_continued(df: pd.DataFrame) -> pd.DataFrame:
+    # there is no continued key we need to check which run_id (in the index) spans over multiple pbt_epochs
+    pbt_epochs = df[("config", "pbt_epoch")]
+    # Ignore "training_iteration" in the index by resetting it if present
+    idx_names = list(df.index.names)
+    # if "training_iteration" in idx_names:
+    #    pbt_epochs = pbt_epochs.reset_index("training_iteration", drop=True)
+    epoch_counts = pbt_epochs.groupby(level="run_id").nunique()
+
+    # Method 1:
+    continued = epoch_counts[(epoch_counts > 1).values]  # type: ignore  # noqa: PD011
+    continued.columns = ["continued"]
+    return continued
+    # Method 2:
+    mask = df[("config", "__pbt_main_branch__")] == True  # noqa: E712
+    return df[mask.values].index.get_level_values("run_id").unique()
+
+
+def _connect_groups(last: pd.DataFrame, now: pd.DataFrame, stat_value: str | None) -> pd.DataFrame:
+    last_entries = last.xs(
+        last.index.get_level_values("training_iteration").max(),
+        level=1,
+        drop_level=False,
+        axis=0,
+    )
+    # Add immediate connection to start value
+    if stat_value is None:
+        return pd.concat(
+            [
+                last_entries,
+                now,
+            ],
+            axis=0,
+        )
+    new_value = now.iloc[0][stat_value]
+    last_entries2 = last_entries.copy()
+    last_entries2["current_step"] += 128
+    last_entries2[stat_value] = new_value
+    return pd.concat(
+        [
+            last_entries,
+            last_entries2,
+            now,
+        ],
+        axis=0,
+    )
+
+
+TEST = 0
 
 
 def plot_run_data(
     df: pd.DataFrame,
     metrics: list[str],
     experiment_keys: list[str] | None = None,
-    smoothing: int = 1,
     figsize: tuple[int, int] = (12, 8),
+    group_stat: str | None = None,
     group_by=("pbt_epoch", "pbt_group_key"),
     *,
-    plot_std: bool = False,
-) -> None:
+    log: bool | None = None,
+) -> Figure:
     """Plot specified metrics from the run data.
 
     Args:
@@ -161,10 +309,23 @@ def plot_run_data(
             If None, all experiments in df are used.
         smoothing: Smoothing window size for rolling mean. Default is 1 (no smoothing).
         figsize: Size of the figure to create.
+        group_stat: Refers to the column that relates to the grouping statistic, e.g. pbt_group_key.
+            By default the last key of group_by is used.
         group_by: Tuple of column names (as strings, not tuples) to group by under 'config'.
     """
     if experiment_keys is None:
         experiment_keys = df.index.get_level_values(0).unique().to_list()
+        if TEST:
+            experiment_keys = experiment_keys[:5]
+    if group_stat is None:
+        # assumes a name=... format
+        group_stat = df.iloc[0].config[group_by[-1]].str.split("=").iloc[0][0]
+        assert group_stat is not None
+    log = log if log is not None else group_stat in LOG_SETTINGS
+    depth = len(df.columns[0])
+
+    def ifill(*cols):
+        return (*cols, *(nan,) * (depth - len(cols)))
 
     # Select the group-by columns from MultiIndex columns
     group_cols = [("config", k) for k in group_by]
@@ -173,77 +334,242 @@ def plot_run_data(
         df.current_step.droplevel(0, axis=1),
         *(df[col] for col in group_cols),
         df.config.seed,
+        df[group_stat].droplevel(0, axis=1),
     ]
     # Combine into a DataFrame for groupby
-    group_df = pd.concat(group_values, axis=1, keys=["current_step", *group_by, "seed"], copy=False)
+    group_df = pd.concat(group_values, axis=1, keys=["current_step", *group_by, "seed", group_stat], copy=False)
     # Problem we get duplicated values as the dfs contain their parents data - need to drop these when we aggregate
     group_df = group_df[~group_df.duplicated(keep="first")]
-    group_df.columns = ["current_step", *group_by, "seed"]  # flatten for groupby
+    group_df.columns = ["current_step", *group_by, "seed", group_stat]  # flatten for groupby
     group_df = group_df.drop("seed", axis=1)
 
     # Example usage: grouped = df.groupby([group_df[k] for k in group_keys])
-    grouped = df.groupby([group_df[k] for k in group_df.columns])
-    # If you want to use group_df for further processing, do so here.
-
     num_metrics = len(metrics)
     fig, axes = plt.subplots(num_metrics, 1, figsize=figsize)
 
     if num_metrics == 1:
         axes = [axes]
 
-    for i, metric in enumerate(metrics):
-        ax = axes[i]
-        metric_group = grouped[metric]
-        stats = metric_group.describe()
-        # Drop all levels from the columns except the last
-        # stats.columns = [col[-1] if isinstance(col, tuple) else col for col in stats.columns]
-        for exp_key in experiment_keys if not TEST else experiment_keys[:15]:
-            # df_exp = df.loc[exp_key]
-            # if metric not in df_exp.columns.get_level_values(0):
-            #    logger.warning("Metric %s not found in experiment %s. Skipping.", metric, exp_key)  # noqa: G004
-            #    continue
-            # metric_series = df_exp[metric].droplevel(0, axis=1)
-            # if smoothing > 1:
-            #    metric_series = metric_series.rolling(window=smoothing, min_periods=1).mean()
-            # Plot mean, std, min, max from stats
-            # stats is a DataFrame with multi-index (group keys, then stat rows)
-            # We need to select the rows for this exp_key and plot mean, std, min, max
+    # continued_runs = which_continued(df)
+    # cont_mask = df.index.get_level_values("run_id").isin(continued_runs)
+    # df.loc[cont_mask, ("config", "__pbt_main_branch__")] = True
 
-            # stats.loc[...] shape: (stat, group_keys, metric)
-            # For each group, plot mean, std, min, max as lines
-            # Here, stats is grouped by group_keys, so we need to select the correct group
-            # We'll plot mean, std, min, max for each group in this experiment
-            # stats.index: MultiIndex (group_keys, stat)
-            # stats.columns: metric
-            # We'll plot mean, std, min, max as separate lines
-            stat_names = ["mean", "std"]
-            for stat in stat_names:
-                stat_df: pd.DataFrame = stats.xs(stat, level=-1, axis=1).reset_index()
-                stat_df.columns = [*(n[0] for n in stats.index.names), stat]
-                if stat == "mean":
-                    # Plot mean line
-                    sns.lineplot(data=stat_df, x="current_step", y=stat, ax=ax, label=f"{exp_key} mean", linestyle="-")
-                    # Fill between mean ± std if std is available
-                    if "std" in stats.columns.get_level_values(-1):
-                        std_df: pd.DataFrame = stats.xs("std", level=-1, axis=1).reset_index()
-                        std_df.columns = [*(n[0] for n in stats.index.names), "std"]
-                        ax.fill_between(
-                            stat_df["current_step"],
-                            stat_df["mean"] - std_df["std"],
-                            stat_df["mean"] + std_df["std"],
-                            alpha=0.2,
-                            label=f"{exp_key} mean±std",
-                        )
-                else:
-                    sns.lineplot(
-                        data=stat_df, x="current_step", y=stat, ax=ax, label=f"{exp_key} {stat}", linestyle="--"
+    for i, metric in enumerate(metrics):
+        ax: Axes = axes[i]
+        ax2 = ax.twinx()
+        ax2.set_ylabel(group_stat)
+        if log:
+            ax2.set_yscale("log")
+
+        # if ("_combined_group_key" not in df.columns):
+        #    df["_combined_group_key"] = (
+        #        df[("config", "pbt_epoch")].astype(str) + "_" + df[("config", "pbt_group_key")].astype(str)
+        #    )
+        # Ensure x and y are 1D Series, not DataFrames or ndarrays with extra dimensions
+
+        plot_df: pd.DataFrame = pd.concat(
+            [
+                df[["current_step", metric]],
+                df[[ifill("config", group_by[0]), ifill("config", "__pbt_main_branch__")]],
+                df[("config", group_stat)].round(10),
+            ],
+            axis=1,
+        )
+        plot_df.columns = ["current_step", metric, group_by[0], "__pbt_main_branch__", group_stat]
+        plot_df["__pbt_main_branch__"] = plot_df["__pbt_main_branch__"].fillna(False)  # noqa: FBT003
+        # plot_df.sort_values(["training_iteration", "__pbt_main_branch__", metric], inplace=True)
+        assert group_stat in plot_df
+
+        color_map, cmap, norm = make_cmap(plot_df[group_stat], log=log)
+        # Sort each subgroup by their std from highest to lowest
+        # Sort plot_df within each (group_by[0], group_stat) group by the std of the metric (descending)
+        std_by_group = plot_df.groupby([group_by[0], group_stat])[metric].std().sort_values(ascending=False)
+        # Reorder plot_df so that rows belonging to groups with higher std appear first
+        plot_df["__group_sort__"] = list(zip(plot_df[group_by[0]], plot_df[group_stat], strict=True))
+        plot_df["__group_sort__"] = pd.Categorical(
+            plot_df["__group_sort__"], categories=list(std_by_group.index), ordered=True
+        )
+        plot_df = plot_df.sort_values(["training_iteration", "__pbt_main_branch__", "__group_sort__", metric])
+        # Plot each group separately to control color
+        # Plot Non continues
+        last_main_group = None
+        last_epoch = -1
+        # Track background shading for group changes
+        background_colors = ["#f0f0f0", "#909090"]
+        last_bg_epoch = None
+        bg_color_idx = 0
+        prev_group: pd.DataFrame = None  # type: ignore[assignment]
+
+        for (pbt_epoch, stat_val), group in plot_df.groupby([group_by[0], group_stat], sort=False):
+            # Add background shade when group changes
+
+            if pbt_epoch != last_epoch:
+                last_epoch = pbt_epoch
+            if TEST and pbt_epoch > 1:
+                break
+            if group["__pbt_main_branch__"].any():
+                assert group["__pbt_main_branch__"].all()
+                if last_main_group is not None:
+                    # If the last group correctly has 3 points then this is correct, if due to some crsh
+                    # Add connection to last points
+                    group = _connect_groups(last_main_group, group, group_stat)  # noqa: PLW2901
+                print("Main group:", pbt_epoch, stat_val)
+                last_main_group = group  # TODO: has full history
+                sns.lineplot(
+                    data=group[["current_step", group_stat]].drop_duplicates(),
+                    x="current_step",
+                    y=group_stat,
+                    ax=ax2,
+                    color=color_map[stat_val],
+                    linestyle="-",
+                    linewidth=2,
+                    path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
+                )
+
+                # On a secondary axis we want to plot the group_stat value over time
+                # Plot group_stat value over time on a secondary y-axis
+
+            elif last_main_group is not None:
+                print("Plotting non-main group:", pbt_epoch, stat_val)
+                group = _connect_groups(last_main_group, group, group_stat)  # noqa: PLW2901
+            if last_bg_epoch is None or pbt_epoch != last_bg_epoch:
+                # Shade the region for this epoch
+                if last_bg_epoch is not None:
+                    # Shade from previous group's min step to its max step (the region of the previous group)
+                    prev_min: float = prev_group["current_step"].min()
+                    prev_max: float = prev_group["current_step"].max()
+                    ax.axvspan(
+                        prev_min,
+                        prev_max,
+                        color=background_colors[bg_color_idx % 2],
+                        alpha=0.2,
+                        zorder=0,
                     )
+                    ax2.axvspan(
+                        prev_min,
+                        prev_max,
+                        color=background_colors[bg_color_idx % 2],
+                        alpha=0.2,
+                        zorder=0,
+                    )
+                    bg_color_idx += 1
+                else:
+                    # Shade from left edge to first group's min step
+                    curr_min = group["current_step"].min()
+                    ax.axvspan(
+                        ax.get_xlim()[0],
+                        curr_min,
+                        color=background_colors[bg_color_idx % 2],
+                        alpha=0.2,
+                        zorder=0,
+                    )
+                    ax2.axvspan(
+                        ax2.get_xlim()[0],
+                        curr_min,
+                        color=background_colors[bg_color_idx % 2],
+                        alpha=0.2,
+                        zorder=0,
+                    )
+                    bg_color_idx += 1
+            last_bg_epoch = pbt_epoch
+            prev_group = group
+            sns.lineplot(
+                data=group,
+                x="current_step",
+                y=metric,
+                ax=ax,
+                # linestyle="--",
+                color=color_map[stat_val],
+                label=str(stat_val) if pbt_epoch == 0 else None,
+                linewidth=3,
+            )
+        # Shade from last group's max step to right edge
+        if "prev_group" in locals():
+            prev_max = prev_group["current_step"].max()
+            ax.axvspan(prev_max, ax.get_xlim()[1], color=background_colors[bg_color_idx % 2], alpha=0.2, zorder=0)
+            ax2.axvspan(prev_max, ax2.get_xlim()[1], color=background_colors[bg_color_idx % 2], alpha=0.2, zorder=0)
+
+        # Add a colorbar for the continuous group_stat
+        sm = cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        sm.set_clim(norm.vmin * 0.95, norm.vmax * 1.05)
+        ax.set_xlim(-1000, plot_df.current_step.max() + 1000)
+        ax2.set_ylim(norm.vmin * 0.95, norm.vmax * 1.05)
+        # Make the colorbar 20% smaller by adjusting its fraction
+        cbar = plt.colorbar(sm, ax=ax2, pad=0.01, fraction=0.075)  # default fraction is ~0.1
+        # Remove all ticks from both sides of the colorbar
+        cbar.ax.tick_params(axis="both", which="both", left=False, right=True, labelleft=False, labelright=False)
+        cbar.set_ticks([])
+        ax2.tick_params(axis="y", which="both", left=False, right=False, labelleft=False, labelright=True)
+
+        # Right tick labels are bleeding into the colormap if we use fancytoolbox legend
+        # Move right y-axis tick labels further right by 80%
+        for label in ax2.get_yticklabels():
+            label.set_x(label.get_position()[0] + 0.03)
+
+        # Align the limits of ax2 and the colorbar to be identical
+
         ax.set_title(f"Metric: {metric}")
         ax.set_xlabel("Training Steps")
         ax.set_ylabel(metric)
-        # ax.legend()
+        # Custom legend: one entry per unique pbt_group_key
+        handles, labels = ax.get_legend_handles_labels()
+        # Remove duplicate labels, keep order
+        seen = set()
+        unique = []
+        for h, l in zip(handles, labels, strict=True):
+            if l not in seen:
+                unique.append((h, l))
+                seen.add(l)
+        # Only keep entries where label is a pbt_group_key (not e.g. 'mean', etc.)
+        group_keys = [lbl for _, lbl in unique if lbl is not None]
+        # Remove duplicates while preserving order of appearance
+        seen_keys = set()
+        group_keys_ordered = []
+        for k in group_keys:
+            if k not in seen_keys:
+                group_keys_ordered.append(k)
+                seen_keys.add(k)
+
+        # Sort group_keys_ordered by their group_stat value (convert to float if possible)
+        def _try_float(x):
+            try:
+                return float(x)
+            except Exception:
+                return x
+
+        group_keys_sorted = sorted(group_keys_ordered, key=_try_float, reverse=True)
+        # Filter and order legend entries according to group_keys_sorted
+        filtered_sorted = []
+        for key in group_keys_sorted:
+            for h, lbl in unique:
+                if lbl == key:
+                    filtered_sorted.append((h, lbl))
+                    break
+        if filtered_sorted:
+            handles, labels = zip(*filtered_sorted, strict=True)
+        # Place the legend below the plot in a fancybox
+        legend = ax.legend(
+            handles,
+            labels,
+            title=group_stat,
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.12),
+            ncol=min(len(labels), 5),
+            fancybox=True,
+            framealpha=0.8,
+        )
+        # Reduce legend font size by 2
+        fontsize = max(legend.get_texts()[0].get_fontsize() - 2, 1) if legend.get_texts() else 10
+        for text in legend.get_texts():
+            text.set_fontsize(fontsize)
+        if legend.get_title() is not None:
+            legend.get_title().set_fontsize(fontsize)
+        if (legend2 := ax2.get_legend()) is not None:
+            legend2.remove()
     plt.tight_layout()
     plt.show()
+    return None if TEST else fig
 
 
 # Example for grouping by MultiIndex columns:

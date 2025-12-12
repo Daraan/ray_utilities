@@ -1499,14 +1499,23 @@ def verify_wandb_runs(
                 if sys.argv[0] in ("", "upload_wandb.py"):
                     # TODO: input does not work with the parallel upload
                     try:
-                        choice = input(f"\ncheck all subdirs of {output_dir} for (y/n/path of {experiment_id}):\n")
-                        if choice.lower() == "y":
-                            offline_results = list(Path(output_dir).glob("**/result*.json"))
-                        elif Path(choice).exists():
-                            offline_results = list(Path(choice).glob("**/result*.json"))
-                    except EOFError:
-                        # non-interactive
-                        logger.info("No input available, skipping full subdir search.")
+                        from ray_submit import AsyncInput  # noqa: PLC0415
+                    except ImportError:
+                        try:
+                            choice = input(f"\ncheck all subdirs of {output_dir} for (y/n/path of {experiment_id}):\n")
+                        except EOFError:
+                            # non-interactive
+                            choice = None
+                            logger.info("No input available, skipping full subdir search.")
+                    else:
+                        user_input = AsyncInput()
+                        choice = cast("str | None", user_input.start(timeout=30))
+                    if choice is None:
+                        pass
+                    elif choice.lower() == "y":
+                        offline_results = list(Path(output_dir).glob("**/result*.json"))
+                    elif Path(choice).exists():
+                        offline_results = list(Path(choice).glob("**/result*.json"))
         not_all_runs_complete = False
         offline_results_without_parent = sum(1 for path in offline_results if "parent" not in path.name)
         # For each trial dir we need one experiment that has been trained until the end >1.1M steps

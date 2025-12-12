@@ -131,7 +131,7 @@ sympol_pbt_batch_size:
         submission_id: sympol_pbt_batch_size_Ant-v5_2025-12-05_22:37:50
       sp87c62512070018f6114:
         status: RUNNING
-        note: Restored
+        note: Restored - some trials failed!
         submission_id:
           sympol_pbt_batch_size_Ant-v5_2025-12-06_23:32:43_restore_2025-12-07_23:03:49_restore_2025-12-08_12:01:50
         submission_id1:
@@ -148,6 +148,10 @@ sympol_pbt_batch_size:
       sp87c6251205015966bf4:
         status: STOPPED
         submission_id: pbt_batch_size_pbt_batch_size_Ant-v5_2025-12-05_01:58:18
+      Ant-v5:
+        status: STOPPED
+        submission_id:
+          sympol_pbt_batch_size_Ant-v5_2025-12-06_23:32:43_restore_2025-12-07_23:03:49_restore_2025-12-08_12:01:50
     (Walker2d-v5):
       sp87c62512052243dbd74:
         status: SUCCEEDED
@@ -194,10 +198,17 @@ sympol_pbt_batch_size:
         submission_id:
           pbt_batch_size_pbt_batch_size_HalfCheetah-v5_2025-12-05_01:58:18
       sp87c625120720597f714:
-        status: RUNNING
+        status: STOPPED
         submission_id:
           sympol_pbt_batch_size_HalfCheetah-v5_2025-12-07_20:58:57_restore_2025-12-08_12:01:50
         submission_ids: sympol_pbt_batch_size_HalfCheetah-v5_2025-12-07_20:58:57
+      HalfCheetah-v5_2025-12-07_20:58:57_restore:
+        status: STOPPED
+        submission_id:
+          sympol_pbt_batch_size_HalfCheetah-v5_2025-12-07_20:58:57_restore_2025-12-08_12:01:50
+      sp87c62512111105249e4:
+        status: RUNNING
+        submission_id: sympol_pbt_batch_size_HalfCheetah-v5_2025-12-11_11:04:52
     (Reacher-v5):
       sp87c6251205224924524:
         status: SUCCEEDED
@@ -223,6 +234,15 @@ sympol_pbt_batch_size:
         status: RUNNING
         submission_id:
           sympol_pbt_batch_size_HalfCheetah-v5_2025-12-07_20:58:57_restore_2025-12-08_12:01:50
+    (HumanoidStandup-v5):
+      sp87c62512111105b4a34:
+        status: RUNNING
+        submission_id:
+          sympol_pbt_batch_size_HumanoidStandup-v5_2025-12-11_11:04:52
+    (Pusher-v5):
+      sp87c62512111105297b4:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_batch_size_Pusher-v5_2025-12-11_11:04:52
 sympol_pbt_minibatch_size_2048:
   comment: tune minibatch_size with fixed train_batch_size_per_learner=2048
   entrypoint_resources:
@@ -287,6 +307,16 @@ sympol_pbt_minibatch_size_2048:
         status: SUCCEEDED
         submission_id:
           sympol_pbt_minibatch_size_2048_InvertedPendulum-v5_2025-12-06_14:59:30
+    (Pusher-v5):
+      sp87c62512111105cdf54:
+        status: STOPPED
+        submission_id:
+          sympol_pbt_minibatch_size_2048_Pusher-v5_2025-12-11_11:04:52
+    (HumanoidStandup-v5):
+      sp87c62512111108e9664:
+        status: RUNNING
+        submission_id:
+          sympol_pbt_minibatch_size_2048_HumanoidStandup-v5_2025-12-11_11:04:52
 sympol_pbt_minibatch_size_8192_base:
   comment: tune minibatch_size with fixed train_batch_size_per_learner=8192
   entrypoint_resources:
@@ -447,6 +477,13 @@ sympol_pbt_num_envs:
       sp87c62512080408b2074:
         status: SUCCEEDED
         submission_id: sympol_pbt_num_envs_HalfCheetah-v5_2025-12-08_02:28:29
+      sp87c6251209015338e94:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_num_envs_HalfCheetah-v5_2025-12-07_21:16:58_restore_2025-12-08_12:01:50
+      HalfCheetah-v5:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_num_envs_HalfCheetah-v5_2025-12-08_02:28:29
     (Reacher-v5):
       sp87c6251207223720764:
         status: SUCCEEDED
@@ -483,11 +520,19 @@ sympol_pbt_num_envs:
         status: SUCCEEDED
         submission_id:
           sympol_pbt_num_envs_HalfCheetah-v5_2025-12-07_21:16:58_restore_2025-12-08_12:01:50
-    (InvertedDoublePendulum-v5, 2025-12-07, 21:16:58, restore):
-      sp87c62512090158f3864:
+    (HumanoidStandup-v5):
+      sp87c62512111105a7f24:
         status: RUNNING
-        submission_id: 
-          sympol_pbt_num_envs_InvertedDoublePendulum-v5_2025-12-07_21:16:58_restore_2025-12-08_12:01:50
+        submission_id:
+          sympol_pbt_num_envs_HumanoidStandup-v5_2025-12-11_11:04:52
+    (Hopper-v5):
+      sp87c6251211110571c34:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_num_envs_Hopper-v5_2025-12-11_11:04:52
+    (Pusher-v5):
+      sp87c625121111051df94:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_num_envs_Pusher-v5_2025-12-11_11:04:52
 sympol_pbt_num_envs_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale
@@ -504,8 +549,41 @@ sympol_pbt_num_envs_large:
   run_ids:
     (Humanoid-v5):
       sp87c625121000052f004:
-        status: RUNNING
+        status: STOPPED
         submission_id: sympol_pbt_num_envs_large_Humanoid-v5_2025-12-10_00:04:57
+    (Ant-v5):
+      sp87c62512100107b03f4:
+        status: STOPPED
+        submission_id: sympol_pbt_num_envs_large_Ant-v5_2025-12-10_00:04:57
+    (Walker2d-v5):
+      sp87c625121001075c884:
+        status: SUCCEEDED
+        note: problem with wandb upload
+        submission_id:
+          sympol_pbt_num_envs_large_Walker2d-v5_2025-12-10_00:04:57_restore_2025-12-10_13:53:39
+    (Reacher-v5):
+      sp87c62512100107bb6d4:
+        status: RESTORE
+        submission_id: sympol_pbt_num_envs_large_Reacher-v5_2025-12-10_00:04:57
+    (HalfCheetah-v5):
+      sp87c62512100107198e4:
+        status: RESTORE
+        submission_id:
+          sympol_pbt_num_envs_large_HalfCheetah-v5_2025-12-10_00:04:57
+    (Swimmer-v5):
+      sp87c6251210010780d44:
+        status: STOPPED
+        submission_id: sympol_pbt_num_envs_large_Swimmer-v5_2025-12-10_00:04:57
+    (InvertedDoublePendulum-v5):
+      sp87c6251210011237134:
+        status: RESTORE
+        submission_id:
+          sympol_pbt_num_envs_large_InvertedDoublePendulum-v5_2025-12-10_00:04:57
+    (InvertedPendulum-v5):
+      sp87c6251210012845bf4:
+        status: RESTORE
+        submission_id:
+          sympol_pbt_num_envs_large_InvertedPendulum-v5_2025-12-10_00:04:57
 sympol_pbt_lr_base:
   <ENV_TYPE>:
   - CartPole-v1
@@ -577,6 +655,9 @@ sympol_pbt_lr:
       sp87c625120707576bcf4:
         status: FAILED
         submission_id: sympol_pbt_lr_Hopper-v5_2025-12-06_23:32:43
+      sp87c6251211153617774:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_lr_Hopper-v5_2025-12-11_11:04:52
     (Ant-v5):
       sp87c6251207063675614:
         status: SUCCEEDED
@@ -614,6 +695,18 @@ sympol_pbt_lr:
         - sympol_pbt_lr_InvertedDoublePendulum-v5_2025-12-06_23:32:43
         - sympol_pbt_lr_InvertedDoublePendulum-v5_2025-12-06_23:32:43_restore_2025-12-07_20:38:11
         - sympol_pbt_lr_InvertedDoublePendulum-v5_2025-12-06_23:32:43_restore_2025-12-08_00:01:37
+      sp87c62512111654395b4:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_lr_InvertedDoublePendulum-v5_2025-12-11_11:04:52
+    (HumanoidStandup-v5):
+      sp87c6251211110553514:
+        status: RUNNING
+        submission_id: sympol_pbt_lr_HumanoidStandup-v5_2025-12-11_11:04:52
+    (Pusher-v5):
+      sp87c62512111628fb614:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_lr_Pusher-v5_2025-12-11_11:04:52
 sympol_pbt_lr_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale  - need to repeat because of 2 top groups
@@ -627,6 +720,10 @@ sympol_pbt_lr_large:
       <OTHER_FLAGS>: |
         --minibatch_size 1024
         --train_batch_size_per_learner 8192
+  run_ids:
+    sp87c6251210120325584:
+      status: RESTORE
+      submission_id: sympol_pbt_lr_large_Reacher-v5_2025-12-10_12:03:15
 sympol_pbt_lr_base_large:
   <ENV_TYPE>:
   - CartPole-v1
@@ -648,6 +745,28 @@ sympol_pbt_lr_base_large:
         status: STOPPED
         submission_id:
           sympol_pbt_lr_base_large_LunarLander-v3_2025-12-05_07:15:09
+      sp87c62512101209cf164:
+        status: STOPPED
+        submission_id:
+          sympol_pbt_lr_base_large_LunarLander-v3_2025-12-10_12:03:15
+      sp87c6251210134933294:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_lr_base_large_LunarLander-v3_2025-12-10_13:48:43
+    (CartPole-v1):
+      sp87c62512101015be2d4:
+        status: RUNNING
+        submission_id: sympol_pbt_lr_base_large_CartPole-v1_2025-12-10_00:04:57
+      CartPole-v1:
+        status: STOPPED
+        submission_id: sympol_pbt_lr_base_large_CartPole-v1_2025-12-10_00:04:57
+    (Acrobot-v1):
+      sp87c62512101209ece94:
+        status: STOPPED
+        submission_id: sympol_pbt_lr_base_large_Acrobot-v1_2025-12-10_12:03:15
+      sp87c62512101349df434:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_lr_base_large_Acrobot-v1_2025-12-10_13:48:43
 sympol_pbt_clip_param_base:
   # TODO: Change to base
   <ENV_TYPE>:
@@ -670,10 +789,22 @@ sympol_pbt_clip_param_base:
         status: SUCCEEDED - verification failed
         submission_id:
           sympol_pbt_clip_param_base_CartPole-v1_2025-12-07_21:16:58
+      sp87c625121116558e194:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_clip_param_base_CartPole-v1_2025-12-11_11:04:52
     (Acrobot-v1):
       sp87c62512080056801f4:
-        status: RUNNING
-        submission_id: sympol_pbt_clip_param_base_Acrobot-v1_2025-12-07_21:16:58_restore_2025-12-09_18:29:13
+        status: STOPPED
+        submission_id:
+          sympol_pbt_clip_param_base_Acrobot-v1_2025-12-07_21:16:58_restore_2025-12-09_18:29:13
+      Acrobot-v1_2025-12-07_21:16:58_restore:
+        status: STOPPED
+        submission_id:
+          sympol_pbt_clip_param_base_Acrobot-v1_2025-12-07_21:16:58_restore_2025-12-09_18:29:13
+      sp87c625121121337f424:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_clip_param_base_Acrobot-v1_2025-12-11_11:04:52
     (LunarLander-v3):
       sp87c62512080144ef3c4:
         status: SUCCEEDED
@@ -706,9 +837,17 @@ sympol_pbt_clip_param:
         submission_id: sympol_pbt_clip_param_Swimmer-v5_2025-12-08_02:28:29
     (InvertedPendulum-v5):
       sp87c62512081126d8ea4:
-        status: RUNNING
+        status: STOPPED
         submission_id:
           sympol_pbt_clip_param_InvertedPendulum-v5_2025-12-08_02:28:29_restore_2025-12-09_18:29:13
+      InvertedPendulum-v5_2025-12-08_02:28:29_restore:
+        status: STOPPED
+        submission_id:
+          sympol_pbt_clip_param_InvertedPendulum-v5_2025-12-08_02:28:29_restore_2025-12-09_18:29:13
+      sp87c62512112246add04:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_clip_param_InvertedPendulum-v5_2025-12-11_11:04:52
     (Walker2d-v5):
       sp87c62512081126ba4a4:
         status: SUCCEEDED
@@ -743,6 +882,10 @@ sympol_pbt_clip_param:
         status: RUNNING
         submission_id:
           sympol_pbt_clip_param_HumanoidStandup-v5_2025-12-09_02:11:04
+      HumanoidStandup-v5:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_clip_param_HumanoidStandup-v5_2025-12-09_02:11:04
     (Hopper-v5):
       sp87c62512091049ec114:
         status: SUCCEEDED
@@ -751,6 +894,11 @@ sympol_pbt_clip_param:
       sp87c62512091051eb914:
         status: SUCCEEDED
         submission_id: sympol_pbt_clip_param_Pusher-v5_2025-12-09_02:11:04
+    (InvertedPendulum-v5, 2025-12-08, 02:28:29, restore):
+      sp87c62512081126d8ea4:
+        status: RUNNING
+        submission_id:
+          sympol_pbt_clip_param_InvertedPendulum-v5_2025-12-08_02:28:29_restore_2025-12-09_18:29:13
 sympol_pbt_entropy_coeff_base:
   # TODO: Change to base
   <ENV_TYPE>:
@@ -767,19 +915,33 @@ sympol_pbt_entropy_coeff_base:
   run_ids:
     (Acrobot-v1):
       sp87c6251208112642b94:
-        status: RUNNING
+        status: STOPPED
         submission_id:
-          sympol_pbt_entropy_coeff_base_Acrobot-v1_2025-12-08_02:28:29_restore_2025-12-09_18:29:13:29
+          sympol_pbt_entropy_coeff_base_Acrobot-v1_2025-12-08_02:28:29_restore_2025-12-09_18:29:13
+      sp87c625121200017b3c4:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_entropy_coeff_base_Acrobot-v1_2025-12-11_11:04:52
     (CartPole-v1):
       sp87c62512081126adaf4:
-        status: RUNNING
+        status: STOPPED
+        notes: only first 120k steps -> restore needs verify
         submission_id:
           sympol_pbt_entropy_coeff_base_CartPole-v1_2025-12-08_02:28:29_restore_2025-12-09_18:29:13
+      sp87c62512112246e5b34:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_entropy_coeff_base_CartPole-v1_2025-12-11_11:04:52
     (LunarLander-v3):
       sp87c62512081126ce5a4:
         status: RESTORE
         submission_id:
           sympol_pbt_entropy_coeff_base_LunarLander-v3_2025-12-08_02:28:29
+
+      sp87c6251212000012c94:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_entropy_coeff_base_LunarLander-v3_2025-12-11_11:04:52
 sympol_pbt_vf_loss_coeff_base:
   # TODO: Change to base
   <ENV_TYPE>:
@@ -793,6 +955,22 @@ sympol_pbt_vf_loss_coeff_base:
     substitutions:
       <TUNE_PARAM>: vf_loss_coeff
       <ENV_TYPE>: <basic_envs>
+  run_ids:
+    (CartPole-v1):
+      sp87c6251211003336594:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_vf_loss_coeff_base_CartPole-v1_2025-12-11_00:32:15
+    (Acrobot-v1):
+      sp87c6251211065583f64:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_vf_loss_coeff_base_Acrobot-v1_2025-12-11_00:32:15
+    (LunarLander-v3):
+      sp87c6251211071976004:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_vf_loss_coeff_base_LunarLander-v3_2025-12-11_00:32:15
 sympol_pbt_vf_clip_param_base:
   # TODO: Change to base
   <ENV_TYPE>:
@@ -807,6 +985,22 @@ sympol_pbt_vf_clip_param_base:
       <TUNE_PARAM>: vf_clip_param
       <ENV_TYPE>: <basic_envs>
 # region gamma
+  run_ids:
+    (CartPole-v1):
+      sp87c62512110742c16c4:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_vf_clip_param_base_CartPole-v1_2025-12-11_00:32:15
+    (Acrobot-v1):
+      sp87c62512110757aa3f4:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_vf_clip_param_base_Acrobot-v1_2025-12-11_00:32:15
+    (LunarLander-v3):
+      sp87c62512110806b25c4:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_vf_clip_param_base_LunarLander-v3_2025-12-11_00:32:15
 sympol_pbt_gamma_base:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -818,8 +1012,19 @@ sympol_pbt_gamma_base:
   run_ids:
     (Acrobot-v1):
       sp87c62512081126addf4:
-        status: RUNNING
+        status: UNKNOWN (Deleted)
         submission_id: sympol_pbt_gamma_base_Acrobot-v1_2025-12-08_02:28:29
+      sp87c625121200004cdb4:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_gamma_base_Acrobot-v1_2025-12-11_11:04:52
+    (CartPole-v1):
+      sp87c62512120000a3054:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_gamma_base_CartPole-v1_2025-12-11_11:04:52
+    (LunarLander-v3):
+      sp87c625121201391e874:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_gamma_base_LunarLander-v3_2025-12-11_11:04:52
 sympol_pbt_gamma:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -830,6 +1035,52 @@ sympol_pbt_gamma:
     persistent_node: 1
 
 # region gamma
+  run_ids:
+    (HumanoidStandup-v5):
+      sp87c62512120139ce1f4:
+        status: RUNNING
+        submission_id: sympol_pbt_gamma_HumanoidStandup-v5_2025-12-11_11:04:52
+    (Humanoid-v5):
+      sp87c625121202018bfe4:
+        status: RUNNING
+        submission_id: sympol_pbt_gamma_Humanoid-v5_2025-12-11_11:04:52
+    (Ant-v5):
+      sp87c6251212042261294:
+        status: RUNNING
+        submission_id: sympol_pbt_gamma_Ant-v5_2025-12-11_11:04:52
+    (Hopper-v5):
+      sp87c6251212045567134:
+        status: RUNNING
+        submission_id: sympol_pbt_gamma_Hopper-v5_2025-12-11_11:04:52
+    (Walker2d-v5):
+      sp87c6251212050757094:
+        status: RUNNING
+        submission_id: sympol_pbt_gamma_Walker2d-v5_2025-12-11_11:04:52
+    (HalfCheetah-v5):
+      sp87c6251212051933ff4:
+        status: RUNNING
+        submission_id: sympol_pbt_gamma_HalfCheetah-v5_2025-12-11_11:04:52
+    (Reacher-v5):
+      sp87c62512120540f4f34:
+        status: RUNNING
+        submission_id: sympol_pbt_gamma_Reacher-v5_2025-12-11_11:04:52
+    (Swimmer-v5):
+      sp87c625121207195f034:
+        status: RUNNING
+        submission_id: sympol_pbt_gamma_Swimmer-v5_2025-12-11_11:04:52
+    (Pusher-v5):
+      sp87c625121207220ca54:
+        status: RUNNING
+        submission_id: sympol_pbt_gamma_Pusher-v5_2025-12-11_11:04:52
+    (InvertedDoublePendulum-v5):
+      sp87c625121208078c464:
+        status: RUNNING
+        submission_id:
+          sympol_pbt_gamma_InvertedDoublePendulum-v5_2025-12-11_11:04:52
+    (InvertedPendulum-v5):
+      sp87c62512121110e1d74:
+        status: RUNNING
+        submission_id: sympol_pbt_gamma_InvertedPendulum-v5_2025-12-11_11:04:52
 sympol_pbt_gamma_large:
   entrypoint_pattern:
     pattern: global_pattern_1

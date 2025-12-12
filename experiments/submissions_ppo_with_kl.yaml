@@ -9,6 +9,7 @@ global_pattern_1: >
   --buffer_length auto
   --comet offline --wandb offline+upload@end --log_stats learners
   --hostname_selector '!in(dws-login-01,dws-login-02)'
+  --vf_share_layers
   pbt --grouped --group_size 3 --perturbation_interval 0.125 --quantile_fraction 0.05
 # NOTE: Use set +H when using hostname selector
 # TODO: lr as > 10 options and so quantile_fraction = 0.1 -> 2 top groups
@@ -148,14 +149,6 @@ pbt_batch_size:
       tws47f251207012205ef4:
         status: SUCCEEDED
         submission_id: pbt_batch_size_Pusher-v5_2025-12-07_01:22:34
-        failures:
-        - none
-      pbt_batch_size_Pusher-v5_2025-12-07_00:56:36:
-        status: FAILED
-        submission_id: pbt_batch_size_Pusher-v5_2025-12-07_00:56:36
-        failures:
-          pbt_batch_size_Pusher-v5_2025-12-07_00:56:36:
-          - no offline history found
 pbt_batch_size_base:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -378,22 +371,6 @@ pbt_minibatch_size_2048:
       tws47f251206195907804:
         status: SUCCEEDED
         submission_id: pbt_minibatch_size_2048_Swimmer-v5_2025-12-06_16:40:33
-        failures:
-        - none
-      Swimmer-v5:
-        status: SUCCEEDED
-        submission_id: pbt_minibatch_size_2048_Swimmer-v5_2025-12-06_16:40:33
-        failures:
-          Swimmer-v5:
-          - no offline history found
-          sp87c625120615355b224Xce028C04Fce028C10S4KWG:
-          - No corresponding online wandb run found.
-          tws47f2511301114c8364X54410C10F54410C16S3i9w:
-          - No corresponding online wandb run found.
-          tws47f2512050342d3484X12a22C17F12a22C20S35nc:
-          - No corresponding online wandb run found.
-          multiple: No corresponding online wandb run found., no offline history
-            found
       tws47f2512050615fac74:
         status: SUCCEEDED
         submission_id: pbt_minibatch_size_2048_Swimmer-v5_2025-12-05_06:14:18
@@ -402,29 +379,12 @@ pbt_minibatch_size_2048:
     (InvertedDoublePendulum-v5):
       tws47f251206200449644:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_minibatch_size_2048_InvertedDoublePendulum-v5_2025-12-06_16:40:33
-        failures:
-        - none
-      InvertedDoublePendulum-v5:
-        status: SUCCEEDED
-        submission_id: 
-          pbt_minibatch_size_2048_InvertedDoublePendulum-v5_2025-12-06_16:40:33
-        failures:
-          InvertedDoublePendulum-v5:
-          - no offline history found
-          tws47f251205034294d94X0217cC19F0217cC22S3i9w:
-          - No corresponding online wandb run found.
-          '90446_00009':
-          - No corresponding online wandb run found.
-          sp87c62512061844dfe14X29acaC12F29acaC09S0cMK:
-          - No corresponding online wandb run found.
-          multiple: No corresponding online wandb run found., no offline history
-            found
     (InvertedPendulum-v5):
       tws47f2512062006c3aa4:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_minibatch_size_2048_InvertedPendulum-v5_2025-12-06_16:40:33
         failures:
         - none
@@ -455,7 +415,7 @@ pbt_minibatch_size_8192:
     (HumanoidStandup-v5):
       tws47f2511300152c1834:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_minibatch_size_8192_HumanoidStandup-v5_2025-11-30_01:52:07
         failures:
         - none
@@ -489,7 +449,7 @@ pbt_minibatch_size_8192:
     (HalfCheetah-v5):
       tws47f25120506589e6c4:
         status: STOPPED
-        submission_id: 
+        submission_id:
           pbt_minibatch_size_8192_HalfCheetah-v5_2025-12-05_06:57:32
         failures:
           tws47f25120506589e6c4:
@@ -504,19 +464,19 @@ pbt_minibatch_size_8192:
             found
       tws47f2512050715fd594:
         status: FAILED
-        submission_id: 
+        submission_id:
           pbt_minibatch_size_8192_HalfCheetah-v5_2025-12-05_07:15:18
         failures:
         - none
       tws47f251206233396404:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_minibatch_size_8192_HalfCheetah-v5_2025-12-06_23:33:15
         failures:
         - none
       tws47f251206215554584:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_minibatch_size_8192_HalfCheetah-v5_2025-12-06_16:40:33
         failures:
         - none
@@ -534,21 +494,21 @@ pbt_minibatch_size_8192:
     (InvertedDoublePendulum-v5):
       tws47f2512051506fcc74:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_minibatch_size_8192_InvertedDoublePendulum-v5_2025-12-05_07:15:18
         failures:
         - none
     (InvertedPendulum-v5):
       tws47f2512051555750d4:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_minibatch_size_8192_InvertedPendulum-v5_2025-12-05_07:15:18
         failures:
         - none
     (Pusher-v5):
       tws47f251207210192f14:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_minibatch_size_8192_Pusher-v5_2025-12-07_21:00:59_restore_2025-12-08_11:48:44
         submission_ids:
         - pbt_minibatch_size_8192_Pusher-v5_2025-12-07_21:00:59
@@ -582,7 +542,7 @@ pbt_minibatch_size_base:
     (LunarLander-v3):
       tws47f251205165399f14:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_minibatch_size_base_LunarLander-v3_2025-12-05_07:15:18
         failures:
         - none
@@ -668,7 +628,7 @@ pbt_num_envs:
     (InvertedDoublePendulum-v5):
       tws47f2512052015e4364:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_num_envs_InvertedDoublePendulum-v5_2025-12-05_07:15:18
         failures:
         - none
@@ -724,7 +684,7 @@ pbt_num_envs_base:
         failures:
         - none
 pbt_num_envs_large:
-  comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16) 
+  comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale
   entrypoint_resources:
     persistent_node: 1
@@ -812,14 +772,14 @@ pbt_num_envs_large:
     (InvertedDoublePendulum-v5):
       tws47f251201140137324:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_num_envs_large_InvertedDoublePendulum-v5_2025-12-01_02:15:38
         failures:
         - none
     (InvertedPendulum-v5):
       tws47f25120115501ee54:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_num_envs_large_InvertedPendulum-v5_2025-12-01_02:15:38
 
         failures:
@@ -898,7 +858,7 @@ pbt_lr:
       tws47f2512072225006e4:
         status: SUCCEEDED - wandb verification failed
         submission_id0: pbt_lr_Reacher-v5_2025-12-07_21:00:59
-        submission_id: 
+        submission_id:
           pbt_lr_Reacher-v5_2025-12-07_21:00:59_restore_2025-12-08_01:06:38
         failures:
           tws47f2512072225006e4X36279C25F36279C00S2TRI:
@@ -937,7 +897,7 @@ pbt_lr:
       tws47f25120721013d384:
         status: SUCCEEDED
         note: was restored twice!
-        submission_id: 
+        submission_id:
           pbt_lr_Walker2d-v5_2025-12-07_21:00:59_restore_2025-12-08_11:48:44
         submission_ids:
         - pbt_lr_Walker2d-v5_2025-12-07_21:00:59
@@ -953,7 +913,7 @@ pbt_lr:
           - No corresponding online wandb run found.
           tws47f25120721013d384X8c619C04F8c619C00S3i9w:
           - No corresponding online wandb run found.
-          multiple: No corresponding online wandb run found., metric mismatch, 
+          multiple: No corresponding online wandb run found., metric mismatch,
             online history incomplete
       tws47f2512091343cdba4:
         status: SUCCEEDED
@@ -964,7 +924,7 @@ pbt_lr:
       tws47f251207210174204:
         status: SUCCEEDED -verification failure
         note: was restored twice
-        submission_id: 
+        submission_id:
           pbt_lr_HalfCheetah-v5_2025-12-07_21:00:59_restore_2025-12-08_23:59:58
         submission_ids: pbt_lr_HalfCheetah-v5_2025-12-07_21:00:59
         failures:
@@ -987,7 +947,7 @@ pbt_lr:
       tws47f251207223023b54:
         status: SUCCEEDED
         note: was restored twice!
-        submission_id: 
+        submission_id:
           pbt_lr_Swimmer-v5_2025-12-07_21:00:59_restore_2025-12-08_01:06:38
         submission_ids:
         - pbt_lr_Swimmer-v5_2025-12-07_21:00:59
@@ -1006,7 +966,7 @@ pbt_lr:
     (InvertedPendulum-v5):
       tws47f2512072311b8014:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_lr_InvertedPendulum-v5_2025-12-07_21:00:59_restore_2025-12-09_01:20:52
         submission_ids: pbt_lr_InvertedPendulum-v5_2025-12-07_21:00:59
         failures:
@@ -1018,7 +978,7 @@ pbt_lr:
           tws47f2512091343c85f4:
           - no offline history found
 pbt_lr_large:
-  comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16) 
+  comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale  - need to repeat because of 2 top groups
   entrypoint_resources:
     persistent_node: 1
@@ -1097,7 +1057,7 @@ pbt_lr_large:
     (InvertedDoublePendulum-v5):
       tws47f25120118400ad24:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_lr_large_InvertedDoublePendulum-v5_2025-12-01_02:16:20
         failures:
         - none
@@ -1236,7 +1196,7 @@ pbt_clip_param:
     (HalfCheetah-v5):
       tws47f2512072355fe1a4:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_clip_param_HalfCheetah-v5_2025-12-07_21:00:59_restore_2025-12-08_23:59:58
         submission_ids: pbt_clip_param_HalfCheetah-v5_2025-12-07_21:00:59
         failures:
@@ -1252,7 +1212,7 @@ pbt_clip_param:
     (Reacher-v5):
       tws47f25120723586df44:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_clip_param_Reacher-v5_2025-12-07_21:00:59_restore_2025-12-08_23:59:58
         submission_ids: pbt_clip_param_Reacher-v5_2025-12-07_21:00:59
         failures:
@@ -1264,12 +1224,12 @@ pbt_clip_param:
           - No corresponding online wandb run found.
           tws47f25120723586df44X375bfC02F375bfC01S1Eie:
           - No corresponding online wandb run found.
-          multiple: No corresponding online wandb run found., online history 
+          multiple: No corresponding online wandb run found., online history
             incomplete
     (Swimmer-v5):
       tws47f251208003366444:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_clip_param_Swimmer-v5_2025-12-07_21:00:59_restore_2025-12-08_23:59:58
         submission_ids: pbt_clip_param_Swimmer-v5_2025-12-07_21:00:59
         failures:
@@ -1291,10 +1251,20 @@ pbt_clip_param:
     (InvertedDoublePendulum-v5):
       tws47f25120801409b594:
         status: SUCCEEDED
-        submission_id: 
+        submission_id:
           pbt_clip_param_InvertedDoublePendulum-v5_2025-12-07_21:00:59_restore_2025-12-08_11:48:44
-        submission_ids: 
+        submission_ids:
           pbt_clip_param_InvertedDoublePendulum-v5_2025-12-07_21:00:59
+        failures:
+          tws47f25120801409b594X75277C20F75277C14S2TRI:
+          - No corresponding online wandb run found.
+          tws47f25120801409b594X75277C11F75277C19S4KWG:
+          - No corresponding online wandb run found.
+          '75277_00018':
+          - No corresponding online wandb run found.
+          tws47f25120801409b594X75277C04F75277C06S35nc:
+          - No corresponding online wandb run found.
+          multiple: No corresponding online wandb run found.
 pbt_entropy_coeff_base:
   # TODO: Change to base
   <ENV_TYPE>:
@@ -1376,7 +1346,20 @@ pbt_vf_loss_coeff_base:
       <ENV_TYPE>: <basic_envs>
 
 # region vf_loss_coeff
+pbt_vf_loss_coeff_test:
+  entrypoint_pattern:
+    pattern: global_pattern_1
+    substitutions:
+      <TUNE_PARAM>: vf_loss_coeff
+      <ENV_TYPE>: Hopper-v5
+  entrypoint_resources:
+    persistent_node: 1
 
+  run_ids:
+    (Hopper-v5):
+      tws47f251210145572164:
+        status: SUCCEEDED
+        submission_id: pbt_vf_loss_coeff_test__2025-12-10_14:54:37
 pbt_vf_loss_coeff:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -1484,6 +1467,17 @@ pbt_kl_coeff_base:
       tws47f2512091754a9124:
         status: SUCCEEDED
         submission_id: pbt_kl_coeff_base_LunarLander-v3_2025-12-09_17:46:07
+        failures:
+          tws47f2512091754a9124:
+          - no offline history found
+          tws47f2512091754a9124Xb17f6C16Fb17f6C20S1Eie:
+          - No corresponding online wandb run found.
+          tws47f2512091754a9124Xb17f6C04Fb17f6C05S2TRI:
+          - No corresponding online wandb run found.
+          tws47f2512091754a9124Xb17f6C18Fb17f6C19S2TRI:
+          - No corresponding online wandb run found.
+          multiple: no offline history found, No corresponding online wandb run
+            found.
 pbt_kl_coeff:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -1495,15 +1489,26 @@ pbt_kl_coeff:
   run_ids:
     (HumanoidStandup-v5):
       tws47f25120918478ec74:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_kl_coeff_HumanoidStandup-v5_2025-12-09_18:47:48
+        failures:
+          tws47f25120918478ec74:
+          - no offline history found
+          '34671_00018':
+          - No corresponding online wandb run found.
+          '34671_00009':
+          - No corresponding online wandb run found.
+          '34671_00011':
+          - No corresponding online wandb run found.
+          multiple: no offline history found, No corresponding online wandb run
+            found.
     (Humanoid-v5):
       tws47f25120920026ca94:
         status: SUCCEEDED
         submission_id: pbt_kl_coeff_Humanoid-v5_2025-12-09_18:47:48
     (Ant-v5):
       tws47f2512092003afe54:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_kl_coeff_Ant-v5_2025-12-09_18:47:48
     (Hopper-v5):
       tws47f251209200809a24:
@@ -1515,7 +1520,7 @@ pbt_kl_coeff:
         submission_id: pbt_kl_coeff_Walker2d-v5_2025-12-09_20:16:40
     (HalfCheetah-v5):
       tws47f251209201749254:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_kl_coeff_HalfCheetah-v5_2025-12-09_20:16:40
     (Reacher-v5):
       tws47f2512092025d0bd4:
@@ -1523,7 +1528,7 @@ pbt_kl_coeff:
         submission_id: pbt_kl_coeff_Reacher-v5_2025-12-09_20:16:40
     (Swimmer-v5):
       tws47f2512092025ad794:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_kl_coeff_Swimmer-v5_2025-12-09_20:16:40
     (Pusher-v5):
       tws47f25120920265dcc4:
@@ -1531,10 +1536,10 @@ pbt_kl_coeff:
         submission_id: pbt_kl_coeff_Pusher-v5_2025-12-09_20:16:40
     (InvertedDoublePendulum-v5):
       tws47f2512092233087a4:
-        status: RUNNING
-        submission_id: 
+        status: SUCCEEDED
+        submission_id:
           pbt_kl_coeff_InvertedDoublePendulum-v5_2025-12-09_22:27:19
     (InvertedPendulum-v5):
       tws47f251209224379cb4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_kl_coeff_InvertedPendulum-v5_2025-12-09_22:27:19
