@@ -1630,7 +1630,7 @@ def verify_wandb_runs(
         )
     for run, failure in verify_results.items():
         if isinstance(failure, Exception):
-            logger.error("Verification for wandb run %s (%s) failed with exception: %s", run.id, run.url, str(failure))
+            logger.error("Verification for wandb run %s (%s) failed with exception: %r", run.id, run.url, failure)
         elif failure:
             if all(f.minor for f in failure):
                 logger.warning("Wandb run %s (%s) history has minor discrepancies: %s", run.id, run.url, failure)

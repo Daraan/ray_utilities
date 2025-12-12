@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import Counter
 from copy import deepcopy
 import itertools
 import os
@@ -563,10 +564,15 @@ def write_back(
         with open(file_path, "r") as f:
             data = yaml_load(f)
         backup = deepcopy(data)
-
-        # Don't remove timestamp suffix for restore jobs
-        if not is_restore:
-            job_id = re.sub(r"_\d{4}-\d{2}-\d{2}_\d{2}:\d{2}:\d{2}$", "", job_id)
+        # Remove all timestamp suffixes and special suffixes like _restore from job_id
+        # This handles patterns like: _2025-12-10_17:30:56 or _restore_2025-12-10_19:03:44
+        original_job_id = job_id
+        while True:
+            new_job_id = re.sub(r"_\d{4}-\d{2}-\d{2}_\d{2}:\d{2}:\d{2}$", "", job_id)
+            new_job_id = re.sub(r"_restore$", "", new_job_id)
+            if new_job_id == job_id:
+                break
+            job_id = new_job_id
 
         # Always resolve the actual group by searching for the job_id in the data
         actual_group = group
@@ -606,7 +612,21 @@ def write_back(
                 env_name = job_id.removeprefix(actual_group + "_").split("_")[0]
                 run_key = f"({env_name})"
             else:
-                replacement_parts = job_id.removeprefix(actual_group + "_").split("_")
+                data[actual_group].setdefault("run_ids", {})
+
+                # Extract the environment/replacement parts from job_id
+                job_id_without_group = job_id.removeprefix(actual_group + "_")
+
+                # Extract environment name pattern (e.g., "CartPole-v1", "Swimmer-v5")
+                # This matches common Gym/Gymnasium environment naming: Word-vN or Word_Word-vN
+                env_match = re.search(r"([A-Za-z][A-Za-z0-9_]*-v\d+)", job_id_without_group)
+                if env_match:
+                    # Use the environment name as the primary replacement part
+                    replacement_parts = [env_match.group(1)]
+                else:
+                    # Fallback: split by underscore but be more careful
+                    replacement_parts = job_id_without_group.split("_")
+
                 run_key = "(" + ", ".join(replacement_parts).rstrip(", ") + ")"
 
             if isinstance(run_id, dict):
@@ -954,8 +974,8 @@ async def monitor_job_statuses(
 
             jobs_to_delete = []
             failed_count = 0
-            other_count = 0
             running_count = 0
+            counter = Counter()
 
             for job_id, group_and_job_id in jobs_tracked_left.items():
                 # If job previously failed, skip querying but keep in list
@@ -971,14 +991,13 @@ async def monitor_job_statuses(
 
                 current_time = time.strftime("%Y-%m-%d %H:%M:%S")
                 print(f"[{current_time}] Job {job_id} status: {job_status}.")
+                Counter.update(counter, [job_status])
 
                 if job_status == JobStatus.RUNNING:
                     running_count += 1
                 elif job_status == JobStatus.FAILED:
                     failed_count += 1
                     failed_jobs[job_id] = group_and_job_id
-                else:
-                    other_count += 1
 
                 if job_status in JOB_END_STATES:
                     job_status = cast("JobStatus", job_status)
@@ -1006,7 +1025,8 @@ async def monitor_job_statuses(
             for job_id in jobs_to_delete:
                 jobs_tracked_left.pop(job_id, None)
 
-            print(f"Summary: {running_jobs_count} running, {failed_count} failed, {other_count} other.")
+            counted = "\n".join(f"{k}: {v}" for k, v in counter.items())
+            print(f"Summary: {running_jobs_count} running, {failed_count} failed.\nTracking: \n{counted}")
 
             if failed_jobs:
                 print("Failed jobs:")
@@ -1091,7 +1111,13 @@ async def monitor_job_statuses(
 
 
 class AsyncInput:
-    def __init__(self, loop: asyncio.AbstractEventLoop):
+    def __init__(self, loop: asyncio.AbstractEventLoop | None = None):
+        if loop is None:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
         self.loop = loop
         self.queue = asyncio.Queue()
         self.fd = sys.stdin.fileno()
@@ -1107,10 +1133,24 @@ class AsyncInput:
             if self.future and not self.future.done():
                 self.future.set_exception(e)
 
-    def start(self):
+    def start(self, timeout: float | None = None):
         self.future = self.loop.create_future()
         self.loop.add_reader(self.fd, self._on_input)
+        if hasattr(self, "result"):
+            delattr(self, "result")
+        if not self.loop.is_running():
+            self.loop.run_until_complete(self.wait(timeout or 15))
+            return self.result
         return self.future
+
+    async def wait(self, timeout):
+        assert self.future is not None
+        try:
+            self.result: str | None = await asyncio.wait_for(self.future, timeout)
+        except TimeoutError:
+            self.future.cancel()
+            self.result = None
+        return self.result
 
     def stop(self):
         self.loop.remove_reader(self.fd)

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import json
 import logging
 import os
 import sys
@@ -172,6 +173,29 @@ def _filter_keys_from_config(config: dict) -> dict:
     return config
 
 
+def _get_parents_from_json(offline_path: Path | str, parents: dict | None = None) -> dict:
+    parents = {} if parents is None else parents
+    with open(offline_path, "r") as f:
+        for line in f:
+            data = json.loads(line)
+            if FORK_FROM in data.get("config", {}):
+                parents[data["config"][FORK_FROM]["parent_fork_id"]] = data["config"][FORK_FROM]["fork_id"]
+    return parents
+
+
+def _find_parent_json_file(offline_path: Path | str, parent_run_id: str) -> Path | None:
+    offline_path = Path(offline_path)
+    parent_search = offline_path.parent.glob(f"result*{parent_run_id}.json")
+    parent_files = list(parent_search)
+    if len(parent_files) > 0:
+        logger.warning("Found multiple parent json files for parent run id %s: %s", parent_run_id, parent_files)
+        return parent_files[-1]
+    if len(parent_files) == 1:
+        return parent_files[0]
+    logger.error("Did not find parent json file for parent run id %s in %s", parent_run_id, offline_path.parent)
+    return None
+
+
 def patch_offline_history(
     offline_path: Path | str,
     run: Optional[RunApi | str] = None,
@@ -193,8 +217,6 @@ def patch_offline_history(
     Returns:
         None
     """
-    import json  # noqa: PLC0415
-
     from ray.rllib.utils import unflatten_dict  # noqa: PLC0415
 
     api = wandb_api()
@@ -257,6 +279,7 @@ def patch_offline_history(
                     parent_run_ids,
                 )
                 if sys.argv[0] == "":
+                    logger.info("Require input...")
                     while (choice := input("Skip this parent? (y/n): ").lower()) not in ("y", "n"):
                         pass
                     if choice == "y":
