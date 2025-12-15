@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import time
 import traceback
 from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Sequence, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Collection, Sequence, TypeAlias, TypeVar, cast
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import base62
@@ -19,6 +20,8 @@ import seaborn as sns
 from matplotlib import cm, colormaps, patheffects
 from tqdm import tqdm
 from typing_extensions import Final, Sentinel, TypeVarTuple, Unpack
+
+from ray_utilities.testing_utils import remote_breakpoint
 
 # from ray_utilities.constants import EPISODE_RETURN_MEAN_EMA
 # from ray_utilities.testing_utils import remote_breakpoint
@@ -133,10 +136,12 @@ def load_run_data(offline_run: str | Path, experiment_dir=None):
                 for col in df.columns
             ]
             df.columns = pd.MultiIndex.from_tuples(tuples)
-            df = df.sort_index(axis=1, level=range(len(df.columns[0]))).drop(columns=DROP_COLUMNS, errors="ignore")
+            df = df.sort_index(axis=1).drop(columns=DROP_COLUMNS, errors="ignore")
             # df.columns = pd.MultiIndex.from_tuples(cast("list[tuple[str, ...]]", df.columns))
             try:
-                experiment_key = df.config.experiment_key.iloc[-1].item()
+                experiment_key = df.config.experiment_key.iloc[-1]
+                if not isinstance(experiment_key, str):
+                    experiment_key = experiment_key.item()
                 assert result_file.name == "result.json" or experiment_key in result_file.name, (
                     f"Experiment key {experiment_key} does does not match id in file name {result_file}"
                 )
@@ -390,6 +395,8 @@ def which_continued(df: pd.DataFrame) -> pd.DataFrame:
             mutations = dict.fromkeys(groups, None)
 
             ns = SimpleNamespace(_hyperparam_mutations=mutations)
+            if groups and groups[0] not in row and groups[0] in row.config:
+                row = row.config
             return GroupedTopPBTTrialScheduler._build_group_key_from_config(
                 ns,
                 row.droplevel(level=list(range(1, row.index.nlevels))),  # pyright: ignore[reportArgumentType]
@@ -508,15 +515,49 @@ def plot_run_data(
         # assumes a name=... format
         group_stat = df.iloc[0].config[group_by[-1]].str.split("=").iloc[0][0]
         assert group_stat is not None
-    if group_stat == "batch_size" and "batch_size" not in df.config:
-        df.loc[:, ifill("config", "batch_size")] = df.config.train_batch_size_per_learner
+    if group_stat == "train_batch_size_per_learner" and "train_batch_size_per_learner" not in df:
+        group_stat = "batch_size"
+    if group_stat == "batch_size" and "batch_size" not in df:
+        df["batch_size"] = df.config.train_batch_size_per_learner
+        df.sort_index(axis=1, inplace=True)
+    elif group_stat not in df:
+        try:
+            df[group_stat] = df.config[group_stat]
+        except (TypeError, KeyError):
+            remote_breakpoint()
+            raise
+        df.sort_index(axis=1, inplace=True)
+    if group_stat not in df.config and group_stat in df:
+        df.loc[:, ifill("config", group_stat)] = df[group_stat]
+        df.sort_index(axis=1, inplace=True, level=2)
     final_metric_was_none = pbt_metric is None
     log = log if log is not None else group_stat in LOG_SETTINGS
 
     # Secondary x-axis mappers
     first_change: tuple[str, int] = df[ifill("config", "pbt_epoch")].diff().iloc[1:].ne(0).idxmax()  # pyright: ignore[reportAssignmentType]
-    perturbation_interval = df.current_step.loc[(first_change[0], first_change[1] - 1)].item()
-    secondard_to_main = lambda xs: (xs + 0.5) * perturbation_interval  # noqa: E731
+    try:
+        perturbation_interval = df.current_step.loc[(first_change[0], first_change[1] - 1)].item()
+    except AttributeError as ae:
+        if "item" not in str(ae):
+            raise
+        remote_breakpoint()
+    except KeyError:
+        # When restored the pbt_epoch might be wrong and we might have duplicated steps, use first non-duplicated to get interval
+        # use last to continue values
+        duplicated_steps = df.loc[first_change[0], "current_step"].nunique() < len(df.current_step)
+        try:
+            duplicated_steps = bool(duplicated_steps)
+        except ValueError:
+            duplicated_steps = duplicated_steps.item()
+        if not duplicated_steps:
+            raise
+            # if we keep last the metrics will align better but we might not get the correct interval
+        no_duplicates = df[~df.index.duplicated(keep="first")]
+        loc_alt = no_duplicates[ifill("config", "pbt_epoch")].diff().iloc[1:].ne(0).idxmax()
+        perturbation_interval = int(no_duplicates.loc[(loc_alt[0], loc_alt[1] - 1)].current_step.item())
+        # Use last to take values of last restore
+        df = df[~df.index.duplicated(keep="last")]
+    secondary_to_main = lambda xs: (xs + 0.5) * perturbation_interval  # noqa: E731
     main_to_secondary = lambda xs: (xs - perturbation_interval / 2) / perturbation_interval  # noqa: E731
     num_pbt_epochs = df[ifill("config", "pbt_epoch")].max().item() + 1
 
@@ -524,11 +565,20 @@ def plot_run_data(
     group_cols = [("config", k) for k in group_by]
     # Extract the group-by columns as a DataFrame (each column is 1D)
     try:
+        try:
+            stat_columns = df[group_stat].droplevel(0, axis=1)
+        except ValueError as ve:
+            if "No axis named 1" not in str(ve):
+                raise
+            remote_breakpoint()
+            # If group_stat is a series cannot drop levels
+            logger.error("Failed to drop level from group_stat %s", group_stat)
+            stat_columns = df[group_stat]
         group_values: list[pd.Series] = [
             df.current_step.droplevel(0, axis=1),
             *(df[col] for col in group_cols),
             df.config.seed,
-            df[group_stat].droplevel(0, axis=1),
+            stat_columns,
         ]
     except AttributeError as ae:
         if "seed" not in str(ae):
@@ -585,7 +635,7 @@ def plot_run_data(
         # we did not save perturbation interval, check where pbt_epoch first changes
         # Use transform to add it relative to the data
         if pbt_plot_interval:
-            secax = ax.secondary_xaxis("top", functions=(main_to_secondary, secondard_to_main), transform=None)
+            secax = ax.secondary_xaxis("top", functions=(main_to_secondary, secondary_to_main), transform=None)
             secax.set_xlabel("PBT Epoch")
             secax.set_xticks([e for e in range(num_pbt_epochs) if e % pbt_plot_interval == 1])
             # Show tick labels for secondary xaxis, inside and closer to the plot
@@ -789,7 +839,10 @@ def plot_run_data(
 
             last_bg_epoch = pbt_epoch
             prev_group = group
-
+            try:
+                color_map[stat_val]
+            except KeyError:
+                remote_breakpoint()
             # Plot
             sns.lineplot(
                 data=group,
@@ -885,11 +938,13 @@ def plot_run_data(
             legend.get_title().set_fontsize(fontsize)
         if (legend2 := ax2.get_legend()) is not None:
             legend2.remove()
-        ax.set_title(
-            f"{df.iloc[0].config.cli_args.env_type.item()} "
-            f"- {df.iloc[0].config.cli_args.agent_type.item()} "
-            f"- {metrics[0]}"
-        )
+        env_type = df.iloc[0].config.cli_args.env_type
+        if not isinstance(env_type, str):
+            env_type = env_type.item()
+        agent_type = df.iloc[0].config.cli_args.agent_type
+        if not isinstance(agent_type, str):
+            agent_type = agent_type.item()
+        ax.set_title(f"{env_type} - {agent_type} - {metrics[0]}")
     plt.tight_layout()
     if show:
         plt.show()
@@ -967,7 +1022,18 @@ def export_run_data(
         data = load_run_data(experiment_path)
         logger.debug("Combining dataframes...")
         combined_df = combine_df(data)
-        out_path = save_path / f"{experiment_path.name}_{metric_str}.{format}"
+        # Mark large experiments:
+        large = ""
+        if group_stat is None:
+            group_stat = combined_df.iloc[0].config[group_by[-1]].str.split("=").iloc[0][0]
+        if group_stat not in ("batch_size", "train_batch_size_per_learner"):
+            batch_size = combined_df.iloc[0].config.get(
+                "train_batch_size_per_learner",
+                combined_df.iloc[0].config.get("batch_size", combined_df.iloc[0].get("batch_size", None)),
+            )
+            if batch_size >= 8192:
+                large = "(large)"
+        out_path = save_path / f"{experiment_path.name}_{metric_str}{large}.{format}"
     elif save_path is None:
         raise ValueError("When providing a DataFrame directly, save_path must be specified.")
     else:
@@ -1035,6 +1101,16 @@ def _export_multiple(
         logger.error(f"Failed to combine dataframes for {experiment_path}: {e!r}", exc_info=True)  # noqa: G004
         return saved_files, [(e, tb, experiment_path)]
     # Expand kwargs if any value is an Options instance (cross product over all Options)
+    large = False
+    if (group_stat := kwargs.get("group_stat")) is None:
+        group_stat = combined_df.iloc[0].config[group_by[-1]].str.split("=").iloc[0][0]
+    if group_stat not in ("batch_size", "train_batch_size_per_learner"):
+        batch_size = combined_df.iloc[0].config.get(
+            "train_batch_size_per_learner",
+            combined_df.iloc[0].config.get("batch_size", combined_df.iloc[0].get("batch_size", None)),
+        )
+        if batch_size >= 8192:
+            large = True
 
     # Identify keys in kwargs whose values are Options
     option_keys = [k for k, v in kwargs.items() if isinstance(v, Repeat)]
@@ -1043,6 +1119,7 @@ def _export_multiple(
         # Build a list of lists for each Options value, or [v] if not Options
         option_values: list[Repeat[object]] = [kwargs[k] for k in option_keys]  # pyright: ignore[reportAssignmentType]
         # For each combination in the cross product, build a dict of overrides
+        # remote_breakpoint()
         for combo in product(*option_values):
             combo_kwargs = kwargs.copy()
             for k, v in zip(option_keys, combo, strict=True):
@@ -1051,8 +1128,23 @@ def _export_multiple(
             assert not any(isinstance(v, Repeat) for v in combo_kwargs.values()), (
                 "All Repeat values should have been expanded."
             )
+            if combo_kwargs.get("main_only", False) and combo_kwargs.get("plot_reduced", False):
+                logger.info(
+                    "Skipping combination with main_only=True and plot_reduced=True as they are mutually exclusive."
+                )
+                continue
             for metric in metrics:
                 metric_str = metrics if isinstance(metrics, str) else "-".join(map(_join_nested, metrics))
+                out_path = _create_image_output_path(
+                    experiment_path,
+                    metric,
+                    main_only=combo_kwargs.get("main_only", False),
+                    plot_reduced=combo_kwargs.get("plot_reduced", False),
+                    output_dir=experiment_path,
+                    format=format,
+                    large=large,
+                )
+                logger.info("Exporting metric '%s' with options %s to '%s' ...", metric_str, combo_kwargs, out_path)
                 try:
                     file_path = export_run_data(
                         combined_df,
@@ -1060,7 +1152,7 @@ def _export_multiple(
                         group_by=group_by,
                         figsize=figsize,
                         format=format,
-                        save_path=experiment_path / "plots" / f"{experiment_path.name}_{metric_str}.{format}",
+                        save_path=out_path,
                         **combo_kwargs,
                     )
                 except Exception as e:  # noqa: PERF203
@@ -1073,7 +1165,14 @@ def _export_multiple(
         return saved_files, errors
     kws = cast("dict[str, Any]", kwargs)
     for metric in metrics:
-        metric_str = metrics if isinstance(metrics, str) else "-".join(map(_join_nested, metrics))
+        out_path = _create_image_output_path(
+            experiment_path,
+            metric,
+            main_only=kws.get("main_only", False),
+            plot_reduced=kws.get("plot_reduced", False),
+            output_dir=experiment_path,
+            format=format,
+        )
         try:
             file_path = export_run_data(
                 combined_df,
@@ -1081,7 +1180,7 @@ def _export_multiple(
                 group_by=group_by,
                 figsize=figsize,
                 format=format,
-                save_path=experiment_path / "plots" / f"{experiment_path.name}_{metric_str}.{format}",
+                save_path=out_path,
                 **kws,
             )
         except Exception as e:  # noqa: PERF203
@@ -1104,19 +1203,45 @@ class Repeat(list[T]):
 OptionalRepeat: TypeAlias = Repeat[T] | T
 
 
+def _create_image_output_path(
+    experiment_path: Path,
+    metric: str | tuple[str, ...],
+    *,
+    main_only: bool,
+    plot_reduced: bool,
+    output_dir: Path,
+    format: str,
+    large: bool = False,
+) -> Path:
+    metric_str = "-".join(metric) if isinstance(metric, tuple) else metric
+    suffixes = []
+    if main_only:
+        suffixes.append("main_only")
+    # Main not compatible with reduced
+    elif plot_reduced:
+        suffixes.append("reduced")
+    else:
+        suffixes.append("all")
+    suffix_str = ("-" + "_".join(suffixes)) if suffixes else ""
+    if large:
+        suffix_str += "(large)"
+    return output_dir / "plots" / f"{experiment_path.name}_{metric_str}{suffix_str}.{format}"
+
+
 def export_all_runs(
     output_dir: str | Path,
     *,
     single: bool = False,
+    test=TEST,
+    max_workers: int = 4,
+    zip_plots: bool = False,
+    excludes: Collection[str] = (),
+    redo: bool = False,
+    # need to be passed on
     format="pdf",
     figsize=(14, 10),
     group_by=("pbt_epoch", "pbt_group_key"),
     metrics=("episode_reward_mean",),
-    test=TEST,
-    max_workers: int = 4,
-    zip_plots: bool = False,
-    excludes: Sequence[str] = (),
-    redo: bool = False,
     main_only: OptionalRepeat[bool] = False,
     plot_reduced: OptionalRepeat[bool] = True,
     **kwargs,
@@ -1142,6 +1267,7 @@ def export_all_runs(
     test = int(test) - 1 if test else float("inf")
     # Submit tasks as soon as we get experiment paths from glob
     file_paths: list[Path] = []
+    start = time.time()
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         i = 0
@@ -1172,18 +1298,17 @@ def export_all_runs(
                 for metric in metrics:
                     for mo in main_only_options:
                         for pr in plot_reduced_options:
-                            metric_str = "-".join(metric) if isinstance(metric, tuple) else metric
-                            suffixes = []
-                            if mo:
-                                suffixes.append("main_only")
-                            if pr:
-                                suffixes.append("reduced")
-                            else:
-                                suffixes.append("all")
-                            suffix_str = ("_" + "_".join(suffixes)) if suffixes else ""
-                            out_path = (
-                                output_dir / "plots" / f"{experiment_path.name}_{metric_str}{suffix_str}.{format}"
-                            )
+                            # Cannot use main only with plot reduced:
+                            if mo and pr:
+                                continue
+                            out_path = _create_image_output_path(
+                                experiment_path,
+                                metric,
+                                main_only=mo,
+                                plot_reduced=pr,
+                                output_dir=output_dir,
+                                format=format,
+                            )  # noqa: E501
                             if out_path.exists():
                                 metrics_to_remove.add((metric, mo, pr))
                                 # Include in zip file paths even if skipping
@@ -1209,6 +1334,8 @@ def export_all_runs(
                     group_by=group_by,
                     figsize=figsize,
                     format=format,
+                    main_only=main_only,
+                    plot_reduced=plot_reduced,
                     **kwargs,
                 )
             )
@@ -1220,29 +1347,31 @@ def export_all_runs(
         tracebacks = []
         zipf = None
         try:
-            if zip_plots:
+            if zip_plots:  # zip skipped files as we go
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 zip_path = output_dir / f"exported_plots_{timestamp}.zip"
                 zipf = ZipFile(zip_path, "w", compression=ZIP_DEFLATED, compresslevel=9)
                 for file_path in file_paths:
-                    arcname = output_dir.name / file_path.relative_to(output_dir)
+                    arcname = file_path.relative_to(output_dir)
                     zipf.write(file_path, arcname=str(arcname))
             try:
                 # Collect results as they complete
                 file_paths: list[Path]
                 errors: list[tuple[Exception, str, Path]]
+                print("---------- Waiting and collecting results ----------")
                 for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
                     file_paths, errors = future.result()
                     if isinstance(file_paths, (Path, str)):
                         file_paths = [Path(file_paths)]
+                    print("Exported files:", file_paths)
+                    saved_files.extend(file_paths)
                     for file_path in file_paths:
-                        saved_files.extend(file_paths)
-                        arcname = output_dir.name / file_path.relative_to(output_dir)
+                        arcname = file_path.relative_to(output_dir)
                         if zipf is not None:
                             zipf.write(file_path, arcname=str(arcname))
                     for error_return in errors:
                         error, tb, failed_path = error_return
-                        logger.error(f"Error during export of {failed_path} : {error}\n{tb}")  # noqa: G004
+                        logger.error(f"Error during export of {failed_path} : {error!r}\n{tb}")  # noqa: G004
                         tracebacks.append((failed_path, tb))
             except KeyboardInterrupt:
                 logger.warning("KeyboardInterrupt received: cancelling all running futures.")
@@ -1259,7 +1388,13 @@ def export_all_runs(
         for failed_path, tb in tracebacks:
             print("\n--------------------------------\n")
             logger.error(f"Failed export for {failed_path}:\n{tb}")  # noqa: G004
-    logger.info(f"Exported {len(saved_files)} files in total:\n%s", "\n".join(str(f) for f in saved_files))  # noqa: G004
+    end = time.time()
+    logger.info(
+        "Exported %d files in %s:\n%s",
+        len(saved_files),
+        f"{(end - start) / 60:.1f} min",
+        "\n".join(map(str, {f.parent.parent for f in saved_files})),
+    )  # noqa: G004
     if zip_plots:
         logger.info(f"Zipped plots saved to {zip_path}")  # pyright: ignore[reportPossiblyUnboundVariable] # noqa: G004
     return saved_files
@@ -1273,6 +1408,14 @@ if __name__ == "__main__":
     from datetime import datetime
 
     from ray_utilities import nice_logger
+
+    try:
+        with open("plot_exclude.txt", "r") as f:
+            file_excludes: set[str] = {line.strip() for line in f if line.strip() and not line.startswith("#")}
+            logger.info("Loaded plot excludes: %s", file_excludes)
+    except FileNotFoundError:
+        logger.info("No plot excludes found.")
+        file_excludes = set()
 
     logger = nice_logger(logger, logging.INFO)
     # logging.info("Set handle")  # noqa: LOG015
@@ -1309,20 +1452,21 @@ if __name__ == "__main__":
         args.metrics = ["episode_reward_mean", ("training", "episode_return_mean")]
     else:
         args.metrics = list(map(literal_eval, args.metrics))
+    excludes: set[str] = file_excludes.union(set(args.excludes))
     export_all_runs(
         args.path,
         single=args.single,
+        main_only=Repeat([True, False]) if not args.main_only else True,
+        plot_reduced=Repeat([True, False]),
+        test=args.test,
         metrics=args.metrics,
         group_by=("pbt_epoch", "pbt_group_key"),
         figsize=tuple(args.figsize),
         format=args.format,
-        main_only=Repeat([True, False]) if not args.main_only else True,
-        plot_reduced=Repeat([True, False]),
-        test=args.test,
         pbt_metric=args.pbt_metric,
         max_workers=args.workers,
         zip_plots=args.zip,
-        excludes=args.excludes,
+        excludes=excludes,
         redo=args.redo,
     )
 
