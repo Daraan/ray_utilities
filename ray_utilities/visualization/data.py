@@ -7,7 +7,7 @@ import traceback
 from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Collection, Sequence, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Collection, Hashable, Sequence, TypeAlias, TypeVar, cast
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import base62
@@ -72,8 +72,11 @@ sns.set_theme(
         "axes.spines.right": True,
         "axes.titleweight": "bold",
         "axes.labelweight": "bold",
-        "axes.labelsize": 12,
-        "axes.titlesize": 14,
+        "font.size": 16.0,
+        "axes.labelsize": 16.0,
+        "axes.titlesize": 16.0,
+        "legend.fontsize": 14,
+        "legend.title_fontsize": 15.0,
         "xtick.direction": "out",
         "ytick.direction": "out",
         "legend.frameon": False,
@@ -333,7 +336,7 @@ def make_cmap(
 
     # Map group_stat values to colors
     unique_stats = values.unique()
-    color_map = {val: mcolors.to_hex(cmap(norm(val))) for val in unique_stats if val > 0}
+    color_map = {val: mcolors.to_hex(cmap(norm(val))) for val in unique_stats if not log or val > 0}
     # For zero or negative values, fallback to a default color
     for val in unique_stats:
         if log and val <= 0:
@@ -347,11 +350,50 @@ def _which_continued_legacy(df: pd.DataFrame) -> np.ndarray[Any, np.dtype[np.str
         parent_ids = df.config.fork_from["parent_fork_id"].dropna().unique()
     except AttributeError as ae:
         if "unique" not in str(ae):
+            if "fork_from" in str(ae):
+                # no fork_from at all - maybe aborted early, or was never forked
+                return np.array([], dtype=str)
             raise
         # need to drop levels
         depth = df.config.fork_from.columns.nlevels
         parent_ids = df.config.fork_from.droplevel(axis=1, level=list(range(1, depth))).parent_fork_id.dropna().unique()
     return parent_ids
+
+
+def _get_group_stat(df: pd.DataFrame | pd.Series, group_key: str | Hashable):
+    if isinstance(df, pd.DataFrame):
+        first_row = df.iloc[0]
+    else:
+        first_row = df
+    try:
+        return first_row.config[group_key].str.split("=").iloc[0][0]
+    except KeyError:
+        pass
+    # If this failed then we have no group_by[-1] (pbt_group_key) column with key=value; other parts might then fail too
+    # Possibly this run was never forked
+    tune = first_row.cli_args.get("tune")
+    if not tune:
+        tune = first_row.config.experiment_group.values.item().split(":")[-1]
+        if tune == "batch_size" and ("batch_size" not in df.config and "train_batch_size_per_learner" not in df.config):
+            # experiment group can be helpful BUT batch_size was added to some that did NOT tune batch_size
+            candidates = set(df.config.columns.get_level_values(0)) & {
+                "lr",
+                "minibatch_size",
+                "num_envs_per_env_runner",
+                "accumulate_gradients_every",
+                "clip_param",
+            }
+            if candidates:
+                if len(candidates) == 1:
+                    return candidates.pop()
+                logger.warning(f"Multiple possible group keys found {candidates}, using 'lr'")
+                remote_breakpoint()
+                return candidates.pop()
+            logger.error("No suitable group key found - 'batch_size' is likely incorrect")
+            remote_breakpoint()
+            raise
+        return tune
+    return tune[0]
 
 
 def which_continued(df: pd.DataFrame) -> pd.DataFrame:
@@ -365,6 +407,15 @@ def which_continued(df: pd.DataFrame) -> pd.DataFrame:
         continued_ids = _which_continued_legacy(df)
         # bring into expected format
         continued = pd.DataFrame(index=continued_ids, columns=["continued"])
+        if continued.empty:
+            if df.shape[0] != df.index.nunique():
+                logger.warning(
+                    "Could not determine continued runs - no pbt_epoch and no fork_from parent_fork_id found."
+                )
+            else:
+                # Do not return all, else main_only will not work
+                logger.info("Run without any forks")
+            return continued
         # How many epochs where they continued?
         # parent_env_steps = df.config.fork_from.parent_env_steps
 
@@ -391,7 +442,8 @@ def which_continued(df: pd.DataFrame) -> pd.DataFrame:
         def map_group_key(row: pd.Series) -> str:
             groups = row.config.cli_args.get("tune")
             if not groups:
-                groups = [row.config.experiment_group.values.item().split(":")[-1]]  # noqa: PD011
+                # this might say batch_size but this could be wrong
+                groups = [_get_group_stat(row, "pbt_group_key")]  # noqa: PD011
             mutations = dict.fromkeys(groups, None)
 
             ns = SimpleNamespace(_hyperparam_mutations=mutations)
@@ -504,8 +556,8 @@ def plot_run_data(
     """
     depth = len(df.columns[0])
 
-    def ifill(*cols):
-        return (*cols, *(Placeholder,) * (depth - len(cols)))
+    def ifill(*cols, n=depth):
+        return (*cols, *(Placeholder,) * (n - len(cols)))
 
     if experiment_keys is None:
         experiment_keys = df.index.get_level_values(0).unique().to_list()
@@ -513,7 +565,7 @@ def plot_run_data(
             experiment_keys = experiment_keys[:5]
     if group_stat is None:
         # assumes a name=... format
-        group_stat = df.iloc[0].config[group_by[-1]].str.split("=").iloc[0][0]
+        group_stat = _get_group_stat(df, group_by[-1])
         assert group_stat is not None
     if group_stat == "train_batch_size_per_learner" and "train_batch_size_per_learner" not in df:
         group_stat = "batch_size"
@@ -538,24 +590,57 @@ def plot_run_data(
     try:
         perturbation_interval = df.current_step.loc[(first_change[0], first_change[1] - 1)].item()
     except AttributeError as ae:
+        # might be a DataFrame
         if "item" not in str(ae):
             raise
-        remote_breakpoint()
+        try:
+            perturbation_interval = int(df.current_step.loc[(first_change[0], first_change[1] - 1)].iloc[0, 0])
+        except Exception as e:
+            logger.error("Failed to get perturbation interval at %s %r", (first_change[0], first_change[1] - 1), e)
+            remote_breakpoint()
+            pass
+            raise
     except KeyError:
         # When restored the pbt_epoch might be wrong and we might have duplicated steps, use first non-duplicated to get interval
         # use last to continue values
-        duplicated_steps = df.loc[first_change[0], "current_step"].nunique() < len(df.current_step)
+        duplicated_steps = cast("pd.DataFrame | pd.Series", df.loc[first_change[0], "current_step"]).nunique() < len(
+            df.current_step
+        )
         try:
             duplicated_steps = bool(duplicated_steps)
         except ValueError:
-            duplicated_steps = duplicated_steps.item()
+            duplicated_steps = duplicated_steps.item()  # pyright: ignore[reportAttributeAccessIssue]
         if not duplicated_steps:
             raise
             # if we keep last the metrics will align better but we might not get the correct interval
         no_duplicates = df[~df.index.duplicated(keep="first")]
-        loc_alt = no_duplicates[ifill("config", "pbt_epoch")].diff().iloc[1:].ne(0).idxmax()
-        perturbation_interval = int(no_duplicates.loc[(loc_alt[0], loc_alt[1] - 1)].current_step.item())
-        # Use last to take values of last restore
+        loc_alt: tuple[str, int] = no_duplicates[ifill("config", "pbt_epoch")].diff().iloc[1:].ne(0).idxmax()  # pyright: ignore[reportAssignmentType]
+        try:
+            perturbation_interval = int(no_duplicates.loc[(loc_alt[0], loc_alt[1] - 1)].current_step)  # item() ?
+        except KeyError:
+            # bad order so that fork comes first
+            try:
+                perturbation_interval = int(
+                    no_duplicates.loc[loc_alt].current_step
+                    - no_duplicates.loc[loc_alt].get(
+                        "batch_size",
+                        no_duplicates.loc[loc_alt].config.get(
+                            "train_batch_size_per_learner", no_duplicates.loc[loc_alt].config.get("batch_size")
+                        ),
+                    )
+                )
+            except TypeError:
+                perturbation_interval = int(
+                    (
+                        no_duplicates.loc[loc_alt].current_step
+                        - no_duplicates.loc[loc_alt].get(
+                            "batch_size",
+                            no_duplicates.loc[loc_alt].config.get(
+                                "train_batch_size_per_learner", no_duplicates.loc[loc_alt].config.get("batch_size")
+                            ),
+                        )
+                    ).iloc[0]
+                )
         df = df[~df.index.duplicated(keep="last")]
     secondary_to_main = lambda xs: (xs + 0.5) * perturbation_interval  # noqa: E731
     main_to_secondary = lambda xs: (xs - perturbation_interval / 2) / perturbation_interval  # noqa: E731
@@ -570,10 +655,13 @@ def plot_run_data(
         except ValueError as ve:
             if "No axis named 1" not in str(ve):
                 raise
-            remote_breakpoint()
             # If group_stat is a series cannot drop levels
-            logger.error("Failed to drop level from group_stat %s", group_stat)
-            stat_columns = df[group_stat]
+            logger.info("Failed to drop level from group_stat %s", group_stat)
+            target_level = df.current_step.columns.nlevels - 1
+            stat_columns = df[group_stat].to_frame()
+            # Need to turn into frame with same depth
+            if stat_columns.columns.nlevels != target_level:
+                stat_columns.columns = pd.MultiIndex.from_arrays([[v] for v in ifill(group_stat, n=target_level)])
         group_values: list[pd.Series] = [
             df.current_step.droplevel(0, axis=1),
             *(df[col] for col in group_cols),
@@ -589,11 +677,14 @@ def plot_run_data(
             df.current_step.droplevel(0, axis=1),
             *(df[col] for col in group_cols),
             df.config.seed,
-            df[group_stat].droplevel(0, axis=1),
+            stat_columns,
         ]
 
     # Combine into a DataFrame for groupby
-    group_df = pd.concat(group_values, axis=1, keys=["current_step", *group_by, "seed", group_stat], copy=False)
+    try:
+        group_df = pd.concat(group_values, axis=1, keys=["current_step", *group_by, "seed", group_stat], copy=False)
+    except AssertionError:
+        remote_breakpoint()
     # Problem we get duplicated values as the dfs contain their parents data - need to drop these when we aggregate
     group_df = group_df[~group_df.duplicated(keep="first")]
     group_df.columns = ["current_step", *group_by, "seed", group_stat]  # flatten for groupby
@@ -639,7 +730,7 @@ def plot_run_data(
             secax.set_xlabel("PBT Epoch")
             secax.set_xticks([e for e in range(num_pbt_epochs) if e % pbt_plot_interval == 1])
             # Show tick labels for secondary xaxis, inside and closer to the plot
-            secax.xaxis.set_tick_params(which="both", bottom=False, top=False, labelbottom=True, labeltop=False, pad=-1)
+            secax.xaxis.set_tick_params(which="both", bottom=False, top=False, labelbottom=True, labeltop=False, pad=-2)
             secax.xaxis.set_label_position("top")
             # Also move the label closer to the plot
             secax.set_xlabel("PBT Epoch", labelpad=3)
@@ -822,17 +913,21 @@ def plot_run_data(
             if last_bg_epoch is None or pbt_epoch != last_bg_epoch:
                 logger.debug("plotting shade %s", pbt_epoch)
                 # Shade the region for this epoch
-                if last_bg_epoch is not None:
-                    # Shade from previous group's min step to its max step (the region of the previous group)
-                    prev_min: float = prev_group["current_step"].min()
-                    prev_max: float = prev_group["current_step"].max()
-                    shade_background(ax, background_colors[bg_color_idx % 2], prev_min, prev_max)
-                    bg_color_idx += 1
-                else:
-                    # Shade from left edge to first group's min step
-                    curr_min = group["current_step"].min()
-                    shade_background(ax, background_colors[bg_color_idx % 2], ax.get_xlim()[0], curr_min)
-                    bg_color_idx += 1
+                try:
+                    if last_bg_epoch is not None:
+                        # Shade from previous group's min step to its max step (the region of the previous group)
+                        prev_min: float = prev_group["current_step"].min()
+                        prev_max: float = prev_group["current_step"].max()
+                        shade_background(ax, background_colors[bg_color_idx % 2], prev_min, prev_max)
+                        bg_color_idx += 1
+                    else:
+                        # Shade from left edge to first group's min step
+                        curr_min = group["current_step"].min()
+                        shade_background(ax, background_colors[bg_color_idx % 2], ax.get_xlim()[0], curr_min)
+                        bg_color_idx += 1
+                except Exception as e:
+                    logger.error("Failed to shade background for epoch %s: %r", pbt_epoch, e)
+                    remote_breakpoint()
             if pbt_epoch % pbt_plot_interval == 0:
                 # print
                 ...
@@ -874,9 +969,11 @@ def plot_run_data(
         ax2.tick_params(axis="y", which="both", left=False, right=False, labelleft=False, labelright=True)
 
         # Right tick labels are bleeding into the colormap if we use fancytoolbox legend
-        # Move right y-axis tick labels further right by 80%
-        for label in ax2.get_yticklabels():
-            label.set_x(label.get_position()[0] + 0.03)
+        # Move right y-axis tick labels further right
+        if log:
+            # labels overlap with ticks from colorbar
+            for label in ax2.get_yticklabels():
+                label.set_x(label.get_position()[0] + 0.04)
 
         # Align the limits of ax2 and the colorbar to be identical
 
@@ -926,16 +1023,16 @@ def plot_run_data(
             title=group_stat,
             loc="upper center",
             bbox_to_anchor=(0.5, -0.12),
-            ncol=min(len(labels), 5),
+            ncol=min(len(labels), 6),
             fancybox=True,
             framealpha=0.8,
         )
         # Reduce legend font size by 2
-        fontsize = max(legend.get_texts()[0].get_fontsize() - 2, 1) if legend.get_texts() else 10
-        for text in legend.get_texts():
-            text.set_fontsize(fontsize)
-        if legend.get_title() is not None:  # pyright: ignore[reportUnnecessaryComparison]
-            legend.get_title().set_fontsize(fontsize)
+        # fontsize = max(legend.get_texts()[0].get_fontsize() - 2, 1) if legend.get_texts() else 10
+        # for text in legend.get_texts():
+        #    text.set_fontsize(fontsize)
+        # if legend.get_title() is not None:  # pyright: ignore[reportUnnecessaryComparison]
+        #    legend.get_title().set_fontsize(fontsize)
         if (legend2 := ax2.get_legend()) is not None:
             legend2.remove()
         env_type = df.iloc[0].config.cli_args.env_type
@@ -944,7 +1041,7 @@ def plot_run_data(
         agent_type = df.iloc[0].config.cli_args.agent_type
         if not isinstance(agent_type, str):
             agent_type = agent_type.item()
-        ax.set_title(f"{env_type} - {agent_type} - {metrics[0]}")
+        ax.set_title(f"{env_type} - {agent_type.upper()} - {metrics[0]}")
     plt.tight_layout()
     if show:
         plt.show()
@@ -1025,7 +1122,7 @@ def export_run_data(
         # Mark large experiments:
         large = ""
         if group_stat is None:
-            group_stat = combined_df.iloc[0].config[group_by[-1]].str.split("=").iloc[0][0]
+            group_stat = _get_group_stat(combined_df, group_by[-1])
         if group_stat not in ("batch_size", "train_batch_size_per_learner"):
             batch_size = combined_df.iloc[0].config.get(
                 "train_batch_size_per_learner",
@@ -1103,14 +1200,22 @@ def _export_multiple(
     # Expand kwargs if any value is an Options instance (cross product over all Options)
     large = False
     if (group_stat := kwargs.get("group_stat")) is None:
-        group_stat = combined_df.iloc[0].config[group_by[-1]].str.split("=").iloc[0][0]
+        group_stat = _get_group_stat(combined_df, group_by[-1])
     if group_stat not in ("batch_size", "train_batch_size_per_learner"):
         batch_size = combined_df.iloc[0].config.get(
             "train_batch_size_per_learner",
             combined_df.iloc[0].config.get("batch_size", combined_df.iloc[0].get("batch_size", None)),
         )
-        if batch_size >= 8192:
-            large = True
+        try:
+            if batch_size >= 8192:
+                large = True
+        except ValueError:
+            if not batch_size.empty:
+                if isinstance(batch_size, pd.Series):
+                    if batch_size.iloc[0] >= 8192:
+                        large = True
+                elif batch_size.iloc[0, 0] >= 8192:
+                    large = True
 
     # Identify keys in kwargs whose values are Options
     option_keys = [k for k, v in kwargs.items() if isinstance(v, Repeat)]
@@ -1444,7 +1549,6 @@ if __name__ == "__main__":
     )
     parser.add_argument("--redo", action="store_true", help="Redo existing plots.")
     parser.add_argument("--single", "-s", action="store_true", help="Export a single run instead of all runs.")
-
     args = parser.parse_args()
 
     assert not args.all or not args.main_only, "Cannot use --all and --main_only together."
