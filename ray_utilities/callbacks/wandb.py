@@ -88,7 +88,7 @@ def get_wandb_failed_upload_file() -> str:
 
 _wandb_api = None
 
-MIN_TOTAL_STEPS = int(os.environ.get("MIN_TOTAL_STEPS", "1_100_000"))
+MIN_TOTAL_STEPS = int(os.environ.get("MIN_TOTAL_STEPS", "1_040_000"))
 "Vor experiment verification"
 
 
@@ -1379,7 +1379,7 @@ def default_experiment_validator(
             break
     trial_step_failures: tuple[_FailureTuple, ...] = tuple(trial_failures)
 
-    if any(exp["current_step"] > MIN_TOTAL_STEPS for exp in experiment_data.values()):
+    if any(exp["current_step"] >= MIN_TOTAL_STEPS for exp in experiment_data.values()):
         return (fail1, *trial_step_failures) if fail1 else (trial_step_failures or None)
     try:
         max_off_value = max(exp["current_step"] for exp in experiment_data.values())

@@ -207,7 +207,7 @@ sympol_pbt_batch_size:
         submission_id:
           sympol_pbt_batch_size_HalfCheetah-v5_2025-12-07_20:58:57_restore_2025-12-08_12:01:50
       sp87c62512111105249e4:
-        status: RUNNING
+        status: FAILED
         submission_id: sympol_pbt_batch_size_HalfCheetah-v5_2025-12-11_11:04:52
     (Reacher-v5):
       sp87c6251205224924524:
@@ -236,7 +236,7 @@ sympol_pbt_batch_size:
           sympol_pbt_batch_size_HalfCheetah-v5_2025-12-07_20:58:57_restore_2025-12-08_12:01:50
     (HumanoidStandup-v5):
       sp87c62512111105b4a34:
-        status: RUNNING
+        status: FAILED
         submission_id:
           sympol_pbt_batch_size_HumanoidStandup-v5_2025-12-11_11:04:52
     (Pusher-v5):
@@ -307,14 +307,10 @@ sympol_pbt_minibatch_size_2048:
         status: SUCCEEDED
         submission_id:
           sympol_pbt_minibatch_size_2048_InvertedPendulum-v5_2025-12-06_14:59:30
-    (Pusher-v5):
-      sp87c62512111105cdf54:
-        status: STOPPED
-        submission_id:
-          sympol_pbt_minibatch_size_2048_Pusher-v5_2025-12-11_11:04:52
     (HumanoidStandup-v5):
       sp87c62512111108e9664:
-        status: RUNNING
+        status: RESTORE
+        note: some perturbed too early???,some runs and wandb data missing
         submission_id:
           sympol_pbt_minibatch_size_2048_HumanoidStandup-v5_2025-12-11_11:04:52
 sympol_pbt_minibatch_size_8192_base:
@@ -522,7 +518,7 @@ sympol_pbt_num_envs:
           sympol_pbt_num_envs_HalfCheetah-v5_2025-12-07_21:16:58_restore_2025-12-08_12:01:50
     (HumanoidStandup-v5):
       sp87c62512111105a7f24:
-        status: RUNNING
+        status: FAILED
         submission_id:
           sympol_pbt_num_envs_HumanoidStandup-v5_2025-12-11_11:04:52
     (Hopper-v5):
@@ -701,7 +697,7 @@ sympol_pbt_lr:
           sympol_pbt_lr_InvertedDoublePendulum-v5_2025-12-11_11:04:52
     (HumanoidStandup-v5):
       sp87c6251211110553514:
-        status: RUNNING
+        status: FAILED
         submission_id: sympol_pbt_lr_HumanoidStandup-v5_2025-12-11_11:04:52
     (Pusher-v5):
       sp87c62512111628fb614:
@@ -937,7 +933,6 @@ sympol_pbt_entropy_coeff_base:
         status: RESTORE
         submission_id:
           sympol_pbt_entropy_coeff_base_LunarLander-v3_2025-12-08_02:28:29
-
       sp87c6251212000012c94:
         status: SUCCEEDED
         submission_id:
@@ -1038,48 +1033,48 @@ sympol_pbt_gamma:
   run_ids:
     (HumanoidStandup-v5):
       sp87c62512120139ce1f4:
-        status: RUNNING
+        status: RESTORE
         submission_id: sympol_pbt_gamma_HumanoidStandup-v5_2025-12-11_11:04:52
     (Humanoid-v5):
       sp87c625121202018bfe4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: sympol_pbt_gamma_Humanoid-v5_2025-12-11_11:04:52
     (Ant-v5):
       sp87c6251212042261294:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: sympol_pbt_gamma_Ant-v5_2025-12-11_11:04:52
     (Hopper-v5):
       sp87c6251212045567134:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: sympol_pbt_gamma_Hopper-v5_2025-12-11_11:04:52
     (Walker2d-v5):
       sp87c6251212050757094:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: sympol_pbt_gamma_Walker2d-v5_2025-12-11_11:04:52
     (HalfCheetah-v5):
       sp87c6251212051933ff4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: sympol_pbt_gamma_HalfCheetah-v5_2025-12-11_11:04:52
     (Reacher-v5):
       sp87c62512120540f4f34:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: sympol_pbt_gamma_Reacher-v5_2025-12-11_11:04:52
     (Swimmer-v5):
       sp87c625121207195f034:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: sympol_pbt_gamma_Swimmer-v5_2025-12-11_11:04:52
     (Pusher-v5):
       sp87c625121207220ca54:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: sympol_pbt_gamma_Pusher-v5_2025-12-11_11:04:52
     (InvertedDoublePendulum-v5):
       sp87c625121208078c464:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           sympol_pbt_gamma_InvertedDoublePendulum-v5_2025-12-11_11:04:52
     (InvertedPendulum-v5):
       sp87c62512121110e1d74:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: sympol_pbt_gamma_InvertedPendulum-v5_2025-12-11_11:04:52
 sympol_pbt_gamma_large:
   entrypoint_pattern:
