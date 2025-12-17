@@ -1987,26 +1987,31 @@ def verify_wandb_run_history(
         # if it is a forked run skip until fork_point
         if FORK_FROM in run.config:
             fork_point = run.config[FORK_FROM]["parent_training_iteration"]
-            if len(online_history) != len(offline_data[offline_data["training_iteration"] > fork_point]):
+            # Online history has sometimes entries from the parent. Trim the online history as well
+            trimmed_online_hist = online_history[online_history["training_iteration"] > fork_point]
+            if len(trimmed_online_hist) != len(offline_data[offline_data["training_iteration"] > fork_point]):
                 logger.error(
                     "❌ Mismatch in number of history entries for forked run %s after fork at iteration %d: "
-                    "offline %d vs online %d. %s",
+                    "offline %d vs online %d (trimmed: all: %s). %s",
                     run_id,
                     fork_point,
                     len(offline_data[offline_data["training_iteration"] > fork_point]),
+                    len(trimmed_online_hist),
                     len(online_history),
-                    "offline history broken"
-                    if len(online_history) > len(offline_data)
-                    else "online history incomplete",
+                    (
+                        "offline history broken"
+                        if len(trimmed_online_hist) > len(offline_data)
+                        else "online history incomplete"
+                    ),
                 )
                 failures.append(
                     _FailureTuple(
                         "num_history_entries_after_fork",
                         len(offline_data[offline_data["training_iteration"] > fork_point]),
-                        len(online_history),
+                        len(trimmed_online_hist),
                         type=(
                             VerificationFailure.OFFLINE_HISTORY_BROKEN
-                            if len(online_history) > len(offline_data)
+                            if len(trimmed_online_hist) > len(offline_data)
                             else VerificationFailure.ONLINE_HISTORY_INCOMPLETE
                         ),
                     )
