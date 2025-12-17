@@ -383,10 +383,12 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
         file_name = self._make_forked_trial_file_name(trial, fork_data)
         trial.init_local_path()
         local_file_path = Path(trial.local_path, file_name)  # pyright: ignore[reportArgumentType]
+        remote_file_path = Path(trial.path) / file_name  # pyright: ignore[reportArgumentType]
+        file_copied = None
         if local_file_path.exists():
             # Might exist if we are restoring from a previous experiment
             # NOTE: When we restore the local file might already be ahead of the checkpoint we are loading
-            # This might create duplicated lines
+            # This might create duplicated lines - however we also do not want to trim it back to be behind
             # TODO: We likely should trim them - need to know the current iteration
             logger.warning(
                 "Trial %s forked but log file %s already exists. "
@@ -394,11 +396,18 @@ class FileLoggerForkMixin(TrackForkedTrialsMixin):
                 trial.trial_id,
                 local_file_path,
             )
+            # Just create a copy for now
+            shutil.copy2(local_file_path, local_file_path.with_suffix(".restoredjson"))
+            file_copied = True
+        if remote_file_path.exists():
+            # we are restoring, copy the file to be save to not loose via overwrite
+            shutil.copy2(remote_file_path, remote_file_path.with_suffix(".restoredjson"))
 
         # Try to sync from parent trial
-        file_copied = None
-        if (parent_trial := (fork_data.get("parent_trial") or self.parent_trial_lookup.get(trial))) and isinstance(
-            parent_trial, Trial
+        if (
+            not file_copied
+            and (parent_trial := (fork_data.get("parent_trial") or self.parent_trial_lookup.get(trial)))
+            and isinstance(parent_trial, Trial)
         ):
             # NOTE: When we restore the last entry in trial.config.get("trial_id_history") is the trial id itself
             parent_file_name = self._get_parent_file_name(parent_trial, trial.config.get("trial_id_history"))
