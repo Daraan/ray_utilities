@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from matplotlib import cm, colormaps, patheffects
+from matplotlib.figure import Figure
 from tqdm import tqdm
 from typing_extensions import Final, Literal, Sentinel, TypeVarTuple, Unpack
 
@@ -31,7 +32,6 @@ from ray_utilities.testing_utils import remote_breakpoint
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
-    from matplotlib.figure import Figure
 
 PATHS = [Path("outputs/experiments/shared"), Path("outputs/experiments/shared_backup")]
 
@@ -55,11 +55,35 @@ DEFAULT_GROUP_BY = ("pbt_epoch", "pbt_group_key")
 
 LOG_SETTINGS = {"lr", "batch_size"}
 
+MAX_ENV_LOWER_BOUND = {"LunarLander-v3": -750}
+"""Lower bound clip for plots"""
+
 TEST = 0
 
 nan: Final = np.nan
 
-Placeholder = Sentinel("Placeholder")
+
+class _PlaceholderType:
+    def __eq__(self, value: object) -> bool:
+        if isinstance(value, _PlaceholderType):
+            return True
+        return False
+
+    def __lt__(self, value: object) -> bool:
+        return False
+
+    def __gt__(self, value: object) -> bool:
+        return True
+
+    def __repr__(self) -> str:
+        return "<Placeholder>"
+
+    def __hash__(self) -> int:
+        return hash("ru.vis.Placeholder")
+
+
+Placeholder: Final = _PlaceholderType()
+
 Ts = TypeVarTuple("Ts")
 
 # Experiment output directory structure is - if sorted in groups else one level higher
@@ -145,8 +169,11 @@ def load_run_data(offline_run: str | Path, experiment_dir=None):
                 tuple(Placeholder if (isinstance(part, float) and np.isnan(part)) else part for part in col.split("/"))
                 for col in df.columns
             ]
-            df.columns = pd.MultiIndex.from_tuples(tuples)
-            df = df.sort_index(axis=1).drop(columns=DROP_COLUMNS, errors="ignore")
+            longest_tuple_length = max(len(t) for t in tuples)
+            tuples = [ifill(*tup, n=longest_tuple_length) for tup in tuples]
+            multiindex = pd.MultiIndex.from_tuples(tuples)
+            df.columns = multiindex
+            df = df.sort_index(axis=1).drop(columns=DROP_COLUMNS, errors="ignore").sort_index(axis=1)
             # df.columns = pd.MultiIndex.from_tuples(cast("list[tuple[str, ...]]", df.columns))
             try:
                 experiment_key = df.config.experiment_key.iloc[-1]
@@ -156,6 +183,7 @@ def load_run_data(offline_run: str | Path, experiment_dir=None):
                     f"Experiment key {experiment_key} does does not match id in file name {result_file}"
                 )
             except AttributeError as ae:
+                remote_breakpoint()
                 if "experiment_key" not in str(ae):
                     raise
                 # Older versions without this field, take from filename
@@ -281,6 +309,7 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
                 [("config", *col) if isinstance(col, tuple) else ("config", col) for col in configs.columns]
             )
         combined_df = pd.concat([combined_df, configs], axis=1)
+        combined_df = combined_df.sort_index(axis=1)
     logger.debug("Removing duplicates changed the shape from %s to %s", shape_before, combined_df.shape)
 
     # Reset only the outermost 'run_id' index, not all levels
@@ -299,6 +328,9 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
         # likely because failed before first perturb
         combined_df.loc[:, ifill("config", "__pbt_main_branch__")] = False
         return combined_df
+    # if ("config", "__pbt_main_branch__") in combined_df and not combined_df[("config", "__pbt_main_branch__")].isna().any():
+    #    # already present
+    #    return combined_df.sort_index(axis=1)
     main_branch_mask = np.zeros_like(
         combined_df.index, dtype=bool
     )  # combined_df.index.get_level_values("run_id").isin(continued_runs.index)
@@ -314,12 +346,15 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
         else:
             assert False
 
-    try:
-        combined_df.loc[:, ("config", "__pbt_main_branch__")] = main_branch_mask
-    except KeyError:
-        combined_df.loc[:, ifill("config", "__pbt_main_branch__")] = main_branch_mask
-
-    return combined_df.sort_index(axis=1)
+    main_branch_mask = pd.Series(main_branch_mask, index=combined_df.index, name=ifill("config", "__pbt_main_branch__"))
+    # try:
+    #    combined_df.loc[:, ("config", "__pbt_main_branch__")] = main_branch_mask
+    # except KeyError:
+    #    combined_df.loc[:, ifill("config", "__pbt_main_branch__")] = main_branch_mask
+    combined_df = pd.concat(
+        [combined_df.drop(ifill("config", "__pbt_main_branch__"), axis=1, errors="ignore"), main_branch_mask], axis=1
+    ).sort_index(axis=1)
+    return combined_df
 
 
 def make_cmap(
@@ -577,22 +612,26 @@ def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]
     value_shifter.index = last_epoch_values.index + 1
     value_shifter_with_first = value_shifter.drop("current_step", axis=1).copy()
     try:
-        value_shifter_with_first.loc[0] = (
-            # TODO: For batch_size this can be off
+        metric_agg = (
             metric_values[metric_values.index.get_level_values("pbt_epoch") == 0]
             .groupby(["pbt_epoch", "current_step"])[metric_key]
             .agg(["mean", "std"])
-            .iloc[0]
-            .values
         )
+        first_loc = metric_agg.isna().idxmin()["mean"]
+        # if we tune batch size the first entry weill be 0
+        value_shifter_with_first.loc[0] = metric_agg.loc[first_loc]["mean"]
     except (ValueError, KeyError):
         remote_breakpoint()
     # Subtract initial mean from each group to get variance around start value
-    centered_metric_values = metric_values.sub(value_shifter[metric_key].to_frame(), level="pbt_epoch")[metric_key]
+    centered_metric_values = metric_values.sub(value_shifter[metric_key].to_frame(), level="pbt_epoch")[
+        metric_key
+    ].dropna()
     # Rough start value for all groups; not good when we tune batch_size
-    normed_metric_values = metric_values.divide(value_shifter_with_first.replace(0, nan), level="pbt_epoch")[metric_key]
+    normed_metric_values = metric_values.divide(value_shifter_with_first.replace(0, nan), level="pbt_epoch")[
+        metric_key
+    ].dropna()
     # Also center the first epoch
-    centered_metric_values2 = metric_values.sub(value_shifter_with_first, level="pbt_epoch")[metric_key]
+    centered_metric_values2 = metric_values.sub(value_shifter_with_first, level="pbt_epoch")[metric_key].dropna()
 
     centered_metrics = centered_metric_values.groupby(level="current_step").aggregate(["var", "std", "mean"])
     centered_metrics2 = centered_metric_values2.groupby(level="current_step").aggregate(["var", "std", "mean"])
@@ -604,7 +643,7 @@ def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]
         metric_values[metric_key]
         .sub(value_shifter_with_first[metric_key], level="pbt_epoch")
         .div(value_shifter_with_first["metric_std"], level="pbt_epoch")
-    )
+    ).dropna()
     normalized_metric = normalized_metric_values.groupby(level="current_step").aggregate(["var", "std", "mean"])
     # endregion
 
@@ -623,6 +662,7 @@ def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]
         return gini_coeff
 
     gini_metrics = metric_values.groupby("current_step")[metric_key].agg(calc_gini)
+    # Clip gini_metrics to 99% of the data to reduce the effect of outliers
 
     # Kendallal Tau
     from scipy.stats import kendalltau
@@ -664,17 +704,40 @@ def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]
 
     stats = pd.concat(
         [
-            to_multiindex(centered_metrics, "centered_metrics"),
-            to_multiindex(centered_metrics2, "centered_metrics2"),
-            to_multiindex(normed_metrics, "normed_metrics"),
-            to_multiindex(normalized_metric.clip(-1, 1), "normalized_metrics"),
-            to_multiindex(gini_metrics, "gini_metrics"),
+            to_multiindex(
+                centered_metrics.clip(
+                    lower=centered_metrics.quantile(0.02) - 1, upper=centered_metrics.quantile(0.98) + 1, axis=1
+                ),
+                "centered_metrics",
+            ),
+            to_multiindex(
+                centered_metrics2.clip(
+                    lower=centered_metrics2.quantile(0.02) - 1, upper=centered_metrics2.quantile(0.98) + 1, axis=1
+                ),
+                "centered_metrics2",
+            ),
+            to_multiindex(
+                normed_metrics.clip(
+                    lower=normed_metrics.quantile(0.01) - 1, upper=normed_metrics.quantile(0.98) + 1, axis=1
+                ),
+                "normed_metrics",
+            ),
+            to_multiindex(
+                normalized_metric.clip(
+                    lower=normalized_metric.quantile(0.01) - 1, upper=normalized_metric.quantile(0.98) + 1, axis=1
+                ),
+                "normalized_metrics",
+            ),
+            to_multiindex(
+                gini_metrics.clip(lower=gini_metrics.quantile(0.01) - 1, upper=gini_metrics.quantile(0.98) + 1),
+                "gini_metrics",
+            ),
             to_multiindex(kendall_metrics, "kendall_metrics"),
         ],
         axis=1,
     )
     # mean and std of the variance and metrics
-    stats_reduced = stats.agg(["mean", "std"]).T.drop(["mean", "std"], axis=0, level=1)
+    stats_reduced = stats.agg(["mean", "std"]).T.drop(["mean", "std"], axis=0, level=1).sort_index()
     stats_reduced = pd.concat(
         [
             stats_reduced.drop("normed_metrics"),
@@ -732,6 +795,59 @@ def plot_error_distribution(
         logger.debug("No data in second half of epochs for (%s)", metric_key)
         return None
     data = data.drop(columns="_training_iteration")
+
+    # Detect extreme outliers using IQR method
+    metric_values = data[metric_key].dropna()
+    if len(metric_values) > 0:
+        q1 = metric_values.quantile(0.25)
+        q3 = metric_values.quantile(0.75)
+        iqr = q3 - q1
+        lower_bound = q1 - 1.5 * iqr
+        upper_bound = q3 + 1.5 * iqr
+
+        # Check if we have extreme outliers (values beyond 3*IQR)
+        extreme_outliers = (metric_values < lower_bound) | (metric_values > upper_bound)
+        has_extreme_outliers = extreme_outliers.any()
+    else:
+        has_extreme_outliers = False
+
+    fig_err, ax_err = plt.subplots(figsize=(max(len(data[group_stat].unique()) * 0.4 + 5, 8), 6))
+
+    # Use brokenaxes if we have extreme outliers
+    if has_extreme_outliers:
+        try:
+            from brokenaxes import brokenaxes
+
+            # Determine the break points
+            normal_max = q3 + 1.5 * iqr
+            extreme_min = (
+                metric_values[metric_values > upper_bound].min() if (metric_values > upper_bound).any() else None
+            )
+            extreme_max = metric_values.max()
+
+            # Create brokenaxes with a gap
+            fig_err = plt.figure(figsize=(max(len(data[group_stat].unique()) * 0.4 + 5, 8), 6))
+            if extreme_min is not None and extreme_max > normal_max * 1.2:
+                # Gap between normal range and outliers
+                gap_size = 0.05
+                ax_err = brokenaxes(
+                    ylims=((metric_values.min() * 0.95, normal_max * 1.05), (extreme_min * 0.95, extreme_max * 1.05)),
+                    hspace=0.3,
+                    fig=fig_err,
+                )
+            else:
+                # Fall back to normal plot if break is too small
+                fig_err, ax_err = plt.subplots(figsize=(max(len(data[group_stat].unique()) * 0.4 + 5, 8), 6))
+                has_extreme_outliers = False
+        except ImportError:
+            logger.debug("brokenaxes not installed, using standard plot for outlier data")
+            fig_err, ax_err = plt.subplots(figsize=(max(len(data[group_stat].unique()) * 0.4 + 5, 8), 6))
+            has_extreme_outliers = False
+        except Exception as e:
+            logger.warning("Failed to create broken axes: %r, falling back to standard plot", e)
+            fig_err, ax_err = plt.subplots(figsize=(max(len(data[group_stat].unique()) * 0.4 + 5, 8), 6))
+            has_extreme_outliers = False
+
     fig_err, ax_err = plt.subplots(figsize=(max(len(data[group_stat].unique()) * 0.4 + 5, 8), 6))
     plot_fn = sns.boxplot if plot_errors_type == "box" else sns.violinplot
     plot_kwargs = {
@@ -765,6 +881,7 @@ class PlotOption:
     main_vs_rest: bool = False
 
     exclude_metric: Sequence[str] | None = ()
+    colorbar: bool = False
 
     def __post_init__(self):
         # at most one of these can be true
@@ -782,7 +899,10 @@ def _drop_duplicate_steps(df: pd.DataFrame) -> pd.DataFrame:
     def ifill(*cols, n=df.columns.nlevels):
         return (*cols, *(Placeholder,) * (n - len(cols)))
 
-    first_change: tuple[str, int] = df[ifill("config", "pbt_epoch")].diff().iloc[1:].ne(0).idxmax()  # pyright: ignore[reportAssignmentType]
+    first_change: tuple[str, int] | pd.Series = df[ifill("config", "pbt_epoch")].diff().iloc[1:].ne(0).idxmax()  # pyright: ignore[reportAssignmentType]
+    if isinstance(first_change, (pd.Series, pd.DataFrame)):
+        # rare case can be a series
+        first_change = first_change.item()
     try:
         perturbation_interval = df.current_step.loc[(first_change[0], first_change[1] - 1)].item()
     except AttributeError:
@@ -856,7 +976,7 @@ def _drop_duplicate_steps(df: pd.DataFrame) -> pd.DataFrame:
         logger.warning("Disagreement between pbt_epoch fixing methods, using method 1.")
         remote_breakpoint()
     df.loc[:, ifill("config", "pbt_epoch")] = method2.to_numpy()
-    return df
+    return df.sort_index(axis=1).copy()
 
 
 def plot_run_data(
@@ -884,7 +1004,6 @@ def plot_run_data(
             will be used to determine the best runs for highlighting and ordering.
         experiment_keys: Optional list of experiment keys to include in the plot.
             If None, all experiments in df are used.
-        smoothing: Smoothing window size for rolling mean. Default is 1 (no smoothing).
         figsize: Size of the figure to create.
         group_stat: Refers to the column that relates to the grouping statistic, e.g. pbt_group_key.
             By default the last key of group_by is used.
@@ -919,20 +1038,22 @@ def plot_run_data(
     if group_stat == "train_batch_size_per_learner" and "train_batch_size_per_learner" not in df:
         group_stat = "batch_size"
     if group_stat == "batch_size" and "batch_size" not in df:
-        df["batch_size"] = df.config.train_batch_size_per_learner
+        df = df.assign(batch_size=df.config.train_batch_size_per_learner)
         df.sort_index(axis=1, inplace=True)
     elif group_stat not in df:
         try:
-            df[group_stat] = df.config[group_stat]
+            df = df.assign(group_stat=df.config[group_stat])
         except TypeError:
-            df[group_stat] = df.config[group_stat].values
+            df = df.assign(group_stat=df.config[group_stat].values)
         except KeyError:
             remote_breakpoint()
             raise
         df.sort_index(axis=1, inplace=True)
     if group_stat not in df.config and group_stat in df:
-        df.loc[:, ifill("config", group_stat)] = df[group_stat]
-        df.sort_index(axis=1, inplace=True, level=2)
+        stat_column = df[group_stat].to_frame() if isinstance(df[group_stat], pd.Series) else df[group_stat]
+        stat_column.columns = pd.MultiIndex.from_tuples([ifill("config", group_stat)])
+        df = pd.concat([df, stat_column], axis=1).sort_index(axis=1)
+        # df.loc[:, ifill("config", group_stat)] = df[group_stat]
     final_metric_was_none = pbt_metric is None
     log = log if log is not None else group_stat in LOG_SETTINGS
 
@@ -970,7 +1091,7 @@ def plot_run_data(
             if "No axis named 1" not in str(ve):
                 raise
             # If group_stat is a series cannot drop levels
-            logger.info("Failed to drop level from group_stat %s", group_stat)
+            logger.debug("Failed to drop level from group_stat %s", group_stat)
             target_level = df.current_step.columns.nlevels - 1
             stat_columns = df[group_stat].to_frame()
             # Need to turn into frame with same depth
@@ -1037,6 +1158,7 @@ def plot_run_data(
         assert pbt_metric is not None
         ax: Axes = axes[i]
         ax2 = ax.twinx()
+        ax_2handles = ax2_labels = None
         ax2.set_ylabel(group_stat)
         # we did not save perturbation interval, check where pbt_epoch first changes
         # Use transform to add it relative to the data
@@ -1197,11 +1319,14 @@ def plot_run_data(
         seen_labels = set()
         # TODO: pbt_epoch is first group, if not grouping over epoch ,,,,
         plotted_rest_this_epoch = False
+        GROUP_STAT_COLOR = "blue"
+        # When we plot all epochs at the same time and only check any() for the main group we will have multiple main groups
+        plot_main_group = "pbt_epoch" in group_by or not group_by == ("pbt_group_key")
         for i, ((group0, stat_val), group) in enumerate(grouper):
             if group_by[0] == "pbt_epoch":
                 pbt_epoch = group0
             elif "pbt_epoch" in group:
-                pbt_epoch = group["pbt_epoch"].iloc[0]
+                pbt_epoch = group["pbt_epoch"].min()
             else:
                 pbt_epoch = 0
             # Add background shade when group changes
@@ -1213,25 +1338,29 @@ def plot_run_data(
                 plotted_rest_this_epoch = False
             if TEST and pbt_epoch > 1:
                 break
-            if group["__pbt_main_branch__"].any() or (
-                pbt_epoch == max_epoch and group["__group_rank__"].max() == max_rank
+            if plot_main_group and (
+                group["__pbt_main_branch__"].any()
+                or (pbt_epoch == max_epoch and group["__group_rank__"].max() == max_rank)
             ):
-                if last_main_group is not None:
+                # If we do not group by epoch but by pbt_group_key we should not plot a main group.
+                if last_main_group is not None and pbt_epoch > 0:
                     # Add connection to last points
                     group = _connect_groups(last_main_group, group, group_stat)  # noqa: PLW2901
                 logger.debug("Main group: %s %s", pbt_epoch, stat_val)
-                last_main_group = group
+                last_main_group = group.copy()
                 # Print the group_stat value over time on the secondary y-axis
                 sns.lineplot(
-                    data=group[["current_step", group_stat]].drop_duplicates(),
+                    data=group[["current_step", group_stat]].drop_duplicates().sort_values("current_step"),
                     x="current_step",
                     y=group_stat,
                     ax=ax2,
-                    color="blue",  # color_map[stat_val],
+                    color=GROUP_STAT_COLOR,  # color_map[stat_val],
                     linestyle="-",
                     linewidth=2,
+                    legend=True,
                     path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
                 )
+                # Add one of the legend handles to the legend of ax 1
 
                 # On a secondary axis we want to plot the group_stat value over time
                 # Plot group_stat value over time on a secondary y-axis
@@ -1252,6 +1381,9 @@ def plot_run_data(
                         group = plot_df_last[plot_df["__group_rank__"] < max_rank]
                     group = group.copy()
                     group[group_stat] = "other"  # <-- sets on a copy
+                except IndexError:
+                    logger.error("Failed to group rest for epoch %s", pbt_epoch)
+                    remote_breakpoint()
                 except Exception as e:
                     logger.error("Failed to group rest for epoch %s: %r", pbt_epoch, e)
                     remote_breakpoint()
@@ -1259,7 +1391,7 @@ def plot_run_data(
             elif main_only:
                 logger.debug("Skipping non-main group: %s %s", pbt_epoch, stat_val)
                 continue
-            elif last_main_group is not None:
+            elif last_main_group is not None and pbt_epoch > 0 and "pbt_epoch" in group_by:
                 logger.debug("Plotting non-main group: %s %s", pbt_epoch, stat_val)
                 group = _connect_groups(last_main_group, group, group_stat)  # noqa: PLW2901
 
@@ -1292,16 +1424,41 @@ def plot_run_data(
             except KeyError:
                 remote_breakpoint()
             # Plot
-            sns.lineplot(
-                data=group,
-                x="current_step",
-                y=metric_key,
-                ax=ax,
-                # linestyle="--",
-                color=color_map[stat_val],
-                label=str(stat_val) if stat_val not in seen_labels else None,
-                linewidth=3,
-            )
+            # if len(group.index) != group.index.nunique():
+            #    logger.warning(
+            #        "Group has duplicated indices: epoch %s stat %s len %s unique %s",
+            #        pbt_epoch,
+            #        stat_val,
+            #        len(group.index),group.index.unique(),
+            #    )
+            # From the group join we have duplicated indices for the main branch but that does not cause errors
+            # try:
+            #    group = group.drop_duplicates(keep="last")
+            # except Exception as e:
+            #    logger.error("Failed to drop duplicates for epoch %s stat %s: %r", pbt_epoch, stat_val, e)
+            #    remote_breakpoint()
+            # else:
+            #    if len(group.index) != group.index.nunique():
+            #        remote_breakpoint()
+            try:
+                sns.lineplot(
+                    data=group,
+                    x="current_step",
+                    y=metric_key,
+                    ax=ax,
+                    # linestyle="--",
+                    color=color_map[stat_val],
+                    label=str(stat_val) if stat_val not in seen_labels else None,
+                    linewidth=3,
+                )
+            except Exception as e:
+                logger.error("Failed to plot group for epoch %s stat %s: %r", pbt_epoch, stat_val, e)
+                group = group.set_index("current_step", append=True)
+                duplicated = group.index[group.index.duplicated(keep=False)].unique()
+                dupl_cols = group.loc[duplicated]
+                remote_breakpoint()
+                # wired thing both duplicated had wrong batch_size values
+                group = group.reset_index(level="current_step")
             seen_labels.add(stat_val)
         # Shade from last group's max step to right edge
         if "prev_group" in locals():
@@ -1315,17 +1472,22 @@ def plot_run_data(
         ax.set_xlim(-1000, plot_df.current_step.max() + 1000)
         ax2.set_ylim(norm.vmin * 0.95, norm.vmax * 1.05)  # pyright: ignore[reportOptionalOperand]
         # Make the colorbar 20% smaller by adjusting its fraction
-        cbar = plt.colorbar(sm, ax=ax2, pad=0.01, fraction=0.075)  # default fraction is ~0.1
-        # Remove all ticks from both sides of the colorbar
-        cbar.ax.tick_params(axis="both", which="both", left=False, right=True, labelleft=False, labelright=False)
-        cbar.set_ticks([])
         ax2.tick_params(axis="y", which="both", left=False, right=False, labelleft=False, labelright=True)
-
-        # Right tick labels are bleeding into the colormap if we use fancytoolbox legend
-        # Move right y-axis tick labels further right
-        # labels overlap with ticks from colorbar
-        for label in ax2.get_yticklabels():
-            label.set_x(label.get_position()[0] + (0.04 if log else 0.025))
+        if plot_option.colorbar:
+            remote_breakpoint()
+            cbar = plt.colorbar(sm, ax=ax2, pad=0.01, fraction=0.075)  # default fraction is ~0.1
+            # Remove all ticks from both sides of the colorbar
+            cbar.ax.tick_params(axis="both", which="both", left=False, right=True, labelleft=False, labelright=False)
+            cbar.set_ticks([])
+            # Right tick labels are bleeding into the colormap if we use fancytoolbox legend
+            # Move right y-axis tick labels further right
+            # labels overlap with ticks from colorbar
+            for label in ax2.get_yticklabels():
+                label.set_x(label.get_position()[0] + (0.04 if log else 0.025))
+        else:
+            # remove any existing colorbar
+            if ax2.images and ax2.images[0].colorbar is not None:
+                cbar = ax2.images[0].colorbar
 
         # Align the limits of ax2 and the colorbar to be identical
 
@@ -1368,6 +1530,16 @@ def plot_run_data(
                     break
         if filtered_sorted:
             handles, labels = zip(*filtered_sorted, strict=True)
+        if (legend2 := ax2.get_legend()) is not None:
+            ax_2handles, ax2_labels = ax2.get_legend_handles_labels()
+            legend2.remove()
+            if ax_2handles:
+                handles = (*handles, ax_2handles[0])
+                labels = (*labels, ax2_labels[0])
+            else:
+                h2 = plt.Line2D([], [], color=GROUP_STAT_COLOR, label=group_stat)
+                handles = (h2, *handles)
+                labels = (group_stat, *labels)
         # Place the legend below the plot in a fancybox
         legend = ax.legend(
             handles,
@@ -1385,8 +1557,7 @@ def plot_run_data(
         #    text.set_fontsize(fontsize)
         # if legend.get_title() is not None:  # pyright: ignore[reportUnnecessaryComparison]
         #    legend.get_title().set_fontsize(fontsize)
-        if (legend2 := ax2.get_legend()) is not None:
-            legend2.remove()
+
         env_type = df.iloc[0].config.cli_args.env_type
         if not isinstance(env_type, str):
             env_type = env_type.item()
@@ -1406,6 +1577,11 @@ def plot_run_data(
             )
             if err_fig is not None:
                 error_figures[metric_key] = err_fig
+
+        if env_type in MAX_ENV_LOWER_BOUND:
+            curr_y, _ = ax.get_ylim()
+            if curr_y < MAX_ENV_LOWER_BOUND[env_type]:
+                ax.set_ylim(bottom=MAX_ENV_LOWER_BOUND[env_type])
 
     plt.tight_layout()
     if show:
@@ -1481,7 +1657,12 @@ def _join_nested(m, on="_"):
 def calculate_experiment_stats(
     combined_df: pd.DataFrame, metrics: Sequence[str | tuple[str, ...]], out_path: Path, format="pdf"
 ) -> None:
-    path_base = out_path.stem
+    if not out_path.is_dir():
+        # Single file names are normally to convoluted with extra keys
+        base_dir = out_path.parent
+        path_base = base_dir.stem
+    else:
+        path_base = out_path.stem
     for metric in metrics:
         metric_str = _join_nested(metric)
         if metric_str not in path_base and _join_nested(metric, on="-") not in path_base:
@@ -1491,11 +1672,11 @@ def calculate_experiment_stats(
         stats, stats_reduced = calculate_hyperparam_metrics(combined_df, metric)
 
         # 1. Save reduced stats
-        stats_reduced_path = out_path.with_name(f"{path_base}{metric_str}_hyperparam_stats_reduced.txt")
+        stats_reduced_path = out_path.with_name(f"{path_base}{metric_str}-hyperparam_stats_reduced.txt")
         with open(stats_reduced_path, "w") as f:
             f.write(stats_reduced)
+        logger.info("Saved reduced hyperparameter stats to '%s'", stats_reduced_path)
         # 2nd plot the stats
-        # fig, ax = plt.subplots()
         stats_path = out_path.with_name(f"{path_base}{metric_str}_hyperparam_stats.{format}")
         stats_to_plot = stats.drop(
             [
@@ -1505,15 +1686,15 @@ def calculate_experiment_stats(
             ],
             axis=1,
         )
-        fig, ax = plt.subplots()
-        axes = stats_to_plot.plot(
-            ax=ax,
-            subplots=True,
-            kind="line",
-            layout=(len(stats_to_plot.columns), 1),
-            legend=False,
-            fontsize=11,
-        )
+        remote_breakpoint()
+        fig, axes = plt.subplots(nrows=len(stats_to_plot.columns), sharex=True)
+        for col, ax in zip(stats_to_plot.columns, axes.flatten(), strict=True):
+            stats_to_plot[col].sort_index().dropna().plot(
+                ax=ax,
+                kind="line",
+                legend=False,
+                fontsize=11,
+            )
         columns_ax: "Axes"
         fig.set_size_inches(10, 1.25 * len(stats_to_plot.columns))
         for i, (columns_ax, column) in enumerate(zip(axes.flatten(), stats_to_plot.columns, strict=True)):
@@ -1528,7 +1709,7 @@ def calculate_experiment_stats(
         #    stats[stat].plot(ax=ax, label=stat)
         fig.savefig(stats_path, format=format, bbox_inches="tight")
         plt.close(fig)
-        logger.info("Saved hyperparameter stats to %s", stats_path)
+        logger.info("Saved hyperparameter stats to '%s'", stats_path)
         stats.to_csv(stats_path.with_suffix(".csv"), index=True)
 
 
@@ -1675,6 +1856,7 @@ def _export_multiple(
         option_values: list[Repeat[object]] = [kwargs[k] for k in option_keys]  # pyright: ignore[reportAssignmentType]
         # For each combination in the cross product, build a dict of overrides
         # remote_breakpoint()
+        calced_stat_for_metric = set()
         for combo in product(*option_values):
             combo_kwargs = kwargs.copy()
             for k, v in zip(option_keys, combo, strict=True):
@@ -1689,7 +1871,6 @@ def _export_multiple(
                 )
                 continue
             for metric in metrics:
-                calc_stats = True
                 for option in plot_options:
                     if option.exclude_metric and metric in option.exclude_metric:
                         continue
@@ -1703,7 +1884,9 @@ def _export_multiple(
                         large=large,
                         group_by=combo_kwargs.get("group_by", kwargs.get("group_by", DEFAULT_GROUP_BY)),
                     )
-                    logger.info("Exporting metric '%s' with options %s to '%s' ...", metric_str, combo_kwargs, out_path)
+                    logger.debug(
+                        "Exporting metric '%s' with options %s to '%s' ...", metric_str, combo_kwargs, out_path
+                    )
                     try:
                         file_path = export_run_data(
                             combined_df,
@@ -1712,16 +1895,16 @@ def _export_multiple(
                             figsize=figsize,
                             format=format,
                             save_path=out_path,
-                            calc_stats=calc_stats,
+                            calc_stats=metric not in calced_stat_for_metric,
                             **combo_kwargs,
                         )
-                        calc_stats = False
+                        calced_stat_for_metric.add(metric)
                     except Exception as e:  # noqa: PERF203
                         tb = traceback.format_exc()
                         logger.error(f"Failed to export run data for {experiment_path}: {e!r}", exc_info=True)  # noqa: G004
                         errors.append((e, tb, experiment_path))
                     else:
-                        logger.debug(f"Exported run data for '{experiment_path}' to '{file_path}'")  # noqa: G004
+                        logger.info(f"Exported run data for '{experiment_path}' to '{file_path}'")  # noqa: G004
                         saved_files.append(file_path)
         return saved_files, errors
     kws = cast("dict[str, Any]", kwargs)
@@ -2034,16 +2217,16 @@ if __name__ == "__main__":
 
     assert not args.all or not args.main_only, "Cannot use --all and --main_only together."
     if args.metrics is None:
-        args.metrics = ["episode_reward_mean", ("training", "episode_return_mean")]
+        args.metrics = ["episode_reward_mean", ("training", "episode_return_mean")]  # , ("learners", "total_loss")]
     else:
         args.metrics = list(map(literal_eval, args.metrics))
     excludes: set[str] = file_excludes.union(set(args.excludes))
     plot_options = [
-        PlotOption(plot_reduced=False),
+        # PlotOption(plot_reduced=False),  # plot all
         PlotOption(plot_reduced=True),
-        PlotOption(main_only=True, plot_reduced=False),
-        PlotOption(main_vs_second_best=True, plot_reduced=False),
-        PlotOption(main_vs_rest=True, plot_reduced=False),
+        # PlotOption(main_only=True, plot_reduced=False),
+        # PlotOption(main_vs_second_best=True, plot_reduced=False),
+        # PlotOption(main_vs_rest=True, plot_reduced=False),
     ]
     export_all_runs(
         args.path,
@@ -2051,7 +2234,7 @@ if __name__ == "__main__":
         plot_options=plot_options,
         test=args.test,
         metrics=args.metrics,
-        group_by=Repeat([DEFAULT_GROUP_BY, ("pbt_group_key",)]),
+        group_by=("pbt_group_key",),  # Repeat([DEFAULT_GROUP_BY, ("pbt_group_key",)]),
         figsize=tuple(args.figsize),
         format=args.format,
         pbt_metric=args.pbt_metric,
