@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 # pyright: reportAttributeAccessIssue=warning
-
 import concurrent.futures
-from dataclasses import dataclass
+import json
 import logging
 import time
 import traceback
+from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
@@ -512,7 +512,7 @@ def _connect_groups(last: pd.DataFrame, now: pd.DataFrame, stat_value: str | Non
     )
 
 
-def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]) -> pd.DataFrame:
+def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]) -> tuple[pd.DataFrame, str]:
     """
     Calculate additional metrics for the DataFrame.
     This calculates:
@@ -520,36 +520,47 @@ def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]
         - Gini coefficient between data grouped by pbt_group_key
         - Kendal Tau metric at the end of each pbt_epoch between data grouped by pbt_group_key
     """
-    # region Variance
-    backup = df
 
+    # region Variance
+    # backup = df
     def ifill(*cols, n=df.columns.nlevels):
         return (*cols, *(Placeholder,) * (n - len(cols)))
 
-    remote_breakpoint()
+    metric_key = metric if isinstance(metric, str) else "-".join(metric)
     main_branch_data = df[df[ifill("config", "__pbt_main_branch__")]]
     epoch_grouper = main_branch_data.groupby([ifill("config", "pbt_epoch")])[
         [ifill(*((metric,) if isinstance(metric, str) else metric)), ifill("current_step")]
     ]
-    epoch_end_steps = epoch_grouper.last().current_step
+    # Does not contain last epoch as there is no main branch
+    epoch_end_steps = epoch_grouper.last().current_step.copy()
     epoch_end_steps.index.names = ["pbt_epoch"]
     epoch_end_steps.columns = ["current_step"]
+    # Find the ending position. This might be wrong as some trials have been trained for longer accidentially => use harded max step, but it should align with the last_step + perturb interval
+    epoch_end_steps.loc[epoch_end_steps.index.max() + 1] = int(
+        min(
+            df.current_step.max().item(),
+            (epoch_end_steps.loc[epoch_end_steps.index.max()] + epoch_end_steps.diff().iloc[-1]).iloc[-1],
+            1_179_648,
+        )
+    )
+    epoch_end_steps.drop_duplicates(keep="first", inplace=True)
     main_branch_data = main_branch_data.set_index(ifill("current_step"), append=True)
     main_branch_data.index.names = [*main_branch_data.index.names[:-1], "current_step"]
-    last_epoch_values = (
-        main_branch_data.loc[pd.IndexSlice[:, :, epoch_end_steps.T.values.tolist()[0]]]
-        .groupby(ifill("config", "pbt_epoch"))[metric if isinstance(metric, str) else [ifill(*metric)]]
-        .mean()
-    )
-    last_epoch_values.columns = [metric]
-    last_epoch_values.index.names = ["pbt_epoch"]
-    last_epoch_values["current_step"] = epoch_end_steps
-    last_epoch_values.loc[-1] = 0
-    last_epoch_values = last_epoch_values.sort_index()
     df = df.set_index(
         [ifill("config", "pbt_epoch"), ifill("config", "pbt_group_key"), ifill("current_step")], append=True
     )
     df.index.names = [*df.index.names[:-3], "pbt_epoch", "pbt_group_key", "current_step"]
+    last_epoch_values = (
+        # Exclude final step from list as not pinned on main branch
+        df.loc[pd.IndexSlice[:, :, :, :, epoch_end_steps.T.values.tolist()[0]]]
+        .groupby(["pbt_epoch"])[metric if isinstance(metric, str) else [ifill(*metric)]]
+        .agg(["mean", "std"])
+    )
+    last_epoch_values.columns = [metric_key, "metric_std"]
+    last_epoch_values.index.names = ["pbt_epoch"]
+    last_epoch_values["current_step"] = epoch_end_steps
+    last_epoch_values.loc[-1] = 0
+    last_epoch_values = last_epoch_values.sort_index()
     # df.groupby([pd.Grouper(level="current_step"), pd.Grouper(level="pbt_group_key"), "pbt_epoch"])[
     #    [ifill(metric, n=4), ifill("config", "pbt_epoch", n=4)]
     # ]
@@ -557,37 +568,49 @@ def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]
         df.groupby(level=["current_step", "pbt_group_key", "pbt_epoch"])[
             metric if isinstance(metric, str) else [ifill(*metric)]
         ]
-        .mean()
+        .agg(["mean", "std"])
         .droplevel(level=list(range(1, df.columns.nlevels)), axis=1)
     )
+    metric_values.columns = [metric_key, "metric_std"]
     # Shift by for for subtracting initial value
     value_shifter = last_epoch_values.copy()
     value_shifter.index = last_epoch_values.index + 1
     value_shifter_with_first = value_shifter.drop("current_step", axis=1).copy()
-    value_shifter_with_first.loc[0] = (
-        # TODO: For batch_size this can be off
-        metric_values[metric_values.index.get_level_values("pbt_epoch") == 0]
-        .groupby(["pbt_epoch", "current_step"])
-        .mean()
-        .iloc[0]
-    )
-    del last_epoch_values
+    try:
+        value_shifter_with_first.loc[0] = (
+            # TODO: For batch_size this can be off
+            metric_values[metric_values.index.get_level_values("pbt_epoch") == 0]
+            .groupby(["pbt_epoch", "current_step"])[metric_key]
+            .agg(["mean", "std"])
+            .iloc[0]
+            .values
+        )
+    except (ValueError, KeyError):
+        remote_breakpoint()
     # Subtract initial mean from each group to get variance around start value
-    centered_metric_values = metric_values.sub(value_shifter[metric].to_frame(), level="pbt_epoch")
+    centered_metric_values = metric_values.sub(value_shifter[metric_key].to_frame(), level="pbt_epoch")[metric_key]
     # Rough start value for all groups; not good when we tune batch_size
-    normed_metric_values = metric_values.divide(value_shifter_with_first.replace(0, nan), level="pbt_epoch")
+    normed_metric_values = metric_values.divide(value_shifter_with_first.replace(0, nan), level="pbt_epoch")[metric_key]
     # Also center the first epoch
-    centered_metric_values2 = metric_values.sub(value_shifter_with_first, level="pbt_epoch")
+    centered_metric_values2 = metric_values.sub(value_shifter_with_first, level="pbt_epoch")[metric_key]
 
     centered_metrics = centered_metric_values.groupby(level="current_step").aggregate(["var", "std", "mean"])
     centered_metrics2 = centered_metric_values2.groupby(level="current_step").aggregate(["var", "std", "mean"])
     # For mean we need to subtract mean of pbt_epoch 0
-    normed_variance_per_step = normed_metric_values.groupby(level="current_step").aggregate(["var", "std", "mean"])
+    normed_metrics = normed_metric_values.groupby(level="current_step").aggregate(["var", "std", "mean"])
+
+    # Normed metrics 2: Normalize: subtract mean and divide by stddev of epoch begin from value_shifter_with_first
+    normalized_metric_values = (
+        metric_values[metric_key]
+        .sub(value_shifter_with_first[metric_key], level="pbt_epoch")
+        .div(value_shifter_with_first["metric_std"], level="pbt_epoch")
+    )
+    normalized_metric = normalized_metric_values.groupby(level="current_step").aggregate(["var", "std", "mean"])
     # endregion
 
     # region Gini
     # Calculate the gini coefficient for each point in time
-    def gini(x: pd.Series | pd.DataFrame) -> float:
+    def calc_gini(x: pd.Series | pd.DataFrame, metric=metric_key) -> float:
         # Gini coefficient calculation
         if x.empty:
             return nan
@@ -599,21 +622,67 @@ def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]
         gini_coeff = (2 * (np.arange(1, n + 1) * sorted_x).sum()) / (n * cumulative_x.iloc[-1]) - (n + 1) / n
         return gini_coeff
 
-    # Alt implementation
+    gini_metrics = metric_values.groupby("current_step")[metric_key].agg(calc_gini)
+
+    # Kendallal Tau
+    from scipy.stats import kendalltau
+
+    B: pd.Series = metric_values.loc[epoch_end_steps.current_step, metric_key].drop(epoch_end_steps.iloc[-1])
+    A: pd.Series = metric_values.loc[epoch_end_steps.current_step, metric_key].drop(epoch_end_steps.iloc[0])
     try:
-        gini1 = metric_values.groupby("current_step").agg(gini)
+        B.index = A.index
     except:
-        pass
-    metric_values.groupby("current_step").apply(gini)
-    from itertools import combinations
+        # This wont work if some runs are dropped, need a better matcher
+        remote_breakpoint()
+    AB = pd.concat([A, B], axis=1, names=[metric_key, "rank2"])
+    AB.columns = [metric_key, "rank2"]
+    # tau ~0 no consistent ordering, ~1 consistent ordering
+    # high p value, no evidence of monotonic relationship. Tau is compatible with random change
+    kendall_metrics = (
+        AB.groupby("current_step")
+        .rank()
+        .groupby("current_step")
+        .apply(lambda x: pd.Series(kendalltau(x[metric_key], x["rank2"]), index=["tau", "pvalue"]))
+    )
 
-    def gini2(x: pd.Series) -> float:
-        n = len(x)
-        diffs = sum(abs(i - j) for i, j in combinations(x, r=2))
-        return diffs / (n**2 * x.mean())
+    # AllA = metric_values.loc[metric_values.index.get_level_values("current_step") <= epoch_end_steps.iloc[-1].item(), metric].to_frame()
+    # AllA["rank2"] = AllA.shift(len(AllA.loc[2048])*8)
+    # kendall_metrics_all = AllA.groupby("current_step").rank().groupby("current_step").apply(lambda x: pd.Series(kendalltau(x[metric], x["rank2"]), index=["tau", "pvalue"]))
+    # Add a MultiIndex column for each DataFrame/Series, using the variable name as the first level
+    def to_multiindex(df, name):
+        if isinstance(df, pd.Series):
+            df = df.to_frame()
+        if not isinstance(df.columns, pd.MultiIndex):
+            df = df.copy()
+            df.columns = pd.MultiIndex.from_product([[name], df.columns])
+        else:
+            df = df.copy()
+            df.columns = pd.MultiIndex.from_tuples(
+                [(name, *col) if isinstance(col, tuple) else (name, col) for col in df.columns]
+            )
+        return df
 
-    metric_values.groupby("current_step").agg(gini2)
-    metric_values.groupby("current_step").apply(gini2)
+    stats = pd.concat(
+        [
+            to_multiindex(centered_metrics, "centered_metrics"),
+            to_multiindex(centered_metrics2, "centered_metrics2"),
+            to_multiindex(normed_metrics, "normed_metrics"),
+            to_multiindex(normalized_metric.clip(-1, 1), "normalized_metrics"),
+            to_multiindex(gini_metrics, "gini_metrics"),
+            to_multiindex(kendall_metrics, "kendall_metrics"),
+        ],
+        axis=1,
+    )
+    # mean and std of the variance and metrics
+    stats_reduced = stats.agg(["mean", "std"]).T.drop(["mean", "std"], axis=0, level=1)
+    stats_reduced = pd.concat(
+        [
+            stats_reduced.drop("normed_metrics"),
+            to_multiindex(normed_metrics, "normed_metrics").agg(["mean", "std"]).T.drop("std", level=1),
+        ],
+        axis=0,
+    )
+    return stats, stats_reduced.to_string()
 
 
 def _shade_background(ax: Axes, color: str, left: float, right: float, **kwargs):
@@ -703,6 +772,93 @@ class PlotOption:
             raise ValueError("At most one of main_only, plot_reduced, main_vs_second_best, main_vs_rest can be True.")
 
 
+def _drop_duplicate_steps(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Checks for possibly duplicated steps and returns a cleaned version of the DataFrame.
+    """
+
+    # When restored the pbt_epoch might be wrong and we might have duplicated steps, use first non-duplicated to get interval
+    # use last to continue values
+    def ifill(*cols, n=df.columns.nlevels):
+        return (*cols, *(Placeholder,) * (n - len(cols)))
+
+    first_change: tuple[str, int] = df[ifill("config", "pbt_epoch")].diff().iloc[1:].ne(0).idxmax()  # pyright: ignore[reportAssignmentType]
+    try:
+        perturbation_interval = df.current_step.loc[(first_change[0], first_change[1] - 1)].item()
+    except AttributeError:
+        return df
+    except KeyError:
+        pass
+    else:
+        df.attrs["perturbation_interval"] = perturbation_interval
+        return df
+    duplicated_steps = cast("pd.DataFrame | pd.Series", df.loc[first_change[0], "current_step"]).nunique() < len(
+        df.current_step
+    )
+    try:
+        duplicated_steps = bool(duplicated_steps)
+    except ValueError:
+        duplicated_steps = duplicated_steps.item()  # pyright: ignore[reportAttributeAccessIssue]
+    if not duplicated_steps:
+        raise
+        # if we keep last the metrics will align better but we might not get the correct interval
+    no_duplicates = df[~df.index.duplicated(keep="first")]
+    nd_min_epoch_per_step = no_duplicates.groupby(ifill("current_step"))[[ifill("config", "pbt_epoch")]].min()
+    # We cannot just look at the first change restored trials might be started with pbt_epoch 1
+    loc_alt = (
+        no_duplicates[ifill("current_step")]
+        .map(nd_min_epoch_per_step[ifill("config", "pbt_epoch")])
+        .diff()
+        .iloc[1:]
+        .ne(0)
+        .idxmax()
+    )
+    try:
+        perturbation_interval = int(no_duplicates.loc[(loc_alt[0], loc_alt[1] - 1)].current_step)  # item() ?
+    except KeyError:
+        # bad order so that fork comes first
+        try:
+            perturbation_interval = int(
+                no_duplicates.loc[loc_alt].current_step
+                - no_duplicates.loc[loc_alt].get(
+                    "batch_size",
+                    no_duplicates.loc[loc_alt].config.get(
+                        "train_batch_size_per_learner", no_duplicates.loc[loc_alt].config.get("batch_size")
+                    ),
+                )
+            )
+        except TypeError:
+            perturbation_interval = int(
+                (
+                    no_duplicates.loc[loc_alt].current_step
+                    - no_duplicates.loc[loc_alt].get(
+                        "batch_size",
+                        no_duplicates.loc[loc_alt].config.get(
+                            "train_batch_size_per_learner", no_duplicates.loc[loc_alt].config.get("batch_size")
+                        ),
+                    )
+                ).iloc[0]
+            )
+    df.attrs["perturbation_interval"] = perturbation_interval
+    # TODO: Does pbt_epoch need to be fixed?
+    # This disrupts seed, pbt_epoch
+    df = df[~df.index.duplicated(keep="last")]
+    # Need to fix pbt_epoch
+    # Method 1 take min
+    min_epoch_per_step = df.groupby(ifill("current_step"))[[ifill("config", "pbt_epoch")]].min()
+    # Method 2 divide current step
+
+    # Apply method 2
+    method1 = ((df["current_step"] - 4) // perturbation_interval).values.flatten()
+    # Apply method 1
+    method2 = df[ifill("current_step")].map(min_epoch_per_step[ifill("config", "pbt_epoch")])
+    if not (method1 == method2).all():
+        logger.warning("Disagreement between pbt_epoch fixing methods, using method 1.")
+        remote_breakpoint()
+    df.loc[:, ifill("config", "pbt_epoch")] = method2.to_numpy()
+    return df
+
+
 def plot_run_data(
     df: pd.DataFrame,
     metrics: Sequence[str | tuple[str, ...]],
@@ -782,61 +938,24 @@ def plot_run_data(
 
     # Secondary x-axis mappers
     first_change: tuple[str, int] = df[ifill("config", "pbt_epoch")].diff().iloc[1:].ne(0).idxmax()  # pyright: ignore[reportAssignmentType]
-    try:
-        perturbation_interval = df.current_step.loc[(first_change[0], first_change[1] - 1)].item()
-    except AttributeError as ae:
-        # might be a DataFrame
-        if "item" not in str(ae):
-            raise
+    perturbation_interval = df.attrs.get("perturbation_interval", None)
+    if not perturbation_interval:
         try:
-            perturbation_interval = int(df.current_step.loc[(first_change[0], first_change[1] - 1)].iloc[0, 0])
-        except Exception as e:
-            logger.error("Failed to get perturbation interval at %s %r", (first_change[0], first_change[1] - 1), e)
-            remote_breakpoint()
-            pass
-            raise
-    except KeyError:
-        # When restored the pbt_epoch might be wrong and we might have duplicated steps, use first non-duplicated to get interval
-        # use last to continue values
-        duplicated_steps = cast("pd.DataFrame | pd.Series", df.loc[first_change[0], "current_step"]).nunique() < len(
-            df.current_step
-        )
-        try:
-            duplicated_steps = bool(duplicated_steps)
-        except ValueError:
-            duplicated_steps = duplicated_steps.item()  # pyright: ignore[reportAttributeAccessIssue]
-        if not duplicated_steps:
-            raise
-            # if we keep last the metrics will align better but we might not get the correct interval
-        no_duplicates = df[~df.index.duplicated(keep="first")]
-        loc_alt: tuple[str, int] = no_duplicates[ifill("config", "pbt_epoch")].diff().iloc[1:].ne(0).idxmax()  # pyright: ignore[reportAssignmentType]
-        try:
-            perturbation_interval = int(no_duplicates.loc[(loc_alt[0], loc_alt[1] - 1)].current_step)  # item() ?
-        except KeyError:
-            # bad order so that fork comes first
+            perturbation_interval = df.current_step.loc[(first_change[0], first_change[1] - 1)].item()
+        except AttributeError as ae:
+            # might be a DataFrame
+            if "item" not in str(ae):
+                raise
             try:
-                perturbation_interval = int(
-                    no_duplicates.loc[loc_alt].current_step
-                    - no_duplicates.loc[loc_alt].get(
-                        "batch_size",
-                        no_duplicates.loc[loc_alt].config.get(
-                            "train_batch_size_per_learner", no_duplicates.loc[loc_alt].config.get("batch_size")
-                        ),
-                    )
-                )
-            except TypeError:
-                perturbation_interval = int(
-                    (
-                        no_duplicates.loc[loc_alt].current_step
-                        - no_duplicates.loc[loc_alt].get(
-                            "batch_size",
-                            no_duplicates.loc[loc_alt].config.get(
-                                "train_batch_size_per_learner", no_duplicates.loc[loc_alt].config.get("batch_size")
-                            ),
-                        )
-                    ).iloc[0]
-                )
-        df = df[~df.index.duplicated(keep="last")]
+                perturbation_interval = int(df.current_step.loc[(first_change[0], first_change[1] - 1)].iloc[0, 0])
+            except Exception as e:
+                logger.error("Failed to get perturbation interval at %s %r", (first_change[0], first_change[1] - 1), e)
+                remote_breakpoint()
+                pass
+                raise
+        except KeyError:
+            df = _drop_duplicate_steps(df)
+            perturbation_interval = df.attrs["perturbation_interval"]
     secondary_to_main = lambda xs: (xs + 0.5) * perturbation_interval  # noqa: E731
     main_to_secondary = lambda xs: (xs - perturbation_interval / 2) / perturbation_interval  # noqa: E731
     num_pbt_epochs = df[ifill("config", "pbt_epoch")].max().item() + 1
@@ -952,14 +1071,17 @@ def plot_run_data(
                     if metric == pbt_metric
                     else [df[pbt_metric if isinstance(pbt_metric, str) else ifill(*pbt_metric)]]
                 ),
+                *(() if "pbt_epoch" == group_by[0] else [df[[ifill("config", "pbt_epoch")]]]),
             ],
             axis=1,
         )
         pbt_metric_key = pbt_metric if isinstance(pbt_metric, str) else pbt_metric[-1]
         if metric != pbt_metric and pbt_metric_key == metric_key:
             pbt_metric_key = f"pbt_{pbt_metric_key}"
-        plot_df.columns = ["current_step", metric_key, group_by[0], "__pbt_main_branch__", group_stat] + (
-            [pbt_metric_key] if metric != pbt_metric else []
+        plot_df.columns = (
+            ["current_step", metric_key, group_by[0], "__pbt_main_branch__", group_stat]
+            + ([pbt_metric_key] if metric != pbt_metric else [])
+            + (["pbt_epoch"] if "pbt_epoch" != group_by[0] else [])
         )
         plot_df["__pbt_main_branch__"] = plot_df["__pbt_main_branch__"].infer_objects(copy=False).fillna(False)  # noqa: FBT003
         # plot_df.sort_values(["training_iteration", "__pbt_main_branch__", metric], inplace=True)
@@ -1050,11 +1172,17 @@ def plot_run_data(
         )
         # Iterators:
         # Last data should not be needed if group_by != pbt_epoch
-        max_epoch = plot_df["pbt_epoch"].max()
-        last_data = plot_df[plot_df["pbt_epoch"] == max_epoch]
-        # TODO: What about those runs that were trained too long
-        last_data = last_data.sort_values(["training_iteration", "__group_sort__", "__group_rank__", metric_key])
-        last_group_iter = iter(last_data.groupby([group_by[0], group_stat], sort=False))
+        try:
+            max_epoch = plot_df["pbt_epoch"].max()
+            last_data = plot_df[plot_df["pbt_epoch"] == max_epoch]
+        except KeyError:
+            # will happen if group_by[0] != "pbt_epoch", but should now always be present
+            max_epoch = 1
+            remote_breakpoint()
+        else:
+            # TODO: What about those runs that were trained too long
+            last_data = last_data.sort_values(["training_iteration", "__group_sort__", "__group_rank__", metric_key])
+            last_group_iter = iter(last_data.groupby([group_by[0], group_stat], sort=False))
         grouper = plot_df.groupby([group_by[0], group_stat], sort=False)
 
         # Plot Non continues
@@ -1072,8 +1200,10 @@ def plot_run_data(
         for i, ((group0, stat_val), group) in enumerate(grouper):
             if group_by[0] == "pbt_epoch":
                 pbt_epoch = group0
-            else:
+            elif "pbt_epoch" in group:
                 pbt_epoch = group["pbt_epoch"].iloc[0]
+            else:
+                pbt_epoch = 0
             # Add background shade when group changes
             if pbt_epoch == max_epoch:
                 (pbt_epoch, stat_val), group = next(last_group_iter)  # noqa: PLW2901
@@ -1091,12 +1221,13 @@ def plot_run_data(
                     group = _connect_groups(last_main_group, group, group_stat)  # noqa: PLW2901
                 logger.debug("Main group: %s %s", pbt_epoch, stat_val)
                 last_main_group = group
+                # Print the group_stat value over time on the secondary y-axis
                 sns.lineplot(
                     data=group[["current_step", group_stat]].drop_duplicates(),
                     x="current_step",
                     y=group_stat,
                     ax=ax2,
-                    color=color_map[stat_val],
+                    color="blue",  # color_map[stat_val],
                     linestyle="-",
                     linewidth=2,
                     path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
@@ -1113,12 +1244,17 @@ def plot_run_data(
                     continue
                 plotted_rest_this_epoch = True
                 # Group all other groups together for the original frame for thich pbt_epoch
-                if pbt_epoch != max_epoch:
-                    group = plot_df[(~plot_df.__pbt_main_branch__) & plot_df[group_by[0]] == group0]
-                else:
-                    plot_df_last = plot_df[plot_df["pbt_epoch"] == max_epoch]
-                    group = plot_df_last[plot_df["__group_rank__"].max() < max_rank]
-                group[group_stat] = "other"
+                try:
+                    if pbt_epoch != max_epoch:
+                        group = plot_df[(~plot_df.__pbt_main_branch__) & (plot_df[group_by[0]] == group0)]
+                    else:
+                        plot_df_last = plot_df[plot_df["pbt_epoch"] == max_epoch]
+                        group = plot_df_last[plot_df["__group_rank__"] < max_rank]
+                    group = group.copy()
+                    group[group_stat] = "other"  # <-- sets on a copy
+                except Exception as e:
+                    logger.error("Failed to group rest for epoch %s: %r", pbt_epoch, e)
+                    remote_breakpoint()
 
             elif main_only:
                 logger.debug("Skipping non-main group: %s %s", pbt_epoch, stat_val)
@@ -1325,22 +1461,75 @@ def plot_n_save(
     if error_figures:
         for metric_name, error_fig in error_figures.items():
             error_path = save_path.with_name(
-                f"{save_path.stem}_{metric_name.replace('/', '_')}_errors{save_path.suffix}"
+                f"{save_path.stem}_{metric_name.replace('/', '_') if metric_name not in save_path.stem else ''}_errors{save_path.suffix}"
             )
             error_fig.savefig(error_path, format=format, bbox_inches="tight")
             if close:
                 plt.close(error_fig)
             print(f"Saved error plot to {error_path}")
-            remote_breakpoint()
     if close:
         plt.close(fig)
     logger.info(f"Saved plot to {save_path}")  # noqa: G004
 
 
-def _join_nested(m):
+def _join_nested(m, on="_"):
     if isinstance(m, tuple):
-        return "_".join(m)
+        return on.join(m)
     return m
+
+
+def calculate_experiment_stats(
+    combined_df: pd.DataFrame, metrics: Sequence[str | tuple[str, ...]], out_path: Path, format="pdf"
+) -> None:
+    path_base = out_path.stem
+    for metric in metrics:
+        metric_str = _join_nested(metric)
+        if metric_str not in path_base and _join_nested(metric, on="-") not in path_base:
+            metric_str = "-" + metric_str
+        else:
+            metric_str = ""
+        stats, stats_reduced = calculate_hyperparam_metrics(combined_df, metric)
+
+        # 1. Save reduced stats
+        stats_reduced_path = out_path.with_name(f"{path_base}{metric_str}_hyperparam_stats_reduced.txt")
+        with open(stats_reduced_path, "w") as f:
+            f.write(stats_reduced)
+        # 2nd plot the stats
+        # fig, ax = plt.subplots()
+        stats_path = out_path.with_name(f"{path_base}{metric_str}_hyperparam_stats.{format}")
+        stats_to_plot = stats.drop(
+            [
+                c
+                for c in stats.columns
+                if "var" not in c[-1] and "gini" not in c[0] and "kendall" not in c[0] and "normed_metrics" not in c[0]
+            ],
+            axis=1,
+        )
+        fig, ax = plt.subplots()
+        axes = stats_to_plot.plot(
+            ax=ax,
+            subplots=True,
+            kind="line",
+            layout=(len(stats_to_plot.columns), 1),
+            legend=False,
+            fontsize=11,
+        )
+        columns_ax: "Axes"
+        fig.set_size_inches(10, 1.25 * len(stats_to_plot.columns))
+        for i, (columns_ax, column) in enumerate(zip(axes.flatten(), stats_to_plot.columns, strict=True)):
+            if i != len(stats_to_plot.columns) - 1:
+                columns_ax.set_xlabel("")
+                columns_ax.set_xticks([])
+                columns_ax.set_xticklabels([])
+            columns_ax.set_title(column, fontsize=11, fontweight="light")
+            if "kendall" in column[0]:
+                stats_to_plot[column].dropna().plot(ax=columns_ax, label=column)
+        # for stat in stats.columns.get_level_values(0).unique():
+        #    stats[stat].plot(ax=ax, label=stat)
+        fig.savefig(stats_path, format=format, bbox_inches="tight")
+        plt.close(fig)
+        logger.info("Saved hyperparameter stats to %s", stats_path)
+        stats.to_csv(stats_path.with_suffix(".csv"), index=True)
 
 
 def export_run_data(
@@ -1355,6 +1544,7 @@ def export_run_data(
     log: bool | None = None,
     format="pdf",
     save_path: str | Path | None = None,
+    calc_stats: bool = True,
     **kwargs,
 ) -> Path:
     """
@@ -1391,8 +1581,8 @@ def export_run_data(
         combined_df = experiment_path
     logger.info("Plotting and saving...")
 
-    for metric in metrics:
-        stats = calculate_hyperparam_metrics(combined_df, metric)
+    if calc_stats:
+        calculate_experiment_stats(combined_df=combined_df, metrics=metrics, out_path=out_path, format=format)
     plot_n_save(
         combined_df,
         plot_option=plot_option,
@@ -1454,6 +1644,7 @@ def _export_multiple(
         tb = traceback.format_exc()
         logger.error(f"Failed to combine dataframes for {experiment_path}: {e!r}", exc_info=True)  # noqa: G004
         return saved_files, [(e, tb, experiment_path)]
+    combined_df = _drop_duplicate_steps(combined_df)
     # Expand kwargs if any value is an Options instance (cross product over all Options)
     large = False
     if (group_stat := kwargs.get("group_stat")) is None:
@@ -1497,8 +1688,9 @@ def _export_multiple(
                     "Skipping combination with main_only=True and plot_reduced=True as they are mutually exclusive."
                 )
                 continue
-            for option in plot_options:
-                for metric in metrics:
+            for metric in metrics:
+                calc_stats = True
+                for option in plot_options:
                     if option.exclude_metric and metric in option.exclude_metric:
                         continue
                     metric_str = metrics if isinstance(metrics, str) else "-".join(map(_join_nested, metrics))
@@ -1520,14 +1712,16 @@ def _export_multiple(
                             figsize=figsize,
                             format=format,
                             save_path=out_path,
+                            calc_stats=calc_stats,
                             **combo_kwargs,
                         )
+                        calc_stats = False
                     except Exception as e:  # noqa: PERF203
                         tb = traceback.format_exc()
                         logger.error(f"Failed to export run data for {experiment_path}: {e!r}", exc_info=True)  # noqa: G004
                         errors.append((e, tb, experiment_path))
                     else:
-                        logger.info(f"Exported run data for '{experiment_path}' to '{file_path}'")  # noqa: G004
+                        logger.debug(f"Exported run data for '{experiment_path}' to '{file_path}'")  # noqa: G004
                         saved_files.append(file_path)
         return saved_files, errors
     kws = cast("dict[str, Any]", kwargs)
@@ -1582,13 +1776,15 @@ def _create_image_output_path(
 ) -> Path:
     metric_str = "-".join(metric) if isinstance(metric, tuple) else metric
     suffixes = []
-    main_only = plot_option.main_only
-    plot_reduced = plot_option.plot_reduced
-    if main_only:
+    if plot_option.main_only:
         suffixes.append("main_only")
     # Main not compatible with reduced
-    elif plot_reduced:
+    elif plot_option.plot_reduced:
         suffixes.append("reduced")
+    elif plot_option.main_vs_second_best:
+        suffixes.append("main_vs_second_best")
+    elif plot_option.main_vs_rest:
+        suffixes.append("main_vs_rest")
     else:
         suffixes.append("all")
     if group_by == DEFAULT_GROUP_BY:
@@ -1843,9 +2039,9 @@ if __name__ == "__main__":
         args.metrics = list(map(literal_eval, args.metrics))
     excludes: set[str] = file_excludes.union(set(args.excludes))
     plot_options = [
-        PlotOption(main_only=True, plot_reduced=False),
         PlotOption(plot_reduced=False),
         PlotOption(plot_reduced=True),
+        PlotOption(main_only=True, plot_reduced=False),
         PlotOption(main_vs_second_best=True, plot_reduced=False),
         PlotOption(main_vs_rest=True, plot_reduced=False),
     ]
