@@ -1427,6 +1427,9 @@ class CheckpointConfigArgumentParser(Tap):
     If auto, then each trainable will call itself with train_buffered with an appropriate value.
     """
 
+    pbt_enable_checkpoints: bool = False
+    """Normally pbt does not create extra checkpoints as it handles checkpoints."""
+
     def configure(self) -> None:
         super().configure()
         self.add_argument(
