@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+# pyright: reportAttributeAccessIssue=warning
+
 import concurrent.futures
+from dataclasses import dataclass
 import logging
 import time
 import traceback
 from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Collection, Hashable, Sequence, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Collection, Hashable, Mapping, Sequence, TypeAlias, TypeVar, cast
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import base62
@@ -19,7 +22,7 @@ import pandas as pd
 import seaborn as sns
 from matplotlib import cm, colormaps, patheffects
 from tqdm import tqdm
-from typing_extensions import Final, Sentinel, TypeVarTuple, Unpack
+from typing_extensions import Final, Literal, Sentinel, TypeVarTuple, Unpack
 
 from ray_utilities.testing_utils import remote_breakpoint
 
@@ -48,7 +51,11 @@ DROP_COLUMNS = [
     ("config", "fork_from", "parent_time"),
 ]
 
+DEFAULT_GROUP_BY = ("pbt_epoch", "pbt_group_key")
+
 LOG_SETTINGS = {"lr", "batch_size"}
+
+TEST = 0
 
 nan: Final = np.nan
 
@@ -371,7 +378,7 @@ def _get_group_stat(df: pd.DataFrame | pd.Series, group_key: str | Hashable):
         pass
     # If this failed then we have no group_by[-1] (pbt_group_key) column with key=value; other parts might then fail too
     # Possibly this run was never forked
-    tune = first_row.cli_args.get("tune")
+    tune = first_row.config.cli_args.get("tune")
     if not tune:
         tune = first_row.config.experiment_group.values.item().split(":")[-1]
         if tune == "batch_size" and ("batch_size" not in df.config and "train_batch_size_per_learner" not in df.config):
@@ -505,10 +512,111 @@ def _connect_groups(last: pd.DataFrame, now: pd.DataFrame, stat_value: str | Non
     )
 
 
-TEST = 0
+def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]) -> pd.DataFrame:
+    """
+    Calculate additional metrics for the DataFrame.
+    This calculates:
+        - variance between data grouped by pbt_group_key
+        - Gini coefficient between data grouped by pbt_group_key
+        - Kendal Tau metric at the end of each pbt_epoch between data grouped by pbt_group_key
+    """
+    # region Variance
+    backup = df
+
+    def ifill(*cols, n=df.columns.nlevels):
+        return (*cols, *(Placeholder,) * (n - len(cols)))
+
+    remote_breakpoint()
+    main_branch_data = df[df[ifill("config", "__pbt_main_branch__")]]
+    epoch_grouper = main_branch_data.groupby([ifill("config", "pbt_epoch")])[
+        [ifill(*((metric,) if isinstance(metric, str) else metric)), ifill("current_step")]
+    ]
+    epoch_end_steps = epoch_grouper.last().current_step
+    epoch_end_steps.index.names = ["pbt_epoch"]
+    epoch_end_steps.columns = ["current_step"]
+    main_branch_data = main_branch_data.set_index(ifill("current_step"), append=True)
+    main_branch_data.index.names = [*main_branch_data.index.names[:-1], "current_step"]
+    last_epoch_values = (
+        main_branch_data.loc[pd.IndexSlice[:, :, epoch_end_steps.T.values.tolist()[0]]]
+        .groupby(ifill("config", "pbt_epoch"))[metric if isinstance(metric, str) else [ifill(*metric)]]
+        .mean()
+    )
+    last_epoch_values.columns = [metric]
+    last_epoch_values.index.names = ["pbt_epoch"]
+    last_epoch_values["current_step"] = epoch_end_steps
+    last_epoch_values.loc[-1] = 0
+    last_epoch_values = last_epoch_values.sort_index()
+    df = df.set_index(
+        [ifill("config", "pbt_epoch"), ifill("config", "pbt_group_key"), ifill("current_step")], append=True
+    )
+    df.index.names = [*df.index.names[:-3], "pbt_epoch", "pbt_group_key", "current_step"]
+    # df.groupby([pd.Grouper(level="current_step"), pd.Grouper(level="pbt_group_key"), "pbt_epoch"])[
+    #    [ifill(metric, n=4), ifill("config", "pbt_epoch", n=4)]
+    # ]
+    metric_values = (
+        df.groupby(level=["current_step", "pbt_group_key", "pbt_epoch"])[
+            metric if isinstance(metric, str) else [ifill(*metric)]
+        ]
+        .mean()
+        .droplevel(level=list(range(1, df.columns.nlevels)), axis=1)
+    )
+    # Shift by for for subtracting initial value
+    value_shifter = last_epoch_values.copy()
+    value_shifter.index = last_epoch_values.index + 1
+    value_shifter_with_first = value_shifter.drop("current_step", axis=1).copy()
+    value_shifter_with_first.loc[0] = (
+        # TODO: For batch_size this can be off
+        metric_values[metric_values.index.get_level_values("pbt_epoch") == 0]
+        .groupby(["pbt_epoch", "current_step"])
+        .mean()
+        .iloc[0]
+    )
+    del last_epoch_values
+    # Subtract initial mean from each group to get variance around start value
+    centered_metric_values = metric_values.sub(value_shifter[metric].to_frame(), level="pbt_epoch")
+    # Rough start value for all groups; not good when we tune batch_size
+    normed_metric_values = metric_values.divide(value_shifter_with_first.replace(0, nan), level="pbt_epoch")
+    # Also center the first epoch
+    centered_metric_values2 = metric_values.sub(value_shifter_with_first, level="pbt_epoch")
+
+    centered_metrics = centered_metric_values.groupby(level="current_step").aggregate(["var", "std", "mean"])
+    centered_metrics2 = centered_metric_values2.groupby(level="current_step").aggregate(["var", "std", "mean"])
+    # For mean we need to subtract mean of pbt_epoch 0
+    normed_variance_per_step = normed_metric_values.groupby(level="current_step").aggregate(["var", "std", "mean"])
+    # endregion
+
+    # region Gini
+    # Calculate the gini coefficient for each point in time
+    def gini(x: pd.Series | pd.DataFrame) -> float:
+        # Gini coefficient calculation
+        if x.empty:
+            return nan
+        if isinstance(x, pd.DataFrame):
+            x = x[metric]
+        sorted_x = x.sort_values() if isinstance(x, pd.Series) else x.sort_values(metric)
+        n = len(x)
+        cumulative_x = sorted_x.cumsum()
+        gini_coeff = (2 * (np.arange(1, n + 1) * sorted_x).sum()) / (n * cumulative_x.iloc[-1]) - (n + 1) / n
+        return gini_coeff
+
+    # Alt implementation
+    try:
+        gini1 = metric_values.groupby("current_step").agg(gini)
+    except:
+        pass
+    metric_values.groupby("current_step").apply(gini)
+    from itertools import combinations
+
+    def gini2(x: pd.Series) -> float:
+        n = len(x)
+        diffs = sum(abs(i - j) for i, j in combinations(x, r=2))
+        return diffs / (n**2 * x.mean())
+
+    metric_values.groupby("current_step").agg(gini2)
+    metric_values.groupby("current_step").apply(gini2)
 
 
-def shade_background(ax: Axes, color: str, left: float, right: float, **kwargs):
+def _shade_background(ax: Axes, color: str, left: float, right: float, **kwargs):
     kwargs.setdefault("alpha", 0.2)
     ax.axvspan(
         left,
@@ -519,21 +627,98 @@ def shade_background(ax: Axes, color: str, left: float, right: float, **kwargs):
     )
 
 
+def bin_metric(values: pd.Series, bins: int = 10) -> pd.Series:
+    """Bin a continuous metric into *bins* equal-width intervals."""
+    if values.dropna().empty:
+        return pd.Series(index=values.index, dtype="object")
+    # pd.cut preserves the original index, which keeps time linkage intact
+    binned = pd.cut(values, bins=bins, include_lowest=True, duplicates="drop")
+    return binned.astype(str)
+
+
+def plot_error_distribution(
+    plot_df: pd.DataFrame,
+    metric_key: str,
+    group_stat: str,
+    *,
+    plot_errors_type: Literal["box", "violin"],
+    palette: Mapping[Hashable, str] | None = None,
+    epoch_col: str = "pbt_epoch",
+) -> Figure | None:
+    """Create a separate figure showing the distribution of *metric_key* per *group_stat*."""
+    if epoch_col not in plot_df:
+        logger.warning("Epoch column %s missing from plot_df, skipping error plot.", epoch_col)
+        return None
+    data = plot_df[[metric_key, group_stat, epoch_col]].copy()
+    data["_training_iteration"] = plot_df.index.get_level_values("training_iteration")
+    if data.empty:
+        logger.debug("No data available for error plot (%s)", metric_key)
+        return None
+    gp = data.groupby([group_stat, epoch_col])
+    start = gp["_training_iteration"].transform("min")
+    end = gp["_training_iteration"].transform("max")
+    threshold = start + (end - start) / 2
+    data = data[data["_training_iteration"] >= threshold]
+    if data.empty:
+        logger.debug("No data in second half of epochs for (%s)", metric_key)
+        return None
+    data = data.drop(columns="_training_iteration")
+    fig_err, ax_err = plt.subplots(figsize=(max(len(data[group_stat].unique()) * 0.4 + 5, 8), 6))
+    plot_fn = sns.boxplot if plot_errors_type == "box" else sns.violinplot
+    plot_kwargs = {
+        "data": data,
+        "x": group_stat,
+        "hue": group_stat,
+        "legend": False,
+        "y": metric_key,
+        "ax": ax_err,
+        "linewidth": 1,
+    }
+    if palette:
+        palette_colors = {stat: palette.get(stat, "#4c72b0") for stat in pd.unique(data[group_stat])}
+        plot_kwargs["palette"] = palette_colors
+    else:
+        plot_kwargs["color"] = "#4c72b0"
+    plot_fn(**plot_kwargs)
+    ax_err.set_title(f"{metric_key} distribution by {group_stat}")
+    ax_err.set_xlabel(group_stat)
+    ax_err.set_ylabel(metric_key)
+    ax_err.tick_params(axis="x", rotation=30)
+    plt.tight_layout()
+    return fig_err
+
+
+@dataclass
+class PlotOption:
+    main_only: bool = False
+    plot_reduced: bool = True
+    main_vs_second_best: bool = False
+    main_vs_rest: bool = False
+
+    exclude_metric: Sequence[str] | None = ()
+
+    def __post_init__(self):
+        # at most one of these can be true
+        if self.main_only + self.plot_reduced + self.main_vs_second_best + self.main_vs_rest > 1:
+            raise ValueError("At most one of main_only, plot_reduced, main_vs_second_best, main_vs_rest can be True.")
+
+
 def plot_run_data(
     df: pd.DataFrame,
     metrics: Sequence[str | tuple[str, ...]],
     experiment_keys: list[str] | None = None,
     figsize: tuple[int, int] = (12, 8),
     group_stat: str | None = None,
-    group_by=("pbt_epoch", "pbt_group_key"),
+    group_by: str | Sequence[str] = DEFAULT_GROUP_BY,
     *,
     pbt_metric: str | tuple[str, ...] | None = None,
     log: bool | None = None,
-    main_only: bool = False,
-    plot_reduced: bool = True,
+    plot_option: PlotOption = PlotOption(),  # noqa: B008
     show: bool = True,
     pbt_plot_interval: int = 4,
-) -> Figure:
+    plot_errors: bool | Literal["only"] | str | Sequence[str] = True,
+    plot_errors_type: Literal["box", "violin"] = "box",
+) -> tuple[Figure, dict[str, Figure]]:
     """Plot specified metrics from the run data.
 
     Args:
@@ -553,7 +738,15 @@ def plot_run_data(
         main_only: Whether to plot only the main branch runs.
         plot_reduced: When True, to reduce clutter will plot curves of the best, second best, and worst of each group_stat,
             the old value +/- 1 level and the new value +/- 1 level and the second best.
+        plot_errors: Plot a second graphic with a boxplot or violin plot of the error bars for each group.
     """
+    main_only = plot_option.main_only
+    plot_reduced = plot_option.plot_reduced
+    if not isinstance(plot_errors, bool) and plot_errors != "only":
+        plot_errors = plot_errors == group_by and plot_errors
+        if not plot_errors:
+            logger.info("Will not plot error bars as plot_errors=%r does not match group_by=%r", plot_errors, group_by)
+
     depth = len(df.columns[0])
 
     def ifill(*cols, n=depth):
@@ -575,7 +768,9 @@ def plot_run_data(
     elif group_stat not in df:
         try:
             df[group_stat] = df.config[group_stat]
-        except (TypeError, KeyError):
+        except TypeError:
+            df[group_stat] = df.config[group_stat].values
+        except KeyError:
             remote_breakpoint()
             raise
         df.sort_index(axis=1, inplace=True)
@@ -677,7 +872,7 @@ def plot_run_data(
             df.current_step.droplevel(0, axis=1),
             *(df[col] for col in group_cols),
             df.config.seed,
-            stat_columns,
+            stat_columns,  # pyright: ignore[reportPossiblyUnboundVariable]
         ]
 
     # Combine into a DataFrame for groupby
@@ -697,6 +892,7 @@ def plot_run_data(
     if num_metrics == 1:
         axes = [axes]
 
+    error_figures: dict[str, Figure] = {}
     # continued_runs = which_continued(df)
     # cont_mask = df.index.get_level_values("run_id").isin(continued_runs)
     # df.loc[cont_mask, ("config", "__pbt_main_branch__")] = True
@@ -853,8 +1049,9 @@ def plot_run_data(
             ["training_iteration", "__pbt_main_branch__", "__group_sort__", "__group_rank__", metric_key]
         )
         # Iterators:
-        max_epoch = plot_df[group_by[0]].max()
-        last_data = plot_df[plot_df[group_by[0]] == max_epoch]
+        # Last data should not be needed if group_by != pbt_epoch
+        max_epoch = plot_df["pbt_epoch"].max()
+        last_data = plot_df[plot_df["pbt_epoch"] == max_epoch]
         # TODO: What about those runs that were trained too long
         last_data = last_data.sort_values(["training_iteration", "__group_sort__", "__group_rank__", metric_key])
         last_group_iter = iter(last_data.groupby([group_by[0], group_stat], sort=False))
@@ -870,20 +1067,25 @@ def plot_run_data(
         bg_color_idx = 0
         prev_group: pd.DataFrame = None  # type: ignore[assignment]
         seen_labels = set()
-        for i, ((pbt_epoch, stat_val), group) in enumerate(grouper):
+        # TODO: pbt_epoch is first group, if not grouping over epoch ,,,,
+        plotted_rest_this_epoch = False
+        for i, ((group0, stat_val), group) in enumerate(grouper):
+            if group_by[0] == "pbt_epoch":
+                pbt_epoch = group0
+            else:
+                pbt_epoch = group["pbt_epoch"].iloc[0]
             # Add background shade when group changes
             if pbt_epoch == max_epoch:
                 (pbt_epoch, stat_val), group = next(last_group_iter)  # noqa: PLW2901
 
             if pbt_epoch != last_epoch:
                 last_epoch = pbt_epoch
+                plotted_rest_this_epoch = False
             if TEST and pbt_epoch > 1:
                 break
-            is_main = False
             if group["__pbt_main_branch__"].any() or (
                 pbt_epoch == max_epoch and group["__group_rank__"].max() == max_rank
             ):
-                is_main = True
                 if last_main_group is not None:
                     # Add connection to last points
                     group = _connect_groups(last_main_group, group, group_stat)  # noqa: PLW2901
@@ -902,6 +1104,22 @@ def plot_run_data(
 
                 # On a secondary axis we want to plot the group_stat value over time
                 # Plot group_stat value over time on a secondary y-axis
+            elif plot_option.main_vs_second_best:
+                if group["__group_rank__"].max() != second_max_rank:
+                    continue
+                logger.debug("Plotting second best group: %s %s", pbt_epoch, stat_val)
+            elif plot_option.main_vs_rest:
+                if plotted_rest_this_epoch:
+                    continue
+                plotted_rest_this_epoch = True
+                # Group all other groups together for the original frame for thich pbt_epoch
+                if pbt_epoch != max_epoch:
+                    group = plot_df[(~plot_df.__pbt_main_branch__) & plot_df[group_by[0]] == group0]
+                else:
+                    plot_df_last = plot_df[plot_df["pbt_epoch"] == max_epoch]
+                    group = plot_df_last[plot_df["__group_rank__"].max() < max_rank]
+                group[group_stat] = "other"
+
             elif main_only:
                 logger.debug("Skipping non-main group: %s %s", pbt_epoch, stat_val)
                 continue
@@ -918,19 +1136,18 @@ def plot_run_data(
                         # Shade from previous group's min step to its max step (the region of the previous group)
                         prev_min: float = prev_group["current_step"].min()
                         prev_max: float = prev_group["current_step"].max()
-                        shade_background(ax, background_colors[bg_color_idx % 2], prev_min, prev_max)
+                        _shade_background(ax, background_colors[bg_color_idx % 2], prev_min, prev_max)
                         bg_color_idx += 1
                     else:
                         # Shade from left edge to first group's min step
                         curr_min = group["current_step"].min()
-                        shade_background(ax, background_colors[bg_color_idx % 2], ax.get_xlim()[0], curr_min)
+                        _shade_background(ax, background_colors[bg_color_idx % 2], ax.get_xlim()[0], curr_min)
                         bg_color_idx += 1
                 except Exception as e:
                     logger.error("Failed to shade background for epoch %s: %r", pbt_epoch, e)
                     remote_breakpoint()
-            if pbt_epoch % pbt_plot_interval == 0:
-                # print
-                ...
+            if isinstance(pbt_epoch, str):
+                remote_breakpoint()
 
             last_bg_epoch = pbt_epoch
             prev_group = group
@@ -953,7 +1170,7 @@ def plot_run_data(
         # Shade from last group's max step to right edge
         if "prev_group" in locals():
             prev_max = prev_group["current_step"].max()
-            shade_background(ax, background_colors[bg_color_idx % 2], prev_max, ax.get_xlim()[1])
+            _shade_background(ax, background_colors[bg_color_idx % 2], prev_max, ax.get_xlim()[1])
 
         # Add a colorbar for the continuous group_stat
         sm = cm.ScalarMappable(cmap=cmap, norm=norm)
@@ -970,10 +1187,9 @@ def plot_run_data(
 
         # Right tick labels are bleeding into the colormap if we use fancytoolbox legend
         # Move right y-axis tick labels further right
-        if log:
-            # labels overlap with ticks from colorbar
-            for label in ax2.get_yticklabels():
-                label.set_x(label.get_position()[0] + 0.04)
+        # labels overlap with ticks from colorbar
+        for label in ax2.get_yticklabels():
+            label.set_x(label.get_position()[0] + (0.04 if log else 0.025))
 
         # Align the limits of ax2 and the colorbar to be identical
 
@@ -1042,35 +1258,59 @@ def plot_run_data(
         if not isinstance(agent_type, str):
             agent_type = agent_type.item()
         ax.set_title(f"{env_type} - {agent_type.upper()} - {metrics[0]}")
+
+        if plot_errors and not main_only and not plot_reduced:
+            err_fig = plot_error_distribution(
+                plot_df,
+                metric_key,
+                group_stat,
+                plot_errors_type=plot_errors_type,
+                palette=color_map,
+                epoch_col=group_by[0],
+            )
+            if err_fig is not None:
+                error_figures[metric_key] = err_fig
+
     plt.tight_layout()
     if show:
         plt.show()
-    return fig
+    return (fig, error_figures)
 
 
 def plot_n_save(
     df: pd.DataFrame,
     metrics: Sequence[str | tuple[str, ...]],
+    plot_option: PlotOption,
     save_path: str | Path,
     experiment_keys: list[str] | None = None,
     group_stat: str | None = None,
-    group_by=("pbt_epoch", "pbt_group_key"),
+    group_by=DEFAULT_GROUP_BY,
     *,
     figsize: tuple[int, int] = (12, 8),
     log: bool | None = None,
     format="pdf",
+    close: bool = True,
+    plot_errors: bool | Literal["only"] | str | Sequence[str] = True,
+    plot_errors_type: Literal["box", "violin"] = "box",
     **kwargs,
 ) -> None:
     # for metric in metrics: [metric]
-    fig = plot_run_data(
+    plot_errors = kwargs.pop("plot_errors", plot_errors)
+    plot_errors_type = kwargs.pop("plot_errors_type", plot_errors_type)
+    if "plot_error" in kwargs:
+        plot_errors = kwargs.pop("plot_error")
+    fig, error_figures = plot_run_data(
         df,
         metrics,
         experiment_keys,
         figsize,
         group_stat,
         group_by,
+        plot_option=plot_option,
         log=log,
         show=False,
+        plot_errors=plot_errors,
+        plot_errors_type=plot_errors_type,
         **kwargs,
     )
     save_path = Path(save_path)
@@ -1082,6 +1322,18 @@ def plot_n_save(
             f"({save_path.suffix} != .{format}). Change the name or format,"
         )
     fig.savefig(save_path, format=format, bbox_inches="tight")
+    if error_figures:
+        for metric_name, error_fig in error_figures.items():
+            error_path = save_path.with_name(
+                f"{save_path.stem}_{metric_name.replace('/', '_')}_errors{save_path.suffix}"
+            )
+            error_fig.savefig(error_path, format=format, bbox_inches="tight")
+            if close:
+                plt.close(error_fig)
+            print(f"Saved error plot to {error_path}")
+            remote_breakpoint()
+    if close:
+        plt.close(fig)
     logger.info(f"Saved plot to {save_path}")  # noqa: G004
 
 
@@ -1093,17 +1345,18 @@ def _join_nested(m):
 
 def export_run_data(
     experiment_path: str | Path | pd.DataFrame,
+    plot_option: PlotOption,
     experiment_keys: list[str] | None = None,
     metrics: Sequence[str | tuple[str, ...]] = ("episode_reward_mean",),
     group_stat: str | None = None,
-    group_by: Sequence[str] = ("pbt_epoch", "pbt_group_key"),
+    group_by: Sequence[str] = DEFAULT_GROUP_BY,
     *,
     figsize: tuple[int, int] = (12, 8),
     log: bool | None = None,
     format="pdf",
     save_path: str | Path | None = None,
     **kwargs,
-):
+) -> Path:
     """
     TODO:
         - Some older runs do not have a pbt_group_key, and likely also no pbt_epoch
@@ -1138,8 +1391,11 @@ def export_run_data(
         combined_df = experiment_path
     logger.info("Plotting and saving...")
 
+    for metric in metrics:
+        stats = calculate_hyperparam_metrics(combined_df, metric)
     plot_n_save(
         combined_df,
+        plot_option=plot_option,
         metrics=metrics,
         save_path=out_path,
         experiment_keys=experiment_keys,
@@ -1166,15 +1422,16 @@ def _export_one(args, group_by, figsize, format, **kwargs):
         )
     except Exception as e:  # noqa: PERF203
         tb = traceback.format_exc()
-        logger.error(f"Failed to export run data for {experiment_path}: {e!r}", exc_info=True)  # noqa: G004
+        logger.error("Failed to export run data for %s: %r", experiment_path, e, exc_info=True)  # noqa: G004
         return e, tb, experiment_path
     else:
-        logger.info(f"Exported run data for {experiment_path} to {file_path}")  # noqa: G004
+        logger.info("Exported run data for %s to %s", experiment_path, file_path)  # noqa: G004
         return file_path
 
 
 def _export_multiple(
     experiment_path: Path,
+    plot_options: Sequence[PlotOption],
     metrics: Sequence[str | tuple[str, ...]],
     group_by: Sequence[str],
     figsize: tuple[int, int],
@@ -1218,6 +1475,8 @@ def _export_multiple(
                     large = True
 
     # Identify keys in kwargs whose values are Options
+    kwargs["group_by"] = group_by
+    del group_by
     option_keys = [k for k, v in kwargs.items() if isinstance(v, Repeat)]
     errors: list[tuple[Exception, str, Path]] = []
     if option_keys:
@@ -1238,63 +1497,66 @@ def _export_multiple(
                     "Skipping combination with main_only=True and plot_reduced=True as they are mutually exclusive."
                 )
                 continue
-            for metric in metrics:
-                metric_str = metrics if isinstance(metrics, str) else "-".join(map(_join_nested, metrics))
-                out_path = _create_image_output_path(
-                    experiment_path,
-                    metric,
-                    main_only=combo_kwargs.get("main_only", False),
-                    plot_reduced=combo_kwargs.get("plot_reduced", False),
-                    output_dir=experiment_path,
-                    format=format,
-                    large=large,
-                )
-                logger.info("Exporting metric '%s' with options %s to '%s' ...", metric_str, combo_kwargs, out_path)
-                try:
-                    file_path = export_run_data(
-                        combined_df,
-                        metrics=(metric,),
-                        group_by=group_by,
-                        figsize=figsize,
+            for option in plot_options:
+                for metric in metrics:
+                    if option.exclude_metric and metric in option.exclude_metric:
+                        continue
+                    metric_str = metrics if isinstance(metrics, str) else "-".join(map(_join_nested, metrics))
+                    out_path = _create_image_output_path(
+                        experiment_path,
+                        metric,
+                        plot_option=option,
+                        output_dir=experiment_path,
                         format=format,
-                        save_path=out_path,
-                        **combo_kwargs,
+                        large=large,
+                        group_by=combo_kwargs.get("group_by", kwargs.get("group_by", DEFAULT_GROUP_BY)),
                     )
-                except Exception as e:  # noqa: PERF203
-                    tb = traceback.format_exc()
-                    logger.error(f"Failed to export run data for {experiment_path}: {e!r}", exc_info=True)  # noqa: G004
-                    errors.append((e, tb, experiment_path))
-                else:
-                    logger.info(f"Exported run data for {experiment_path} to {file_path}")  # noqa: G004
-                    saved_files.append(file_path)
+                    logger.info("Exporting metric '%s' with options %s to '%s' ...", metric_str, combo_kwargs, out_path)
+                    try:
+                        file_path = export_run_data(
+                            combined_df,
+                            plot_option=option,
+                            metrics=(metric,),
+                            figsize=figsize,
+                            format=format,
+                            save_path=out_path,
+                            **combo_kwargs,
+                        )
+                    except Exception as e:  # noqa: PERF203
+                        tb = traceback.format_exc()
+                        logger.error(f"Failed to export run data for {experiment_path}: {e!r}", exc_info=True)  # noqa: G004
+                        errors.append((e, tb, experiment_path))
+                    else:
+                        logger.info(f"Exported run data for '{experiment_path}' to '{file_path}'")  # noqa: G004
+                        saved_files.append(file_path)
         return saved_files, errors
     kws = cast("dict[str, Any]", kwargs)
-    for metric in metrics:
-        out_path = _create_image_output_path(
-            experiment_path,
-            metric,
-            main_only=kws.get("main_only", False),
-            plot_reduced=kws.get("plot_reduced", False),
-            output_dir=experiment_path,
-            format=format,
-        )
-        try:
-            file_path = export_run_data(
-                combined_df,
-                metrics=(metric,),
-                group_by=group_by,
-                figsize=figsize,
+    for option in plot_options:
+        for metric in metrics:
+            out_path = _create_image_output_path(
+                experiment_path,
+                metric,
+                plot_option=option,
+                output_dir=experiment_path,
                 format=format,
-                save_path=out_path,
-                **kws,
             )
-        except Exception as e:  # noqa: PERF203
-            tb = traceback.format_exc()
-            logger.error(f"Failed to export run data for {experiment_path}: {e!r}", exc_info=True)  # noqa: G004
-            errors.append((e, tb, experiment_path))
-        else:
-            logger.info(f"Exported run data for {experiment_path} to {file_path}")  # noqa: G004
-            saved_files.append(file_path)
+            try:
+                file_path = export_run_data(
+                    combined_df,
+                    plot_option=option,
+                    metrics=(metric,),
+                    figsize=figsize,
+                    format=format,
+                    save_path=out_path,
+                    **kws,
+                )
+            except Exception as e:  # noqa: PERF203
+                tb = traceback.format_exc()
+                logger.error(f"Failed to export run data for {experiment_path}: {e!r}", exc_info=True)  # noqa: G004
+                errors.append((e, tb, experiment_path))
+            else:
+                logger.info(f"Exported run data for {experiment_path} to {file_path}")  # noqa: G004
+                saved_files.append(file_path)
     return saved_files, errors
 
 
@@ -1311,15 +1573,17 @@ OptionalRepeat: TypeAlias = Repeat[T] | T
 def _create_image_output_path(
     experiment_path: Path,
     metric: str | tuple[str, ...],
+    plot_option: PlotOption,
     *,
-    main_only: bool,
-    plot_reduced: bool,
     output_dir: Path,
     format: str,
     large: bool = False,
+    group_by: Sequence[str] = DEFAULT_GROUP_BY,
 ) -> Path:
     metric_str = "-".join(metric) if isinstance(metric, tuple) else metric
     suffixes = []
+    main_only = plot_option.main_only
+    plot_reduced = plot_option.plot_reduced
     if main_only:
         suffixes.append("main_only")
     # Main not compatible with reduced
@@ -1327,6 +1591,11 @@ def _create_image_output_path(
         suffixes.append("reduced")
     else:
         suffixes.append("all")
+    if group_by == DEFAULT_GROUP_BY:
+        group_by_str = ""
+    else:
+        group_by_str = "_".join(group_by) if not isinstance(group_by, str) else group_by
+        suffixes.append(f"_groupby_{group_by_str}")
     suffix_str = ("-" + "_".join(suffixes)) if suffixes else ""
     if large:
         suffix_str += "(large)"
@@ -1335,6 +1604,7 @@ def _create_image_output_path(
 
 def export_all_runs(
     output_dir: str | Path,
+    plot_options: Sequence[PlotOption],
     *,
     single: bool = False,
     test=TEST,
@@ -1345,10 +1615,10 @@ def export_all_runs(
     # need to be passed on
     format="pdf",
     figsize=(14, 10),
-    group_by=("pbt_epoch", "pbt_group_key"),
+    group_by=DEFAULT_GROUP_BY,
     metrics=("episode_reward_mean",),
-    main_only: OptionalRepeat[bool] = False,
-    plot_reduced: OptionalRepeat[bool] = True,
+    plot_errors: OptionalRepeat[bool] = True,
+    plot_errors_type: OptionalRepeat[Literal["box", "violin"]] = "box",
     **kwargs,
 ):
     """
@@ -1385,7 +1655,7 @@ def export_all_runs(
                 # possibly not yet sorted into groups
                 experiment_path = experiment_path.parent  # noqa: PLW2901
                 if not (experiment_path / ".validate_storage_marker").exists():
-                    logger.error(f"Missing .validate_storage_marker in {experiment_path}, skipping.")
+                    logger.error(f"Missing .validate_storage_marker in {experiment_path}, skipping.")  # noqa: G004
                     skip_dirs.add(experiment_path)
                     continue
                 if experiment_path in skip_dirs:
@@ -1395,35 +1665,41 @@ def export_all_runs(
                 # raise ValueError(f"Experiment path {experiment_path} is not a directory.")
             filtered_metrics = metrics.copy()
             # Prepare all combinations of main_only and plot_reduced if they are Repeat, else just use as is
-            main_only_options = main_only if isinstance(main_only, Repeat) else [main_only]
-            plot_reduced_options = plot_reduced if isinstance(plot_reduced, Repeat) else [plot_reduced]
+            main_only_options = [o.main_only for o in plot_options]
+            plot_reduced_options = [o.plot_reduced for o in plot_options]
             # If not redo, check for all combinations and remove metrics that already exist for all combinations
             if not redo:
                 metrics_to_remove = set()
                 for metric in metrics:
-                    for mo in main_only_options:
-                        for pr in plot_reduced_options:
-                            # Cannot use main only with plot reduced:
-                            if mo and pr:
-                                continue
-                            out_path = _create_image_output_path(
-                                experiment_path,
-                                metric,
-                                main_only=mo,
-                                plot_reduced=pr,
-                                output_dir=output_dir,
-                                format=format,
-                            )  # noqa: E501
-                            if out_path.exists():
-                                metrics_to_remove.add((metric, mo, pr))
-                                # Include in zip file paths even if skipping
-                                file_paths.append(out_path)
-                                logger.info(
-                                    f"Plot for metric {metric} (main_only={mo}, plot_reduced={pr}) already exists at {out_path}, skipping."  # noqa: G004
-                                )
+                    for option in plot_options:
+                        if option.exclude_metric and metric in option.exclude_metric:
+                            continue
+                        mo = option.main_only
+                        pr = option.plot_reduced
+                        if mo and pr:
+                            continue
+                        out_path = _create_image_output_path(
+                            experiment_path,
+                            metric,
+                            plot_option=option,
+                            output_dir=output_dir,
+                            format=format,
+                        )  # noqa: E501
+                        if out_path.exists():
+                            metrics_to_remove.add((metric, mo, pr))
+                            # Include in zip file paths even if skipping
+                            file_paths.append(out_path)
+                            logger.info(
+                                f"Plot for metric {metric} (main_only={mo}, plot_reduced={pr}) already exists at {out_path}, skipping."  # noqa: G004
+                            )
                 # Remove metrics for which all combinations exist
                 # If all combinations for a metric exist, remove it from filtered_metrics
                 for metric in metrics:
+                    if any(
+                        metric in options.exclude_metric for options in plot_options if options.exclude_metric
+                    ) and all(metric in options.exclude_metric for options in plot_options if options.exclude_metric):
+                        filtered_metrics.remove(metric)
+                        continue
                     all_exist = all(
                         (metric, mo, pr) in metrics_to_remove
                         for mo in main_only_options
@@ -1431,6 +1707,9 @@ def export_all_runs(
                     )  # fmt: skip
                     if all_exist and metric in filtered_metrics:
                         filtered_metrics.remove(metric)
+            base_kwargs = kwargs.copy()
+            base_kwargs.setdefault("plot_errors", plot_errors)
+            base_kwargs.setdefault("plot_errors_type", plot_errors_type)
             futures.append(
                 executor.submit(
                     _export_multiple,
@@ -1439,9 +1718,8 @@ def export_all_runs(
                     group_by=group_by,
                     figsize=figsize,
                     format=format,
-                    main_only=main_only,
-                    plot_reduced=plot_reduced,
-                    **kwargs,
+                    plot_options=plot_options,
+                    **base_kwargs,
                 )
             )
             if i >= test:
@@ -1549,6 +1827,13 @@ if __name__ == "__main__":
     )
     parser.add_argument("--redo", action="store_true", help="Redo existing plots.")
     parser.add_argument("--single", "-s", action="store_true", help="Export a single run instead of all runs.")
+    parser.add_argument("--no_error", "-nb", action="store_true", help="Disable error bars in plots.")
+    parser.add_argument(
+        "--error-plot-type",
+        choices=["box", "violin"],
+        default="box",
+        help="Error plot type (box or violin).",
+    )
     args = parser.parse_args()
 
     assert not args.all or not args.main_only, "Cannot use --all and --main_only together."
@@ -1557,14 +1842,20 @@ if __name__ == "__main__":
     else:
         args.metrics = list(map(literal_eval, args.metrics))
     excludes: set[str] = file_excludes.union(set(args.excludes))
+    plot_options = [
+        PlotOption(main_only=True, plot_reduced=False),
+        PlotOption(plot_reduced=False),
+        PlotOption(plot_reduced=True),
+        PlotOption(main_vs_second_best=True, plot_reduced=False),
+        PlotOption(main_vs_rest=True, plot_reduced=False),
+    ]
     export_all_runs(
         args.path,
         single=args.single,
-        main_only=Repeat([True, False]) if not args.main_only else True,
-        plot_reduced=Repeat([True, False]),
+        plot_options=plot_options,
         test=args.test,
         metrics=args.metrics,
-        group_by=("pbt_epoch", "pbt_group_key"),
+        group_by=Repeat([DEFAULT_GROUP_BY, ("pbt_group_key",)]),
         figsize=tuple(args.figsize),
         format=args.format,
         pbt_metric=args.pbt_metric,
@@ -1572,6 +1863,8 @@ if __name__ == "__main__":
         zip_plots=args.zip,
         excludes=excludes,
         redo=args.redo,
+        plot_errors=not args.no_error,
+        plot_errors_type=args.error_plot_type,
     )
 
 
