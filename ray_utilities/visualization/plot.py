@@ -281,6 +281,9 @@ def plot_run_data(
             df.config.seed,
             stat_columns,  # pyright: ignore[reportPossiblyUnboundVariable]
         ]
+    except KeyError as ke:
+        logger.exception("Failed to get group columns %s from df columns %s", group_cols, df.columns)
+        remote_breakpoint()
 
     # Combine into a DataFrame for groupby
     try:
@@ -730,6 +733,7 @@ def plot_run_data(
                     break
         if filtered_sorted:
             handles, labels = zip(*filtered_sorted, strict=True)
+        ax2.legend()
         if (legend2 := ax2.get_legend()) is not None:
             ax_2handles, ax2_labels = ax2.get_legend_handles_labels()
             legend2.remove()
@@ -737,7 +741,7 @@ def plot_run_data(
                 handles = (*handles, ax_2handles[0])
                 labels = (*labels, ax2_labels[0])
             else:
-                h2 = plt.Line2D([], [], color=GROUP_STAT_COLOR, label=group_stat)
+                h2 = plt.Line2D([], [], color=GROUP_STAT_COLOR, label="best")
                 handles = (h2, *handles)
                 labels = (group_stat, *labels)
         # Place the legend below the plot in a fancybox

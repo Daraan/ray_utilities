@@ -160,7 +160,14 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
     df = None
     if use_cache:
         if (offline_run / FULL_EXPERIMENT_FILE.with_suffix(".parquet")).exists():
-            df = pd.read_parquet(offline_run / FULL_EXPERIMENT_FILE.with_suffix(".parquet"))
+            try:
+                df = pd.read_parquet(offline_run / FULL_EXPERIMENT_FILE.with_suffix(".parquet"))
+            except Exception as e:
+                logger.error(  # noqa: G004
+                    f"Failed to read parquet file for run {offline_run}: {e!r}. "
+                    "This may be due to mixed data types in columns. "
+                    "Please delete the parquet file to regenerate it."
+                )
         if (offline_run / FULL_EXPERIMENT_FILE.with_suffix(".csv")).exists():
             df = pd.read_csv(
                 offline_run / FULL_EXPERIMENT_FILE.with_suffix(".csv"), header=[0, 1, 2, 3], index_col=[0, 1]
@@ -175,7 +182,7 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
         if result_file.name.endswith(".parent.json"):
             continue
         try:
-            df = pd.read_json(result_file, lines=True)
+            df = pd.read_json(result_file, lines=True, dtype={"trial_id": str})
             # Drop unwanted columns if they exist
             # Flatten nested dict columns and convert to MultiIndex
             # ptimes = df[("config", "fork_from", "parent_time")]
@@ -220,7 +227,6 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
                     assert df.trial_id.nunique().item() == 1
                     experiment_key = df.iloc[0].trial_id.item()
                 else:
-                    remote_breakpoint()
                     experiment_key = result_file.stem.split("-")[-1]
                     if "fork_from" in df.config:
                         # can be nan if it is a continued fork and we did not include this info
@@ -233,7 +239,8 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
                         )
                 # experiment_key = df.config.experiment_id.values.item()+"_"+df.config.trial_id.values.item()
                 if experiment_key in run_data:
-                    raise ValueError(f"Duplicate experiment_key {experiment_key} found in {offline_run}")  # noqa: B904
+                    remote_breakpoint()
+                    raise ValueError(f"Duplicate experiment_key {experiment_key} already present in {offline_run}")  # noqa: B904
         except Exception as e:  # noqa: PERF203
             num_errors += 1
             logger.error(f"Failed to load run data for {result_file}: {e!r}", exc_info=num_errors <= 2)  # noqa: G004
@@ -265,9 +272,9 @@ def save_run_data(offline_run: str | Path, data: pd.DataFrame, format: Literal["
         except Exception as e:
             if "Conversion failed for column run_id" in str(e):
                 # some might have an int there
-                assert offline_run.index.names == ["run_id", "training_iteration"]
-                offline_run.index = pd.MultiIndex.from_arrays(
-                    [offline_run.index.get_level_values(0).map(str), offline_run.index.get_level_values(1)]
+                assert data.index.names == ["run_id", "training_iteration"]
+                data.index = pd.MultiIndex.from_arrays(
+                    [data.index.get_level_values(0).map(str), data.index.get_level_values(1)]
                 )
                 data.to_parquet(offline_run, index=True)
             else:
@@ -582,6 +589,20 @@ def _connect_groups(last: pd.DataFrame, now: pd.DataFrame, stat_value: str | Non
         ],
         axis=0,
     )
+
+
+def check_metric_backport(df: pd.DataFrame, metric: str | tuple[str, ...]) -> str | tuple[str, ...]:
+    if metric == "episode_reward_mean" and "episode_reward_mean" not in df:
+        from ray_utilities.constants import EPISODE_RETURN_MEAN, EPISODE_RETURN_MEAN_EMA  # noqa: PLC0415
+
+        # introduced it later
+        if EPISODE_RETURN_MEAN_EMA in df.evaluation:
+            backport_metric = ("evaluation", EPISODE_RETURN_MEAN_EMA)
+        else:
+            backport_metric = ("evaluation", EPISODE_RETURN_MEAN)
+        logger.info("Metric 'episode_reward_mean' was not found in the data, changing metric to: %s", backport_metric)
+        return backport_metric
+    return metric
 
 
 def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]) -> tuple[pd.DataFrame, str] | None:
@@ -993,6 +1014,7 @@ def calculate_experiment_stats(
     else:
         path_base = out_path.stem
     for metric in metrics:
+        metric = check_metric_backport(combined_df, metric)  # noqa: PLW2901
         metric_str = _join_nested(metric)
         if metric_str not in path_base and _join_nested(metric, on="-") not in path_base:
             metric_str = "-" + metric_str

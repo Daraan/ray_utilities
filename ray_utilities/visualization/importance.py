@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import logging
 from dataclasses import dataclass, field
 from itertools import chain
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Collection, Iterable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -12,6 +13,7 @@ from typing_extensions import Literal
 
 from ray_utilities.config.parser.default_argument_parser import DefaultArgumentParser
 from ray_utilities.testing_utils import remote_breakpoint
+from ray_utilities.misc import round_floats
 
 try:  # pragma: no cover - compatibility shim for older NumPy
     from numpy import trapezoid as _np_trapezoid
@@ -47,6 +49,8 @@ MetricKey = str | tuple[Any, ...]
 
 
 logger = logging.getLogger(__name__)
+
+_REPORT_INTERVAL = 32
 
 
 @dataclass
@@ -479,6 +483,8 @@ def get_optuna_study(
         study_name += f"_env={env}"
     if step is not None:
         study_name += f"_step={step}"
+    else:
+        study_name += f"_global"
     study = optuna.create_study(
         study_name=study_name, storage=storage, load_if_exists=load_if_exists, direction="maximize"
     )
@@ -708,6 +714,8 @@ def optuna_create_studies(
                                 if params[key] == "NOT_FOUND":
                                     params[key] = getattr(DefaultArgumentParser, key)
                         params = {k: v for k, v in params.items() if not isinstance(v, str) or v != "NOT_FOUND"}
+                    # Clean floating point errors from params
+                    params = round_floats(params)
                     # Clean placeholders
                     if metric not in final_row and metric == "episode_reward_mean":
                         from ray_utilities.constants import (  # noqa: PLC0415
@@ -851,17 +859,21 @@ def optuna_create_studies(
                         if study_to_add is not None:
                             trials_to_add[study_to_add].append(trial)
 
-                    if i % 10 == 0:
+                    if i % _REPORT_INTERVAL == 0:
                         if per_pbt_epoch:
                             logger.debug(
-                                "Adding trial for run %s pbt_epoch %s with metric %s - and 10 more trials",
+                                "Adding trial for run %s pbt_epoch %s with metric %s - and %d more trials",
                                 run_id,
                                 group_key[0],
                                 metric_result,
+                                _REPORT_INTERVAL,
                             )
                         else:
                             logger.debug(
-                                "Adding trial for run %s with metric %s - and 10 more trials", run_id, metric_result
+                                "Adding trial for run %s with metric %s - and %d more trials",
+                                run_id,
+                                metric_result,
+                                _REPORT_INTERVAL,
                             )
 
             except Exception as e:
@@ -885,27 +897,111 @@ PARAMS_TO_CHECK = {
 }
 
 
+def _fix_distributions(study: optuna.Study, params: Collection[str]):
+    completed_trials = study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))
+    distributions: dict[str, set[optuna.distributions.BaseDistribution]] = {}
+    for trial in completed_trials:
+        trial_distributions = trial.distributions
+        for param in params:
+            if param in trial_distributions:
+                continue
+            ...  # Need all values
+            raise KeyError(f"Parameter {param} not found in trial distributions")
+        for name, distribution in trial_distributions.items():
+            if name not in distributions:
+                distributions[name] = set()
+            distributions[name].add(distribution)
+    for name, dists in distributions.items():
+        # merge them
+        if len(dists) <= 1:
+            continue
+        logger.info("Parameter %s has multiple distributions: %s", name, dists)
+        # Merge
+        choices = set()
+        for dist in dists:
+            if isinstance(dist, optuna.distributions.CategoricalDistribution):
+                choices.update(dist.choices)
+            elif isinstance(dist, optuna.distributions.FloatDistribution):
+                choices.update([dist.low, dist.high])
+            elif isinstance(dist, optuna.distributions.IntDistribution):
+                choices.update(range(dist.low, dist.high + 1))
+            else:
+                logger.warning("Cannot merge distribution of type %s for parameter %s", type(dist), name)
+        if all(isinstance(c, (int, float)) for c in choices):
+            if all(isinstance(c, int) for c in choices):
+                new_dist = optuna.distributions.IntDistribution(low=min(choices), high=max(choices))
+            else:
+                new_dist = optuna.distributions.FloatDistribution(low=min(choices), high=max(choices))
+        else:
+            if None in choices:
+                choices.discard(None)
+                choices = (*sorted(choices), None)
+                new_dist = optuna.distributions.CategoricalDistribution(choices=choices)
+            else:
+                new_dist = optuna.distributions.CategoricalDistribution(choices=tuple(sorted(choices)))
+        logger.debug("Setting merged distribution for parameter %s: %s", name, new_dist)
+        # Now set it for all trials
+        for trial in completed_trials:
+            trial.distributions[name] = new_dist
+    return completed_trials
+
+
 def optuna_analyze_studies(
     studies: dict[Any, optuna.Study],
     output_path: str | Path,
     params: list[str] | None = None,
 ) -> None:
+    from optuna.importance import (
+        MeanDecreaseImpurityImportanceEvaluator,
+        PedAnovaImportanceEvaluator,
+        FanovaImportanceEvaluator,
+    )
+
+    evaluators = {
+        "MeanDecreaseImpurity": MeanDecreaseImpurityImportanceEvaluator(),
+        "PedAnovaLocal": PedAnovaImportanceEvaluator(evaluate_on_local=True),
+        "Fanova(default)": FanovaImportanceEvaluator(),  # default
+        "MeanDecreaseImpurity32": MeanDecreaseImpurityImportanceEvaluator(n_trees=32, max_depth=32),
+        "PedAnovaGlobal": PedAnovaImportanceEvaluator(evaluate_on_local=False),
+        "Fanova32": FanovaImportanceEvaluator(n_trees=32, max_depth=32),
+    }
+
     for key, study in studies.items():
         logger.info("Analyzing study for key: %s", key)
+        completed_trials = None
         try:
-            importances = optuna.importance.get_param_importances(study, params=params)
-            # logger.info("Top %d important hyperparameters for study %s:", top_n, key)
-            try:
-                output_path = Path(output_path)
-                if output_path.is_dir():
-                    output_path = output_path / f"hyperparameter_importance-{key}.csv"
-                pd.DataFrame.from_dict(importances, orient="index").to_csv(output_path, index=True)
-                logger.info("Saved importances to %s", output_path)
-            except Exception:
-                logger.exception("Could likely not export importances to %s", output_path)
-            sorted_importances = sorted(importances.items(), key=lambda item: item[1], reverse=True)
-            for param, importance in sorted_importances:
-                logger.info("  %s: %.4f", param, importance)
+            for evaluator_name, evaluator in evaluators.items():
+                try:
+                    importances = optuna.importance.get_param_importances(study, evaluator=evaluator, params=params)
+                except ValueError as ve:
+                    if "dynamic search" in str(ve):
+                        study = deepcopy(study)  # noqa: PLW2901
+                        completed_trials = _fix_distributions(study, params or PARAMS_TO_CHECK)
+                        study.get_trials = lambda *args, **kwargs: completed_trials  # type: ignore[assignment]
+                        importances = optuna.importance.get_param_importances(study, evaluator=evaluator, params=params)
+                    else:
+                        raise
+                else:
+                    completed_trials = study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))
+                # logger.info("Top %d important hyperparameters for study %s:", top_n, key)
+                try:
+                    save_path = Path(output_path)
+                    if save_path.is_dir():
+                        save_path = save_path / f"hyperparameter_importance-{study.study_name}_{evaluator_name}.csv"
+                    else:
+                        raise ValueError("output_path must be a directory to save importances")
+                    importances["_number_of_trials"] = len(completed_trials)
+                    importances["_evaluator"] = evaluator_name  # pyright: ignore[reportArgumentType]
+                    pd.DataFrame.from_dict(importances, orient="index").to_csv(save_path, index=True)
+                    logger.info("Saved importances to %s", save_path)
+                except Exception:
+                    logger.exception("Could likely not export importances to %s", output_path)
+                importances.pop("_evaluator", None)
+                sorted_importances = sorted(importances.items(), key=lambda item: item[1], reverse=True)
+                report_str = f"Hyperparameter importances for study {study.study_name} ({evaluator_name}) with {len(completed_trials)} trials:\n"
+                for param, importance in sorted_importances:
+                    report_str += f"  {param}: {importance:.5f}\n"
+                logger.info("%s", report_str)
         except Exception as e:
             logger.exception("Failed to analyze study for key %s: %r", key, e)
 
@@ -928,6 +1024,7 @@ if __name__ == "__main__":
     logger = nice_logger(logger, logging.DEBUG)
     distributions = load_distributions_from_json(write_distributions_to_json(default_distributions), as_optuna=True)
     distributions.pop("test", None)
+    distributions.pop("minibatch_scale", None)
     if "vf_clip_param" in distributions and 0.0 not in distributions["vf_clip_param"].choices:
         # We changed this distribution
         distributions["vf_clip_param"].choices = (0.0, *distributions["vf_clip_param"].choices)
@@ -955,7 +1052,7 @@ if __name__ == "__main__":
     if "DEBUG" in os.environ:
         import sys
 
-        sys.exit(0)
+    sys.exit(0)
     for env in ["CartPole-v1", "Walker2d-v5", "LunarLander-v3"]:
         paths = [
             f"outputs/shared/experiments/Default-mlp-{env}",
