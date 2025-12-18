@@ -23,6 +23,23 @@ from typing_extensions import Final, Literal, Sentinel, TypeVarTuple, Unpack
 from ray_utilities.testing_utils import remote_breakpoint
 from ray_utilities.visualization._common import Placeholder, PlotOption
 
+try:
+    from ruamel.yaml import YAML
+
+    yaml = YAML(typ="rt")
+    yaml.preserve_quotes = True
+except ModuleNotFoundError:
+    import yaml
+
+    print(
+        "ruamel.yaml not found, falling back to PyYAML which may not preserve formatting. Please install ruamel.yaml."
+    )
+    yaml_load = yaml.safe_load
+    yaml_dump = yaml.safe_dump
+else:
+    yaml_load = yaml.load
+    yaml_dump = yaml.dump
+
 # from ray_utilities.constants import EPISODE_RETURN_MEAN_EMA
 # from ray_utilities.testing_utils import remote_breakpoint
 
@@ -34,6 +51,7 @@ PATHS = [Path("outputs/experiments/shared"), Path("outputs/experiments/shared_ba
 DROP_COLUMNS = [
     "hostname",
     "done",
+    "timers",
     ("config", "cli_args", "evaluate_every_n_steps_before_step"),
     ("config", "cli_args", "offline_loggers"),
     ("config", "cli_args", "fcnet_hiddens"),
@@ -61,7 +79,7 @@ DROP_COLUMNS = [
 
 DEFAULT_GROUP_BY = ("pbt_epoch", "pbt_group_key")
 
-LOG_SETTINGS = {"lr", "batch_size"}
+LOG_SETTINGS = {"lr", "batch_size", "minibatch_size", "entropy_coeff", "vf_clip_param", "grad_clip", "gamma"}
 
 MAX_ENV_LOWER_BOUND = {"LunarLander-v3": -750}
 """Lower bound clip for plots"""
@@ -142,7 +160,6 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
     df = None
     if use_cache:
         if (offline_run / FULL_EXPERIMENT_FILE.with_suffix(".parquet")).exists():
-            logger.info
             df = pd.read_parquet(offline_run / FULL_EXPERIMENT_FILE.with_suffix(".parquet"))
         if (offline_run / FULL_EXPERIMENT_FILE.with_suffix(".csv")).exists():
             df = pd.read_csv(
@@ -179,6 +196,14 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
             multiindex = pd.MultiIndex.from_tuples(tuples)
             df.columns = multiindex
             df = df.sort_index(axis=1).drop(columns=DROP_COLUMNS, errors="ignore").sort_index(axis=1)
+            # Drop levels that are only Placeholder
+            levels_to_drop = [
+                level for level in range(df.columns.nlevels) if all(df.columns.get_level_values(level) == Placeholder)
+            ]
+            if levels_to_drop:
+                df.columns = df.columns.droplevel(level=levels_to_drop)
+            if "timers" in df:
+                remote_breakpoint()
             # df.columns = pd.MultiIndex.from_tuples(cast("list[tuple[str, ...]]", df.columns))
             try:
                 experiment_key = df.config.experiment_key.iloc[-1]
@@ -235,7 +260,18 @@ def save_run_data(offline_run: str | Path, data: pd.DataFrame, format: Literal["
     elif format == "csv" and offline_run.suffix != ".csv":
         offline_run = offline_run.with_suffix(".csv")
     if format == "parquet":
-        data.to_parquet(offline_run, index=True)
+        try:
+            data.to_parquet(offline_run, index=True)
+        except Exception as e:
+            if "Conversion failed for column run_id" in str(e):
+                # some might have an int there
+                assert offline_run.index.names == ["run_id", "training_iteration"]
+                offline_run.index = pd.MultiIndex.from_arrays(
+                    [offline_run.index.get_level_values(0).map(str), offline_run.index.get_level_values(1)]
+                )
+                data.to_parquet(offline_run, index=True)
+            else:
+                raise
     elif format == "csv":
         data.to_csv(offline_run, index=True)
 
@@ -245,7 +281,7 @@ __logged_base62_value_error = False
 
 def __base62_sort_key(s: str) -> tuple[int, int]:
     if not isinstance(s, str):
-        return s
+        return s, 0
     if s.endswith("Z") or "S" not in s:
         secondary = 0
         try:
@@ -301,6 +337,7 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
     if len(dfs) == 0:
         raise ValueError("No DataFrames to combine.")
     try:
+        # If we tracked timers at some points the df levels might not match
         combined_df = pd.concat(dfs, keys=dataframes.keys(), names=["run_id", "training_iteration"]).sort_index(
             key=_base62_sort_key
         )
@@ -350,7 +387,9 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
     if continued_runs.empty:
         # likely because failed before first perturb
         combined_df.loc[:, ifill("config", "__pbt_main_branch__")] = False
-        return combined_df
+        combined_df.loc[:, ifill("config", "pbt_epoch")] = 0
+        # If it is a baseline / aborted early still add pbt epoch = 0
+        return combined_df.sort_index(axis=1).copy()
     # if ("config", "__pbt_main_branch__") in combined_df and not combined_df[("config", "__pbt_main_branch__")].isna().any():
     #    # already present
     #    return combined_df.sort_index(axis=1)
@@ -412,7 +451,11 @@ def _get_group_stat(df: pd.DataFrame | pd.Series, group_key: str | Hashable):
         tune = first_row.config.experiment_group.values.item().split(":")[-1]
         if tune == "batch_size" and ("batch_size" not in df.config and "train_batch_size_per_learner" not in df.config):
             # experiment group can be helpful BUT batch_size was added to some that did NOT tune batch_size
-            candidates = set(df.config.columns.get_level_values(0)) & {
+            if isinstance(df.config, pd.Series):
+                columns = set(df.config.index.get_level_values(0))
+            else:
+                columns = set(df.config.columns.get_level_values(0))
+            candidates = columns & {
                 "lr",
                 "minibatch_size",
                 "num_envs_per_env_runner",
@@ -541,7 +584,7 @@ def _connect_groups(last: pd.DataFrame, now: pd.DataFrame, stat_value: str | Non
     )
 
 
-def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]) -> tuple[pd.DataFrame, str]:
+def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]) -> tuple[pd.DataFrame, str] | None:
     """
     Calculate additional metrics for the DataFrame.
     This calculates:
@@ -557,21 +600,41 @@ def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]
 
     metric_key = metric if isinstance(metric, str) else "-".join(metric)
     main_branch_data = df[df[ifill("config", "__pbt_main_branch__")]]
-    epoch_grouper = main_branch_data.groupby([ifill("config", "pbt_epoch")])[
-        [ifill(*((metric,) if isinstance(metric, str) else metric)), ifill("current_step")]
-    ]
+    try:
+        epoch_grouper = main_branch_data.groupby([ifill("config", "pbt_epoch")])[
+            [ifill(*((metric,) if isinstance(metric, str) else metric)), ifill("current_step")]
+        ]
+    except KeyError as ke:
+        if main_branch_data.empty:
+            logger.error("No main branch data found for calculating hyperparam metrics.")
+            return None
+        remote_breakpoint()
+        raise
     # Does not contain last epoch as there is no main branch
     epoch_end_steps = epoch_grouper.last().current_step.copy()
     epoch_end_steps.index.names = ["pbt_epoch"]
     epoch_end_steps.columns = ["current_step"]
     # Find the ending position. This might be wrong as some trials have been trained for longer accidentially => use harded max step, but it should align with the last_step + perturb interval
-    epoch_end_steps.loc[epoch_end_steps.index.max() + 1] = int(
-        min(
-            df.current_step.max().item(),
-            (epoch_end_steps.loc[epoch_end_steps.index.max()] + epoch_end_steps.diff().iloc[-1]).iloc[-1],
-            1_179_648,
+    max_epoch = epoch_end_steps.index.max()
+    try:
+        if pd.isna(max_epoch) and epoch_end_steps.empty:
+            max_epoch = -1
+        epoch_end_steps.loc[max_epoch + 1] = int(
+            min(
+                df.current_step.max().item(),
+                (epoch_end_steps.loc[max_epoch] + epoch_end_steps.diff().iloc[-1]).iloc[-1],
+                1_179_648,
+            )
         )
-    )
+    except KeyError:
+        if max_epoch != -1:
+            remote_breakpoint()
+        epoch_end_steps.loc[max_epoch + 1] = int(
+            min(
+                df.current_step.max().item(),
+                1_179_648,
+            )
+        )
     epoch_end_steps.drop_duplicates(keep="first", inplace=True)
     main_branch_data = main_branch_data.set_index(ifill("current_step"), append=True)
     main_branch_data.index.names = [*main_branch_data.index.names[:-1], "current_step"]
@@ -666,8 +729,10 @@ def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]
     try:
         B.index = A.index
     except:
-        # This wont work if some runs are dropped, need a better matcher
-        remote_breakpoint()
+        if epoch_end_steps.max().item() > 500_000:
+            # This wont work if some runs are dropped, need a better matcher
+            remote_breakpoint()
+        # ignore this error for short aborted runs, kendall will be NaN then
     AB = pd.concat([A, B], axis=1, names=[metric_key, "rank2"])
     AB.columns = [metric_key, "rank2"]
     # tau ~0 no consistent ordering, ~1 consistent ordering
@@ -802,12 +867,14 @@ def _drop_duplicate_steps(df: pd.DataFrame) -> pd.DataFrame:
         try:
             perturbation_interval = int(
                 no_duplicates.loc[loc_alt].current_step
-                - no_duplicates.loc[loc_alt].get(
+                - no_duplicates.loc[loc_alt]
+                .get(
                     "batch_size",
                     no_duplicates.loc[loc_alt].config.get(
                         "train_batch_size_per_learner", no_duplicates.loc[loc_alt].config.get("batch_size")
                     ),
                 )
+                .iloc[0]
             )
         except TypeError:
             perturbation_interval = int(
@@ -866,6 +933,11 @@ def plot_n_save(
     # cyclic import
     from ray_utilities.visualization.plot import plot_run_data  # noqa: PLC0415
 
+    if (plot_option.main_only or plot_option.main_vs_rest or plot_option.main_vs_second_best) and not df.config[
+        "__pbt_main_branch__"
+    ].any().item():
+        logger.warning("Cannot plot main branch only data as no main branch found in DataFrame.")
+        return
     fig, error_figures = plot_run_data(
         df,
         metrics,
@@ -880,6 +952,8 @@ def plot_n_save(
         plot_errors_type=plot_errors_type,
         **kwargs,
     )
+    if fig is None:  # pyright: ignore[reportUnnecessaryComparison]
+        return
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     if save_path.exists() and not save_path.is_dir():
@@ -924,7 +998,10 @@ def calculate_experiment_stats(
             metric_str = "-" + metric_str
         else:
             metric_str = ""
-        stats, stats_reduced = calculate_hyperparam_metrics(combined_df, metric)
+        calculated_stats = calculate_hyperparam_metrics(combined_df, metric)
+        if calculated_stats is None:
+            continue
+        stats, stats_reduced = calculated_stats
 
         # 1. Save reduced stats
         stats_reduced_path = out_path.with_name(f"{path_base}{metric_str}-hyperparam_stats_reduced.txt")
@@ -980,17 +1057,25 @@ def get_and_check_group_stat(
         df = df.assign(batch_size=df.config.train_batch_size_per_learner)
     elif group_stat not in df:
         try:
-            df = df.assign(group_stat=df.config[group_stat])
+            df = df.assign(**{group_stat: df.config[group_stat]})
         except TypeError:
-            df = df.assign(group_stat=df.config[group_stat].values)
+            df = df.assign(**{group_stat: df.config[group_stat].values})
         except KeyError:
             remote_breakpoint()
+            from_cli_args = df.config.cli_args[group_stat]
+            if from_cli_args.empty or (from_cli_args.iloc[0] == from_cli_args).all():
+                # wrong group_stat key
+                raise
+            df = df.assign(**{group_stat: df.config.cli_args[group_stat].values})
             raise
     if group_stat not in df.config and group_stat in df:
         stat_column = df[group_stat].to_frame() if isinstance(df[group_stat], pd.Series) else df[group_stat]
         stat_column.columns = pd.MultiIndex.from_tuples([ifill("config", group_stat, n=df.columns.nlevels)])
         df = pd.concat([df, stat_column], axis=1)
         # df.loc[:, ifill("config", group_stat)] = df[group_stat]
+    if (df[group_stat] == df[group_stat].iloc[0]).all().item():
+        logger.warning("Group stat '%s' has the same value for all runs.", group_stat)
+        # mabye an old run with repeated runs per metric
     return group_stat, df.sort_index(axis=1)
 
 
@@ -1026,8 +1111,14 @@ def export_run_data(
         if not isinstance(data, pd.DataFrame):
             logger.debug("Combining dataframes...")
             combined_df = combine_df(data)
+            save_run_data(experiment_path, combined_df)
         else:
             combined_df = data
+            if "pbt_epoch" not in combined_df.config and use_cache:
+                logger.warning("Loaded old cache but pbt_epoch not in data, reloading without cache.")
+                data = load_run_data(experiment_path, use_cache=False)
+                combined_df = combine_df(data)
+                save_run_data(experiment_path, combined_df)
         # Mark large experiments:
         large = ""
         if group_stat is None:
@@ -1048,7 +1139,10 @@ def export_run_data(
     logger.info("Plotting and saving...")
 
     if calc_stats:
-        calculate_experiment_stats(combined_df=combined_df, metrics=metrics, out_path=out_path, format=format)
+        try:
+            calculate_experiment_stats(combined_df=combined_df, metrics=metrics, out_path=out_path, format=format)
+        except Exception as e:  # noqa: PERF203
+            logger.exception("Failed to calculate experiment stats: %r", e, exc_info=True)  # noqa: G004
     plot_n_save(
         combined_df,
         plot_option=plot_option,
@@ -1086,8 +1180,8 @@ def _export_one(args, group_by, figsize, format, **kwargs):
 
 
 def clean_placeholder_keys(
-    d: dict[str | tuple[str, ...], dict], *, flatten: bool = False
-) -> dict[str | tuple[str, ...], dict]:
+    d: dict[str | tuple[str, ...], dict | Any], *, flatten: bool = False
+) -> dict[str | tuple[str, ...], dict | Any]:
     def clean_key(key):
         if isinstance(key, tuple):
             # Remove Placeholder values
@@ -1186,7 +1280,8 @@ def _export_multiple(
                 continue
             for metric in metrics:
                 for option in plot_options:
-                    if option.exclude_metric and metric in option.exclude_metric:
+                    groupby_option = combo_kwargs.get("group_by", kwargs.get("group_by", DEFAULT_GROUP_BY))
+                    if option.exclude(metric, groupby_option):
                         continue
                     metric_str = metrics if isinstance(metrics, str) else "-".join(map(_join_nested, metrics))
                     out_path = _create_image_output_path(
@@ -1196,7 +1291,7 @@ def _export_multiple(
                         output_dir=experiment_path,
                         format=format,
                         large=large,
-                        group_by=combo_kwargs.get("group_by", kwargs.get("group_by", DEFAULT_GROUP_BY)),
+                        group_by=groupby_option,
                     )
                     logger.debug(
                         "Exporting metric '%s' with options %s to '%s' ...", metric_str, combo_kwargs, out_path
@@ -1224,12 +1319,15 @@ def _export_multiple(
     kws = cast("dict[str, Any]", kwargs)
     for option in plot_options:
         for metric in metrics:
+            if option.exclude(metric, kws.get("group_by", DEFAULT_GROUP_BY)):
+                continue
             out_path = _create_image_output_path(
                 experiment_path,
                 metric,
                 plot_option=option,
                 output_dir=experiment_path,
                 format=format,
+                group_by=kws.get("group_by", DEFAULT_GROUP_BY),
             )
             try:
                 file_path = export_run_data(
@@ -1269,9 +1367,10 @@ def _create_image_output_path(
     output_dir: Path,
     format: str,
     large: bool = False,
-    group_by: Sequence[str] = DEFAULT_GROUP_BY,
+    group_by: Sequence[str],
 ) -> Path:
     metric_str = "-".join(metric) if isinstance(metric, tuple) else metric
+    subdir = metric_str
     suffixes = []
     if plot_option.main_only:
         suffixes.append("main_only")
@@ -1292,7 +1391,9 @@ def _create_image_output_path(
     suffix_str = ("-" + "_".join(suffixes)) if suffixes else ""
     if large:
         suffix_str += "(large)"
-    return output_dir / "plots" / f"{experiment_path.name}_{metric_str}{suffix_str}.{format}"
+    file_path = output_dir / "plots" / subdir / f"{experiment_path.name}_{metric_str}{suffix_str}.{format}"
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    return file_path
 
 
 def export_all_runs(
@@ -1342,7 +1443,8 @@ def export_all_runs(
         skip_dirs = set()
         for experiment_path in output_dir.glob("*/*/*") if not single else [output_dir]:
             if any(excl in str(experiment_path) for excl in excludes) or "cometml" in str(experiment_path):
-                logger.info(f"Excluding experiment path {experiment_path} due to exclude patterns.")  # noqa: G004
+                if "cometml" not in str(experiment_path):
+                    logger.info(f"Excluding experiment path {experiment_path} due to exclude patterns.")  # noqa: G004
                 continue
             if not experiment_path.is_dir():
                 # possibly not yet sorted into groups
@@ -1365,7 +1467,7 @@ def export_all_runs(
                 metrics_to_remove = set()
                 for metric in metrics:
                     for option in plot_options:
-                        if option.exclude_metric and metric in option.exclude_metric:
+                        if option.exclude(metric, group_by):
                             continue
                         mo = option.main_only
                         pr = option.plot_reduced
@@ -1377,6 +1479,7 @@ def export_all_runs(
                             plot_option=option,
                             output_dir=output_dir,
                             format=format,
+                            group_by=group_by,
                         )  # noqa: E501
                         if out_path.exists():
                             metrics_to_remove.add((metric, mo, pr))
@@ -1389,8 +1492,8 @@ def export_all_runs(
                 # If all combinations for a metric exist, remove it from filtered_metrics
                 for metric in metrics:
                     if any(
-                        metric in options.exclude_metric for options in plot_options if options.exclude_metric
-                    ) and all(metric in options.exclude_metric for options in plot_options if options.exclude_metric):
+                        options.exclude(metric, group_by) for options in plot_options if options.exclude_metric
+                    ) and all(options.exclude(metric, group_by) for options in plot_options if options.exclude_metric):
                         filtered_metrics.remove(metric)
                         continue
                     all_exist = all(
@@ -1476,6 +1579,29 @@ def export_all_runs(
     return saved_files
 
 
+def get_running_experiments(experiment_dir: str | Path = "./experiments"):
+    experiment_dir = Path(experiment_dir)
+    if not experiment_dir.exists() or not experiment_dir.is_dir():
+        raise ValueError(f"Experiment directory {experiment_dir} does not exist or is not a directory.")
+    submission_files = list(experiment_dir.glob("submission*.yaml"))
+    running_experiments = set()
+    for submission_file in submission_files:
+        with open(submission_file, "r") as f:
+            submission_data = yaml_load(f)
+        if not isinstance(submission_data, dict):
+            logger.warning(f"Submission file {submission_file} is not a dict, skipping.")  # noqa: G004
+            continue
+        for group in submission_data.values():
+            if not isinstance(group, dict) or "run_ids" not in group:
+                continue
+            for _run_key, runs in group["run_ids"].items():
+                for run_id, run_info in runs.items():
+                    if isinstance(run_info, dict) and run_info.get("status") == "RUNNING":
+                        running_experiments.add(run_id)
+    # Clean some wrong keys
+    return {k for k in running_experiments if "-v" not in k and "_restore" not in k}
+
+
 if __name__ == "__main__":
     # cd /path/to/parent
     # find dir1 dir2 -type f -iname '*.pdf' -printf '%P\n' | sed 's|^[^/]*/||' | zip -@ all_pdfs.zip
@@ -1492,6 +1618,7 @@ if __name__ == "__main__":
     except FileNotFoundError:
         logger.info("No plot excludes found.")
         file_excludes = set()
+    running_experiments = get_running_experiments(Path(__file__).parent.parent.parent / "experiments")
 
     logger = nice_logger(logger, logging.INFO)
     # logging.info("Set handle")  # noqa: LOG015
@@ -1531,16 +1658,18 @@ if __name__ == "__main__":
 
     assert not args.all or not args.main_only, "Cannot use --all and --main_only together."
     if args.metrics is None:
-        args.metrics = ["episode_reward_mean", ("training", "episode_return_mean")]  # , ("learners", "total_loss")]
+        args.metrics = [
+            "episode_reward_mean",
+        ]  # ("training", "episode_return_mean")]  # , ("learners", "total_loss")]  # XXX
     else:
         args.metrics = list(map(literal_eval, args.metrics))
-    excludes: set[str] = file_excludes.union(set(args.excludes))
+    excludes: set[str] = file_excludes.union(set(args.excludes)).union(running_experiments)
     plot_options = [
-        # PlotOption(plot_reduced=False),  # plot all
+        PlotOption(plot_reduced=False),  # plot all
         PlotOption(plot_reduced=True),
-        # PlotOption(main_only=True, plot_reduced=False),
-        # PlotOption(main_vs_second_best=True, plot_reduced=False),
-        # PlotOption(main_vs_rest=True, plot_reduced=False),
+        PlotOption(main_only=True, plot_reduced=False),
+        PlotOption(main_vs_second_best=True, plot_reduced=False),
+        PlotOption(main_vs_rest=True, plot_reduced=False),
     ]
     export_all_runs(
         args.path,
@@ -1548,7 +1677,7 @@ if __name__ == "__main__":
         plot_options=plot_options,
         test=args.test,
         metrics=args.metrics,
-        group_by=("pbt_group_key",),  # Repeat([DEFAULT_GROUP_BY, ("pbt_group_key",)]),
+        group_by=DEFAULT_GROUP_BY,
         figsize=tuple(args.figsize),
         format=args.format,
         pbt_metric=args.pbt_metric,

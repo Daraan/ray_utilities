@@ -199,13 +199,13 @@ def plot_run_data(
         group_by: Tuple of column names (as strings, not tuples) to group by under 'config'.
         log: Whether to use logarithmic scale for the group_stat color mapping. If None, checks LOG_SETTINGS.
         show: Whether to display the plot immediately.
-        main_only: Whether to plot only the main branch runs.
-        plot_reduced: When True, to reduce clutter will plot curves of the best, second best, and worst of each group_stat,
-            the old value +/- 1 level and the new value +/- 1 level and the second best.
+        plot_option:
+            main_only: Whether to plot only the main branch runs.
+            plot_reduced: When True, to reduce clutter will plot curves of the best,
+                second best, and worst of each group_stat,
+                the old value +/- 1 level and the new value +/- 1 level and the second best.
         plot_errors: Plot a second graphic with a boxplot or violin plot of the error bars for each group.
-    """
-    main_only = plot_option.main_only
-    plot_reduced = plot_option.plot_reduced
+    """  # noqa: W291
     if not isinstance(plot_errors, bool) and plot_errors != "only":
         plot_errors = plot_errors == group_by and plot_errors
         if not plot_errors:
@@ -305,6 +305,9 @@ def plot_run_data(
     # df.loc[cont_mask, ("config", "__pbt_main_branch__")] = True
 
     for i, metric in enumerate(metrics):
+        if plot_option.exclude(metric, group_by):
+            logger.warning("Skipping metric %s as it is excluded by plot options.", metric)
+            continue
         if final_metric_was_none:
             pbt_metric = metric
         if (metric == "episode_reward_mean" or pbt_metric == "episode_reward_mean") and "episode_reward_mean" not in df:
@@ -424,7 +427,7 @@ def plot_run_data(
 
         # TODO: Does likely not work for uneven lengths of runs, i.e. when we tune batch_size
         # then need to check for current_step max
-        if plot_reduced and not main_only:
+        if plot_option.plot_reduced and not plot_option.main_only:
             max_stat = plot_df[group_stat].max()
             min_stat = plot_df[group_stat].min()
             stats_to_keep = {max_stat, min_stat}
@@ -488,7 +491,8 @@ def plot_run_data(
         plotted_rest_this_epoch = False
         GROUP_STAT_COLOR = "blue"
         # When we plot all epochs at the same time and only check any() for the main group we will have multiple main groups
-        plot_main_group = "pbt_epoch" in group_by or not group_by == ("pbt_group_key")
+        group_by_keys_only = len(group_by) == 1 and group_by[0] == "pbt_group_key"
+        plot_main_group = "pbt_epoch" in group_by or not group_by_keys_only
         for i, ((group0, stat_val), group) in enumerate(grouper):
             if group_by[0] == "pbt_epoch":
                 pbt_epoch = group0
@@ -554,16 +558,15 @@ def plot_run_data(
                 except Exception as e:
                     logger.error("Failed to group rest for epoch %s: %r", pbt_epoch, e)
                     remote_breakpoint()
-
-            elif main_only:
+            elif plot_option.main_only and not group_by_keys_only:
                 logger.debug("Skipping non-main group: %s %s", pbt_epoch, stat_val)
                 continue
             elif last_main_group is not None and pbt_epoch > 0 and "pbt_epoch" in group_by:
                 logger.debug("Plotting non-main group: %s %s", pbt_epoch, stat_val)
                 group = _connect_groups(last_main_group, group, group_stat)  # noqa: PLW2901
 
-            # Shading:
-            if last_bg_epoch is None or pbt_epoch != last_bg_epoch:
+            # Shading: - if we plot groups only shade below
+            if not group_by_keys_only and (last_bg_epoch is None or pbt_epoch != last_bg_epoch):
                 logger.debug("plotting shade %s", pbt_epoch)
                 # Shade the region for this epoch
                 try:
@@ -607,17 +610,47 @@ def plot_run_data(
             # else:
             #    if len(group.index) != group.index.nunique():
             #        remote_breakpoint()
+
             try:
-                sns.lineplot(
-                    data=group,
-                    x="current_step",
-                    y=metric_key,
-                    ax=ax,
-                    # linestyle="--",
-                    color=color_map[stat_val],
-                    label=str(stat_val) if stat_val not in seen_labels else None,
-                    linewidth=3,
-                )
+                if not group_by_keys_only:
+                    # default case
+                    sns.lineplot(
+                        data=group,
+                        x="current_step",
+                        y=metric_key,
+                        ax=ax,
+                        # linestyle="--",
+                        color=color_map[stat_val],
+                        label=str(stat_val) if stat_val not in seen_labels else None,
+                        linewidth=3,
+                    )
+                else:
+                    # There will be jumps at the end of each epoch, split the data and plot separately
+                    # to avoid lines going across the plot
+                    last_epoch_group = None
+                    epoch_grouper = group.groupby("pbt_epoch", sort=True)
+                    for _, epoch_group in epoch_grouper:
+                        # Shade background:
+                        if last_epoch_group is not None:
+                            _shade_background(
+                                ax,
+                                background_colors[bg_color_idx % 2],
+                                last_epoch_group["current_step"].max(),
+                                epoch_group["current_step"].max(),
+                            )
+                        last_epoch_group = epoch_group
+                        bg_color_idx += 1
+                        # Plot data
+                        sns.lineplot(
+                            data=epoch_group,
+                            x="current_step",
+                            y=metric_key,
+                            ax=ax,
+                            # linestyle="--",
+                            color=color_map[stat_val],
+                            label=str(stat_val) if stat_val not in seen_labels else None,
+                            linewidth=3,
+                        )
             except Exception as e:
                 logger.error("Failed to plot group for epoch %s stat %s: %r", pbt_epoch, stat_val, e)
                 group = group.set_index("current_step", append=True)
@@ -628,7 +661,7 @@ def plot_run_data(
                 group = group.reset_index(level="current_step")
             seen_labels.add(stat_val)
         # Shade from last group's max step to right edge
-        if "prev_group" in locals():
+        if "prev_group" in locals() and prev_group is not None:
             prev_max = prev_group["current_step"].max()
             _shade_background(ax, background_colors[bg_color_idx % 2], prev_max, ax.get_xlim()[1])
 
@@ -708,16 +741,22 @@ def plot_run_data(
                 handles = (h2, *handles)
                 labels = (group_stat, *labels)
         # Place the legend below the plot in a fancybox
-        legend = ax.legend(
-            handles,
-            labels,
-            title=group_stat,
-            loc="upper center",
-            bbox_to_anchor=(0.5, -0.12),
-            ncol=min(len(labels), 6),
-            fancybox=True,
-            framealpha=0.8,
-        )
+        try:
+            legend = ax.legend(
+                handles,
+                labels,
+                title=group_stat,
+                loc="upper center",
+                bbox_to_anchor=(0.5, -0.12),
+                ncol=min(len(labels), 6),
+                fancybox=True,
+                framealpha=0.8,
+            )
+        except ValueError as ve:
+            if len(handles) == len(labels) == 0 and plot_option.main_only and not plot_df["__pbt_main_branch__"].any():
+                return None, None
+            logger.exception("Failed to create legend with handles %s and labels %s: %r", handles, labels, ve)
+            remote_breakpoint()
         # Reduce legend font size by 2
         # fontsize = max(legend.get_texts()[0].get_fontsize() - 2, 1) if legend.get_texts() else 10
         # for text in legend.get_texts():
@@ -733,7 +772,7 @@ def plot_run_data(
             agent_type = agent_type.item()
         ax.set_title(f"{env_type} - {agent_type.upper()} - {metrics[0]}")
 
-        if plot_errors and not main_only and not plot_reduced:
+        if plot_errors and not plot_option.main_only and not plot_option.plot_reduced:
             err_fig = plot_error_distribution(
                 plot_df,
                 metric_key,

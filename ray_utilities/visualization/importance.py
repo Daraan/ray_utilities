@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from itertools import chain
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 import numpy as np
 import pandas as pd
+from typing_extensions import Literal
 
 from ray_utilities.config.parser.default_argument_parser import DefaultArgumentParser
+from ray_utilities.testing_utils import remote_breakpoint
 
 try:  # pragma: no cover - compatibility shim for older NumPy
     from numpy import trapezoid as _np_trapezoid
@@ -24,6 +27,8 @@ from ray_utilities.visualization.data import (
     clean_placeholder_keys,
     combine_df,
     get_and_check_group_stat,
+    get_running_experiments,
+    ifill,
     load_run_data,
     save_run_data,
 )
@@ -101,11 +106,16 @@ def experiment_importance(
 
     for path in paths:
         logger.debug("Processing experiment at %s", path)
+        # We do not want load trials that are currently running
         run_frames = load_run_data(path)
         if not run_frames:
             logger.warning("No runs found for experiment at %s", path)
             continue
-        combined_df = combine_df(run_frames)
+        if not isinstance(run_frames, pd.DataFrame):
+            combined_df = combine_df(run_frames)
+            save_run_data(path, combined_df)
+        else:
+            combined_df = run_frames
         summary = summarise_epochs(combined_df, metric, min_group_size=min_group_size)
         if summary.table.empty:
             logger.warning("Skipping %s - no epoch summaries left after filtering", path)
@@ -434,75 +444,177 @@ import os
 import optuna
 
 
-def get_optuna_study(experiment_path, env: str | None, step: int | None = None, *, load_if_exists=True):
-    db_path = f"{experiment_path}/optuna_study.db"
+def _get_storage(experiment_path: str | Path):
+    experiment_path = Path(experiment_path)
+    if experiment_path.is_dir():
+        db_path = f"{experiment_path}/optuna_study.db"
+    else:
+        db_path = str(experiment_path)
     storage_str = f"sqlite:///{db_path}"
+    try:
+        storage = optuna.storages.RDBStorage(
+            url=storage_str,
+            engine_kwargs={"connect_args": {"timeout": 10}},
+        )
+    except Exception:
+        logger.error("Could not oben RDBStorage %s", db_path)
+        raise
+    logger.info("Created/Opened db %s", db_path)
+    return storage
+
+
+def get_optuna_study(
+    experiment_path: str | Path | optuna.storages.BaseStorage,
+    env: str | None,
+    step: int | None = None,
+    *,
+    load_if_exists=True,
+):
+    if isinstance(experiment_path, (Path, str)):
+        storage = _get_storage(experiment_path)
+    else:
+        storage = experiment_path
     study_name = "pbt_study"
     if env is not None:
         study_name += f"_env={env}"
     if step is not None:
         study_name += f"_step={step}"
-    storage = optuna.storages.RDBStorage(
-        url=storage_str,
-        engine_kwargs={"connect_args": {"timeout": 10}},
-    )
-    if Path(db_path).exists() and not load_if_exists:
-        os.remove(db_path)
-        try:
-            optuna.delete_study(study_name=study_name, storage=storage)
-        except Exception as e:
-            logger.warning("Failed to delete existing study: %s", e)
-    return optuna.create_study(
+    study = optuna.create_study(
         study_name=study_name, storage=storage, load_if_exists=load_if_exists, direction="maximize"
     )
+    logger.debug("Created optuna study %s", study_name)
+    TRIAL_CACHE[study] = {t.user_attrs.get("identifier") for t in study.get_trials()}  # pyright: ignore[reportArgumentType]
+    TRIAL_CACHE[study].discard(None)  # pyright: ignore[reportArgumentType]
+    return study
+
+
+def get_experiment_track_study(storage: optuna.storages.BaseStorage):
+    tracking_study = optuna.create_study(study_name="_experiment_tracker", storage=storage, load_if_exists=True)
+    STORED_EXPERIMENTS.update(t.user_attrs["run_id"] for t in tracking_study.get_trials())
+    return tracking_study
+
+
+def add_finished_experiment(run_id: str, tracking_study: optuna.Study):
+    tracker = optuna.create_trial(state=optuna.trial.TrialState.COMPLETE, value=1, user_attrs={"run_id": run_id})
+    tracking_study.add_trial(tracker)
+    STORED_EXPERIMENTS.add(run_id)
 
 
 def create_fake_trial(
-    metric_result,
+    metric_result: float,
+    identifier: str,
     params: dict[str, Any],
     intermediate_values: dict[int, float] | None = None,
     distributions: dict[str, optuna.distributions.BaseDistribution] | None = None,
 ):
-    trial = optuna.trial.create_trial(
-        state=optuna.trial.TrialState.COMPLETE,
-        value=metric_result,
-        params=params,
-        intermediate_values=intermediate_values,
-        distributions=distributions,
-    )
+    try:
+        trial = optuna.trial.create_trial(
+            state=optuna.trial.TrialState.COMPLETE,
+            value=metric_result,
+            params=params,
+            intermediate_values=intermediate_values,
+            distributions=distributions,
+            user_attrs={"identifier": identifier},
+        )
+    except ValueError as ve:
+        if not distributions or "not in" not in str(ve):
+            raise
+        # likely because we changed the distribution
+        # need to figure out to which dist the value belongs
+        # Only works for Categorical:
+        wrong_metrics = {k: v for k, v in params.items() if k in distributions and v not in distributions[k].choices}
+        for k, v in wrong_metrics.items():
+            new_choices = (v, *distributions[k].choices)
+            try:
+                new_choices = tuple(sorted(new_choices))
+            except Exception:  # noqa: BLE001
+                pass
+            distributions[k].choices = new_choices
+        trial = optuna.trial.create_trial(
+            state=optuna.trial.TrialState.COMPLETE,
+            value=metric_result,
+            params=params,
+            intermediate_values=intermediate_values,
+            distributions=distributions,
+            user_attrs={"identifier": identifier},
+        )
     return trial
 
 
 GLOBAL_STUDY = "global"
 
+TRIAL_CACHE: dict[optuna.Study, set[str]] = {}
+STORED_EXPERIMENTS: set[str] = set()
+
+
+def maybe_add_trials_to_study(
+    trial: optuna.trial.FrozenTrial | Iterable[optuna.trial.FrozenTrial], study: optuna.Study, *, force: bool = False
+):
+    if isinstance(trial, Iterable) and not force:
+        trial = [t for t in trial if t.user_attrs["identifier"] not in TRIAL_CACHE[study]]
+    if isinstance(trial, Iterable):
+        study.add_trials(trial)
+        return
+
+    if force or trial.user_attrs["identifier"] not in TRIAL_CACHE[study]:
+        study.add_trial(trial)
+    else:
+        logger.info(
+            "Trial with identifier '%s' already existed in the study did not add it again",
+            trial.user_attrs["identifier"],
+        )
+
 
 def optuna_create_studies(
     *experiment_paths,
+    database_path: str | Path | None = None,
     env: str | None,
-    study_each_epoch: bool = False,
+    study_each_epoch: bool | None = False,
     dir_depth=1,
     metric="episode_reward_mean",
     group_stat: str | None = None,
     distributions: dict[str, optuna.distributions.BaseDistribution] | None = None,
     load_if_exists: bool = True,
+    submission_file_path: Path | None = None,
+    disable_checks: bool = True,
 ) -> dict[Any, optuna.Study]:
+    if disable_checks:
+        disable_distribution_check()
     studies: dict[Any, optuna.Study] = {}
+    storage = _get_storage(database_path or experiment_paths[0])
+    tracking_study = get_experiment_track_study(storage)
     if not study_each_epoch:
-        study = get_optuna_study(experiment_paths[0], env, load_if_exists=load_if_exists)
+        study = get_optuna_study(storage, env, load_if_exists=load_if_exists)
         studies[GLOBAL_STUDY] = study
-    else:
+    if study_each_epoch is not False:
         # Create a study for each epoch at step 8192 * 4 until max_step
-        for epoch in range(32):
+        for epoch in range(1, 32 + 1):
             step = epoch * 8192 * 4
-            studies[step] = get_optuna_study(experiment_paths[0], env, step)
-
+            studies[step] = get_optuna_study(storage, env, step)
+        # This is not sufficient for the 1/8 perturbation intervals
+        for epoch in range(1, 8 + 1):
+            step = epoch * 147456
+            if step not in studies:
+                studies[step] = get_optuna_study(storage, env, step)
     for experiment_path in experiment_paths:
-        logger.info("Checking experiment path: %s", experiment_path)
+        logger.info("Checking path for experiments: %s", experiment_path)
         if dir_depth == 0:
             experiment_subdirs = [Path(experiment_path)]
         else:
             experiment_subdirs = Path(experiment_path).glob(f"*/{'/'.join(['*'] * dir_depth)}")
-        for experiment_dir in experiment_subdirs:
+        running_experiments = set()
+        if submission_file_path:
+            running_experiments = get_running_experiments(submission_file_path)
+        for experiment_dir in list(experiment_subdirs):
+            no_errors = True
+            experiment_id = experiment_dir.name.split("-")[-1]
+            if experiment_id in running_experiments:
+                logger.info("skipping running experiment: %s", experiment_dir.name)
+                continue
+            if experiment_id in STORED_EXPERIMENTS:
+                logger.info("Skipping run %s as the id is already stored", experiment_id)
+                continue
+
             logger.info("Checking experiment path: %s", experiment_dir)
             # Check if this directory is an experiment directory
             marker_files = {".validate_storage_marker", "pbt_global.txt", "tuner.pkl"}
@@ -515,6 +627,7 @@ def optuna_create_studies(
 
             logger.debug("Processing experiment directory: %s", experiment_dir)
 
+            trials_to_add = {study: [] for study in studies.values()}
             try:
                 # Load run data for this experiment
                 run_frames = load_run_data(experiment_dir)
@@ -526,19 +639,61 @@ def optuna_create_studies(
                     save_run_data(experiment_dir, df)
                 else:
                     df = run_frames
-                group_stat, df = get_and_check_group_stat(df, group_stat, ("pbt_group_key",))
+                _group_stat, df = get_and_check_group_stat(df, group_stat=None, group_by=("pbt_group_key",))
 
                 # Create trials for each run_id
                 # TODO: possibly groupkey -> take mean
-                for group_key, group in df.groupby("run_id" if not study_each_epoch else (("pbt_epoch", "run_id"))):
+                # pbt_epoch should be always present when using combine_df
+                try:
+                    max_epoch = df.config.pbt_epoch.max().item()
+                except AttributeError:
+                    if "pbt_epoch" in df.config:
+                        raise  # some other error
+                    run_frames = load_run_data(experiment_dir, use_cache=False)
+                    df = combine_df(run_frames)
+                    if "pbt_epoch" not in df.config:
+                        remote_breakpoint()
+                        raise
+                    save_run_data(experiment_dir, df)
+                    max_epoch = df.config.pbt_epoch.max().item()
+                if study_each_epoch is True:
+                    if max_epoch == 0:
+                        logger.info("Experiment %s has only a single epoch skipping", experiment_path)
+                        continue
+                    iterator = df.groupby(("pbt_epoch", "pbt_group_key"))
+                elif study_each_epoch is False or (study_each_epoch is None and max_epoch == 0):
+                    iterator = df.groupby("run_id")
+                # but do not do for baseliens that have only one epoch or short runs
+                else:
+                    iterator = chain(
+                        df.groupby("run_id"),
+                        df.groupby(
+                            [
+                                ifill("config", "pbt_epoch", n=df.columns.nlevels),
+                                ifill("config", "pbt_group_key", n=df.columns.nlevels),
+                            ]
+                        ),
+                    )
+                group_key: Literal["run_id"] | tuple[Literal["pbt_epoch"], Literal["pbt_group_key"]]
+                for i, (group_key, group) in enumerate(iterator):  # pyright: ignore[reportAssignmentType]
                     if group.empty:
                         continue
+                    per_pbt_epoch = False
                     if isinstance(group_key, tuple):
                         run_id = group_key[1]
+                        per_pbt_epoch = True
+                        # run_id = group_key[1]
+                        # No run id if we group by pbt_group_key
+                        trial_identifier = "-".join(group.index.get_level_values("run_id").unique().sort_values())
+                        group_numeric = group.select_dtypes(include=["number"])[
+                            (group.current_step == group.current_step.max()).values  # noqa: PD011
+                        ]
+                        final_row = group_numeric.mean()
                     else:
                         run_id = group_key
+                        trial_identifier = run_id
+                        final_row = group.iloc[-1]
                     # Extract final metric value (last row)
-                    final_row = group.iloc[-1]
 
                     # Extract hyperparameters from config
                     params = clean_placeholder_keys(final_row.to_dict(), flatten=True)
@@ -548,8 +703,8 @@ def optuna_create_studies(
                                 params[key] = final_row.config.get(
                                     key, final_row.config.get("cli_args", {}).get(key, "NOT_FOUND")
                                 )
-                                if isinstance(params[key], (pd.DataFrame, pd.Series)) and params[key].size == 1:
-                                    params[key] = params[key].item()
+                                if isinstance(params[key], (pd.DataFrame, pd.Series)) and params[key].size == 1:  # pyright: ignore[reportAttributeAccessIssue]
+                                    params[key] = params[key].item()  # pyright: ignore[reportAttributeAccessIssue]
                                 if params[key] == "NOT_FOUND":
                                     params[key] = getattr(DefaultArgumentParser, key)
                         params = {k: v for k, v in params.items() if not isinstance(v, str) or v != "NOT_FOUND"}
@@ -561,7 +716,10 @@ def optuna_create_studies(
                         )
 
                         # introduced it later
-                        if EPISODE_RETURN_MEAN_EMA in df.evaluation:
+                        if (
+                            EPISODE_RETURN_MEAN_EMA in df.evaluation
+                            and not pd.isna(final_row[("evaluation", EPISODE_RETURN_MEAN_EMA)]).all()
+                        ):
                             backport_metric = ("evaluation", EPISODE_RETURN_MEAN_EMA)
                         else:
                             backport_metric = ("evaluation", EPISODE_RETURN_MEAN)
@@ -572,7 +730,10 @@ def optuna_create_studies(
                         metric = backport_metric
                     elif metric not in final_row:
                         raise KeyError(f"Metric column '{metric}' not found in combined dataframe")  # noqa: TRY301
-                    metric_result = float(final_row[metric])
+                    try:
+                        metric_result = float(final_row[metric].iloc[0])
+                    except Exception:
+                        metric_result = float(final_row[metric])
 
                     # Create intermediate values from the training history
                     if False:
@@ -586,20 +747,134 @@ def optuna_create_studies(
                     # Create and add trial to study
                     trial = create_fake_trial(
                         metric_result=metric_result,
+                        identifier=trial_identifier,
                         params={k: v for k, v in params.items() if k in distributions} if distributions else params,
                         distributions=distributions,
                         # intermediate_values=intermediate_values
                     )
-                    if GLOBAL_STUDY in studies:
-                        studies[GLOBAL_STUDY].add_trial(trial)
+                    if not per_pbt_epoch:
+                        trials_to_add[studies[GLOBAL_STUDY]].append(trial)
                     else:
                         # TODO: will not work if trial ended too early
-                        studies[int(final_row.current_step)].add_trial(trial)
-                    logger.debug("Added trial for run %s with metric %s", run_id, metric_result)
+                        current_step = int(final_row.current_step.iloc[0])
+                        if current_step in studies:
+                            study_to_add = studies[current_step]
+                        else:
+                            # do we have perturbation interval
+                            perturbation_interval = df.attrs.get("perturbation_interval")
+                            if perturbation_interval is not None:
+                                try:
+                                    study_to_add = studies[perturbation_interval * group_key[0]]
+                                except (KeyError, IndexError):
+                                    study_to_add = studies[perturbation_interval * (final_row.config.pbt_epoch + 1)]
+                            else:
+                                # if current_step is not slightly above <= 2048 on another key ceil it
+                                study_keys = sorted([step for step in studies.keys() if isinstance(step, int)])
+                                closest_key_idx = np.argmin([abs(current_step - step) for step in study_keys])
+                                closest_key = study_keys[closest_key_idx]
+                                upper_bound = closest_key + final_row.config.get("train_batch_size_per_learner", 2048)
+                                if isinstance(upper_bound, pd.Series):
+                                    upper_bound: float = upper_bound.iloc[-1]
+                                final_epoch = final_row.config.get("pbt_epoch", 0)
+                                total_steps = final_row.config.get("cli_args", {}).get("total_steps").item()
+                                if total_steps is not None:
+                                    total_steps = int(total_steps)
+                                if closest_key > current_step or current_step <= upper_bound:
+                                    if closest_key == study_keys[-2] and total_steps == study_keys[-1]:
+                                        # special case where we are close to -2 but wanted to train to -1
+                                        logger.warning(
+                                            "Trial with steps %s did not reach the exact end of %s but has total_steps %s putting it into that epoch.",
+                                            current_step,
+                                            study_keys[-1],
+                                            total_steps,
+                                        )
+                                        study_to_add = studies[total_steps]
+                                    else:
+                                        study_to_add = studies[closest_key]
+                                else:
+                                    logger.warning("Could not determine epoch of %s at step %s", run_id, current_step)
+                                    # is in the lower half between two keys - ceil up
+                                    try:
+                                        study_to_add = studies[closest_key + 8192 * 4]
+                                    except KeyError:
+                                        if current_step > study_keys[-1]:
+                                            # was trained to long add to max
+                                            logger.warning(
+                                                "Trial was likely trained to long adding it to epoch matching step %s",
+                                                study_keys[-1],
+                                            )
+                                            study_to_add = studies[study_keys[-1]]
+                                        else:
+                                            # if it is between the second largest and largest add to the largest.
+                                            # Problem there is the total_steps 1_179_648 case and the 1_048_576 of 8 / 32 epochs
+                                            # and possibly old trials not fitting in both.
+                                            if total_steps is not None and total_steps in studies:
+                                                logger.warning(
+                                                    "Trial with steps %s did not reach the exact end of %s but has total_steps %s putting it into that epoch.",
+                                                    current_step,
+                                                    study_keys[-1],
+                                                    total_steps,
+                                                )
+                                                study_to_add = studies[int(total_steps)]
+                                            elif current_step > study_keys[-2] + 8192 * 2:
+                                                logger.warning(
+                                                    "Trial with steps %s did not reach the exact end of %s and is > %s putting it into the last epoch.",
+                                                    current_step,
+                                                    study_keys[-1],
+                                                    study_keys[-2],
+                                                )
+                                                study_to_add = studies[max(study_keys)]
+                                            elif current_step > study_keys[-2] and final_epoch >= 6:
+                                                # Do we have a total steps info?
+                                                if 6 <= final_epoch <= 12:
+                                                    study_to_add = studies[study_keys[-1]]
+                                                else:
+                                                    # ~32 epoch case
+                                                    study_to_add = studies[study_keys[-2]]
+                                            else:
+                                                # should not happen
+                                                logger.error(
+                                                    "Cannot determine pbt epoch / current_step of trial %s with at step %s.",
+                                                    run_id,
+                                                    current_step,
+                                                )
+                                                study_to_add = None
+                                                no_errors = False
+                                    else:
+                                        logger.warning(
+                                            "Could not determine pbt epoch / current_step of trial %s with at step %s. "
+                                            "Added it to epoch of step %s.",
+                                            run_id,
+                                            current_step,
+                                            closest_key + 8192 * 4,
+                                        )
+                        if study_to_add is not None:
+                            trials_to_add[study_to_add].append(trial)
+
+                    if i % 10 == 0:
+                        if per_pbt_epoch:
+                            logger.debug(
+                                "Adding trial for run %s pbt_epoch %s with metric %s - and 10 more trials",
+                                run_id,
+                                group_key[0],
+                                metric_result,
+                            )
+                        else:
+                            logger.debug(
+                                "Adding trial for run %s with metric %s - and 10 more trials", run_id, metric_result
+                            )
 
             except Exception as e:
                 logger.exception("Failed to process experiment at %s: %r", experiment_dir, e)
+                no_errors = False
+                remote_breakpoint()
                 continue
+            logger.info("Adding trials from experiment %s to studies", experiment_dir)
+            for study, trials in trials_to_add.items():
+                maybe_add_trials_to_study(trials, study)
+            if no_errors and study_each_epoch is None:  # add it as finished when we checked both types.
+                add_finished_experiment(experiment_id, tracking_study)
+
     return studies
 
 
@@ -612,34 +887,88 @@ PARAMS_TO_CHECK = {
 
 def optuna_analyze_studies(
     studies: dict[Any, optuna.Study],
-    top_n: int | None = None,
+    output_path: str | Path,
     params: list[str] | None = None,
 ) -> None:
     for key, study in studies.items():
         logger.info("Analyzing study for key: %s", key)
         try:
             importances = optuna.importance.get_param_importances(study, params=params)
-            sorted_importances = sorted(importances.items(), key=lambda item: item[1], reverse=True)
             # logger.info("Top %d important hyperparameters for study %s:", top_n, key)
-            for param, importance in sorted_importances[:top_n]:
+            try:
+                output_path = Path(output_path)
+                if output_path.is_dir():
+                    output_path = output_path / f"hyperparameter_importance-{key}.csv"
+                pd.DataFrame.from_dict(importances, orient="index").to_csv(output_path, index=True)
+                logger.info("Saved importances to %s", output_path)
+            except Exception:
+                logger.exception("Could likely not export importances to %s", output_path)
+            sorted_importances = sorted(importances.items(), key=lambda item: item[1], reverse=True)
+            for param, importance in sorted_importances:
                 logger.info("  %s: %.4f", param, importance)
         except Exception as e:
             logger.exception("Failed to analyze study for key %s: %r", key, e)
 
 
+_check_distribution_compatibility = optuna.distributions.check_distribution_compatibility
+
+
+def disable_distribution_check():
+    # TODO: Alternatively move all trials to a new study with the changed distribution
+    optuna.distributions.check_distribution_compatibility = lambda a, b: None
+
+
 if __name__ == "__main__":
-    logging.debug("Starting optuna analysis")
     from experiments.create_tune_parameters import default_distributions
     from ray_utilities import nice_logger
+
+    os.chdir(Path(__file__).parent.parent.parent)
+    # possibly for repair sqlite3 "outputs/shared/optuna_hp_study.db" ".dump" | sqlite3 new.db
 
     logger = nice_logger(logger, logging.DEBUG)
     distributions = load_distributions_from_json(write_distributions_to_json(default_distributions), as_optuna=True)
     distributions.pop("test", None)
+    if "vf_clip_param" in distributions and 0.0 not in distributions["vf_clip_param"].choices:
+        # We changed this distribution
+        distributions["vf_clip_param"].choices = (0.0, *distributions["vf_clip_param"].choices)
+    if "DEBUG" in os.environ:
+        paths = ("outputs/shared/experiments/Default-mlp-Acrobot-v1",)
+        env = "Acrobot-v1"
+    else:
+        paths = [
+            "outputs/shared/experiments/Default-mlp-Ant-v5",
+            "outputs/shared_backup/needs_sync/Default-mlp-Ant-v5",
+            "outputs/shared_backup/Default-mlp-Ant-v5",
+        ]
+        env = "Ant-v5"
     studies = optuna_create_studies(
-        "outputs/shared/experiments/Default-mlp-Acrobot-v1",
-        env="Acrobot-v1",
-        dir_depth=2,
+        *paths,
+        database_path="outputs/shared/optuna_hp_study.db",
+        env=env,
+        dir_depth=1,
         distributions=distributions,
         load_if_exists=True,
+        study_each_epoch=None,
+        submission_file_path=Path("experiments"),
     )
-    optuna_analyze_studies(studies, params=list(distributions.keys()))
+    optuna_analyze_studies(studies, output_path=paths[0], params=list(distributions.keys()))
+    if "DEBUG" in os.environ:
+        import sys
+
+        sys.exit(0)
+    for env in ["CartPole-v1", "Walker2d-v5", "LunarLander-v3"]:
+        paths = [
+            f"outputs/shared/experiments/Default-mlp-{env}",
+            f"outputs/shared_backup/needs_sync/Default-mlp-{env}",
+            f"outputs/shared_backup/Default-mlp-{env}",
+        ]
+        studies = optuna_create_studies(
+            *paths,
+            database_path="outputs/shared/optuna_hp_study.db",
+            env=env,
+            dir_depth=1,
+            distributions=distributions,
+            load_if_exists=True,
+            study_each_epoch=None,
+            submission_file_path=Path("experiments"),
+        )
