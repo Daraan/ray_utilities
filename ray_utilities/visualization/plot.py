@@ -1,3 +1,7 @@
+# PLOTS TODOS
+# - Some logscale have not enough xticks
+# - Fontsize
+
 from __future__ import annotations
 
 import logging
@@ -251,6 +255,8 @@ def plot_run_data(
     # Select the group-by columns from MultiIndex columns
     group_cols = [("config", k) for k in group_by]
     # Extract the group-by columns as a DataFrame (each column is 1D)
+    if ("config", "pbt_group_key") in group_cols and ("config", "pbt_group_key") not in df:
+        which_continued(df)  # this sets pbt_group_key
     try:
         try:
             stat_columns = df[group_stat].droplevel(0, axis=1)
@@ -737,13 +743,13 @@ def plot_run_data(
         if (legend2 := ax2.get_legend()) is not None:
             ax_2handles, ax2_labels = ax2.get_legend_handles_labels()
             legend2.remove()
-            if ax_2handles:
-                handles = (*handles, ax_2handles[0])
-                labels = (*labels, ax2_labels[0])
-            else:
-                h2 = plt.Line2D([], [], color=GROUP_STAT_COLOR, label="best")
-                handles = (h2, *handles)
-                labels = (group_stat, *labels)
+            # if ax_2handles:
+            #    handles = (*handles, ax_2handles[0])
+            #    labels = (*labels, ax2_labels[0])
+            # else:
+            h2 = plt.Line2D([], [], color=GROUP_STAT_COLOR, label="best")
+            handles = (h2, *handles)
+            labels = (group_stat, *labels)
         # Place the legend below the plot in a fancybox
         try:
             legend = ax.legend(

@@ -592,7 +592,7 @@ def _connect_groups(last: pd.DataFrame, now: pd.DataFrame, stat_value: str | Non
 
 
 def check_metric_backport(df: pd.DataFrame, metric: str | tuple[str, ...]) -> str | tuple[str, ...]:
-    if metric == "episode_reward_mean" and "episode_reward_mean" not in df:
+    if metric == "episode_reward_mean" and (metric not in df or df[metric].isna().all().item()):
         from ray_utilities.constants import EPISODE_RETURN_MEAN, EPISODE_RETURN_MEAN_EMA  # noqa: PLC0415
 
         # introduced it later
@@ -605,15 +605,7 @@ def check_metric_backport(df: pd.DataFrame, metric: str | tuple[str, ...]) -> st
     return metric
 
 
-def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]) -> tuple[pd.DataFrame, str] | None:
-    """
-    Calculate additional metrics for the DataFrame.
-    This calculates:
-        - variance between data grouped by pbt_group_key
-        - Gini coefficient between data grouped by pbt_group_key
-        - Kendal Tau metric at the end of each pbt_epoch between data grouped by pbt_group_key
-    """
-
+def get_epoch_stats(df, metric, *, individual_runs: bool = False):
     # region Variance
     # backup = df
     def ifill(*cols, n=df.columns.nlevels):
@@ -628,7 +620,7 @@ def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]
     except KeyError as ke:
         if main_branch_data.empty:
             logger.error("No main branch data found for calculating hyperparam metrics.")
-            return None
+            return None, None, (None, None)
         remote_breakpoint()
         raise
     # Does not contain last epoch as there is no main branch
@@ -663,43 +655,119 @@ def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]
         [ifill("config", "pbt_epoch"), ifill("config", "pbt_group_key"), ifill("current_step")], append=True
     )
     df.index.names = [*df.index.names[:-3], "pbt_epoch", "pbt_group_key", "current_step"]
-    last_epoch_values = (
-        # Exclude final step from list as not pinned on main branch
-        df.loc[pd.IndexSlice[:, :, :, :, epoch_end_steps.T.values.tolist()[0]]]
-        .groupby(["pbt_epoch"])[metric if isinstance(metric, str) else [ifill(*metric)]]
-        .agg(["mean", "std"])
-    )
+    if not individual_runs:
+        last_epoch_values = (
+            # Exclude final step from list as not pinned on main branch
+            df.loc[pd.IndexSlice[:, :, :, :, epoch_end_steps.T.values.tolist()[0]]]
+            .groupby(["pbt_epoch"])[metric if isinstance(metric, str) else [ifill(*metric)]]
+            .agg(["mean", "std"])
+        )
+    else:
+        last_epoch_values = (
+            # Exclude final step from list as not pinned on main branch
+            df.loc[pd.IndexSlice[:, :, :, :, epoch_end_steps.T.values.tolist()[0]]]
+            .groupby(["pbt_epoch", ifill("config", "experiment_key")])[
+                metric if isinstance(metric, str) else [ifill(*metric)]
+            ]
+            # std will be NaN here
+            .agg(["mean", "std"])
+        )
     last_epoch_values.columns = [metric_key, "metric_std"]
-    last_epoch_values.index.names = ["pbt_epoch"]
-    last_epoch_values["current_step"] = epoch_end_steps
-    last_epoch_values.loc[-1] = 0
-    last_epoch_values = last_epoch_values.sort_index()
+    last_epoch_values.index.names = ["pbt_epoch"] if not individual_runs else ["pbt_epoch", "experiment_key"]
+    last_epoch_values["current_step"] = last_epoch_values.index.get_level_values("pbt_epoch").map(
+        epoch_end_steps.current_step
+    )
+    if not individual_runs:
+        last_epoch_values.loc[-1] = 0
+    else:
+        new_head = pd.DataFrame(
+            [[0] * len(last_epoch_values.columns)]
+            * len(last_epoch_values.loc[0].index.get_level_values("experiment_key")),
+            index=pd.MultiIndex.from_product(
+                [[-1], last_epoch_values.loc[0].index.get_level_values("experiment_key")],
+                names=last_epoch_values.index.names,
+            ),
+        )
+        new_head.columns = last_epoch_values.columns
+        last_epoch_values = pd.concat([new_head, last_epoch_values], axis=0)
+        last_epoch_values = last_epoch_values.sort_index()
+
     # df.groupby([pd.Grouper(level="current_step"), pd.Grouper(level="pbt_group_key"), "pbt_epoch"])[
     #    [ifill(metric, n=4), ifill("config", "pbt_epoch", n=4)]
     # ]
-    metric_values = (
-        df.groupby(level=["current_step", "pbt_group_key", "pbt_epoch"])[
-            metric if isinstance(metric, str) else [ifill(*metric)]
-        ]
-        .agg(["mean", "std"])
-        .droplevel(level=list(range(1, df.columns.nlevels)), axis=1)
-    )
+    group_by = ["current_step", "pbt_group_key", "pbt_epoch"] if not individual_runs else ["current_step", "pbt_epoch"]
+    if not individual_runs:
+        metric_values = (
+            df.groupby(level=group_by)[metric if isinstance(metric, str) else [ifill(*metric)]]
+            .agg(["mean", "std"])
+            .droplevel(level=list(range(1, df.columns.nlevels)), axis=1)
+        )
+    else:
+        metric_values = (
+            df.groupby(["run_id", *group_by])[metric if isinstance(metric, str) else [ifill(*metric)]]
+            .agg(["mean", "std"])
+            .droplevel(level=list(range(1, df.columns.nlevels)), axis=1)
+        )
     metric_values.columns = [metric_key, "metric_std"]
     # Shift by for for subtracting initial value
     value_shifter = last_epoch_values.copy()
-    value_shifter.index = last_epoch_values.index + 1
+    if not isinstance(value_shifter.index, pd.MultiIndex):
+        value_shifter.index = last_epoch_values.index + 1
+    else:
+        assert "pbt_epoch" in value_shifter.index.names
+        value_shifter.index = pd.MultiIndex.from_tuples(
+            [
+                tuple(
+                    idx + 1 if idx_name == "pbt_epoch" else idx
+                    for idx_name, idx in zip(value_shifter.index.names, idx_tuple)
+                )
+                for idx_tuple in value_shifter.index.to_list()
+            ],
+            names=value_shifter.index.names,
+        )
     value_shifter_with_first = value_shifter.drop("current_step", axis=1).copy()
     try:
-        metric_agg = (
-            metric_values[metric_values.index.get_level_values("pbt_epoch") == 0]
-            .groupby(["pbt_epoch", "current_step"])[metric_key]
-            .agg(["mean", "std"])
-        )
-        first_loc = metric_agg.isna().idxmin()["mean"]
-        # if we tune batch size the first entry weill be 0
-        value_shifter_with_first.loc[0] = metric_agg.loc[first_loc]["mean"]
+        if not individual_runs:
+            metric_agg = (
+                metric_values[metric_values.index.get_level_values("pbt_epoch") == 0]
+                .groupby(["pbt_epoch", "current_step"])[metric_key]
+                .agg(["mean", "std"])
+            )
+            first_loc = metric_agg.isna().idxmin()["mean"]
+            # if we tune batch size the first entry weill be 0
+            value_shifter_with_first.loc[0] = metric_agg.loc[first_loc]["mean"]
+        else:
+            metric_agg = (
+                metric_values[metric_values.index.get_level_values("pbt_epoch") == 0]
+                .groupby(["pbt_epoch", "run_id", "current_step"])[metric_key]
+                .agg(["mean", "std"])  # nothing to aggregate
+            )
+            # Shift everyone by mean or shift every individually to 0?
+            # Problem with individually is if there are large batch sizes.
+            for idx in last_epoch_values.index[last_epoch_values.index.get_level_values("pbt_epoch") == 0]:
+                first_loc = metric_agg.loc[idx].isna().idxmin()["mean"]
+                value_shifter_with_first.loc[idx, :] = metric_agg.loc[(*idx, first_loc)].values
+            value_shifter_with_first = value_shifter_with_first.sort_index()
     except (ValueError, KeyError):
         remote_breakpoint()
+
+    return metric_values, epoch_end_steps, (value_shifter, value_shifter_with_first)
+
+
+def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]) -> tuple[pd.DataFrame, str] | None:
+    """
+    Calculate additional metrics for the DataFrame.
+    This calculates:
+        - variance between data grouped by pbt_group_key
+        - Gini coefficient between data grouped by pbt_group_key
+        - Kendal Tau metric at the end of each pbt_epoch between data grouped by pbt_group_key
+    """
+
+    def ifill(*cols, n=df.columns.nlevels):
+        return (*cols, *(Placeholder,) * (n - len(cols)))
+
+    metric_key = metric if isinstance(metric, str) else "-".join(metric)
+    metric_values, epoch_end_steps, (value_shifter, value_shifter_with_first) = get_epoch_stats(df, metric)
     # Subtract initial mean from each group to get variance around start value
     centered_metric_values = metric_values.sub(value_shifter[metric_key].to_frame(), level="pbt_epoch")[
         metric_key
@@ -749,12 +817,31 @@ def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]
     A: pd.Series = metric_values.loc[epoch_end_steps.current_step, metric_key].drop(epoch_end_steps.iloc[0])
     try:
         B.index = A.index
-    except:
-        if epoch_end_steps.max().item() > 500_000:
-            # This wont work if some runs are dropped, need a better matcher
-            remote_breakpoint()
+    except ValueError:
+        # This wont work if some runs are dropped, need a better matcher
+        try:
+            max_step_B = B.index.get_level_values("current_step").max()
+            max_step_A = A.index.get_level_values("current_step").max()
+            keys_B = B[B.index.get_level_values("current_step") == max_step_B].index.get_level_values("pbt_group_key")
+            keys_A = A[A.index.get_level_values("current_step") == max_step_A].index.get_level_values("pbt_group_key")
+            not_in_A = keys_B.difference(keys_A)
+            B.drop((max_step_B, not_in_A.item()), inplace=True, axis=0)
+            B.index = A.index
+            AB = pd.concat([A, B], axis=1, names=[metric_key, "rank2"])
+            # try to throw away those in the last epoch that are not present in A, ignore the step
+        except Exception:
+            logger.exception("Failed to align A and B for kendall tau calculation")
+            B: pd.Series = metric_values.loc[epoch_end_steps.current_step, metric_key].drop(epoch_end_steps.iloc[-1])
+            A: pd.Series = metric_values.loc[epoch_end_steps.current_step, metric_key].drop(epoch_end_steps.iloc[0])
+            # Slicing without accounting for level can disrupt alignment
+            # Fill A with NaN for missing keys in B, cast steps to categorical to align
+            B.name = "rank2"
+            AB = pd.concat([A.reset_index(), B.reset_index()], axis=1, names=[metric_key, "rank2"])
+            AB = AB.loc[:, ~AB.columns.duplicated(keep="first")]
+            AB = AB.set_index(metric_values.index.names)
+    else:
         # ignore this error for short aborted runs, kendall will be NaN then
-    AB = pd.concat([A, B], axis=1, names=[metric_key, "rank2"])
+        AB = pd.concat([A, B], axis=1, names=[metric_key, "rank2"])
     AB.columns = [metric_key, "rank2"]
     # tau ~0 no consistent ordering, ~1 consistent ordering
     # high p value, no evidence of monotonic relationship. Tau is compatible with random change
@@ -847,7 +934,15 @@ def _drop_duplicate_steps(df: pd.DataFrame) -> pd.DataFrame:
     def ifill(*cols, n=df.columns.nlevels):
         return (*cols, *(Placeholder,) * (n - len(cols)))
 
-    first_change: tuple[str, int] | pd.Series = df[ifill("config", "pbt_epoch")].diff().iloc[1:].ne(0).idxmax()  # pyright: ignore[reportAssignmentType]
+    try:
+        first_change: tuple[str, int] | pd.Series = df[ifill("config", "pbt_epoch")].diff().iloc[1:].ne(0).idxmax()  # pyright: ignore[reportAssignmentType]
+    except ValueError as ve:
+        if "argmax of an empty sequence" not in str(ve):
+            raise
+        # no changes; likely early terminated experiment
+        remote_breakpoint()
+        raise
+
     if isinstance(first_change, (pd.Series, pd.DataFrame)):
         # rare case can be a series
         first_change = first_change.item()
@@ -1569,6 +1664,9 @@ def export_all_runs(
                     for file_path in file_paths:
                         arcname = file_path.relative_to(output_dir)
                         if zipf is not None:
+                            if not file_path.exists():
+                                logger.error(f"File {file_path} does not exist, cannot add to zip.")  # noqa: G004
+                                continue
                             zipf.write(file_path, arcname=str(arcname))
                     for error_return in errors:
                         error, tb, failed_path = error_return
@@ -1624,6 +1722,17 @@ def get_running_experiments(experiment_dir: str | Path = "./experiments"):
     return {k for k in running_experiments if "-v" not in k and "_restore" not in k}
 
 
+def load_excludes():
+    try:
+        with open("plot_exclude.txt", "r") as f:
+            file_excludes: set[str] = {line.strip() for line in f if line.strip() and not line.startswith("#")}
+            logger.info("Loaded plot excludes: %s", file_excludes)
+    except FileNotFoundError:
+        logger.info("No plot excludes found.")
+        file_excludes = set()
+    return file_excludes
+
+
 if __name__ == "__main__":
     # cd /path/to/parent
     # find dir1 dir2 -type f -iname '*.pdf' -printf '%P\n' | sed 's|^[^/]*/||' | zip -@ all_pdfs.zip
@@ -1633,13 +1742,7 @@ if __name__ == "__main__":
 
     from ray_utilities import nice_logger
 
-    try:
-        with open("plot_exclude.txt", "r") as f:
-            file_excludes: set[str] = {line.strip() for line in f if line.strip() and not line.startswith("#")}
-            logger.info("Loaded plot excludes: %s", file_excludes)
-    except FileNotFoundError:
-        logger.info("No plot excludes found.")
-        file_excludes = set()
+    file_excludes = load_excludes()
     running_experiments = get_running_experiments(Path(__file__).parent.parent.parent / "experiments")
 
     logger = nice_logger(logger, logging.INFO)
