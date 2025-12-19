@@ -1208,6 +1208,14 @@ def collect_restore_jobs(yaml_file: str, excludes: Sequence[str] = ()) -> dict[s
                     restore_glob = f"outputs/shared/experiments/*{env}*/*/*-{run_id}*"
                     restore_folders = [Path(p).absolute() for p in Path(".").glob(restore_glob)]
                     restore_folder = str(restore_folders[0]) if restore_folders else ""
+                    if not restore_folder:
+                        # check backup
+                        restore_glob = f"outputs/shared_backup/*{env}*/*/*-{run_id}*"
+                        restore_folders = [Path(p).absolute() for p in Path(".").glob(restore_glob)]
+                        restore_folder = str(restore_folders[0]) if restore_folders else ""
+                    if not restore_folder:
+                        print("ERROR: could not find a matching folder for", run_id)
+                        continue
                     # Compose entrypoint
                     entrypoint_py = None
                     # Try to extract python file from entrypoint_pattern

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import os
-from math import floor, log10, isnan
 from typing import TYPE_CHECKING, Any, Mapping, TypeVar
 
-import tree
 from ray.tune.logger import LoggerCallback
 
 from ray_utilities.constants import RAY_UTILITIES_NEW_LOG_FORMAT
@@ -17,35 +15,6 @@ if TYPE_CHECKING:
 
 
 LogMetricsDictT = TypeVar("LogMetricsDictT", bound="dict[str, Any] | AnyAutoExtendedLogMetricsDict | AnyLogMetricsDict")
-_M = TypeVar("_M", bound=Mapping[str, Any])
-
-
-def _round_floats(path, value: float | str | Any):
-    if not isinstance(value, float) or isnan(value) or value == 0.0 or "lr" == path[-1]:
-        return value
-    if abs(value) > 100:
-        return round(value, 2)
-    if abs(value) > 10:
-        return round(value, 3)
-    if abs(value) > 1:
-        return round(value, 4)
-    if abs(value) >= 0.0001:
-        return round(value, 6)
-    # round to at least two significant digits
-
-    digits = -floor(log10(abs(value))) + 1
-    return round(value, digits + 1)
-
-
-def round_floats(results: _M) -> _M:
-    """
-    Round all float values to 6 decimal places for better readability or at last two significant digits if lower.
-    Ignores learning_rate (lr)
-    """
-    return tree.map_structure_with_path(
-        _round_floats,
-        results,
-    )  # pyright: ignore[reportReturnType]
 
 
 class NewStyleLoggerCallback(LoggerCallback):

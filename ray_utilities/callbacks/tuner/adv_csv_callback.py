@@ -13,9 +13,9 @@ from ray.air.constants import EXPR_PROGRESS_FILE
 from ray.tune.logger import CSVLoggerCallback
 
 from ray_utilities.callbacks.tuner._file_logger_fork_mixin import FileLoggerForkMixin
-from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback, round_floats
+from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback
 from ray_utilities.constants import DEFAULT_EVAL_METRIC
-from ray_utilities.misc import resolve_default_eval_metric
+from ray_utilities.misc import resolve_default_eval_metric, round_floats
 from ray_utilities.postprocessing import remove_videos
 
 if TYPE_CHECKING:

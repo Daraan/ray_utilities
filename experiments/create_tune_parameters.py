@@ -8,6 +8,7 @@ Ray Domains for use in Ray Tune.
 from __future__ import annotations
 
 import json
+import time
 from math import log2
 from pathlib import Path
 from typing import Any, Literal, Mapping
@@ -23,8 +24,8 @@ from optuna.distributions import (
 
 from ray_utilities.config.parser.default_argument_parser import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
+from ray_utilities.misc import round_floats
 from ray_utilities.setup.extensions import load_distributions_from_json
-import time
 
 __all__ = [
     "default_distributions",
@@ -82,6 +83,7 @@ default_distributions: dict[str, DistributionDefinition] = {
     # Dummy value --tune test
     "test": {"grid_search": [1, 2, 3]},
 }
+default_distributions = round_floats(default_distributions)
 
 seed_options = [42, 128, 0, 480, 798]
 

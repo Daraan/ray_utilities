@@ -28,11 +28,10 @@ notes: |
   - Use GAE and critic
 # --- Envs --- #
 <mujoco_envs>:
-- Walker2d-v5
+- use another key
 <mujoco_envs_ext>:
 - HumanoidStandup-v5
 - Pusher-v5
-- InvertedPendulum-v5
 - Reacher-v5
 <basic_envs>:
 - Swimmer-v5
@@ -40,6 +39,8 @@ notes: |
 - Acrobot-v1
 - LunarLander-v3
 - Ant-v5
+- Walker2d-v5
+- InvertedPendulum-v5
 - InvertedDoublePendulum-v5
 - Hopper-v5
 - Humanoid-v5
@@ -127,10 +128,31 @@ pbt_fine_batch_size_base:
           - No corresponding online wandb run found.
           multiple: no offline history found, No corresponding online wandb run
             found.
-    (Swimmer-v5):
-      tws47f2512141710e0f34:
+      tws47f25121522581baf4:
+        status: RESTORE
+        submission_id:
+          pbt_fine_batch_size_base_HalfCheetah-v5_2025-12-15_22:58:29_restore_2025-12-17_23:38:08_restore_2025-12-19_01:24:24_restore_2025-12-19_02:44:20
+      tws47f2512190254459b4:
         status: RUNNING
-        submission_id: pbt_fine_batch_size_base_Swimmer-v5_2025-12-14_17:10:50
+        submission_id:
+          pbt_fine_batch_size_base_HalfCheetah-v5_2025-12-19_02:45:47
+    (Swimmer-v5):
+      tws47f2512152258a76a4:
+        status: RESTORE
+        submission_id:
+          pbt_fine_batch_size_base_Swimmer-v5_2025-12-15_22:58:29_restore_2025-12-17_23:38:08_restore_2025-12-19_01:24:24
+      tws47f251219024619be4:
+        status: RUNNING
+        submission_id: pbt_fine_batch_size_base_Swimmer-v5_2025-12-19_02:45:47
+    (Walker2d-v5):
+      tws47f251219025284e34:
+        status: RUNNING
+        submission_id: pbt_fine_batch_size_base_Walker2d-v5_2025-12-19_02:45:47
+    (InvertedPendulum-v5):
+      tws47f25121902532f944:
+        status: RUNNING
+        submission_id:
+          pbt_fine_batch_size_base_InvertedPendulum-v5_2025-12-19_02:45:47
 pbt_fine_batch_size_base_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -211,11 +233,15 @@ pbt_fine_batch_size_base_large:
           - No corresponding online wandb run found.
           multiple: no offline history found, No corresponding online wandb run
             found.
-    (Swimmer-v5):
-      tws47f251214171113784:
-        status: RUNNING
+      tws47f2512152259f42a4:
+        status: SUCCEEDED
         submission_id:
-          pbt_fine_batch_size_base_large_Swimmer-v5_2025-12-14_17:10:50
+          pbt_fine_batch_size_base_large_HalfCheetah-v5_2025-12-15_22:58:29_restore_2025-12-17_23:38:08_restore_2025-12-19_01:24:24
+    (Swimmer-v5):
+      tws47f2512152258c3374:
+        status: RESTORE
+        submission_id:
+          pbt_fine_batch_size_base_large_Swimmer-v5_2025-12-15_22:58:29_restore_2025-12-17_23:38:08_restore_2025-12-19_01:24:24
 pbt_fine_minibatch_size_base:
   comment: tune minibatch_size with fixed train_batch_size_per_learner=2048
   entrypoint_resources:
@@ -310,7 +336,7 @@ pbt_fine_minibatch_size_base:
           multiple: online history incomplete, offline history broken
     (Swimmer-v5):
       tws47f251214171157a64:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_base_Swimmer-v5_2025-12-14_17:10:50
 pbt_fine_minibatch_size_large_base:
@@ -400,7 +426,7 @@ pbt_fine_minibatch_size_large_base:
         status: SUCCEEDED
         note: restored x2 check data
         submission_id:
-          pbt_fine_minibatch_size_large_base_HalfCheetah-v5_2025-12-13_12:05:57_restore_2025-12-13_15:53:33
+          pbt_fine_minibatch_size_large_base_HalfCheetah-v5_2025-12-13_12:05:57_restore_2025-12-13_15:53:33_restore_2025-12-13_22:19:50
         failures:
           tws47f251213120615df4Xcbf71C11Fcbf71C01S47jU:
           - online history incomplete
@@ -411,10 +437,13 @@ pbt_fine_minibatch_size_large_base:
           tws47f251213120615df4Xcbf71C17Fcbf71C02S47jU:
           - online history incomplete
           multiple: online history incomplete
-      tws47f2512140223103d4:
-        status: STOPPED
+    (Swimmer-v5):
+      tws47f251215225930f84:
+        status: SUCCEEDED
+        note: succeeded on
+          pbt_fine_minibatch_size_large_base_Swimmer-v5_2025-12-15_22:58:29_restore_2025-12-17_23:38:08
         submission_id:
-          pbt_fine_minibatch_size_large_base_HalfCheetah-v5_2025-12-13_12:05:57_restore_2025-12-13_15:53:33_restore_2025-12-13_22:19:50
+          pbt_fine_minibatch_size_large_base_Swimmer-v5_2025-12-15_22:58:29_restore_2025-12-17_23:38:08_restore_2025-12-19_01:24:24
 pbt_fine_num_envs:
   # This is a comment
   comment: small minibatch_size=256 and train_batch_size=2048
@@ -460,7 +489,7 @@ pbt_fine_num_envs:
         status: FAILED
         submission_id: pbt_fine_num_envs_HalfCheetah-v5_2025-12-13_12:05:57
       tws47f2512140226b5124:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_num_envs_HalfCheetah-v5_2025-12-13_12:05:57_restore_2025-12-13_22:19:50
       HalfCheetah-v5:
@@ -468,8 +497,14 @@ pbt_fine_num_envs:
         submission_id: pbt_fine_num_envs_HalfCheetah-v5_2025-12-13_12:05:57
     (Swimmer-v5):
       tws47f25121417143e8d4:
-        status: RUNNING
+        status: FAILED
         submission_id: pbt_fine_num_envs_Swimmer-v5_2025-12-14_17:10:50
+      tws47f251215225918774:
+        status: FAILED
+        submission_id: pbt_fine_num_envs_Swimmer-v5_2025-12-15_22:58:29
+      tws47f2512170236076a4:
+        status: FAILED
+        submission_id: pbt_fine_num_envs_Swimmer-v5_2025-12-17_02:35:42
 pbt_fine_num_envs_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale
@@ -523,6 +558,13 @@ pbt_fine_num_envs_large:
         status: SUCCEEDED
         submission_id:
           pbt_fine_num_envs_large_HalfCheetah-v5_2025-12-13_12:05:57_restore_2025-12-13_22:19:50
+    (Swimmer-v5):
+      tws47f251215230094cb4:
+        status: FAILED
+        submission_id: pbt_fine_num_envs_large_Swimmer-v5_2025-12-15_22:58:29
+      tws47f2512170416c6ff4:
+        status: SUCCEEDED
+        submission_id: pbt_fine_num_envs_large_Swimmer-v5_2025-12-17_02:35:42
 pbt_fine_clip_param:
   # TODO: Change to base
   <ENV_TYPE>:
@@ -606,9 +648,17 @@ pbt_fine_clip_param_base_large:
         submission_id:
     (Swimmer-v5):
       tws47f251214171599af4:
-        status: RUNNING
+        status: FAILED
         submission_id:
           pbt_fine_clip_param_base_large_Swimmer-v5_2025-12-14_17:10:50
+      tws47f2512152300cab44:
+        status: FAILED
+        submission_id:
+          pbt_fine_clip_param_base_large_Swimmer-v5_2025-12-15_22:58:29
+      tws47f25121704165c6c4:
+        status: SUCCEEDED
+        submission_id:
+          pbt_fine_clip_param_base_large_Swimmer-v5_2025-12-17_02:35:42
 pbt_fine_entropy_coeff_base:
   # TODO: Change to base
   <ENV_TYPE>:
@@ -715,8 +765,14 @@ pbt_fine_gamma_base:
           pbt_fine_gamma_base_HalfCheetah-v5_2025-12-13_12:05:57_restore_2025-12-13_14:26:31_restore_2025-12-13_15:53:33
     (Swimmer-v5):
       tws47f25121417139b474:
-        status: RUNNING
+        status: STOPPED
         submission_id: pbt_fine_gamma_base_Swimmer-v5_2025-12-14_17:10:50
+      tws47f251215230289804:
+        status: FAILED
+        submission_id: pbt_fine_gamma_base_Swimmer-v5_2025-12-15_22:58:29
+      tws47f2512170416f7bd4:
+        status: SUCCEEDED
+        submission_id: pbt_fine_gamma_base_Swimmer-v5_2025-12-17_02:35:42
 pbt_fine_gamma_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -756,9 +812,6 @@ pbt_fine_gamma_large:
         submission_id: pbt_fine_gamma_large_Hopper-v5_2025-12-13_01:44:34
     (Humanoid-v5):
       tws47f2512130621cb984:
-        status: RESTORE
-        submission_id: pbt_fine_gamma_large_Humanoid-v5_2025-12-13_01:44:34
-      tws47f251214050816664:
         status: SUCCEEDED
         submission_id:
           pbt_fine_gamma_large_Humanoid-v5_2025-12-13_01:44:34_restore_2025-12-14_02:43:41
@@ -769,7 +822,7 @@ pbt_fine_gamma_large:
           pbt_fine_gamma_large_HalfCheetah-v5_2025-12-13_12:05:57_restore_2025-12-13_14:26:31
     (Swimmer-v5):
       tws47f251214171313264:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_fine_gamma_large_Swimmer-v5_2025-12-14_17:10:50
 pbt_fine_lr_base:
   entrypoint_resources:
@@ -807,20 +860,19 @@ pbt_fine_lr_base:
         submission_id: pbt_fine_lr_base_Hopper-v5_2025-12-13_01:44:34
     (Humanoid-v5):
       tws47f25121306217ba34:
-        status: RESTORE
-        submission_id: pbt_fine_lr_base_Humanoid-v5_2025-12-13_01:44:34
-      tws47f251214053503494:
         status: SUCCEEDED
         submission_id:
           pbt_fine_lr_base_Humanoid-v5_2025-12-13_01:44:34_restore_2025-12-14_02:43:41
     (HalfCheetah-v5):
       tws47f251213121476df4:
         status: RESTORE
-        submission_id: pbt_fine_lr_base_HalfCheetah-v5_2025-12-13_12:05:57
-      tws47f2512140726a26c4:
-        status: RUNNING
         submission_id:
           pbt_fine_lr_base_HalfCheetah-v5_2025-12-13_12:05:57_restore_2025-12-14_02:43:41
+      tws47f25121704160f394:
+        status: SUCCEEDED
+        notes: nearly done
+        submission_id:
+          pbt_fine_lr_base_HalfCheetah-v5_2025-12-17_02:35:42_restore_2025-12-17_23:38:08_restore_2025-12-19_01:24:24
 pbt_fine_lr_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale  - need to repeat because of 2 top groups
@@ -862,9 +914,6 @@ pbt_fine_lr_large:
         submission_id: pbt_fine_lr_large_Hopper-v5_2025-12-13_01:44:34
     (Humanoid-v5):
       tws47f25121306216cda4:
-        status: RESTORE
-        submission_id: pbt_fine_lr_large_Humanoid-v5_2025-12-13_01:44:34
-      tws47f251214080260d74:
         status: SUCCEEDED
         submission_id:
           pbt_fine_lr_large_Humanoid-v5_2025-12-13_01:44:34_restore_2025-12-14_02:43:41
@@ -875,8 +924,14 @@ pbt_fine_lr_large:
           pbt_fine_lr_large_HalfCheetah-v5_2025-12-13_12:05:57_restore_2025-12-13_14:26:31_restore_2025-12-13_15:53:33
     (Swimmer-v5):
       tws47f251214171327be4:
-        status: RUNNING
+        status: STOPPED
         submission_id: pbt_fine_lr_large_Swimmer-v5_2025-12-14_17:10:50
+      tws47f25121523009ba04:
+        status: FAILED
+        submission_id: pbt_fine_lr_large_Swimmer-v5_2025-12-15_22:58:29
+      tws47f2512170416df564:
+        status: SUCCEEDED
+        submission_id: pbt_fine_lr_large_Swimmer-v5_2025-12-17_02:35:42
 pbt_fine_vf_clip_param_base:
   entrypoint_resources:
     persistent_node: 1
@@ -928,6 +983,11 @@ pbt_fine_vf_clip_param_base:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_clip_param_base_HalfCheetah-v5_2025-12-13_12:05:57_restore_2025-12-13_14:26:31_restore_2025-12-13_15:53:33
+    (Swimmer-v5):
+      tws47f25121704168c2c4:
+        status: SUCCEEDED
+        submission_id:
+          pbt_fine_vf_clip_param_base_Swimmer-v5_2025-12-17_02:35:42
 pbt_fine_grad_clip_base:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -939,15 +999,11 @@ pbt_fine_grad_clip_base:
 
   run_ids:
     (CartPole-v1):
-      tws47f2512101836b6024:
-        status: STOPPED
-        submission_id:
-          pbt_fine_grad_clip_base_CartPole-v1_2025-12-10_17:30:56_restore_2025-12-10_19:03:44
       tws47f251210215321014:
         status: SUCCEEDED
         submission_id: pbt_fine_grad_clip_base_CartPole-v1_2025-12-10_21:53:14
-      CartPole-v1_2025-12-10_17:30:56_restore:
-        status: STOPPED
+      tws47f2512101836b6024:
+        status: UNKNOWN (Deleted)
         submission_id:
           pbt_fine_grad_clip_base_CartPole-v1_2025-12-10_17:30:56_restore_2025-12-10_19:03:44
     (Acrobot-v1):
@@ -983,13 +1039,21 @@ pbt_fine_grad_clip_base:
         submission_id: pbt_fine_grad_clip_base_Humanoid-v5_2025-12-13_01:44:34
     (Hopper-v5):
       tws47f2512130621cc004:
-        status: STOPPED
+        status: SUCCEEDED
         submission_id: pbt_fine_grad_clip_base_Hopper-v5_2025-12-13_01:44:34
+      tws47f2512171455e2444:
+        status: SUCCEEDED
+        submission_id:
+          pbt_fine_grad_clip_base_Hopper-v5_2025-12-17_02:35:42_restore_2025-12-17_23:38:08_restore_2025-12-19_01:24:24
     (HalfCheetah-v5):
       tws47f2512131209518c4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_HalfCheetah-v5_2025-12-13_12:05:57_restore_2025-12-13_14:26:31_restore_2025-12-13_15:53:33
+    (Swimmer-v5):
+      tws47f2512171428f5e44:
+        status: SUCCEEDED
+        submission_id: pbt_fine_grad_clip_base_Swimmer-v5_2025-12-17_02:35:42
 pbt_fine_grad_clip_base_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -1041,3 +1105,10 @@ pbt_fine_grad_clip_base_large:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_large_HalfCheetah-v5_2025-12-13_12:05:57_restore_2025-12-13_14:26:31
+    (Swimmer-v5):
+      tws47f2512171504c6934:
+        status: SUCCEEDED
+        note: succeeded on
+          pbt_fine_grad_clip_base_large_Swimmer-v5_2025-12-17_02:35:42_restore_2025-12-17_23:38:08
+        submission_id:
+          pbt_fine_grad_clip_base_large_Swimmer-v5_2025-12-17_02:35:42_restore_2025-12-17_23:38:08_restore_2025-12-19_01:24:24

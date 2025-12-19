@@ -1,0 +1,4 @@
+# Add files / part of filenames here that are to be excluded from visualization
+dev-workspace
+TESTING
+tws47f25112602186e2d4

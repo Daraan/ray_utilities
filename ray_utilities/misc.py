@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 from enum import Enum
+from math import floor, isnan, log10
 from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, cast, overload
 
 import base62
@@ -25,6 +26,7 @@ import psutil
 import pyarrow.fs as pyfs
 import ray
 import ray.exceptions
+import tree
 from frozendict import frozendict
 from ray.experimental import tqdm_ray
 from ray.rllib.utils.metrics import (
@@ -1184,3 +1186,34 @@ def get_available_memory_bytes() -> int:
                 available_mem, slurm_mem_limit - (mem.total - mem.available), slurm_mem_limit - my_mem_usage
             )
     return int(available_mem)
+
+
+def _round_floats(path, value: float | str | Any):
+    if not isinstance(value, float) or isnan(value) or value == 0.0 or "lr" == path[-1]:
+        return value
+    if abs(value) > 100:
+        return round(value, 2)
+    if abs(value) > 10:
+        return round(value, 3)
+    if abs(value) > 1:
+        return round(value, 4)
+    if abs(value) >= 0.0001:
+        return round(value, 6)
+    # round to at least two significant digits
+
+    digits = -floor(log10(abs(value))) + 1
+    return round(value, digits + 1)
+
+
+_M = TypeVar("_M", bound=Mapping[str, Any])
+
+
+def round_floats(results: _M) -> _M:
+    """
+    Round all float values to 6 decimal places for better readability or at last two significant digits if lower.
+    Ignores learning_rate (lr)
+    """
+    return tree.map_structure_with_path(
+        _round_floats,
+        results,
+    )  # pyright: ignore[reportReturnType]
