@@ -1217,3 +1217,24 @@ def round_floats(results: _M) -> _M:
         _round_floats,
         results,
     )  # pyright: ignore[reportReturnType]
+
+
+def cast_numpy_numbers(obj: Any) -> Any:
+    """
+    Recursively convert all numpy numeric types in the given object to Python built-in int or float.
+
+    Args:
+        obj: The object to process (can be dict, list, tuple, or a scalar).
+
+    Returns:
+        The object with all numpy numbers converted to built-in types.
+    """
+    if isinstance(obj, dict):
+        return {k: cast_numpy_numbers(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return type(obj)(cast_numpy_numbers(v) for v in obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    return obj

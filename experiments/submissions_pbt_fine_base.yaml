@@ -131,26 +131,31 @@ pbt_fine_batch_size_base:
       tws47f25121522581baf4:
         status: RESTORE
         submission_id:
-          pbt_fine_batch_size_base_HalfCheetah-v5_2025-12-15_22:58:29_restore_2025-12-17_23:38:08_restore_2025-12-19_01:24:24_restore_2025-12-19_02:44:20
+          pbt_fine_batch_size_base_HalfCheetah-v5_2025-12-15_22:58:29_restore_2025-12-17_23:38:08_restore_2025-12-19_01:24:24_restore_2025-12-19_02:44:20_restore_2025-12-19_11:55:46
       tws47f2512190254459b4:
-        status: RUNNING
+        status: FAILED
         submission_id:
           pbt_fine_batch_size_base_HalfCheetah-v5_2025-12-19_02:45:47
     (Swimmer-v5):
       tws47f2512152258a76a4:
         status: RESTORE
+        note: failed to find checkpoint?
         submission_id:
           pbt_fine_batch_size_base_Swimmer-v5_2025-12-15_22:58:29_restore_2025-12-17_23:38:08_restore_2025-12-19_01:24:24
       tws47f251219024619be4:
-        status: RUNNING
+        status: RESTORE
         submission_id: pbt_fine_batch_size_base_Swimmer-v5_2025-12-19_02:45:47
+      tws47f25121911570b684:
+        status: RUNNING
+        submission_id:
+          pbt_fine_batch_size_base_Swimmer-v5_2025-12-19_02:45:47_restore_2025-12-19_11:55:46
     (Walker2d-v5):
       tws47f251219025284e34:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_fine_batch_size_base_Walker2d-v5_2025-12-19_02:45:47
     (InvertedPendulum-v5):
       tws47f25121902532f944:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_InvertedPendulum-v5_2025-12-19_02:45:47
 pbt_fine_batch_size_base_large:
@@ -242,6 +247,24 @@ pbt_fine_batch_size_base_large:
         status: RESTORE
         submission_id:
           pbt_fine_batch_size_base_large_Swimmer-v5_2025-12-15_22:58:29_restore_2025-12-17_23:38:08_restore_2025-12-19_01:24:24
+      tws47f2512190339ec434:
+        status: FAILED
+        submission_id:
+          pbt_fine_batch_size_base_large_Swimmer-v5_2025-12-19_02:45:47
+    (Walker2d-v5):
+      tws47f2512190351459b4:
+        status: RESTORE
+        submission_id:
+          pbt_fine_batch_size_base_large_Walker2d-v5_2025-12-19_02:45:47
+      tws47f2512191210790f4:
+        status: FAILED
+        submission_id:
+          pbt_fine_batch_size_base_large_Walker2d-v5_2025-12-19_02:45:47_restore_2025-12-19_11:55:46
+    (InvertedPendulum-v5):
+      tws47f251219041264df4:
+        status: FAILED
+        submission_id:
+          pbt_fine_batch_size_base_large_InvertedPendulum-v5_2025-12-19_02:45:47
 pbt_fine_minibatch_size_base:
   comment: tune minibatch_size with fixed train_batch_size_per_learner=2048
   entrypoint_resources:
@@ -339,6 +362,24 @@ pbt_fine_minibatch_size_base:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_base_Swimmer-v5_2025-12-14_17:10:50
+    (Walker2d-v5):
+      tws47f25121904150a124:
+        status: RESTORE
+        submission_id:
+          pbt_fine_minibatch_size_base_Walker2d-v5_2025-12-19_02:45:47
+      tws47f2512191315ad0c4:
+        status: SUCCEEDED
+        submission_id:
+          pbt_fine_minibatch_size_base_Walker2d-v5_2025-12-19_02:45:47_restore_2025-12-19_11:55:46
+    (InvertedPendulum-v5):
+      tws47f25121904181a2f4:
+        status: RESTORE
+        submission_id:
+          pbt_fine_minibatch_size_base_InvertedPendulum-v5_2025-12-19_02:45:47
+      tws47f2512191414ccf24:
+        status: RESTORE
+        submission_id:
+          pbt_fine_minibatch_size_base_InvertedPendulum-v5_2025-12-19_02:45:47_restore_2025-12-19_11:55:46
 pbt_fine_minibatch_size_large_base:
   comment: tune minibatch_size with fixed train_batch_size_per_learner=8192
   entrypoint_resources:
@@ -444,6 +485,20 @@ pbt_fine_minibatch_size_large_base:
           pbt_fine_minibatch_size_large_base_Swimmer-v5_2025-12-15_22:58:29_restore_2025-12-17_23:38:08
         submission_id:
           pbt_fine_minibatch_size_large_base_Swimmer-v5_2025-12-15_22:58:29_restore_2025-12-17_23:38:08_restore_2025-12-19_01:24:24
+    (Walker2d-v5):
+      tws47f2512190433b21e4:
+        status: RESTORE
+        submission_id:
+          pbt_fine_minibatch_size_large_base_Walker2d-v5_2025-12-19_02:45:47
+      tws47f251219142181bc4:
+        status: SUCCEEDED
+        submission_id:
+          pbt_fine_minibatch_size_large_base_Walker2d-v5_2025-12-19_02:45:47_restore_2025-12-19_11:55:46
+    (InvertedPendulum-v5):
+      tws47f2512190506b6c04:
+        status: SUCCEEDED
+        submission_id:
+          pbt_fine_minibatch_size_large_base_InvertedPendulum-v5_2025-12-19_02:45:47
 pbt_fine_num_envs:
   # This is a comment
   comment: small minibatch_size=256 and train_batch_size=2048
@@ -505,6 +560,17 @@ pbt_fine_num_envs:
       tws47f2512170236076a4:
         status: FAILED
         submission_id: pbt_fine_num_envs_Swimmer-v5_2025-12-17_02:35:42
+      tws47f2512190512d8914:
+        status: FAILED
+        submission_id: pbt_fine_num_envs_Swimmer-v5_2025-12-19_02:45:47
+    (Walker2d-v5):
+      tws47f2512190539d1c34:
+        status: SUCCEEDED
+        submission_id: pbt_fine_num_envs_Walker2d-v5_2025-12-19_02:45:47
+    (InvertedPendulum-v5):
+      tws47f251219062159164:
+        status: FAILED
+        submission_id: pbt_fine_num_envs_InvertedPendulum-v5_2025-12-19_02:45:47
 pbt_fine_num_envs_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale
@@ -565,6 +631,15 @@ pbt_fine_num_envs_large:
       tws47f2512170416c6ff4:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_large_Swimmer-v5_2025-12-17_02:35:42
+    (Walker2d-v5):
+      tws47f25121906492ee24:
+        status: SUCCEEDED
+        submission_id: pbt_fine_num_envs_large_Walker2d-v5_2025-12-19_02:45:47
+    (InvertedPendulum-v5):
+      tws47f251219074021754:
+        status: SUCCEEDED
+        submission_id:
+          pbt_fine_num_envs_large_InvertedPendulum-v5_2025-12-19_02:45:47
 pbt_fine_clip_param:
   # TODO: Change to base
   <ENV_TYPE>:
@@ -659,6 +734,16 @@ pbt_fine_clip_param_base_large:
         status: SUCCEEDED
         submission_id:
           pbt_fine_clip_param_base_large_Swimmer-v5_2025-12-17_02:35:42
+    (Walker2d-v5):
+      tws47f251219074363c84:
+        status: SUCCEEDED
+        submission_id:
+          pbt_fine_clip_param_base_large_Walker2d-v5_2025-12-19_02:45:47
+    (InvertedPendulum-v5):
+      tws47f251219074630784:
+        status: SUCCEEDED
+        submission_id:
+          pbt_fine_clip_param_base_large_InvertedPendulum-v5_2025-12-19_02:45:47
 pbt_fine_entropy_coeff_base:
   # TODO: Change to base
   <ENV_TYPE>:
@@ -773,6 +858,15 @@ pbt_fine_gamma_base:
       tws47f2512170416f7bd4:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_base_Swimmer-v5_2025-12-17_02:35:42
+    (Walker2d-v5):
+      tws47f2512191019e8c54:
+        status: SUCCEEDED
+        submission_id: pbt_fine_gamma_base_Walker2d-v5_2025-12-19_02:45:47
+    (InvertedPendulum-v5):
+      tws47f2512191022f5304:
+        status: FAILED
+        submission_id:
+          pbt_fine_gamma_base_InvertedPendulum-v5_2025-12-19_02:45:47
 pbt_fine_gamma_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -824,6 +918,15 @@ pbt_fine_gamma_large:
       tws47f251214171313264:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_large_Swimmer-v5_2025-12-14_17:10:50
+    (Walker2d-v5):
+      tws47f2512191315fbe54:
+        status: SUCCEEDED
+        submission_id: pbt_fine_gamma_large_Walker2d-v5_2025-12-19_02:45:47
+    (InvertedPendulum-v5):
+      tws47f2512191517cf6e4:
+        status: RUNNING
+        submission_id:
+          pbt_fine_gamma_large_InvertedPendulum-v5_2025-12-19_02:45:47
 pbt_fine_lr_base:
   entrypoint_resources:
     persistent_node: 1
@@ -873,6 +976,18 @@ pbt_fine_lr_base:
         notes: nearly done
         submission_id:
           pbt_fine_lr_base_HalfCheetah-v5_2025-12-17_02:35:42_restore_2025-12-17_23:38:08_restore_2025-12-19_01:24:24
+    (Swimmer-v5):
+      tws47f25121915301b8a4:
+        status: RUNNING
+        submission_id: pbt_fine_lr_base_Swimmer-v5_2025-12-19_02:45:47
+    (Walker2d-v5):
+      tws47f2512191554f1484:
+        status: RUNNING
+        submission_id: pbt_fine_lr_base_Walker2d-v5_2025-12-19_02:45:47
+    (InvertedPendulum-v5):
+      tws47f25121916398d9f4:
+        status: RUNNING
+        submission_id: pbt_fine_lr_base_InvertedPendulum-v5_2025-12-19_02:45:47
 pbt_fine_lr_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale  - need to repeat because of 2 top groups
@@ -932,6 +1047,14 @@ pbt_fine_lr_large:
       tws47f2512170416df564:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_large_Swimmer-v5_2025-12-17_02:35:42
+    (Walker2d-v5):
+      tws47f25121916573b6c4:
+        status: RUNNING
+        submission_id: pbt_fine_lr_large_Walker2d-v5_2025-12-19_02:45:47
+    (InvertedPendulum-v5):
+      tws47f251219174839514:
+        status: SUCCEEDED
+        submission_id: pbt_fine_lr_large_InvertedPendulum-v5_2025-12-19_02:45:47
 pbt_fine_vf_clip_param_base:
   entrypoint_resources:
     persistent_node: 1
@@ -988,6 +1111,16 @@ pbt_fine_vf_clip_param_base:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_clip_param_base_Swimmer-v5_2025-12-17_02:35:42
+    (Walker2d-v5):
+      tws47f2512191812eb434:
+        status: RUNNING
+        submission_id:
+          pbt_fine_vf_clip_param_base_Walker2d-v5_2025-12-19_02:45:47
+    (InvertedPendulum-v5):
+      tws47f25121918152e744:
+        status: RESTORE
+        submission_id:
+          pbt_fine_vf_clip_param_base_InvertedPendulum-v5_2025-12-19_02:45:47
 pbt_fine_grad_clip_base:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -1054,6 +1187,15 @@ pbt_fine_grad_clip_base:
       tws47f2512171428f5e44:
         status: SUCCEEDED
         submission_id: pbt_fine_grad_clip_base_Swimmer-v5_2025-12-17_02:35:42
+    (Walker2d-v5):
+      tws47f2512191818e58a4:
+        status: RESTORE
+        submission_id: pbt_fine_grad_clip_base_Walker2d-v5_2025-12-19_02:45:47
+    (InvertedPendulum-v5):
+      tws47f25121918215ba44:
+        status: RUNNING
+        submission_id:
+          pbt_fine_grad_clip_base_InvertedPendulum-v5_2025-12-19_02:45:47
 pbt_fine_grad_clip_base_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -1112,3 +1254,13 @@ pbt_fine_grad_clip_base_large:
           pbt_fine_grad_clip_base_large_Swimmer-v5_2025-12-17_02:35:42_restore_2025-12-17_23:38:08
         submission_id:
           pbt_fine_grad_clip_base_large_Swimmer-v5_2025-12-17_02:35:42_restore_2025-12-17_23:38:08_restore_2025-12-19_01:24:24
+    (Walker2d-v5):
+      tws47f2512191830a3b24:
+        status: SUCCEEDED
+        submission_id:
+          pbt_fine_grad_clip_base_large_Walker2d-v5_2025-12-19_02:45:47
+    (InvertedPendulum-v5):
+      tws47f2512191930fc544:
+        status: SUCCEEDED
+        submission_id:
+          pbt_fine_grad_clip_base_large_InvertedPendulum-v5_2025-12-19_02:45:47

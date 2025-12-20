@@ -24,7 +24,7 @@ from optuna.distributions import (
 
 from ray_utilities.config.parser.default_argument_parser import DefaultArgumentParser
 from ray_utilities.dynamic_config.dynamic_buffer_update import MAX_DYNAMIC_BATCH_SIZE
-from ray_utilities.misc import round_floats
+from ray_utilities.misc import cast_numpy_numbers, round_floats
 from ray_utilities.setup.extensions import load_distributions_from_json
 
 __all__ = [
@@ -83,7 +83,9 @@ default_distributions: dict[str, DistributionDefinition] = {
     # Dummy value --tune test
     "test": {"grid_search": [1, 2, 3]},
 }
-default_distributions = round_floats(default_distributions)
+
+default_distributions = round_floats(cast_numpy_numbers(default_distributions))
+
 
 seed_options = [42, 128, 0, 480, 798]
 

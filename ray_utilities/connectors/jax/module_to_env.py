@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 
 __all__ = [
-    "make_jax_module_to_env_connector",
+    "MakeJaxModuleToEnvConnector",
 ]
 
 
