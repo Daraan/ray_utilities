@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+# TODOS
+# NOTE: That the current code stores and caches trials that might have failed/stopped and are restored later
+# cause of this caching the trial data might not be complete!
+
 # pyright: reportAttributeAccessIssue=warning
 import concurrent.futures
-import json
 import logging
 import time
 import traceback
@@ -22,6 +25,7 @@ from typing_extensions import Final, Literal, Sentinel, TypeVarTuple, Unpack
 
 from ray_utilities.testing_utils import remote_breakpoint
 from ray_utilities.visualization._common import Placeholder, PlotOption
+from ray_utilities.misc import ExperimentKey
 
 try:
     from ruamel.yaml import YAML
@@ -124,10 +128,34 @@ sns.set_theme(
 # mpl.rcParams["savefig.facecolor"] = "#f7f7f7"
 
 
+def _cast_int_or_nan(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
 def ifill(
     *cols: Unpack[Ts], n: int
 ) -> tuple[Unpack[Ts]] | tuple[Unpack[Ts], Sentinel] | tuple[Unpack[Ts], Sentinel, Sentinel] | tuple[Sentinel, ...]:
     return (*cols, *(Placeholder,) * (n - len(cols)))
+
+
+class _NoReprDict(dict):
+    """Dict for faster debugging"""
+
+    def __repr__(self) -> str:
+        return "{...}"
+
+
+class _NoReprList(list):
+    """List for faster debugging"""
+
+    def __repr__(self) -> str:
+        return "{...}"
+
+
+_NoReprList = cast("type[list]", _NoReprList)
 
 
 def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=True) -> pd.DataFrame | dict[Any, Any]:
@@ -176,7 +204,7 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
             logger.info("Loaded cached full experiment data for run %s from %s", offline_run, FULL_EXPERIMENT_FILE)
             return df
     result_files = offline_run.glob("*/result*.json")
-    run_data = {}
+    run_data = _NoReprDict()
     num_errors = 0
     for result_file in tqdm(result_files):
         if result_file.name.endswith(".parent.json"):
@@ -216,9 +244,64 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
                 experiment_key = df.config.experiment_key.iloc[-1]
                 if not isinstance(experiment_key, str):
                     experiment_key = experiment_key.item()
-                assert result_file.name == "result.json" or experiment_key in result_file.name, (
-                    f"Experiment key {experiment_key} does does not match id in file name {result_file}"
-                )
+                if result_file.name != "result.json" and experiment_key not in result_file.name:
+                    # Due to a bug where orignal experiment was added to config.trial_id_history on continue
+                    remote_breakpoint()
+                    if experiment_key.endswith(ExperimentKey.RIGHT_PAD_CHAR):
+                        history = df.iloc[-1].config.trial_id_history
+                        history.index = history.index.get_level_values(0)  # remove all Placeholder
+                        indices = history.index[history == experiment_key].map(_cast_int_or_nan)
+                        idx = indices.max()
+                        if idx > 0:
+                            assert (
+                                idx > 1
+                            )  # as this only happens when a fork is continued the index should be at least 2
+                            max_index = history.index[history == experiment_key].map(_cast_int_or_nan).fillna(0).max()
+                            if idx == max_index:
+                                # drop the column
+                                df = df.drop(
+                                    [
+                                        # Try int and string
+                                        ("config", "trial_id_history", str(idx)),
+                                        ("config", "trial_id_history", idx),
+                                    ],
+                                    errors="ignore",
+                                )
+                            else:
+                                # drop and shift the other columns
+                                histories = df.config.trial_id_history.sort_index(axis=1).copy()
+                                original_experiment_keys = histories.pop("original_experiment_keys")
+                                epoch_columns = histories.columns.get_level_values(0)
+                                col_type = type(epoch_columns[0])
+                                epoch_columns = epoch_columns.map(int)
+                                levels_before = histories.columns.nlevels
+                                histories.columns = pd.RangeIndex(epoch_columns.min(), epoch_columns.max() + 1)
+                                cols_after = histories[list(range(idx + 1, len(histories.columns)))]
+                                histories = histories.drop(histories.columns[-1], axis=1)
+                                histories[list(range(idx, len(histories.columns)))] = cols_after
+                                # Wirte back multiindex columns
+                                histories["original_experiment_key"] = original_experiment_keys
+                                histories.columns = pd.MultiIndex.from_product(
+                                    [
+                                        ["config"],
+                                        ["trial_id_history"],
+                                        list(map(col_type, histories.columns)),
+                                        *[[Placeholder]] * (levels_before - 1),
+                                    ]
+                                )
+                                df = pd.concat(
+                                    [df.drop(("config", "trial_id_history"), axis=1), histories], axis=1
+                                ).sort_index(axis=1)
+                        else:
+                            raise ValueError(
+                                "Experiment key %s does not match filename. Possibly the history is incomplete."
+                            )
+
+                    else:
+                        # Raise
+                        assert result_file.name == "result.json" or experiment_key in result_file.name, (
+                            f"Experiment key {experiment_key} does does not match id in file name {result_file}"
+                        )
             except AttributeError as ae:
                 if "experiment_key" not in str(ae):
                     raise
@@ -242,6 +325,8 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
                     remote_breakpoint()
                     raise ValueError(f"Duplicate experiment_key {experiment_key} already present in {offline_run}")  # noqa: B904
         except Exception as e:  # noqa: PERF203
+            if "patched.json" in str(result_file):
+                continue
             num_errors += 1
             logger.error(f"Failed to load run data for {result_file}: {e!r}", exc_info=num_errors <= 2)  # noqa: G004
             if num_errors >= 6:
@@ -329,7 +414,7 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
             return df.loc[:, mask]
         return df.drop(columns=["run_id"], errors="ignore")
 
-    dfs: list[pd.DataFrame] = []
+    dfs: list[pd.DataFrame] = _NoReprList()
     for df in dataframes.values():
         df_clean = drop_run_id_columns(df)
         # Find the correct column name for 'training_iteration' in MultiIndex or single index
@@ -345,9 +430,9 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
         raise ValueError("No DataFrames to combine.")
     try:
         # If we tracked timers at some points the df levels might not match
-        combined_df = pd.concat(dfs, keys=dataframes.keys(), names=["run_id", "training_iteration"]).sort_index(
-            key=_base62_sort_key
-        )
+        combined_df = pd.concat(
+            cast("list[pd.DataFrame]", dfs), keys=dataframes.keys(), names=["run_id", "training_iteration"]
+        ).sort_index(key=_base62_sort_key)
         # Replace NaN in MultiIndex with the Placeholder sentinel
         if isinstance(combined_df.columns, pd.MultiIndex):
             new_tuples = [
@@ -390,7 +475,10 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
     def ifill(*cols):
         return (*cols, *(Placeholder,) * (depth - len(cols)))
 
-    continued_runs = which_continued(combined_df)
+    combined_df, perturbation_interval = add_missing_pbt_epoch(combined_df)
+    # if perturbation_inveral is None we possibly do not not have pbt_epoch entry which can cause a failure below
+    combined_df = _drop_duplicate_steps(combined_df)
+    continued_runs, combined_df = which_continued(combined_df)
     if continued_runs.empty:
         # likely because failed before first perturb
         combined_df.loc[:, ifill("config", "__pbt_main_branch__")] = False
@@ -426,19 +514,59 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
     return combined_df
 
 
+def add_missing_pbt_epoch(df: pd.DataFrame) -> tuple[pd.DataFrame, int | None]:
+    """Adds missing pbt_epoch column if not present based on fork_from parent_env_steps"""
+    if "pbt_epoch" in df.config:
+        return df, None
+    if "fork_from" not in df.config:
+        logger.warning("Cannot add pbt_epoch as no fork_from information is present.")
+        unique_index = df.index.get_level_values("run_id").unique()
+        if not unique_index.str.contains(ExperimentKey.FORK_SEPARATOR).any():
+            # no forked runs
+            indexer = ifill("config", "pbt_epoch", n=df.columns.nlevels)
+            df = df.copy()
+            df.loc[:, indexer] = 0
+        return df, None
+    depth = df.config.fork_from.columns.nlevels
+    fork_from = df.config.fork_from.droplevel(axis=1, level=list(range(1, depth)))
+    epoch_end_steps = np.nan_to_num(fork_from.parent_env_steps.unique()).astype(int)
+    diffs = np.diff(epoch_end_steps)
+    if (diffs[0] == diffs).all():
+        perturbation_interval = diffs[0]
+    elif (diffs[0] == diffs[:-1]).all():
+        perturbation_interval = diffs[0]
+    else:
+        # There kan be rare bug that a parent overstepped and therefore not all are unique
+        unique, counts = np.unique(diffs, return_counts=True)
+        cleaner_diffs = unique[counts > 1]
+        if len(cleaner_diffs) == 1:
+            perturbation_interval = cleaner_diffs[0]
+        else:
+            perturbation_interval = None
+            logger.warning(
+                "Cannot make a good guess on perturbation interval from fork_from parent_env_steps %s", epoch_end_steps
+            )
+    if perturbation_interval is not None:
+        # Estimate pbt_epochs
+        df = df.copy()
+        indexer = ifill("config", "pbt_epoch", n=df.columns.nlevels)
+        df.loc[:, indexer] = (df["current_step"] - 1) // perturbation_interval
+        df = df.sort_index(axis=1)
+    # else cannot make a good guess on the real pbt epochs
+    return df, perturbation_interval
+
+
 def _which_continued_legacy(df: pd.DataFrame) -> np.ndarray[Any, np.dtype[np.str_]]:
     # When we have no pbt_epoch we need other methods.
     try:
-        parent_ids = df.config.fork_from["parent_fork_id"].dropna().unique()
-    except AttributeError as ae:
-        if "unique" not in str(ae):
-            if "fork_from" in str(ae):
-                # no fork_from at all - maybe aborted early, or was never forked
-                return np.array([], dtype=str)
-            raise
-        # need to drop levels
         depth = df.config.fork_from.columns.nlevels
-        parent_ids = df.config.fork_from.droplevel(axis=1, level=list(range(1, depth))).parent_fork_id.dropna().unique()
+    except AttributeError as ae:
+        if "fork_from" in str(ae):
+            # no fork_from at all - maybe aborted early, or was never forked
+            return np.array([], dtype=str)
+        raise
+    fork_from = df.config.fork_from.droplevel(axis=1, level=list(range(1, depth)))
+    parent_ids = fork_from.parent_fork_id.dropna().unique()
     return parent_ids
 
 
@@ -482,46 +610,42 @@ def _get_group_stat(df: pd.DataFrame | pd.Series, group_key: str | Hashable):
     return tune[0]
 
 
-def which_continued(df: pd.DataFrame) -> pd.DataFrame:
+def which_continued(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Note for now we do not trust the __pbt_main_branch__
+    """
     # there is no continued key we need to check which run_id (in the index) spans over multiple pbt_epochs
-    resort = False
+    df = df.copy()
+    continued_legacy = None
     try:
         pbt_epochs = df[("config", "pbt_epoch")]
     except KeyError as ke:
         if "pbt_epoch" not in str(ke):
             raise
-        continued_ids = _which_continued_legacy(df)
-        # bring into expected format
-        continued = pd.DataFrame(index=continued_ids, columns=["continued"])
-        if continued.empty:
-            if df.shape[0] != df.index.nunique():
+        try:
+            df, perturbation_interval = add_missing_pbt_epoch(df)
+            pbt_epochs = df[("config", "pbt_epoch")]
+        except KeyError as e:
+            if "pbt_epoch" not in str(e):
+                # will only happen if fork_from is not in df.config
                 logger.warning(
-                    "Could not determine continued runs - no pbt_epoch and no fork_from parent_fork_id found."
+                    "pbt_epoch not found in df.config, likely also not df.config.fork_from. Assuming no forks."
                 )
-            else:
-                # Do not return all, else main_only will not work
-                logger.info("Run without any forks")
-            return continued
-        # How many epochs where they continued?
-        # parent_env_steps = df.config.fork_from.parent_env_steps
-
-        # This might be off when there was a reload or some other error:
-        perturbation_intervals = (
-            df.config.fork_from.droplevel(axis=1, level=list(range(1, df.config.fork_from.columns.nlevels)))
-            .parent_env_steps.fillna(0)
-            .astype(int)
-            .unique()
-        )
-        if len(perturbation_intervals) <= 1:
-            # was never perturbed, return empty
-            return pd.DataFrame(columns=["continued"])
-        perturbation_interval = perturbation_intervals[1]
-        # pbt_epochs_estimated = (parent_env_steps // perturbation_interval).groupby(level="run_id").max().reindex(continued.index, fill_value=0)
-        indexer = ifill("config", "pbt_epoch", n=df.columns.nlevels)
-        # As the perturbation_interval is the last step of an epoch we need to subtract 1
-        df.loc[:, indexer] = (df.current_step - 1) // perturbation_interval
-        pbt_epochs = df[("config", "pbt_epoch")]
-        resort = True
+                return pd.DataFrame(index=[], columns=["continued"]), df
+            # Note this also adds pbt_epoch
+            continued_ids = _which_continued_legacy(df)
+            # bring into expected format
+            continued = pd.DataFrame(index=continued_ids, columns=["continued"])
+            if continued.empty:
+                if df.shape[0] != df.index.nunique():
+                    logger.warning(
+                        "Could not determine continued runs - no pbt_epoch and no fork_from parent_fork_id found."
+                    )
+                else:
+                    # Do not return all, else main_only will not work
+                    logger.info("Run without any forks")
+                return continued, df
+            continued_legacy = continued
     if "pbt_group_key" not in df.config:
         from ray_utilities.tune.scheduler.grouped_top_pbt_scheduler import GroupedTopPBTTrialScheduler  # noqa: PLC0415
 
@@ -542,10 +666,8 @@ def which_continued(df: pd.DataFrame) -> pd.DataFrame:
 
         group_keys = df.apply(map_group_key, axis=1)
         df.loc[:, ifill("config", "pbt_group_key", n=df.columns.nlevels)] = group_keys
-        resort = True
 
-    if resort:
-        df.sort_index(axis=1, inplace=True)
+    df.sort_index(axis=1, inplace=True)
     # Ignore "training_iteration" in the index by resetting it if present
     idx_names = list(df.index.names)
     # if "training_iteration" in idx_names:
@@ -555,10 +677,25 @@ def which_continued(df: pd.DataFrame) -> pd.DataFrame:
     # Method 1: TODO: Maybe not correct for older runs that do not set it on perturb
     continued = epoch_counts[(epoch_counts > 1).values]  # type: ignore  # noqa: PD011
     continued.columns = ["continued"]
-    return continued
-    # Method 2:
-    mask = df[("config", "__pbt_main_branch__")] == True  # noqa: E712
-    return df[mask.values].index.get_level_values("run_id").unique()
+    # Method 2
+    if continued_legacy is not None:
+        if set(continued_legacy.index) != set(continued.index):
+            logger.warning
+            remote_breakpoint()
+        if (continued_legacy != continued).any().item():
+            logger.warning("Discrepancy between continued runs detected between methods.")
+            remote_breakpoint()
+    if "__pbt_main_branch__" in df.config:
+        main_branch_info = (
+            df[(df.config.__pbt_main_branch__).fillna(False).values].index.get_level_values("run_id").unique()
+        )
+        if (
+            not set(continued.index) == set(main_branch_info)
+            and not (df.config.__pbt_main_branch__).fillna(False).any().item()
+        ):
+            logger.warning("Continued runs do not match main branch runs.")
+            remote_breakpoint()
+    return continued, df
 
 
 def _connect_groups(last: pd.DataFrame, now: pd.DataFrame, stat_value: str | None) -> pd.DataFrame:
@@ -596,7 +733,7 @@ def check_metric_backport(df: pd.DataFrame, metric: str | tuple[str, ...]) -> st
         from ray_utilities.constants import EPISODE_RETURN_MEAN, EPISODE_RETURN_MEAN_EMA  # noqa: PLC0415
 
         # introduced it later
-        if EPISODE_RETURN_MEAN_EMA in df.evaluation:
+        if EPISODE_RETURN_MEAN_EMA in df.evaluation and not df.evaluation[EPISODE_RETURN_MEAN_EMA].isna().all().item():
             backport_metric = ("evaluation", EPISODE_RETURN_MEAN_EMA)
         else:
             backport_metric = ("evaluation", EPISODE_RETURN_MEAN)
@@ -605,7 +742,9 @@ def check_metric_backport(df: pd.DataFrame, metric: str | tuple[str, ...]) -> st
     return metric
 
 
-def get_epoch_stats(df, metric, *, individual_runs: bool = False):
+def get_epoch_stats(
+    df, metric, *, individual_runs: bool = False
+) -> tuple[pd.DataFrame, pd.DataFrame, tuple[pd.DataFrame, pd.DataFrame]]:
     # region Variance
     # backup = df
     def ifill(*cols, n=df.columns.nlevels):
@@ -649,6 +788,7 @@ def get_epoch_stats(df, metric, *, individual_runs: bool = False):
             )
         )
     epoch_end_steps.drop_duplicates(keep="first", inplace=True)
+    # NOTE: main_branch data is not backfilled here!
     main_branch_data = main_branch_data.set_index(ifill("current_step"), append=True)
     main_branch_data.index.names = [*main_branch_data.index.names[:-1], "current_step"]
     df = df.set_index(
@@ -678,13 +818,19 @@ def get_epoch_stats(df, metric, *, individual_runs: bool = False):
         epoch_end_steps.current_step
     )
     if not individual_runs:
-        last_epoch_values.loc[-1] = 0
+        # we want to add this as -1; but possibly the minium is 0?
+        if last_epoch_values.index.min().item() != 0:
+            remote_breakpoint()
+        last_epoch_values.loc[last_epoch_values.index.min() - 1] = 0
     else:
         new_head = pd.DataFrame(
             [[0] * len(last_epoch_values.columns)]
             * len(last_epoch_values.loc[0].index.get_level_values("experiment_key")),
             index=pd.MultiIndex.from_product(
-                [[-1], last_epoch_values.loc[0].index.get_level_values("experiment_key")],
+                [
+                    [last_epoch_values.index.min() - 1],
+                    last_epoch_values.loc[0].index.get_level_values("experiment_key"),
+                ],
                 names=last_epoch_values.index.names,
             ),
         )
@@ -754,13 +900,20 @@ def get_epoch_stats(df, metric, *, individual_runs: bool = False):
     return metric_values, epoch_end_steps, (value_shifter, value_shifter_with_first)
 
 
-def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]) -> tuple[pd.DataFrame, str] | None:
+def calculate_hyperparam_metrics(
+    df: pd.DataFrame, metric: str | tuple[str, ...], *, per_epoch: bool = False
+) -> tuple[pd.DataFrame, str] | None:
     """
     Calculate additional metrics for the DataFrame.
     This calculates:
         - variance between data grouped by pbt_group_key
         - Gini coefficient between data grouped by pbt_group_key
         - Kendal Tau metric at the end of each pbt_epoch between data grouped by pbt_group_key
+
+    Args:
+        df: DataFrame containing the experiment data.
+        metric: Metric to calculate the statistics for.
+        per_epoch: Whether to calculate metrics per epoch or per step.
     """
 
     def ifill(*cols, n=df.columns.nlevels):
@@ -779,10 +932,12 @@ def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]
     # Also center the first epoch
     centered_metric_values2 = metric_values.sub(value_shifter_with_first, level="pbt_epoch")[metric_key].dropna()
 
-    centered_metrics = centered_metric_values.groupby(level="current_step").aggregate(["var", "std", "mean"])
-    centered_metrics2 = centered_metric_values2.groupby(level="current_step").aggregate(["var", "std", "mean"])
+    groupby = "current_step" if not per_epoch else ["current_step", "pbt_epoch"]
+
+    centered_metrics = centered_metric_values.groupby(level=groupby).aggregate(["var", "std", "mean"])
+    centered_metrics2 = centered_metric_values2.groupby(level=groupby).aggregate(["var", "std", "mean"])
     # For mean we need to subtract mean of pbt_epoch 0
-    normed_metrics = normed_metric_values.groupby(level="current_step").aggregate(["var", "std", "mean"])
+    normed_metrics = normed_metric_values.groupby(level=groupby).aggregate(["var", "std", "mean"])
 
     # Normed metrics 2: Normalize: subtract mean and divide by stddev of epoch begin from value_shifter_with_first
     normalized_metric_values = (
@@ -790,7 +945,7 @@ def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]
         .sub(value_shifter_with_first[metric_key], level="pbt_epoch")
         .div(value_shifter_with_first["metric_std"], level="pbt_epoch")
     ).dropna()
-    normalized_metric = normalized_metric_values.groupby(level="current_step").aggregate(["var", "std", "mean"])
+    normalized_metric = normalized_metric_values.groupby(level=groupby).aggregate(["var", "std", "mean"])
     # endregion
 
     # region Gini
@@ -807,7 +962,16 @@ def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]
         gini_coeff = (2 * (np.arange(1, n + 1) * sorted_x).sum()) / (n * cumulative_x.iloc[-1]) - (n + 1) / n
         return gini_coeff
 
-    gini_metrics = metric_values.groupby("current_step")[metric_key].agg(calc_gini)
+    # TODO: Want to know how robust a configuration is over time, stable increase vs volatile
+    # How to do this?
+    # In metric values we have the std over each group key
+    # metric_values.groupby(["pbt_group_key", "pbt_epoch"])["metric_std"].mean().groupby("pbt_group_key").mean()
+
+    # TODO: or do group by key and get gini within the epoch for each group -> how does group differ over epoch?
+    # metric_values.groupby(["pbt_epoch", "pbt_group_key"] if per_epoch else "current_step")[metric_key].agg(calc_gini)
+    gini_metrics = metric_values.groupby(["current_step", "pbt_epoch"] if per_epoch else "current_step")[
+        metric_key
+    ].agg(calc_gini)
     # Clip gini_metrics to 99% of the data to reduce the effect of outliers
 
     # Kendallal Tau
@@ -851,6 +1015,26 @@ def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]
         .groupby("current_step")
         .apply(lambda x: pd.Series(kendalltau(x[metric_key], x["rank2"]), index=["tau", "pvalue"]))
     )
+    if per_epoch:
+        # if we want epoch in the index and not the current_step:
+        # step_to_epoch = epoch_end_steps.reset_index().set_index("current_step")["pbt_epoch"].to_dict()
+        # kendall_metrics.index = kendall_metrics.index.map(step_to_epoch)
+        gini_metrics = gini_metrics.groupby("pbt_epoch").mean()
+        centered_metrics = centered_metrics.groupby("pbt_epoch").mean()
+        centered_metrics2 = centered_metrics2.groupby("pbt_epoch").mean()
+        normed_metrics = normed_metrics.groupby("pbt_epoch").mean()
+        normalized_metric = normalized_metric.groupby("pbt_epoch").mean()
+        # TODO: However this does not tell us how robust a configuration is over time
+        # Cast epochs to step
+        epoch_to_steps = epoch_end_steps["current_step"].to_dict()
+        for metrics_df in (gini_metrics, centered_metrics, centered_metrics2, normed_metrics, normalized_metric):
+            metrics_df.index = metrics_df.index.map(epoch_to_steps)
+    intra_group_variance = df.groupby([ifill("config", "pbt_epoch"), ifill("config", "pbt_group_key")])[metric].agg(
+        ["var", "std", "mean"]
+    )
+    intra_group_variance.index.names = ["pbt_epoch", "pbt_group_key"]
+    intra_group_variance_global = df.groupby([ifill("config", "pbt_group_key")])[metric].agg(["var", "std", "mean"])
+    intra_group_variance_global.index.names = ["pbt_group_key"]
 
     # AllA = metric_values.loc[metric_values.index.get_level_values("current_step") <= epoch_end_steps.iloc[-1].item(), metric].to_frame()
     # AllA["rank2"] = AllA.shift(len(AllA.loc[2048])*8)
@@ -912,7 +1096,7 @@ def calculate_hyperparam_metrics(df: pd.DataFrame, metric: str | tuple[str, ...]
         ],
         axis=0,
     )
-    return stats, stats_reduced.to_string()
+    return stats, stats_reduced.to_string(), (intra_group_variance, intra_group_variance_global)
 
 
 def bin_metric(values: pd.Series, bins: int = 10) -> pd.Series:
@@ -927,6 +1111,9 @@ def bin_metric(values: pd.Series, bins: int = 10) -> pd.Series:
 def _drop_duplicate_steps(df: pd.DataFrame) -> pd.DataFrame:
     """
     Checks for possibly duplicated steps and returns a cleaned version of the DataFrame.
+
+    As pbt_epoch can be incorrect for restored and duplicated steps, this function
+    determines the perturbation_interval and sets the pbt_epoch based on current_step
     """
 
     # When restored the pbt_epoch might be wrong and we might have duplicated steps, use first non-duplicated to get interval
@@ -942,16 +1129,23 @@ def _drop_duplicate_steps(df: pd.DataFrame) -> pd.DataFrame:
         # no changes; likely early terminated experiment
         remote_breakpoint()
         raise
+    except KeyError:
+        # When this is a baseline run we do not have pbt_epoch. Other duplicate cleaning should take
+        assert not df.index.duplicated().any()
+        assert not df.reset_index("training_iteration").set_index(ifill("current_step"), append=True).duplicated().any()
+        return df
 
     if isinstance(first_change, (pd.Series, pd.DataFrame)):
         # rare case can be a series
         first_change = first_change.item()
     try:
         perturbation_interval = df.current_step.loc[(first_change[0], first_change[1] - 1)].item()
-    except AttributeError:
-        return df
+    except AttributeError as ae:
+        if "item" not in str(ae):
+            raise
+        return df  # should be when item() does not work but then there is no KeyError
     except KeyError:
-        pass
+        pass  # duplicated steps handle below
     else:
         df.attrs["perturbation_interval"] = perturbation_interval
         return df
@@ -977,7 +1171,7 @@ def _drop_duplicate_steps(df: pd.DataFrame) -> pd.DataFrame:
         .idxmax()
     )
     try:
-        perturbation_interval = int(no_duplicates.loc[(loc_alt[0], loc_alt[1] - 1)].current_step)  # item() ?
+        perturbation_interval = int(no_duplicates.loc[(loc_alt[0], loc_alt[1] - 1)].current_step.iloc[0])  # item() ?
     except KeyError:
         # bad order so that fork comes first
         try:
@@ -1099,6 +1293,47 @@ def _join_nested(m, on="_"):
     return m
 
 
+def _plot_intra_group_variances(
+    group_variance_global: pd.DataFrame,
+    group_variance_per_epoch: pd.DataFrame,
+    out_path: Path,
+    path_base: str,
+    metric_str: str,
+    per_epoch_str: str,
+    format: str,
+):
+    # Plot group_variance_global var column as horizontal bar chart
+    fig_global, ax_global = plt.subplots(figsize=(10, max(4, len(group_variance_global) * 0.5)))
+    group_variance_global["var"].sort_values().plot.barh(ax=ax_global, color="skyblue")
+    ax_global.set_xlabel("Variance")
+    ax_global.set_ylabel("Group Key")
+    ax_global.set_title("Group Variance Global")
+    fig_global.tight_layout()
+
+    # Save global variance plot
+    bar_path_global = out_path.with_name(f"{path_base}{metric_str}-group_variance_global{per_epoch_str}_bar.{format}")
+    fig_global.savefig(bar_path_global, format=format, bbox_inches="tight")
+    plt.close(fig_global)
+    logger.info("Saved group variance global bar chart to '%s'", bar_path_global)
+
+    # Plot group_variance_per_epoch var column as bar chart
+    fig_epoch, ax_epoch = plt.subplots(figsize=(max(10, len(group_variance_per_epoch) * 0.3), 6))
+    group_variance_per_epoch["var"].plot.bar(ax=ax_epoch, color="lightcoral")
+    ax_epoch.set_ylabel("Variance")
+    ax_epoch.set_xlabel("Group Key, Epoch")
+    ax_epoch.set_title("Group Variance Per Epoch")
+    ax_epoch.tick_params(axis="x", rotation=45)
+    fig_epoch.tight_layout()
+
+    # Save per epoch variance plot
+    bar_path_per_epoch = out_path.with_name(
+        f"{path_base}{metric_str}-group_variance_per_epoch{per_epoch_str}_bar.{format}"
+    )
+    fig_epoch.savefig(bar_path_per_epoch, format=format, bbox_inches="tight")
+    plt.close(fig_epoch)
+    logger.info("Saved group variance per epoch bar chart to '%s'", bar_path_per_epoch)
+
+
 def calculate_experiment_stats(
     combined_df: pd.DataFrame, metrics: Sequence[str | tuple[str, ...]], out_path: Path, format="pdf"
 ) -> None:
@@ -1108,57 +1343,80 @@ def calculate_experiment_stats(
         path_base = base_dir.stem
     else:
         path_base = out_path.stem
-    for metric in metrics:
-        metric = check_metric_backport(combined_df, metric)  # noqa: PLW2901
-        metric_str = _join_nested(metric)
-        if metric_str not in path_base and _join_nested(metric, on="-") not in path_base:
-            metric_str = "-" + metric_str
-        else:
-            metric_str = ""
-        calculated_stats = calculate_hyperparam_metrics(combined_df, metric)
-        if calculated_stats is None:
-            continue
-        stats, stats_reduced = calculated_stats
+    for per_epoch in (True, False):
+        per_epoch_str = "-per_epoch" if per_epoch else ""
+        for metric in metrics:
+            metric = check_metric_backport(combined_df, metric)  # noqa: PLW2901
+            metric_str = _join_nested(metric)
+            if metric_str not in path_base and _join_nested(metric, on="-") not in path_base:
+                metric_str = "-" + metric_str
+            else:
+                metric_str = ""
+            if per_epoch:
+                remote_breakpoint()
+            calculated_stats = calculate_hyperparam_metrics(combined_df, metric, per_epoch=per_epoch)
+            if calculated_stats is None:
+                continue
+            stats, stats_reduced, (group_variance_per_epoch, group_variance_global) = calculated_stats
 
-        # 1. Save reduced stats
-        stats_reduced_path = out_path.with_name(f"{path_base}{metric_str}-hyperparam_stats_reduced.txt")
-        with open(stats_reduced_path, "w") as f:
-            f.write(stats_reduced)
-        logger.info("Saved reduced hyperparameter stats to '%s'", stats_reduced_path)
-        # 2nd plot the stats
-        stats_path = out_path.with_name(f"{path_base}{metric_str}_hyperparam_stats.{format}")
-        stats_to_plot = stats.drop(
-            [
-                c
-                for c in stats.columns
-                if "var" not in c[-1] and "gini" not in c[0] and "kendall" not in c[0] and "normed_metrics" not in c[0]
-            ],
-            axis=1,
-        )
-        fig, axes = plt.subplots(nrows=len(stats_to_plot.columns), sharex=True)
-        for col, ax in zip(stats_to_plot.columns, axes.flatten(), strict=True):
-            stats_to_plot[col].sort_index().dropna().plot(
-                ax=ax,
-                kind="line",
-                legend=False,
-                fontsize=11,
+            # 1. Save reduced stats
+            stats_reduced_path = out_path.with_name(
+                f"{path_base}{metric_str}-hyperparam_stats{per_epoch_str}_reduced.txt"
             )
-        columns_ax: "Axes"
-        fig.set_size_inches(10, 1.25 * len(stats_to_plot.columns))
-        for i, (columns_ax, column) in enumerate(zip(axes.flatten(), stats_to_plot.columns, strict=True)):
-            if i != len(stats_to_plot.columns) - 1:
-                columns_ax.set_xlabel("")
-                columns_ax.set_xticks([])
-                columns_ax.set_xticklabels([])
-            columns_ax.set_title(column, fontsize=11, fontweight="light")
-            if "kendall" in column[0]:
-                stats_to_plot[column].dropna().plot(ax=columns_ax, label=column)
-        # for stat in stats.columns.get_level_values(0).unique():
-        #    stats[stat].plot(ax=ax, label=stat)
-        fig.savefig(stats_path, format=format, bbox_inches="tight")
-        plt.close(fig)
-        logger.info("Saved hyperparameter stats to '%s'", stats_path)
-        stats.to_csv(stats_path.with_suffix(".csv"), index=True)
+            with open(stats_reduced_path, "w") as f:
+                f.write(stats_reduced)
+            if per_epoch:
+                pd.concat([group_variance_per_epoch, group_variance_global]).to_csv(
+                    out_path.with_name(f"{path_base}{metric_str}-hyperparam_variance_per_epoch.txt"), index=True
+                )
+                _plot_intra_group_variances(
+                    group_variance_global,
+                    group_variance_per_epoch,
+                    out_path,
+                    path_base,
+                    metric_str,
+                    per_epoch_str,
+                    format,
+                )
+
+            logger.info("Saved reduced hyperparameter stats to '%s'", stats_reduced_path)
+            # 2nd plot the stats
+            stats_path = out_path.with_name(f"{path_base}{metric_str}_hyperparam_stats{per_epoch_str}.{format}")
+            stats_to_plot = stats.drop(
+                [
+                    c
+                    for c in stats.columns
+                    if "var" not in c[-1]
+                    and "gini" not in c[0]
+                    and "kendall" not in c[0]
+                    and "normed_metrics" not in c[0]
+                ],
+                axis=1,
+            )
+            fig, axes = plt.subplots(nrows=len(stats_to_plot.columns), sharex=True)
+            for col, ax in zip(stats_to_plot.columns, axes.flatten(), strict=True):
+                stats_to_plot[col].sort_index().dropna().plot(
+                    ax=ax,
+                    kind="line",
+                    legend=False,
+                    fontsize=11,
+                )
+            columns_ax: "Axes"
+            fig.set_size_inches(10, 1.25 * len(stats_to_plot.columns))
+            for i, (columns_ax, column) in enumerate(zip(axes.flatten(), stats_to_plot.columns, strict=True)):
+                if i != len(stats_to_plot.columns) - 1:
+                    columns_ax.set_xlabel("")
+                    columns_ax.set_xticks([])
+                    columns_ax.set_xticklabels([])
+                columns_ax.set_title(column, fontsize=11, fontweight="light")
+                if "kendall" in column[0]:
+                    stats_to_plot[column].dropna().plot(ax=columns_ax, label=column)
+            # for stat in stats.columns.get_level_values(0).unique():
+            #    stats[stat].plot(ax=ax, label=stat)
+            fig.savefig(stats_path, format=format, bbox_inches="tight")
+            plt.close(fig)
+            logger.info("Saved hyperparameter stats to '%s'", stats_path)
+            stats.to_csv(stats_path.with_suffix(".csv"), index=True)
 
 
 def get_and_check_group_stat(
@@ -1339,7 +1597,6 @@ def _export_multiple(
         logger.error(f"Failed to load run data for {experiment_path}: {e!r}", exc_info=True)  # noqa: G004
         return saved_files, [(e, tb, experiment_path)]
 
-    logger.debug("Combining dataframes...")
     if not isinstance(data, pd.DataFrame):
         try:
             combined_df = combine_df(data)
@@ -1347,7 +1604,6 @@ def _export_multiple(
             tb = traceback.format_exc()
             logger.error(f"Failed to combine dataframes for {experiment_path}: {e!r}", exc_info=True)  # noqa: G004
             return saved_files, [(e, tb, experiment_path)]
-        combined_df = _drop_duplicate_steps(combined_df)
         save_run_data(experiment_path, combined_df)
     else:
         combined_df = data
@@ -1649,7 +1905,8 @@ def export_all_runs(
                 zipf = ZipFile(zip_path, "w", compression=ZIP_DEFLATED, compresslevel=9)
                 for file_path in file_paths:
                     arcname = file_path.relative_to(output_dir)
-                    zipf.write(file_path, arcname=str(arcname))
+                    arcname_str = str(arcname).replace(":", "_")
+                    zipf.write(file_path, arcname=arcname_str)
             try:
                 # Collect results as they complete
                 file_paths: list[Path]
@@ -1667,7 +1924,8 @@ def export_all_runs(
                             if not file_path.exists():
                                 logger.error(f"File {file_path} does not exist, cannot add to zip.")  # noqa: G004
                                 continue
-                            zipf.write(file_path, arcname=str(arcname))
+                            arcname_str = str(arcname).replace(":", "_")
+                            zipf.write(file_path, arcname=arcname_str)
                     for error_return in errors:
                         error, tb, failed_path = error_return
                         logger.error(f"Error during export of {failed_path} : {error!r}\n{tb}")  # noqa: G004
@@ -1751,7 +2009,7 @@ if __name__ == "__main__":
     logger.info("Running data export script...")
 
     parser = argparse.ArgumentParser(description="Export and plot RLlib experiment results.")
-    parser.add_argument("path", type=str, help="Experiment output directory or run path.")
+    parser.add_argument("path", nargs="*", type=str, help="Experiment output directory or run path.")
     parser.add_argument("--all", action="store_true", help="Export all runs in the directory.")
     parser.add_argument("--main_only", action="store_true", help="Plot only the main branch runs.")
     parser.add_argument("--format", type=str, default="pdf", help="Output file format (default: pdf).")
@@ -1796,23 +2054,31 @@ if __name__ == "__main__":
         PlotOption(main_vs_second_best=True, plot_reduced=False),
         PlotOption(main_vs_rest=True, plot_reduced=False),
     ]
-    export_all_runs(
-        args.path,
-        single=args.single,
-        plot_options=plot_options,
-        test=args.test,
-        metrics=args.metrics,
-        group_by=DEFAULT_GROUP_BY,
-        figsize=tuple(args.figsize),
-        format=args.format,
-        pbt_metric=args.pbt_metric,
-        max_workers=args.workers,
-        zip_plots=args.zip,
-        excludes=excludes,
-        redo=args.redo,
-        plot_errors=not args.no_error,
-        plot_errors_type=args.error_plot_type,
-    )
+    paths = args.path
+    if paths:
+        paths = [
+            "outputs/shared/experiments/",
+            "outputs/shared_backup/",
+            "outputs/shared_backup/",
+        ]
+    for path in paths:
+        export_all_runs(
+            path,
+            single=args.single,
+            plot_options=plot_options,
+            test=args.test,
+            metrics=args.metrics,
+            group_by=DEFAULT_GROUP_BY,
+            figsize=tuple(args.figsize),
+            format=args.format,
+            pbt_metric=args.pbt_metric,
+            max_workers=args.workers,
+            zip_plots=args.zip,
+            excludes=excludes,
+            redo=args.redo,
+            plot_errors=not args.no_error,
+            plot_errors_type=args.error_plot_type,
+        )
 
 
 # Example for grouping by MultiIndex columns:

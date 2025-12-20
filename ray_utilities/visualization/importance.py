@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
+import math
 import sys
 from copy import deepcopy
 from dataclasses import dataclass, field
-from itertools import chain
+from itertools import chain, product
 from pathlib import Path
 from typing import Any, Callable, Collection, Iterable, Sequence
 
@@ -16,7 +17,7 @@ from typing_extensions import Literal
 
 from experiments.create_tune_parameters import write_distributions_to_json
 from ray_utilities.config.parser.default_argument_parser import DefaultArgumentParser
-from ray_utilities.misc import round_floats
+from ray_utilities.misc import cast_numpy_numbers, round_floats
 from ray_utilities.setup.extensions import load_distributions_from_json
 from ray_utilities.testing_utils import remote_breakpoint
 from ray_utilities.visualization._common import Placeholder
@@ -28,9 +29,9 @@ from ray_utilities.visualization.data import (
     get_epoch_stats,
     get_running_experiments,
     ifill,
+    load_excludes,
     load_run_data,
     save_run_data,
-    load_excludes,
 )
 from ray_utilities.visualization.data import ifill as data_ifill
 
@@ -478,6 +479,7 @@ def get_optuna_study(
     suffix: str = "",
     *,
     load_if_exists=True,
+    clear_study: bool | Literal["all"] | Sequence[str] = False,
 ):
     if isinstance(experiment_path, (Path, str)):
         storage = _get_storage(experiment_path)
@@ -489,7 +491,17 @@ def get_optuna_study(
     if step is not None:
         study_name += f"_step={step}"
     else:
-        study_name += f"_global"
+        study_name += "_global"
+    if clear_study:
+        if clear_study == "all":
+            clear_study = True
+        elif isinstance(clear_study, (Sequence, Collection)):
+            if study_name in clear_study:
+                clear_study = True
+            else:
+                clear_study = False
+        if clear_study is True:
+            optuna.delete_study(study_name=study_name, storage=storage)
     study_name += suffix
     study = optuna.create_study(
         study_name=study_name, storage=storage, load_if_exists=load_if_exists, direction="maximize"
@@ -513,7 +525,11 @@ def add_finished_experiment(run_id: str, tracking_study: optuna.Study):
 
 
 def clear_tracking_study(storage: optuna.storages.BaseStorage):
-    optuna.delete_study(study_name="_experiment_tracker", storage=storage)
+    clear_study(storage, study_name="_experiment_tracker")
+
+
+def clear_study(storage, study_name: str):
+    optuna.delete_study(study_name=study_name, storage=storage)
 
 
 def create_finished_trial(
@@ -530,7 +546,11 @@ def create_finished_trial(
             params=params,
             intermediate_values=intermediate_values,
             distributions=distributions,
-            user_attrs={"identifier": identifier},
+            user_attrs={
+                "identifier": identifier,
+                "vf_share_layers": params.pop("vf_share_layers", True),
+                "use_kl_loss": params.pop("use_kl_loss", False),
+            },
         )
     except ValueError as ve:
         if not distributions or "not in" not in str(ve):
@@ -597,8 +617,10 @@ def optuna_create_studies(
     submission_file_path: Path | None = None,
     disable_checks: bool = True,
     clear_experiment_cache: bool = False,
+    clear_study: Sequence[str] | Literal[False] = False,
     excludes: Collection[str] = (),
 ) -> dict[Any, optuna.Study]:
+    metric_to_check = metric
     if disable_checks:
         _disable_distribution_check()
     studies: dict[Any, optuna.Study] = {}
@@ -611,21 +633,25 @@ def optuna_create_studies(
     if clear_experiment_cache:
         assert not STORED_EXPERIMENTS
     if not study_each_epoch:
-        study = get_optuna_study(storage, env, load_if_exists=load_if_exists)
+        study = get_optuna_study(storage, env, load_if_exists=load_if_exists, clear_study=clear_study)
         studies[GLOBAL_STUDY] = study
     if study_each_epoch is not False:
         # Create a study for each epoch at step 8192 * 4 until max_step
         for epoch in range(1, 32 + 1):
             step = epoch * 8192 * 4
-            studies[step] = get_optuna_study(storage, env, step)
-            pbt_centered_studies[studies[step]] = get_optuna_study(storage, env, step, suffix="_centered")
+            studies[step] = get_optuna_study(storage, env, step, clear_study=clear_study)
+            pbt_centered_studies[studies[step]] = get_optuna_study(
+                storage, env, step, suffix="_centered", clear_study=clear_study
+            )
 
         # This is not sufficient for the 1/8 perturbation intervals
         for epoch in range(1, 8 + 1):
             step = epoch * 147456
             if step not in studies:
-                studies[step] = get_optuna_study(storage, env, step)
-                pbt_centered_studies[studies[step]] = get_optuna_study(storage, env, step, suffix="_centered")
+                studies[step] = get_optuna_study(storage, env, step, clear_study=clear_study)
+                pbt_centered_studies[studies[step]] = get_optuna_study(
+                    storage, env, step, suffix="_centered", clear_study=clear_study
+                )
 
     for experiment_path in experiment_paths:
         logger.info("Checking path for experiments: %s", experiment_path)
@@ -682,11 +708,19 @@ def optuna_create_studies(
                     df = run_frames
                 _group_stat, df = get_and_check_group_stat(df, group_stat=None, group_by=("pbt_group_key",))
 
-                metric = check_metric_backport(df, metric)
+                metric = check_metric_backport(df, metric_to_check)
                 # Get tools to center epochs
                 _metric_values, _epoch_end_steps, (value_shifter, value_shifter_with_first) = get_epoch_stats(
                     df, metric, individual_runs=False
                 )
+
+                vf_share_layers = df.config.get("vf_share_layers", df.config.cli_args.get("vf_share_layers", True))
+                if not isinstance(vf_share_layers, bool):
+                    assert (vf_share_layers.iloc[0] == vf_share_layers).all().item()
+                use_kl_loss = df.config.get("use_kl_loss", df.config.cli_args.get("use_kl_loss", False))
+                if not isinstance(use_kl_loss, bool):
+                    _does_kl_match = (use_kl_loss.iloc[0] == use_kl_loss).all()
+                    assert _does_kl_match.item() if hasattr(_does_kl_match, "item") else _does_kl_match
 
                 # Create trials for each run_id
                 # TODO: possibly groupkey -> take mean
@@ -734,10 +768,14 @@ def optuna_create_studies(
                         # run_id = group_key[1]
                         # No run id if we group by pbt_group_key
                         trial_identifier = "-".join(group.index.get_level_values("run_id").unique().sort_values())
-                        group_numeric = group.select_dtypes(include=["number"])[
+                        group_numeric = group.select_dtypes(include=["number", "bool"])[
                             (group.current_step == group.current_step.max()).values  # noqa: PD011
                         ]
                         final_row = group_numeric.mean()
+                        if "grad_clip" in df.config:
+                            # is the None value cast to NaN?
+                            remote_breakpoint()
+                            assert "grad_clip" in final_row.config
                     else:
                         run_id = group_key
                         trial_identifier = run_id
@@ -759,6 +797,12 @@ def optuna_create_studies(
                         params = {k: v for k, v in params.items() if not isinstance(v, str) or v != "NOT_FOUND"}
                     # Clean floating point errors from params
                     params = round_floats(params)
+                    params["vf_share_layers"] = vf_share_layers
+                    params["use_kl_loss"] = use_kl_loss
+                    params = cast_numpy_numbers(params)
+                    if "grad_clip" in params and pd.isna(params["grad_clip"]):
+                        params["grad_clip"] = None
+                    assert not math.isnan(params["grad_clip"])
                     # Clean placeholders
                     if metric not in final_row:
                         raise KeyError(f"Metric column '{metric}' not found in combined dataframe")  # noqa: TRY301
@@ -789,8 +833,16 @@ def optuna_create_studies(
                                     metric_centered = (metric_result - shift_values[metric]).item()
                             else:
                                 # for group
-                                shift_values = value_shifter_with_first.loc[final_row.config.pbt_epoch.item()]
-                                metric_centered = (metric_result - shift_values[metric]).item()
+                                try:
+                                    shift_values = value_shifter_with_first.loc[final_row.config.pbt_epoch.item()]
+                                except KeyError:
+                                    remote_breakpoint(5680)
+                                if metric in shift_values:
+                                    metric_centered = (metric_result - shift_values[metric]).item()
+                                elif isinstance(metric, str):
+                                    raise KeyError(metric, "not in shift values")
+                                else:  # some Sequece
+                                    metric_centered = (metric_result - shift_values["-".join(metric)]).item()
 
                             centered_trial = create_finished_trial(
                                 metric_result=metric_centered,
@@ -960,6 +1012,8 @@ PARAMS_TO_CHECK = {
 
 
 def _fix_distributions(study: optuna.Study, params: Collection[str]):
+    if hasattr(study, "_fixed_trials"):  # backup for when we adjust what get_trials should
+        return study._fixed_trials
     completed_trials = study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))
     distributions: dict[str, set[optuna.distributions.BaseDistribution]] = {}
     for trial in completed_trials:
@@ -1005,6 +1059,7 @@ def _fix_distributions(study: optuna.Study, params: Collection[str]):
         # Now set it for all trials
         for trial in completed_trials:
             trial.distributions[name] = new_dist
+    study._fixed_trials = completed_trials
     return completed_trials
 
 
@@ -1033,11 +1088,59 @@ def __try_step_cast(col):
     return col
 
 
+def _get_importances(study, evaluator, params, *, use_kl_loss: bool | None = None, vf_share_layers: bool | None = None):
+    if use_kl_loss is None and vf_share_layers is None:
+        if hasattr(study, "_fixed_trials"):
+            study.get_trials = lambda *args, **kwargs: study._fixed_trials  # noqa
+        try:
+            importances = optuna.importance.get_param_importances(study, evaluator=evaluator, params=params)
+        except ValueError as ve:
+            if "dynamic search" in str(ve):
+                study = deepcopy(study)  # noqa: PLW2901
+                completed_trials = _fix_distributions(study, params or PARAMS_TO_CHECK)
+                study.get_trials = lambda *args, **kwargs: completed_trials  # noqa
+                importances = optuna.importance.get_param_importances(study, evaluator=evaluator, params=params)
+            else:
+                raise
+        else:
+            completed_trials = study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))
+        return importances, completed_trials
+    if hasattr(study, "_fixed_trials"):
+        completed_trials = study._fixed_trials  # noqa
+    else:
+        study = deepcopy(study)  # noqa: PLW2901
+        completed_trials = _fix_distributions(study, params or PARAMS_TO_CHECK)
+    # Filter trials based on vf_share_layers and use_kl_loss
+    # NOTE: currently there is not combination of use_kl_loss and not vf_share_layers in our experiments
+    if vf_share_layers is not None:
+        completed_trials = [
+            t
+            for t in completed_trials
+            if t.user_attrs["vf_share_layers"] == vf_share_layers  # If this raises a KeyError recreate the study :(
+        ]
+    if use_kl_loss is not None:
+        completed_trials = [
+            t
+            for t in completed_trials
+            if t.user_attrs["use_kl_loss"] == use_kl_loss  # If this raises a KeyError recreate the study :(
+        ]
+    if not completed_trials:
+        logger.warning(
+            "No completed trials found for filtering vf_share_layers=%s and use_kl_loss=%s",
+            vf_share_layers,
+            use_kl_loss,
+        )
+        return {}, []
+    study.get_trials = lambda *args, **kwargs: completed_trials  # noqa
+    importances = optuna.importance.get_param_importances(study, evaluator=evaluator, params=params)
+    return importances, completed_trials
+
+
 def optuna_analyze_studies(
     studies: dict[Any, optuna.Study],
     output_path: str | Path,
     params: list[str] | None = None,
-) -> pd.DataFrame:
+) -> pd.DataFrame | None:
     from optuna.importance import (
         FanovaImportanceEvaluator,
         MeanDecreaseImpurityImportanceEvaluator,
@@ -1048,49 +1151,57 @@ def optuna_analyze_studies(
         "MeanDecreaseImpurity": MeanDecreaseImpurityImportanceEvaluator(),
         "PedAnovaLocal": PedAnovaImportanceEvaluator(evaluate_on_local=True),
         "Fanova(default)": FanovaImportanceEvaluator(),  # default
-        "MeanDecreaseImpurity8": MeanDecreaseImpurityImportanceEvaluator(n_trees=8, max_depth=8),
+        "MeanDecreaseImpurity8": MeanDecreaseImpurityImportanceEvaluator(n_trees=12, max_depth=12),
         "PedAnovaGlobal": PedAnovaImportanceEvaluator(evaluate_on_local=False),
-        "Fanova8": FanovaImportanceEvaluator(n_trees=8, max_depth=8),
+        "Fanova8": FanovaImportanceEvaluator(n_trees=12, max_depth=12),
     }
 
     all_results = []
+
+    kl_vf_combinations = product([None, True, False], [None, True, False])
 
     for key, study in studies.items():
         logger.info("Analyzing study for key: %s", key)
         completed_trials = None
         try:
-            for evaluator_name, evaluator in evaluators.items():
-                try:
-                    importances = optuna.importance.get_param_importances(study, evaluator=evaluator, params=params)
-                except ValueError as ve:
-                    if "dynamic search" in str(ve):
-                        study = deepcopy(study)  # noqa: PLW2901
-                        completed_trials = _fix_distributions(study, params or PARAMS_TO_CHECK)
-                        study.get_trials = lambda *args, **kwargs: completed_trials  # type: ignore[assignment]
-                        importances = optuna.importance.get_param_importances(study, evaluator=evaluator, params=params)
-                    else:
-                        raise
-                else:
-                    completed_trials = study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))
-
-                # Store results for combined DataFrame
-                for param, importance in importances.items():
-                    all_results.append(
-                        {
-                            "param": param,
-                            "importance": importance,
-                            "evaluator_name": evaluator_name,
-                            "key": str(key),
-                            "number_of_trials": len(completed_trials),
-                            "study_name": study.study_name,
-                        }
+            for filter_kl, filter_vf_share in kl_vf_combinations:
+                for evaluator_name, evaluator in evaluators.items():
+                    importances, completed_trials = _get_importances(
+                        study, evaluator, params, use_kl_loss=filter_kl, vf_share_layers=filter_vf_share
                     )
+                    if not completed_trials:
+                        continue
 
-                sorted_importances = sorted(importances.items(), key=lambda item: item[1], reverse=True)
-                report_str = f"Hyperparameter importances for study {study.study_name} ({evaluator_name}) with {len(completed_trials)} trials:\n"
-                for param, importance in sorted_importances:
-                    report_str += f"  {param}: {importance:.5f}\n"
-                logger.info("%s", report_str)
+                    # Store results for combined DataFrame
+                    for param, importance in importances.items():
+                        store_key = key
+                        if filter_kl is True:
+                            store_key = f"{store_key}_kl_loss"
+                        elif filter_kl is False:
+                            store_key = f"{store_key}_no_kl_loss"
+                        if filter_vf_share is True:
+                            store_key = f"{store_key}_shared_encoder"
+                        elif filter_vf_share is False:
+                            store_key = f"{store_key}_shared_encoder"
+                        all_results.append(
+                            {
+                                "param": param,
+                                "importance": importance,
+                                "evaluator_name": evaluator_name,
+                                "key": str(key),
+                                "number_of_trials": len(completed_trials),
+                                "study_name": study.study_name,
+                            }
+                        )
+                    sorted_importances = sorted(importances.items(), key=lambda item: item[1], reverse=True)
+                    report_str = (
+                        f"Hyperparameter importances for study {study.study_name} "
+                        f"(filtered for kl_loss: {filter_kl}, shared encoder: {filter_vf_share}) ({evaluator_name}) "
+                        f"with {len(completed_trials)} trials:\n"
+                    )
+                    for param, importance in sorted_importances:
+                        report_str += f"  {param}: {importance:.5f}\n"
+                    logger.info("%s", report_str)
         except Exception as e:
             logger.exception("Failed to analyze study for key %s: %r", key, e)
 
@@ -1136,6 +1247,8 @@ def plot_importance_studies(
         study_results = optuna_analyze_studies(studies, output_path, params=params)
     else:
         study_results = studies
+    if study_results is None:
+        return
     if study_results.columns.nlevels > 1:
         importances = {
             evaluator_name: study_results[evaluator_name] for evaluator_name in study_results.columns.levels[0]
@@ -1210,9 +1323,10 @@ def plot_importance_studies(
 
 
 if __name__ == "__main__":
+    import argparse
+
     from experiments.create_tune_parameters import default_distributions
     from ray_utilities import nice_logger
-    import argparse
 
     os.chdir(Path(__file__).parent.parent.parent)
 
@@ -1225,6 +1339,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--clear-experiment-cache",
         action="store_true",
+        help="Clear the experiment tracking study before running.",
+    )
+    parser.add_argument(
+        "--clear-study",
+        nargs="?",
+        const="all",
+        default=False,
         help="Clear the experiment tracking study before running.",
     )
     parser.add_argument(
@@ -1309,6 +1430,7 @@ if __name__ == "__main__":
             study_each_epoch=None,
             submission_file_path=Path("experiments"),
             clear_experiment_cache=args.clear_experiment_cache,
+            clear_study=args.clear_study,
             excludes=load_excludes(),
         )
         plot_importance_studies(studies, output_path=paths[0], params=list(distributions.keys()))

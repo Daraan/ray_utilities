@@ -24,7 +24,6 @@ from ray_utilities.visualization.data import (
     MAX_ENV_LOWER_BOUND,
     _connect_groups,
     _drop_duplicate_steps,
-    _get_group_stat,
     get_and_check_group_stat,
     which_continued,
 )
@@ -256,7 +255,7 @@ def plot_run_data(
     group_cols = [("config", k) for k in group_by]
     # Extract the group-by columns as a DataFrame (each column is 1D)
     if ("config", "pbt_group_key") in group_cols and ("config", "pbt_group_key") not in df:
-        which_continued(df)  # this sets pbt_group_key
+        df = which_continued(df)  # this sets pbt_group_key
     try:
         try:
             stat_columns = df[group_stat].droplevel(0, axis=1)
@@ -440,7 +439,7 @@ def plot_run_data(
             max_stat = plot_df[group_stat].max()
             min_stat = plot_df[group_stat].min()
             stats_to_keep = {max_stat, min_stat}
-            continued_runs = which_continued(df)
+            continued_runs, df = which_continued(df)
             # Need to know which the main groups are
             # Remove those that do not have the highest rank, second highest rank, lowest rank,
             # And highest lowest group_stat, however keep last group_stat always
