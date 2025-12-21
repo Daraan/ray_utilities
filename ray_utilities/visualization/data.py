@@ -11,7 +11,7 @@ import traceback
 from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Collection, Hashable, Sequence, TypeAlias, TypeVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Collection, Hashable, Optional, Sequence, TypeAlias, TypedDict, TypeVar, cast
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import base62
@@ -81,7 +81,16 @@ DROP_COLUMNS = [
 
 DEFAULT_GROUP_BY = ("pbt_epoch", "pbt_group_key")
 
-LOG_SETTINGS = {"lr", "batch_size", "minibatch_size", "entropy_coeff", "vf_clip_param", "grad_clip", "gamma"}
+LOG_SETTINGS = {
+    "lr",
+    "batch_size",
+    "minibatch_size",
+    "entropy_coeff",
+    "vf_clip_param",
+    "grad_clip",
+    "gamma",
+    "accumulate_gradients_every",
+}
 
 MAX_ENV_LOWER_BOUND = {"LunarLander-v3": -750}
 """Lower bound clip for plots"""
@@ -1154,7 +1163,10 @@ def calculate_hyperparam_metrics(
                     "pbt_group_key"
                 )
                 not_in_A = keys_B.difference(keys_A)
-                B.drop((max_step_B, not_in_A.item()), inplace=True, axis=0)
+                if not_in_A.size == 1:
+                    B.drop((max_step_B, not_in_A.item()), inplace=True, axis=0)
+                else:
+                    B = B.drop([(max_step_B, a) for a in not_in_A.to_numpy()], axis=0)
                 B.index = A.index
                 AB = pd.concat([A, B], axis=1, names=[metric_key, "rank2"])
                 # try to throw away those in the last epoch that are not present in A, ignore the step
@@ -1935,6 +1947,7 @@ def export_all_runs(
     metrics=("episode_reward_mean",),
     plot_errors: OptionalRepeat[bool] = True,
     plot_errors_type: OptionalRepeat[Literal["box", "violin"]] = "box",
+    zip_file: Optional[ZipFile] = None,
     **kwargs,
 ):
     """
@@ -2047,12 +2060,16 @@ def export_all_runs(
 
         # Collect results as they complete
         tracebacks = []
-        zipf = None
+        zipf: ZipFile | None = zip_file
         try:
             if zip_plots:  # zip skipped files as we go
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                zip_path = output_dir / f"exported_plots_{timestamp}.zip"
-                zipf = ZipFile(zip_path, "w", compression=ZIP_DEFLATED, compresslevel=9)
+                if not zip_file:
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    zip_path = output_dir / f"exported_plots_{timestamp}.zip"
+                    zipf = ZipFile(zip_path, "w", compression=ZIP_DEFLATED, compresslevel=3)
+                else:
+                    zip_path = zipf.fp
+                assert zipf
                 for file_path in file_paths:
                     arcname = file_path.relative_to(output_dir)
                     arcname_str = str(arcname).replace(":", "_")
@@ -2087,7 +2104,7 @@ def export_all_runs(
                 executor.shutdown(wait=False, cancel_futures=True)
                 raise
         finally:
-            if zipf is not None:
+            if zip_file is None and zipf is not None:
                 zipf.close()
 
     if tracebacks:
@@ -2214,6 +2231,7 @@ if __name__ == "__main__":
             "outputs/shared_backup/",
             "outputs/shared_backup/",
         ]
+    zipfile = None
     if any(p.endswith(".yaml") for p in paths):
         assert all(p.endswith(".yaml") for p in paths), "Either all or none of the paths must be YAML files."
         # Load experiment groups from YAML files
@@ -2222,24 +2240,36 @@ if __name__ == "__main__":
         args.single = True
         for yaml_path in yaml_paths:
             paths.extend(get_run_directories_from_submission(yaml_path).values())
-    for path in paths:
-        export_all_runs(
-            path,
-            single=args.single,
-            plot_options=plot_options,
-            test=args.test,
-            metrics=args.metrics,
-            group_by=DEFAULT_GROUP_BY,
-            figsize=tuple(args.figsize),
-            format=args.format,
-            pbt_metric=args.pbt_metric,
-            max_workers=args.workers,
-            zip_plots=args.zip,
-            excludes=excludes,
-            redo=args.redo,
-            plot_errors=not args.no_error,
-            plot_errors_type=args.error_plot_type,
+        # need a common zipfile
+        submission_str = "-".join(
+            [Path(p).stem.replace("submission_", "").replace("pbt_", "").strip("_- ") for p in yaml_paths]
         )
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        zip_path = Path("outputs/shared/experiments") / f"exported_plots_{submission_str}_{timestamp}.zip"
+        zipfile = ZipFile(zip_path, "w", compression=ZIP_DEFLATED, compresslevel=3)
+    try:
+        for path in paths:
+            export_all_runs(
+                path,
+                single=args.single,
+                plot_options=plot_options,
+                test=args.test,
+                metrics=args.metrics,
+                group_by=DEFAULT_GROUP_BY,
+                figsize=tuple(args.figsize),
+                format=args.format,
+                pbt_metric=args.pbt_metric,
+                max_workers=args.workers,
+                zip_plots=args.zip,
+                excludes=excludes,
+                redo=args.redo,
+                plot_errors=not args.no_error,
+                plot_errors_type=args.error_plot_type,
+                zipfile=zipfile,
+            )
+    finally:
+        if zipfile:
+            zipfile.close()
 
 
 # Example for grouping by MultiIndex columns:

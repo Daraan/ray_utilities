@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from itertools import chain, product
 from pathlib import Path
 from typing import Any, Callable, Collection, Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import optuna.importance
@@ -565,9 +566,11 @@ def create_finished_trial(
     params = params.copy()
     user_attrs = {
         "identifier": identifier,
-        "vf_share_layers": params.pop("vf_share_layers", True),
-        "use_kl_loss": params.pop("use_kl_loss", False),
+        "vf_share_layers": params.pop("vf_share_layers"),
+        "use_kl_loss": params.pop("use_kl_loss"),
     }
+    assert isinstance(user_attrs["vf_share_layers"], bool)
+    assert isinstance(user_attrs["use_kl_loss"], bool)
     try:
         trial = optuna.trial.create_trial(
             state=optuna.trial.TrialState.COMPLETE,
@@ -1246,10 +1249,88 @@ def _get_importances(study, evaluator, params, *, use_kl_loss: bool | None = Non
     return importances, completed_trials
 
 
+def _analyze_single_study(
+    key: Any,
+    study: optuna.Study,
+    evaluators: dict[str, Any],
+    params: list[str] | None,
+) -> list[dict[str, Any]]:
+    """Analyze one study and return result rows."""
+    rows: list[dict[str, Any]] = []
+    logger.info("Analyzing study for key: %s", key)
+    completed_trials = None
+    try:
+        for filter_kl, filter_vf_share in product([None, True, False], [None, True, False]):
+            for evaluator_name, evaluator in evaluators.items():
+                evaluator = deepcopy(evaluator)
+                importances, completed_trials = _get_importances(
+                    study, evaluator, params, use_kl_loss=filter_kl, vf_share_layers=filter_vf_share
+                )
+                if not completed_trials:
+                    continue
+                for param, importance in importances.items():
+                    store_key = key
+                    if isinstance(store_key, int):
+                        # should normally have env name in key now
+                        step = store_key
+                        centered = False
+                    else:
+                        centered = "centered" in store_key
+                        store_key = store_key.replace("_centered", "")
+
+                        match = re.search(r"step=(\d+)", store_key)
+                        if match:
+                            step = match.groups()[0]
+                            store_key = re.sub(r"_?step=\d+", "", store_key)
+                        else:
+                            step = "global"
+                            store_key = store_key.replace("_global", "")
+                    if filter_kl is True:
+                        store_key = f"{store_key}_kl_loss"
+                    elif filter_kl is False:
+                        store_key = f"{store_key}_no_kl_loss"
+                    if filter_vf_share is True:
+                        store_key = f"{store_key}_shared_encoder"
+                    elif filter_vf_share is False:
+                        store_key = f"{store_key}_shared_encoder"
+                    rows.append(
+                        {
+                            "param": param,
+                            "importance": importance,
+                            "evaluator_name": evaluator_name,
+                            "key": store_key,
+                            "centered": centered,
+                            "step": step,
+                            "number_of_trials": len(completed_trials),
+                            "study_name": study.study_name,
+                        }
+                    )
+                sorted_importances = sorted(importances.items(), key=lambda item: item[1], reverse=True)
+                report_str = (
+                    f"Hyperparameter importances for study {study.study_name} "
+                    f"(filtered for kl_loss: {filter_kl}, shared encoder: {filter_vf_share}) ({evaluator_name}) "
+                    f"with {len(completed_trials)} trials:\n"
+                )
+                for param, importance in sorted_importances:
+                    report_str += f"  {param}: {importance:.5f}\n"
+                logger.info("%s", report_str)
+    except Exception as e:
+        logger.exception("Failed to analyze study for key %s: %r", key, e)
+        try:
+            if len(study.get_trials()) == 0:
+                pass
+            else:
+                remote_breakpoint()
+        except Exception:
+            remote_breakpoint()
+    return rows
+
+
 def optuna_analyze_studies(
     studies: dict[Any, optuna.Study],
-    output_path: str | Path,
+    output_path: str | Path | None,
     params: list[str] | None = None,
+    max_workers: int | None = None,
 ) -> pd.DataFrame | None:
     from optuna.importance import (
         FanovaImportanceEvaluator,
@@ -1266,82 +1347,44 @@ def optuna_analyze_studies(
         # "Fanova8": FanovaImportanceEvaluator(n_trees=12, max_depth=12),
     }
 
-    all_results = []
+    all_results: list[dict[str, Any]] = []
 
-    kl_vf_combinations = product([None, True, False], [None, True, False])
-
-    for key, study in studies.items():
-        logger.info("Analyzing study for key: %s", key)
-        completed_trials = None
-        if "524288_pbt_fine_base" in key:
-            remote_breakpoint()
-        try:
-            for filter_kl, filter_vf_share in kl_vf_combinations:
-                for evaluator_name, evaluator in evaluators.items():
-                    importances, completed_trials = _get_importances(
-                        study, evaluator, params, use_kl_loss=filter_kl, vf_share_layers=filter_vf_share
-                    )
-                    if not completed_trials:
-                        # logger.info("No completed trials for key %s with filter kl_loss=%s, shared_encoder=%s", key, filter_kl, filter_vf_share)
-                        continue
-
-                    # Store results for combined DataFrame
-                    for param, importance in importances.items():
-                        store_key = key
-                        if filter_kl is True:
-                            store_key = f"{store_key}_kl_loss"
-                        elif filter_kl is False:
-                            store_key = f"{store_key}_no_kl_loss"
-                        if filter_vf_share is True:
-                            store_key = f"{store_key}_shared_encoder"
-                        elif filter_vf_share is False:
-                            store_key = f"{store_key}_shared_encoder"
-                        all_results.append(
-                            {
-                                "param": param,
-                                "importance": importance,
-                                "evaluator_name": evaluator_name,
-                                "key": store_key,
-                                "number_of_trials": len(completed_trials),
-                                "study_name": study.study_name,
-                            }
-                        )
-                    sorted_importances = sorted(importances.items(), key=lambda item: item[1], reverse=True)
-                    report_str = (
-                        f"Hyperparameter importances for study {study.study_name} "
-                        f"(filtered for kl_loss: {filter_kl}, shared encoder: {filter_vf_share}) ({evaluator_name}) "
-                        f"with {len(completed_trials)} trials:\n"
-                    )
-                    for param, importance in sorted_importances:
-                        report_str += f"  {param}: {importance:.5f}\n"
-                    logger.info("%s", report_str)
-        except Exception as e:
-            logger.exception("Failed to analyze study for key %s: %r", key, e)
-            if len(study.get_trials()) == 0:
-                pass
-            else:
-                remote_breakpoint()
+    # Parallelize per-study processing
+    workers = max_workers or max(1, min((os.cpu_count() or 6), len(studies), 22))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(_analyze_single_study, key, study, evaluators, params): key
+            for key, study in studies.items()
+        }
+        for future in as_completed(futures):
+            rows = future.result()
+            if rows:
+                all_results.extend(rows)
 
     # Create combined DataFrame with multilevel columns
     if not all_results:
         return None
     results_df = pd.DataFrame(all_results)
+
     pivot_df = results_df.pivot_table(
-        index="param", columns=["evaluator_name", "key"], values="importance", fill_value=0.0
+        index="param", columns=["evaluator_name", "key", "centered", "step"], values="importance", fill_value=0.0
     )
     pivot_df.columns = pivot_df.columns.map(__try_step_cast)
     pivot_df.sort_index(axis=1, key=__sort_columns, inplace=True)
 
-    try:
-        save_path = Path(output_path)
-        if save_path.is_dir():
-            save_path = save_path / "hyperparameter_importance_combined.csv"
-        else:
-            raise ValueError("output_path must be a directory to save importances")
-        pivot_df.to_csv(save_path, index=True)
-        logger.info("Saved combined importances to %s", save_path)
-    except Exception:
-        logger.exception("Could not export combined importances to %s", output_path)
+    if output_path is not None:
+        # should not save to a unique file when we write only for submissions
+        try:
+            save_path = Path(output_path)
+            if save_path.is_dir():
+                save_path = save_path / "hyperparameter_importance_combined.csv"
+            else:
+                raise ValueError("output_path must be a directory to save importances")
+            pivot_df.to_csv(save_path, index=True)
+            pivot_df.to_parquet(save_path.with_suffix(".parquet"))
+            logger.info("Saved combined importances to %s", save_path)
+        except Exception:
+            logger.exception("Could not export combined importances to %s", output_path)
     return pivot_df
 
 
@@ -1361,7 +1404,7 @@ def plot_importance_studies(
 ) -> None:
     # note there is also import optuna.visualization as optuna_vis
     if isinstance(studies, dict):
-        remote_breakpoint()
+        # remote_breakpoint()
         study_results = optuna_analyze_studies(studies, output_path, params=params)
     else:
         study_results = studies
@@ -1373,74 +1416,104 @@ def plot_importance_studies(
         }
     else:
         importances = {"_": study_results}
+    written_paths = set()
     for evaluator_name, importance_df in importances.items():
-        # Create a figure with proper size and colormap
-        importance_df = importance_df.sort_index(axis=1, key=__sort_columns)  # noqa: PLW2901
-        assert "global" in importance_df.columns[-1]
-        fig, ax = plt.subplots(figsize=(12, max(6, 0.5 * len(importance_df))))
-        # Plot heatmap
-        cmap = sns.color_palette("magma", as_cmap=True)
-        # Find the max value in each column and create a mask for those cells
-        max_mask = importance_df.eq(importance_df.max())
-        # Plot heatmap
-        sns.heatmap(
-            importance_df,
-            annot=False,
-            xticklabels=True,
-            ax=ax,
-            cmap=cmap,
-            vmin=0.0,
-            vmax=1.0,
-            yticklabels=True,
-            linewidths=0.5,
-            linecolor="gray",
-        )
-        # Set every 8th x ticklabel in fraction of 1e6 (e.g., 100000 -> 0.1)
-        xticks = ax.get_xticks()
-        xlabels = importance_df.columns
-        new_labels = []
-        add_global = False
-        for i, col in enumerate(xlabels):
-            if col == "global":
-                add_global = True
-                continue
-            if i % 8 == 0:
+        for key in importance_df.columns.get_level_values("key").unique():
+            key_df = importance_df[key]
+            for centered in key_df.columns.get_level_values("centered").unique():
+                fig = None
                 try:
-                    val = int(col)
-                    label = f"{val / 1e6:.1f}"
-                except Exception:
-                    label = str(col)
-                new_labels.append(label)
-            else:
-                new_labels.append("")
-        if add_global:
-            new_labels.append("G")
-        ax.set_xticklabels(new_labels, rotation=45, ha="right")
-        ax.set(ylabel=None)
+                    centered_df = key_df[centered]
 
-        # Draw a black rectangle around the max value in each column
-        for col_idx, col in enumerate(importance_df.columns):
-            if max_mask[col].all():  # likely all 0
-                continue
-            max_rows = importance_df.index[max_mask[col]]
-            for row in max_rows:
-                row_idx = importance_df.index.get_loc(row)
-                # Rectangle: (x, y) is top left, width=1, height=1
-                rect = plt.Rectangle(
-                    (col_idx, row_idx),
-                    1,
-                    1,
-                    fill=False,
-                    edgecolor="white",
-                    linewidth=2,
-                    zorder=10,
-                )
-                ax.add_patch(rect)
-        plt.title(f"Hyperparameter Importances ({evaluator_name})")
-        plt.xlabel("Step")
-        fig.savefig(
-            Path(output_path) / f"hyperparameter_importance_{evaluator_name}.pdf", format="pdf", bbox_inches="tight"
-        )
+                    # Create a figure with proper size and colormap
+                    centered_df = centered_df.sort_index(axis=1, key=__sort_columns)  # noqa: PLW2901
+
+                    # Cannot center global study so only assert for False
+                    if centered is False:
+                        assert "global" == centered_df.columns[-1], (
+                            f"Expected last column to be 'global' not {centered_df.columns[-1]}"
+                        )
+                    add_global = "global" in centered_df.columns
+                    fig, ax = plt.subplots(figsize=(12, max(6, 0.5 * len(centered_df))))
+                    # Plot heatmap
+                    cmap = sns.color_palette("magma", as_cmap=True)
+                    # Find the max value in each column and create a mask for those cells
+                    max_mask = centered_df.eq(centered_df.max())
+                    # Plot heatmap
+                    sns.heatmap(
+                        centered_df,
+                        annot=False,
+                        xticklabels=True,
+                        ax=ax,
+                        cmap=cmap,
+                        vmin=0.0,
+                        vmax=1.0,
+                        yticklabels=True,
+                        linewidths=0.5,
+                        linecolor="gray",
+                    )
+                    # Set every 8th x ticklabel in fraction of 1e6 (e.g., 100000 -> 0.1)
+                    xticks = ax.get_xticks()
+                    xlabels = centered_df.columns
+                    new_labels = []
+                    for i, col in enumerate(xlabels):
+                        if col == "global":
+                            continue
+                        if i % 8 == 0 or i == len(xlabels) - (2 if add_global else 1):
+                            try:
+                                val = int(col)
+                                label = f"{val / 1e6:.1f}"
+                            except Exception:
+                                label = str(col)
+                            new_labels.append(label)
+                        else:
+                            new_labels.append("")
+                    if add_global:
+                        new_labels.append("G")
+                    ax.set_xticklabels(new_labels, rotation=45, ha="center")
+                    ytick_labels = ax.get_yticklabels()
+                    ax.set_yticklabels(ytick_labels, rotation=22, va="top")
+                    ax.set(ylabel=None)
+
+                    # Draw a black rectangle around the max value in each column
+                    for col_idx, col in enumerate(centered_df.columns):
+                        if max_mask[col].all() or sum(max_mask[col]) <= 1:  # do not draw if all 0 or only 1 value
+                            continue
+                        max_rows = centered_df.index[max_mask[col]]
+                        for row in max_rows:
+                            row_idx = centered_df.index.get_loc(row)
+                            # Rectangle: (x, y) is top left, width=1, height=1
+                            rect = plt.Rectangle(
+                                (col_idx, row_idx),
+                                1,
+                                1,
+                                fill=False,
+                                edgecolor="white",
+                                linewidth=2,
+                                zorder=10,
+                            )
+                            ax.add_patch(rect)
+                    plt.title(f"Hyperparameter Importances ({evaluator_name})")
+                    plt.xlabel("Step")
+                    file_path = Path(
+                        output_path
+                    ) / f"hyperparameter_importance_{key}-centered={centered}-{evaluator_name}.pdf".replace(
+                        "(default)", ""
+                    )
+                    assert file_path not in written_paths, "File path already written: %s" % file_path
+                    fig.savefig(
+                        file_path,
+                        format="pdf",
+                        bbox_inches="tight",
+                    )
+                    written_paths.add(file_path)
+                    logger.info("Saved heatmap for %s key centered=%s at '%s", key, centered, file_path)
+                except Exception:
+                    logger.error("Could not plot heatmap for %s key centered=%s", key, centered)
+                    remote_breakpoint()
+                finally:
+                    if fig:
+                        plt.close(fig)
 
 
 if __name__ == "__main__":
@@ -1479,6 +1552,7 @@ if __name__ == "__main__":
         ],
         help="Experiment directories to analyze (default: three HumanoidStandup-v5 paths).",
     )
+    parser.add_argument("--plot_only", action="store_true", help="Only plot from existing analysis files.")
     args = parser.parse_args()
     # possibly for repair sqlite3 "outputs/shared/optuna_hp_study.db" ".dump" | sqlite3 new.db
 
@@ -1521,6 +1595,7 @@ if __name__ == "__main__":
             # TESTING
         )
         studies = optuna_analyze_studies(studies, output_path=paths[0], params=list(distributions.keys()))
+        # Want to plot for each env.
         plot_importance_studies(studies, output_path=paths[0], params=list(distributions.keys()))
         sys.exit(0)
     # clear_study = args.clear_study
@@ -1565,7 +1640,10 @@ if __name__ == "__main__":
             run_paths = get_run_directories_from_submission(yaml_path)
             run_infos: dict[str, SubmissionRun] = get_runs_from_submission(yaml_path)
             env_mapping = {info["run_id"]: info["run_key"] for info in run_infos.values()}
-            assert env_mapping.keys() == run_paths.keys()
+            # slight chanc this fail if a run just finished
+            assert env_mapping.keys() == run_paths.keys(), (
+                f"Mismatch in runs for {yaml_path}. {set(env_mapping.keys()).symmetric_difference(run_paths.keys())}"
+            )
             if args.envs:
                 keep = set()
                 # filter:
@@ -1607,29 +1685,70 @@ if __name__ == "__main__":
                     if clear_studies is not None
                     else make_study_name("pbt_study", env, suffix=f"_{submission_name}")
                 )
-                studies = optuna_create_studies(
-                    *paths,
-                    database_path=database_path,
-                    env=env,
-                    dir_depth=0,
-                    distributions=distributions,
-                    load_if_exists=True,
-                    study_each_epoch=None,
-                    submission_file_path=None,  # used to filter RUNNING, but we already did
-                    clear_experiment_cache=clear_experiment_cache,
-                    clear_study=clear_this_study,  # TODO: Step studies are NOT cleared this way!
-                    excludes=load_excludes(),
-                    metric="episode_reward_mean",
-                    submission_study=submission_name,
-                )
-                clear_experiment_cache = False  # needs to be done only once.
-                # Plots for the global files are wrong until all yaml files are processed
-                plot_importance_studies(studies, output_path=paths[0], params=list(distributions.keys()))
+                if args.plot_only:
+                    data_file = (
+                        Path(f"outputs/shared/experiments/Default-mlp-{env}")
+                        / "hyperparameter_importance_combined.parquet"
+                    )
+                    if not data_file.exists():
+                        logger.error("Plot only specified but data file %s does not exist.", data_file)
+                        continue
+                    importance_results = pd.read_parquet(data_file)
+                    plot_importance_studies(
+                        importance_results,
+                        output_path=f"outputs/shared/experiments/Default-mlp-{env}",
+                        params=list(distributions.keys()),
+                    )
+                    # TODO
+                    # no studies to update all_results
+                else:
+                    studies = optuna_create_studies(
+                        *paths,
+                        database_path=database_path,
+                        env=env,
+                        dir_depth=0,
+                        distributions=distributions,
+                        load_if_exists=True,
+                        study_each_epoch=None,
+                        submission_file_path=None,  # used to filter RUNNING, but we already did
+                        clear_experiment_cache=clear_experiment_cache,
+                        clear_study=clear_this_study,  # TODO: Step studies are NOT cleared this way!
+                        excludes=load_excludes(),
+                        metric="episode_reward_mean",
+                        submission_study=submission_name,
+                    )
+                    clear_experiment_cache = False  # needs to be done only once.
+                    # Plots for the global files are wrong until all yaml files are processed
+                    # Sufficent to do this only for the submission file studies, as the others are incomplete
+                    reduced_studies = {k: v for k, v in studies.items() if submission_name in k}
+                    study_results = optuna_analyze_studies(
+                        reduced_studies,
+                        None,
+                        params=list(distributions.keys()),
+                    )
+                    if study_results is None or study_results.empty:
+                        logger.warning("No study results for env %s submission %s", env, submission_name)
+                        continue
+                    study_results.to_parquet(
+                        f"outputs/shared/experiments/Default-mlp-{env}/hyperparameter_importance_{submission_name}.parquet"
+                    )
+                    plot_importance_studies(
+                        study_results,
+                        output_path=f"outputs/shared/experiments/Default-mlp-{env}",
+                        params=list(distributions.keys()),
+                    )
                 all_studies.update(studies)
             if clear_studies is not False and not isinstance(clear_studies, str):
                 clear_studies = None  # if false do not switch to clearning
         logger.info("All Trials processed, plotting combined importance.")
-        plot_importance_studies(all_studies, output_path=paths[0], params=list(distributions.keys()))
+        for env in envs:
+            remote_breakpoint()
+            env_studies = {k: v for k, v in all_studies.items() if env in k}
+            plot_importance_studies(
+                env_studies,
+                output_path=f"outputs/shared/experiments/Default-mlp-{env}",
+                params=list(distributions.keys()),
+            )
         sys.exit()
     # ------------ ALL -------------------
     database_path = "outputs/shared/optuna_hp_study.db"

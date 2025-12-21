@@ -715,8 +715,8 @@ def plot_run_data(
                 # duplicated = group.index[group.index.duplicated(keep=False)].unique()
                 # Keep last as these are the one we continue with;
                 # however there are examples where the group_stat was not consistent
-                if (df.config.experiment_id.iloc[0] != "tws47f2512191818752f4").all():
-                    remote_breakpoint()
+                if group_stat == "batch_size" and (df.config.experiment_id.iloc[0] != "tws47f2512191818752f4").all():
+                    remote_breakpoint(5679)
                 group = group[~group.index.duplicated(keep="last")]
                 # duplicated = group.index.duplicated(keep=False)
                 # dupl_cols = group.loc[duplicated]
@@ -813,7 +813,7 @@ def plot_run_data(
             # else:
             h2 = plt.Line2D([], [], color=GROUP_STAT_COLOR, label="best")
             handles = (h2, *handles)
-            labels = (group_stat, *labels)
+            labels = ("best", *labels)
         # Place the legend below the plot in a fancybox
         try:
             legend = ax.legend(
