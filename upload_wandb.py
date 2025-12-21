@@ -210,6 +210,9 @@ def _find_parent_json_file(offline_path: Path | str, parent_run_id: str) -> Path
                 # We are looking in the wrong path - which is the normal case
                 # assume offline_path points to the json file
                 parent_search = offline_path.parent.parent.glob(f"*id={parent_run_id}*/result.json")
+            else:
+                # same dir
+                parent_search = offline_path.parent.glob("result.json")
         else:
             logger.error("Cannot identify which result.json file to select for partent run id %s", parent_run_id)
             # TODO: Need to check all for the id, but we should not end up here normally

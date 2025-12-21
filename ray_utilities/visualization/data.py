@@ -3,7 +3,6 @@ from __future__ import annotations
 # TODOS
 # NOTE: That the current code stores and caches trials that might have failed/stopped and are restored later
 # cause of this caching the trial data might not be complete!
-
 # pyright: reportAttributeAccessIssue=warning
 import concurrent.futures
 import logging
@@ -12,20 +11,19 @@ import traceback
 from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Collection, Hashable, Sequence, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Collection, Hashable, Sequence, TypeAlias, TypeVar, TypedDict, cast
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import base62
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from tqdm import tqdm
 from typing_extensions import Final, Literal, Sentinel, TypeVarTuple, Unpack
 
+from ray_utilities.misc import ExperimentKey
 from ray_utilities.testing_utils import remote_breakpoint
 from ray_utilities.visualization._common import Placeholder, PlotOption
-from ray_utilities.misc import ExperimentKey
 
 try:
     from ruamel.yaml import YAML
@@ -50,7 +48,7 @@ else:
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
 
-PATHS = [Path("outputs/experiments/shared"), Path("outputs/experiments/shared_backup")]
+PATHS = [Path("outputs/shared/experiments"), Path("outputs/shared_backup/needs_sync"), Path("outputs/shared_backup")]
 
 DROP_COLUMNS = [
     "hostname",
@@ -101,31 +99,16 @@ Ts = TypeVarTuple("Ts")
 
 # Project/group/Name*run_id/
 
+
+class SubmissionRun(TypedDict):
+    group_name: str
+    run_key: str
+    run_id: str
+    status: str
+    submission_name: str | None
+
+
 logger = logging.getLogger(__name__)
-
-# Set seaborn and matplotlib style for publication-quality plots
-# sns.set_theme()
-sns.set_theme(
-    style="dark",
-    context="talk",
-    rc={
-        "axes.grid": False,  # Disable all grid lines
-        "axes.spines.top": False,
-        "axes.spines.right": True,
-        "axes.titleweight": "bold",
-        "axes.labelweight": "bold",
-        "font.size": 16.0,
-        "axes.labelsize": 16.0,
-        "axes.titlesize": 16.0,
-        "legend.fontsize": 14,
-        "legend.title_fontsize": 15.0,
-        "xtick.direction": "out",
-        "ytick.direction": "out",
-        "legend.frameon": False,
-    },
-)
-
-# mpl.rcParams["savefig.facecolor"] = "#f7f7f7"
 
 
 def _cast_int_or_nan(v):
@@ -135,10 +118,133 @@ def _cast_int_or_nan(v):
         return float("nan")
 
 
+def _try_cast(v: Any):
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return v
+    if v.is_integer():
+        return int(v)
+    return v
+
+
 def ifill(
     *cols: Unpack[Ts], n: int
 ) -> tuple[Unpack[Ts]] | tuple[Unpack[Ts], Sentinel] | tuple[Unpack[Ts], Sentinel, Sentinel] | tuple[Sentinel, ...]:
     return (*cols, *(Placeholder,) * (n - len(cols)))
+
+
+def get_runs_from_submission(
+    submission_file: str | Path, *, status_filter: str = "SUCCEEDED"
+) -> dict[str, SubmissionRun]:
+    """
+    Parse a submission YAML file and collect runs whose group name or status matches ``status_filter``.
+
+    Args:
+        submission_file: Path to the submission YAML file.
+        status_filter: Filter string checked against group name and status (case-insensitive).
+
+    Returns:
+        A list of submission runs containing group, run key, run id, and status metadata.
+    """
+    path = Path(submission_file)
+    if not path.exists():
+        raise FileNotFoundError(f"Submission file {path} does not exist.")
+    with path.open("r", encoding="utf-8") as handle:
+        submission = yaml_load(handle)
+    if not isinstance(submission, dict):
+        raise ValueError(f"Submission file {path} must contain a mapping at the root.")
+    runs: dict[str, SubmissionRun] = {}
+    normalized_filter = status_filter.upper()
+    submission_name = path.name.removesuffix(".yaml").removeprefix("submissions").removeprefix("submission").strip("_")
+
+    for group_name, group_data in submission.items():
+        if not isinstance(group_data, dict) or "run_ids" not in group_data:
+            continue
+        run_ids = group_data["run_ids"]
+        if not isinstance(run_ids, dict):
+            continue
+        group_matches_filter = normalized_filter in group_name.upper()
+        for run_key, run_entries in run_ids.items():
+            if not isinstance(run_entries, dict):
+                continue
+            normalized_run_key = run_key.strip()
+            if normalized_run_key.startswith("(") and normalized_run_key.endswith(")"):
+                normalized_run_key = normalized_run_key[1:-1].strip()
+            for run_id, run_info in run_entries.items():
+                if not isinstance(run_info, dict):
+                    continue
+                status = str(run_info.get("status", "")).upper()
+                if not (group_matches_filter or normalized_filter in status):
+                    logger.info("Skipping run %s/%s with status %s", group_name, run_id, status)  # noqa: G004
+                    continue
+                assert run_id not in runs, f"Duplicate run_id {run_id} found in submission file."
+                runs[run_id] = SubmissionRun(
+                    group_name=group_name,
+                    run_key=normalized_run_key,
+                    run_id=run_id,
+                    status=status,
+                    submission_name=submission_name,
+                )
+    return runs
+
+
+def find_run_directory(run_key: str, run_id: str, *, search_paths: Sequence[Path] | None = None) -> Path:
+    """
+    Locate the directory for the given run using the ``*run_key*/*/*run_id`` glob pattern.
+
+    Args:
+        run_key: Dataset/environment key of the run.
+        run_id: Unique run identifier.
+        search_paths: Paths to scan; defaults to ``PATHS``.
+
+    Returns:
+        The directory containing the run.
+
+    Raises:
+        FileNotFoundError: If no directory matches the pattern.
+        ValueError: If multiple directories match the pattern.
+    """
+    base_paths = tuple(search_paths) if search_paths is not None else tuple(PATHS)
+    pattern = f"*{run_key}*/*/*{run_id}"
+    matches: list[Path] = []
+    for base in base_paths:
+        base_path = Path(base)
+        if not base_path.exists():
+            continue
+        matches.extend(base_path.glob(pattern))
+    unique_matches = list(dict.fromkeys(matches))
+    if not unique_matches:
+        breakpoint()
+        raise FileNotFoundError(f"No run directory found for run_id={run_id} (run_key={run_key}).")
+    if len(unique_matches) > 1:
+        raise ValueError(f"Multiple run directories found for run_id={run_id} (run_key={run_key}): {unique_matches}")
+    return unique_matches[0]
+
+
+def get_run_directories_from_submission(
+    submission_file: str | Path,
+    *,
+    status_filter: str = "SUCCEEDED",
+    search_paths: Sequence[Path] | None = None,
+) -> dict[str, Path]:
+    """
+    Convenience helper that resolves directories for all runs matching ``status_filter`` in a submission file.
+
+    Args:
+        submission_file: Path to the submission YAML file.
+        status_filter: Filter applied to group names and statuses.
+        search_paths: Paths to scan for the runs; defaults to ``PATHS``.
+
+    Returns:
+        Mapping of run_id to the discovered directory.
+    """
+    run_infos = get_runs_from_submission(submission_file, status_filter=status_filter)
+    directories: dict[str, Path] = {}
+    for run_id, info in run_infos.items():
+        assert run_id == info["run_id"]
+        directories[run_id] = find_run_directory(info["run_key"], run_id, search_paths=search_paths)
+    return directories
 
 
 class _NoReprDict(dict):
@@ -246,62 +352,102 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
                     experiment_key = experiment_key.item()
                 if result_file.name != "result.json" and experiment_key not in result_file.name:
                     # Due to a bug where orignal experiment was added to config.trial_id_history on continue
-                    remote_breakpoint()
                     if experiment_key.endswith(ExperimentKey.RIGHT_PAD_CHAR):
-                        history = df.iloc[-1].config.trial_id_history
-                        history.index = history.index.get_level_values(0)  # remove all Placeholder
-                        indices = history.index[history == experiment_key].map(_cast_int_or_nan)
-                        idx = indices.max()
-                        if idx > 0:
-                            assert (
-                                idx > 1
-                            )  # as this only happens when a fork is continued the index should be at least 2
-                            max_index = history.index[history == experiment_key].map(_cast_int_or_nan).fillna(0).max()
-                            if idx == max_index:
-                                # drop the column
-                                df = df.drop(
-                                    [
-                                        # Try int and string
-                                        ("config", "trial_id_history", str(idx)),
-                                        ("config", "trial_id_history", idx),
-                                    ],
-                                    errors="ignore",
+                        # Fix history which should be broken too
+                        # if main branch it is likely a bug and we can trust the result_file as experiment key
+                        main_branch = df.iloc[-1].config.__pbt_main_branch__.item()
+                        if "trial_id_history" in df.config:
+                            history = df.iloc[-1].config.trial_id_history
+                            history.index = history.index.get_level_values(0)  # remove all Placeholder
+                            indices = history.index[history == experiment_key].map(_cast_int_or_nan)
+                            idx = indices.max()
+                            if idx > 0:
+                                assert (
+                                    idx > 1
+                                )  # as this only happens when a fork is continued the index should be at least 2
+                                max_index = (
+                                    history.index[history == experiment_key].map(_cast_int_or_nan).fillna(0).max()
                                 )
+                                if idx == max_index:
+                                    # drop the column
+                                    df = df.drop(
+                                        [
+                                            # Try int and string
+                                            ("config", "trial_id_history", str(idx)),
+                                            ("config", "trial_id_history", idx),
+                                        ],
+                                        axis=1,
+                                        errors="ignore",
+                                    )
+                                else:
+                                    # drop and shift the other columns
+                                    histories = df.config.trial_id_history.sort_index(axis=1).copy()
+                                    original_experiment_keys = histories.pop("original_experiment_keys")
+                                    epoch_columns = histories.columns.get_level_values(0)
+                                    col_type = type(epoch_columns[0])
+                                    epoch_columns = epoch_columns.map(int)
+                                    levels_before = histories.columns.nlevels
+                                    histories.columns = pd.RangeIndex(epoch_columns.min(), epoch_columns.max() + 1)
+                                    cols_after = histories[list(range(idx + 1, len(histories.columns)))]
+                                    histories = histories.drop(histories.columns[-1], axis=1)
+                                    histories[list(range(idx, len(histories.columns)))] = cols_after
+                                    # Wirte back multiindex columns
+                                    histories["original_experiment_key"] = original_experiment_keys
+                                    histories.columns = pd.MultiIndex.from_product(
+                                        [
+                                            ["config"],
+                                            ["trial_id_history"],
+                                            list(map(col_type, histories.columns)),
+                                            *[[Placeholder]] * (levels_before - 1),
+                                        ]
+                                    )
+                                    df = pd.concat(
+                                        [df.drop(("config", "trial_id_history"), axis=1), histories], axis=1
+                                    ).sort_index(axis=1)
                             else:
-                                # drop and shift the other columns
-                                histories = df.config.trial_id_history.sort_index(axis=1).copy()
-                                original_experiment_keys = histories.pop("original_experiment_keys")
-                                epoch_columns = histories.columns.get_level_values(0)
-                                col_type = type(epoch_columns[0])
-                                epoch_columns = epoch_columns.map(int)
-                                levels_before = histories.columns.nlevels
-                                histories.columns = pd.RangeIndex(epoch_columns.min(), epoch_columns.max() + 1)
-                                cols_after = histories[list(range(idx + 1, len(histories.columns)))]
-                                histories = histories.drop(histories.columns[-1], axis=1)
-                                histories[list(range(idx, len(histories.columns)))] = cols_after
-                                # Wirte back multiindex columns
-                                histories["original_experiment_key"] = original_experiment_keys
-                                histories.columns = pd.MultiIndex.from_product(
-                                    [
-                                        ["config"],
-                                        ["trial_id_history"],
-                                        list(map(col_type, histories.columns)),
-                                        *[[Placeholder]] * (levels_before - 1),
-                                    ]
+                                remote_breakpoint()
+                                raise ValueError(
+                                    "Experiment key %s does not match filename. Possibly the history is incomplete."
                                 )
-                                df = pd.concat(
-                                    [df.drop(("config", "trial_id_history"), axis=1), histories], axis=1
-                                ).sort_index(axis=1)
+                        elif main_branch:
+                            # no trial_id history but we are a main branch, believe this is a bug
+                            new_experiment_key = result_file.name.split("-")[-1].split(".")[0]
                         else:
+                            remote_breakpoint()
                             raise ValueError(
                                 "Experiment key %s does not match filename. Possibly the history is incomplete."
                             )
-
+                        experiment_key_from_file = result_file.name.split("-")[-1].split(".")[0]
+                        if "trial_id_history" in df.config:
+                            history = df.iloc[-1].config.trial_id_history.drop(
+                                "original_experiment_key", errors="ignore"
+                            )
+                            index = history.index.get_level_values(0)
+                            col_type = type(index[0])
+                            max_entry_idx = index.map(int).max()
+                            new_experiment_key = history[col_type(max_entry_idx)]
+                            if not isinstance(new_experiment_key, str):
+                                new_experiment_key = new_experiment_key.item()
+                            assert experiment_key_from_file == new_experiment_key
+                        # Cannot replace all occurances as it could be A, B, A
+                        mask = df.config.experiment_key == experiment_key
+                        # replace the last True block
+                        last_true_idx = mask[::-1].idxmin().item()
+                        mask = mask.to_numpy().flatten()
+                        mask[:last_true_idx] = False
+                        df.loc[mask, ("config", "experiment_key")] = new_experiment_key
                     else:
-                        # Raise
-                        assert result_file.name == "result.json" or experiment_key in result_file.name, (
-                            f"Experiment key {experiment_key} does does not match id in file name {result_file}"
+                        logger.error("")
+                        remote_breakpoint()  # some other bug
+                        raise ValueError(
+                            f"Experiment key {experiment_key} does not match id in file name {result_file}"
                         )
+                    experiment_key = df.config.experiment_key.iloc[-1]
+                    if not isinstance(experiment_key, str):
+                        experiment_key = experiment_key.item()
+                    assert result_file.name == "result.json" or experiment_key in result_file.name, (
+                        f"Experiment key {experiment_key} does does not match id in file name {result_file}"
+                    )
             except AttributeError as ae:
                 if "experiment_key" not in str(ae):
                     raise
@@ -329,7 +475,7 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
                 continue
             num_errors += 1
             logger.error(f"Failed to load run data for {result_file}: {e!r}", exc_info=num_errors <= 2)  # noqa: G004
-            if num_errors >= 6:
+            if num_errors >= 2:
                 logger.error("Too many errors encountered while loading run data; aborting further attempts.")
                 raise
         else:
@@ -503,6 +649,13 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
         else:
             assert False
 
+    assert (
+        combined_df.groupby([ifill("config", "pbt_epoch")])[[ifill("config", "__pbt_main_branch__")]]
+        .max()
+        .iloc[:-1]
+        .all()
+        .item()
+    ), "Some epoch is missing main branch True values"
     main_branch_mask = pd.Series(main_branch_mask, index=combined_df.index, name=ifill("config", "__pbt_main_branch__"))
     # try:
     #    combined_df.loc[:, ("config", "__pbt_main_branch__")] = main_branch_mask
@@ -550,7 +703,14 @@ def add_missing_pbt_epoch(df: pd.DataFrame) -> tuple[pd.DataFrame, int | None]:
         # Estimate pbt_epochs
         df = df.copy()
         indexer = ifill("config", "pbt_epoch", n=df.columns.nlevels)
-        df.loc[:, indexer] = (df["current_step"] - 1) // perturbation_interval
+        pbt_epochs = (df["current_step"] - 1) // perturbation_interval
+        # Fix large overstepping:
+        if "fork_from" in df.config:
+            perturbation_steps = df[ifill("config", "fork_from", "parent_env_steps", n=df.columns.nlevels)]
+            epochs = perturbation_steps.fillna(0).unique() // perturbation_interval
+            max_epoch = epochs.max() + 1
+            pbt_epochs = pbt_epochs.astype(int).clip(upper=max_epoch)
+        df.loc[:, indexer] = pbt_epochs.astype(int)
         df = df.sort_index(axis=1)
     # else cannot make a good guess on the real pbt epochs
     return df, perturbation_interval
@@ -902,7 +1062,7 @@ def get_epoch_stats(
 
 def calculate_hyperparam_metrics(
     df: pd.DataFrame, metric: str | tuple[str, ...], *, per_epoch: bool = False
-) -> tuple[pd.DataFrame, str] | None:
+) -> tuple[pd.DataFrame, str, tuple[pd.DataFrame, pd.DataFrame]] | None:
     """
     Calculate additional metrics for the DataFrame.
     This calculates:
@@ -977,35 +1137,44 @@ def calculate_hyperparam_metrics(
     # Kendallal Tau
     from scipy.stats import kendalltau
 
-    B: pd.Series = metric_values.loc[epoch_end_steps.current_step, metric_key].drop(epoch_end_steps.iloc[-1])
-    A: pd.Series = metric_values.loc[epoch_end_steps.current_step, metric_key].drop(epoch_end_steps.iloc[0])
     try:
-        B.index = A.index
-    except ValueError:
-        # This wont work if some runs are dropped, need a better matcher
+        B: pd.Series = metric_values.loc[epoch_end_steps.current_step, metric_key].drop(epoch_end_steps.iloc[-1])
+        A: pd.Series = metric_values.loc[epoch_end_steps.current_step, metric_key].drop(epoch_end_steps.iloc[0])
         try:
-            max_step_B = B.index.get_level_values("current_step").max()
-            max_step_A = A.index.get_level_values("current_step").max()
-            keys_B = B[B.index.get_level_values("current_step") == max_step_B].index.get_level_values("pbt_group_key")
-            keys_A = A[A.index.get_level_values("current_step") == max_step_A].index.get_level_values("pbt_group_key")
-            not_in_A = keys_B.difference(keys_A)
-            B.drop((max_step_B, not_in_A.item()), inplace=True, axis=0)
             B.index = A.index
+        except ValueError:
+            # This wont work if some runs are dropped, need a better matcher
+            try:
+                max_step_B = B.index.get_level_values("current_step").max()
+                max_step_A = A.index.get_level_values("current_step").max()
+                keys_B = B[B.index.get_level_values("current_step") == max_step_B].index.get_level_values(
+                    "pbt_group_key"
+                )
+                keys_A = A[A.index.get_level_values("current_step") == max_step_A].index.get_level_values(
+                    "pbt_group_key"
+                )
+                not_in_A = keys_B.difference(keys_A)
+                B.drop((max_step_B, not_in_A.item()), inplace=True, axis=0)
+                B.index = A.index
+                AB = pd.concat([A, B], axis=1, names=[metric_key, "rank2"])
+                # try to throw away those in the last epoch that are not present in A, ignore the step
+            except Exception:
+                logger.exception("Failed to align A and B for kendall tau calculation")
+                B: pd.Series = metric_values.loc[epoch_end_steps.current_step, metric_key].drop(
+                    epoch_end_steps.iloc[-1]
+                )
+                A: pd.Series = metric_values.loc[epoch_end_steps.current_step, metric_key].drop(epoch_end_steps.iloc[0])
+                # Slicing without accounting for level can disrupt alignment
+                # Fill A with NaN for missing keys in B, cast steps to categorical to align
+                B.name = "rank2"
+                AB = pd.concat([A.reset_index(), B.reset_index()], axis=1, names=[metric_key, "rank2"])
+                AB = AB.loc[:, ~AB.columns.duplicated(keep="first")]
+                AB = AB.set_index(metric_values.index.names)
+        else:
+            # ignore this error for short aborted runs, kendall will be NaN then
             AB = pd.concat([A, B], axis=1, names=[metric_key, "rank2"])
-            # try to throw away those in the last epoch that are not present in A, ignore the step
-        except Exception:
-            logger.exception("Failed to align A and B for kendall tau calculation")
-            B: pd.Series = metric_values.loc[epoch_end_steps.current_step, metric_key].drop(epoch_end_steps.iloc[-1])
-            A: pd.Series = metric_values.loc[epoch_end_steps.current_step, metric_key].drop(epoch_end_steps.iloc[0])
-            # Slicing without accounting for level can disrupt alignment
-            # Fill A with NaN for missing keys in B, cast steps to categorical to align
-            B.name = "rank2"
-            AB = pd.concat([A.reset_index(), B.reset_index()], axis=1, names=[metric_key, "rank2"])
-            AB = AB.loc[:, ~AB.columns.duplicated(keep="first")]
-            AB = AB.set_index(metric_values.index.names)
-    else:
-        # ignore this error for short aborted runs, kendall will be NaN then
-        AB = pd.concat([A, B], axis=1, names=[metric_key, "rank2"])
+    except Exception:
+        remote_breakpoint(5679)
     AB.columns = [metric_key, "rank2"]
     # tau ~0 no consistent ordering, ~1 consistent ordering
     # high p value, no evidence of monotonic relationship. Tau is compatible with random change
@@ -1027,13 +1196,21 @@ def calculate_hyperparam_metrics(
         # TODO: However this does not tell us how robust a configuration is over time
         # Cast epochs to step
         epoch_to_steps = epoch_end_steps["current_step"].to_dict()
-        for metrics_df in (gini_metrics, centered_metrics, centered_metrics2, normed_metrics, normalized_metric):
-            metrics_df.index = metrics_df.index.map(epoch_to_steps)
-    intra_group_variance = df.groupby([ifill("config", "pbt_epoch"), ifill("config", "pbt_group_key")])[metric].agg(
-        ["var", "std", "mean"]
-    )
+        try:
+            for metrics_df in (gini_metrics, centered_metrics, centered_metrics2, normed_metrics, normalized_metric):
+                metrics_df.index = metrics_df.index.map(epoch_to_steps)
+        except ValueError:
+            remote_breakpoint(5680)
+    try:
+        intra_group_variance = df.groupby([ifill("config", "pbt_epoch"), ifill("config", "pbt_group_key")])[
+            metric_key
+        ].agg(["var", "std", "mean"])
+    except (ValueError, KeyError) as e:
+        logger.exception("Failed to calculate intra group variance.")
+        remote_breakpoint(5680)
+        raise
     intra_group_variance.index.names = ["pbt_epoch", "pbt_group_key"]
-    intra_group_variance_global = df.groupby([ifill("config", "pbt_group_key")])[metric].agg(["var", "std", "mean"])
+    intra_group_variance_global = df.groupby([ifill("config", "pbt_group_key")])[metric_key].agg(["var", "std", "mean"])
     intra_group_variance_global.index.names = ["pbt_group_key"]
 
     # AllA = metric_values.loc[metric_values.index.get_level_values("current_step") <= epoch_end_steps.iloc[-1].item(), metric].to_frame()
@@ -1121,6 +1298,7 @@ def _drop_duplicate_steps(df: pd.DataFrame) -> pd.DataFrame:
     def ifill(*cols, n=df.columns.nlevels):
         return (*cols, *(Placeholder,) * (n - len(cols)))
 
+    df = df.sort_index(key=_base62_sort_key)
     try:
         first_change: tuple[str, int] | pd.Series = df[ifill("config", "pbt_epoch")].diff().iloc[1:].ne(0).idxmax()  # pyright: ignore[reportAssignmentType]
     except ValueError as ve:
@@ -1198,6 +1376,9 @@ def _drop_duplicate_steps(df: pd.DataFrame) -> pd.DataFrame:
                     )
                 ).iloc[0]
             )
+    if perturbation_interval > 200_000:
+        logger.warning("Too large perturbation interval detected: %d", perturbation_interval)
+        remote_breakpoint()
     df.attrs["perturbation_interval"] = perturbation_interval
     # TODO: Does pbt_epoch need to be fixed?
     # This disrupts seed, pbt_epoch
@@ -1212,8 +1393,13 @@ def _drop_duplicate_steps(df: pd.DataFrame) -> pd.DataFrame:
     # Apply method 1
     method2 = df[ifill("current_step")].map(min_epoch_per_step[ifill("config", "pbt_epoch")])
     if not (method1 == method2).all():
-        logger.warning("Disagreement between pbt_epoch fixing methods, using method 1.")
-        remote_breakpoint()
+        # Method 1 can disagree when there is large overstepping
+        logger.warning(
+            "Disagreement between pbt_epoch fixing methods, using method 1. Overstepping: %s",
+            (df.current_step.max() > perturbation_interval * 8).item(),
+        )
+        if (df.current_step.max() < perturbation_interval * 8).item():
+            remote_breakpoint()
     df.loc[:, ifill("config", "pbt_epoch")] = method2.to_numpy()
     return df.sort_index(axis=1).copy()
 
@@ -1293,47 +1479,6 @@ def _join_nested(m, on="_"):
     return m
 
 
-def _plot_intra_group_variances(
-    group_variance_global: pd.DataFrame,
-    group_variance_per_epoch: pd.DataFrame,
-    out_path: Path,
-    path_base: str,
-    metric_str: str,
-    per_epoch_str: str,
-    format: str,
-):
-    # Plot group_variance_global var column as horizontal bar chart
-    fig_global, ax_global = plt.subplots(figsize=(10, max(4, len(group_variance_global) * 0.5)))
-    group_variance_global["var"].sort_values().plot.barh(ax=ax_global, color="skyblue")
-    ax_global.set_xlabel("Variance")
-    ax_global.set_ylabel("Group Key")
-    ax_global.set_title("Group Variance Global")
-    fig_global.tight_layout()
-
-    # Save global variance plot
-    bar_path_global = out_path.with_name(f"{path_base}{metric_str}-group_variance_global{per_epoch_str}_bar.{format}")
-    fig_global.savefig(bar_path_global, format=format, bbox_inches="tight")
-    plt.close(fig_global)
-    logger.info("Saved group variance global bar chart to '%s'", bar_path_global)
-
-    # Plot group_variance_per_epoch var column as bar chart
-    fig_epoch, ax_epoch = plt.subplots(figsize=(max(10, len(group_variance_per_epoch) * 0.3), 6))
-    group_variance_per_epoch["var"].plot.bar(ax=ax_epoch, color="lightcoral")
-    ax_epoch.set_ylabel("Variance")
-    ax_epoch.set_xlabel("Group Key, Epoch")
-    ax_epoch.set_title("Group Variance Per Epoch")
-    ax_epoch.tick_params(axis="x", rotation=45)
-    fig_epoch.tight_layout()
-
-    # Save per epoch variance plot
-    bar_path_per_epoch = out_path.with_name(
-        f"{path_base}{metric_str}-group_variance_per_epoch{per_epoch_str}_bar.{format}"
-    )
-    fig_epoch.savefig(bar_path_per_epoch, format=format, bbox_inches="tight")
-    plt.close(fig_epoch)
-    logger.info("Saved group variance per epoch bar chart to '%s'", bar_path_per_epoch)
-
-
 def calculate_experiment_stats(
     combined_df: pd.DataFrame, metrics: Sequence[str | tuple[str, ...]], out_path: Path, format="pdf"
 ) -> None:
@@ -1352,8 +1497,8 @@ def calculate_experiment_stats(
                 metric_str = "-" + metric_str
             else:
                 metric_str = ""
-            if per_epoch:
-                remote_breakpoint()
+            # if per_epoch:
+            #    remote_breakpoint()
             calculated_stats = calculate_hyperparam_metrics(combined_df, metric, per_epoch=per_epoch)
             if calculated_stats is None:
                 continue
@@ -1369,7 +1514,9 @@ def calculate_experiment_stats(
                 pd.concat([group_variance_per_epoch, group_variance_global]).to_csv(
                     out_path.with_name(f"{path_base}{metric_str}-hyperparam_variance_per_epoch.txt"), index=True
                 )
-                _plot_intra_group_variances(
+                from ray_utilities.visualization.plot import plot_intra_group_variances  # cyclic
+
+                plot_intra_group_variances(
                     group_variance_global,
                     group_variance_per_epoch,
                     out_path,
@@ -1378,6 +1525,8 @@ def calculate_experiment_stats(
                     per_epoch_str,
                     format,
                 )
+            else:
+                from ray_utilities.visualization import plot as _plot  # will set theme; cyclic import  # noqa: F401
 
             logger.info("Saved reduced hyperparameter stats to '%s'", stats_reduced_path)
             # 2nd plot the stats
@@ -1517,7 +1666,7 @@ def export_run_data(
         try:
             calculate_experiment_stats(combined_df=combined_df, metrics=metrics, out_path=out_path, format=format)
         except Exception as e:  # noqa: PERF203
-            logger.exception("Failed to calculate experiment stats: %r", e, exc_info=True)  # noqa: G004
+            logger.exception("Failed to calculate experiment stats: %r", e)  # noqa: G004
     plot_n_save(
         combined_df,
         plot_option=plot_option,
@@ -1836,6 +1985,7 @@ def export_all_runs(
             main_only_options = [o.main_only for o in plot_options]
             plot_reduced_options = [o.plot_reduced for o in plot_options]
             # If not redo, check for all combinations and remove metrics that already exist for all combinations
+            redo = True  # XXX - # Currently this check does not inclue all plots so we always redo for now
             if not redo:
                 metrics_to_remove = set()
                 for metric in metrics:
@@ -1957,7 +2107,7 @@ def export_all_runs(
     return saved_files
 
 
-def get_running_experiments(experiment_dir: str | Path = "./experiments"):
+def get_running_experiments(experiment_dir: str | Path = "./experiments", *, include_restore: bool = False):
     experiment_dir = Path(experiment_dir)
     if not experiment_dir.exists() or not experiment_dir.is_dir():
         raise ValueError(f"Experiment directory {experiment_dir} does not exist or is not a directory.")
@@ -1974,8 +2124,11 @@ def get_running_experiments(experiment_dir: str | Path = "./experiments"):
                 continue
             for _run_key, runs in group["run_ids"].items():
                 for run_id, run_info in runs.items():
-                    if isinstance(run_info, dict) and run_info.get("status") == "RUNNING":
-                        running_experiments.add(run_id)
+                    if isinstance(run_info, dict):
+                        if run_info.get("status") == "RUNNING":
+                            running_experiments.add(run_id)
+                        if include_restore and "RESTORE" in (run_info.get("status") or ""):  # status might be None
+                            running_experiments.add(run_id)
     # Clean some wrong keys
     return {k for k in running_experiments if "-v" not in k and "_restore" not in k}
 
@@ -2055,12 +2208,20 @@ if __name__ == "__main__":
         PlotOption(main_vs_rest=True, plot_reduced=False),
     ]
     paths = args.path
-    if paths:
+    if not paths:
         paths = [
             "outputs/shared/experiments/",
             "outputs/shared_backup/",
             "outputs/shared_backup/",
         ]
+    if any(p.endswith(".yaml") for p in paths):
+        assert all(p.endswith(".yaml") for p in paths), "Either all or none of the paths must be YAML files."
+        # Load experiment groups from YAML files
+        yaml_paths = paths
+        paths = []
+        args.single = True
+        for yaml_path in yaml_paths:
+            paths.extend(get_run_directories_from_submission(yaml_path).values())
     for path in paths:
         export_all_runs(
             path,

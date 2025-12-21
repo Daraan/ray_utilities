@@ -80,7 +80,7 @@ pbt_fine_batch_size_base:
           pbt_fine_batch_size_base_HalfCheetah-v5_2025-12-17_15:04:05
     (HumanoidStandup-v5):
       tws47f2512191424c0674:
-        status: RESTORE
+        status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_HumanoidStandup-v5_2025-12-19_14:23:36_restore_2025-12-20_00:51:13
     (Pusher-v5):
@@ -98,7 +98,7 @@ pbt_fine_batch_size_base:
         submission_id: pbt_fine_batch_size_base_Reacher-v5_2025-12-19_14:23:36
     (Walker2d-v5):
       tws47f2512191812f2ef4:
-        status: RESTORE
+        status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_Walker2d-v5_2025-12-19_14:23:36_restore_2025-12-20_00:51:13
     (Swimmer-v5):
@@ -159,7 +159,7 @@ pbt_fine_batch_size_base_large:
           pbt_fine_batch_size_base_large_HalfCheetah-v5_2025-12-18_11:58:37
     (HumanoidStandup-v5):
       tws47f2512191818752f4:
-        status: RESTORE
+        status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_large_HumanoidStandup-v5_2025-12-19_14:23:36_restore_2025-12-20_00:51:13
     (Pusher-v5):
@@ -245,10 +245,6 @@ pbt_fine_minibatch_size_base:
           pbt_fine_minibatch_size_base_HumanoidStandup-v5_2025-12-19_14:23:36
     (Pusher-v5):
       tws47f251219220013794:
-        status: SUCCEEDED
-        submission_id:
-          pbt_fine_minibatch_size_base_Pusher-v5_2025-12-19_14:23:36
-      Pusher-v5:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_base_Pusher-v5_2025-12-19_14:23:36
@@ -861,7 +857,7 @@ pbt_fine_lr_base:
         submission_id: pbt_fine_lr_base_Ant-v5_2025-12-18_11:58:37
     (HumanoidStandup-v5):
       tws47f2512201019d5914:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_fine_lr_base_HumanoidStandup-v5_2025-12-19_14:23:36
     (Pusher-v5):
       tws47f2512201034789c4:
@@ -881,7 +877,7 @@ pbt_fine_lr_base:
         submission_id: pbt_fine_lr_base_Walker2d-v5_2025-12-19_14:23:36
     (Swimmer-v5):
       tws47f2512201122d4774:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_fine_lr_base_Swimmer-v5_2025-12-19_14:23:36
 pbt_fine_lr_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
@@ -1006,7 +1002,7 @@ pbt_fine_vf_clip_param_base:
           pbt_fine_vf_clip_param_base_HalfCheetah-v5_2025-12-17_15:04:05
     (HumanoidStandup-v5):
       tws47f2512201611cc3d4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_vf_clip_param_base_HumanoidStandup-v5_2025-12-19_14:23:36
     (Pusher-v5):
@@ -1015,7 +1011,7 @@ pbt_fine_vf_clip_param_base:
         submission_id: pbt_fine_vf_clip_param_base_Pusher-v5_2025-12-19_14:23:36
     (InvertedPendulum-v5):
       tws47f2512201632eb284:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_vf_clip_param_base_InvertedPendulum-v5_2025-12-19_14:23:36
     (Reacher-v5):
@@ -1030,7 +1026,7 @@ pbt_fine_vf_clip_param_base:
           pbt_fine_vf_clip_param_base_Walker2d-v5_2025-12-19_14:23:36
     (Swimmer-v5):
       tws47f251220171236474:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_vf_clip_param_base_Swimmer-v5_2025-12-19_14:23:36
 pbt_fine_grad_clip_base:
@@ -1078,35 +1074,31 @@ pbt_fine_grad_clip_base:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_HalfCheetah-v5_2025-12-17_15:04:05
-      HalfCheetah-v5:
-        status: SUCCEEDED
-        submission_id:
-          pbt_fine_grad_clip_base_HalfCheetah-v5_2025-12-17_15:04:05
     (HumanoidStandup-v5):
       tws47f2512201730afb34:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_HumanoidStandup-v5_2025-12-19_14:23:36
     (Pusher-v5):
       tws47f25122018254f8c4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_fine_grad_clip_base_Pusher-v5_2025-12-19_14:23:36
     (InvertedPendulum-v5):
       tws47f25122018375dac4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_InvertedPendulum-v5_2025-12-19_14:23:36
     (Reacher-v5):
       tws47f25122018407ffd4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_fine_grad_clip_base_Reacher-v5_2025-12-19_14:23:36
     (Walker2d-v5):
       tws47f2512201853121b4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_fine_grad_clip_base_Walker2d-v5_2025-12-19_14:23:36
     (Swimmer-v5):
       tws47f251220190276204:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_fine_grad_clip_base_Swimmer-v5_2025-12-19_14:23:36
 pbt_fine_grad_clip_base_large:
   entrypoint_pattern:
@@ -1161,16 +1153,31 @@ pbt_fine_grad_clip_base_large:
           pbt_fine_grad_clip_base_large_HalfCheetah-v5_2025-12-18_11:58:37
     (HumanoidStandup-v5):
       tws47f251220190889e14:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_large_HumanoidStandup-v5_2025-12-19_14:23:36
     (Pusher-v5):
       tws47f2512201944b50d4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_large_Pusher-v5_2025-12-19_14:23:36
     (InvertedPendulum-v5):
       tws47f251220195601204:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_large_InvertedPendulum-v5_2025-12-19_14:23:36
+    (Reacher-v5):
+      tws47f25122020206a334:
+        status: SUCCEEDED
+        submission_id:
+          pbt_fine_grad_clip_base_large_Reacher-v5_2025-12-19_14:23:36
+    (Walker2d-v5):
+      tws47f2512202158b2d84:
+        status: SUCCEEDED
+        submission_id:
+          pbt_fine_grad_clip_base_large_Walker2d-v5_2025-12-19_14:23:36
+    (Swimmer-v5):
+      tws47f25122022016af24:
+        status: SUCCEEDED
+        submission_id:
+          pbt_fine_grad_clip_base_large_Swimmer-v5_2025-12-19_14:23:36

@@ -9,7 +9,7 @@ version = "1.0.0.rc2"
 readme = "README.md"
 description = "Utilities for Ray RLlib and related workflows. Includes experiment setup, callbacks, and JAX model utilities."
 license = { file = "LICENSE" }
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
   { name = "Daniel Sperber", email = "github.ray_utilities.blurry@9ox.net" }
 ]
@@ -208,6 +208,7 @@ known_third_party = [
   "jax",
 ]
 line_length = 120
+extraPaths = ["sympol"]
 
 [tool.pyright]
 reportDeprecated = "warning"

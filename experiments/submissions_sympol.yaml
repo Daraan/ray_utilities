@@ -441,16 +441,12 @@ sympol_pbt_num_envs:
         submission_id: sympol_pbt_num_envs_Walker2d-v5_2025-12-08_02:28:29
     (HalfCheetah-v5):
       sp87c62512072234224b4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           sympol_pbt_num_envs_HalfCheetah-v5_2025-12-07_21:16:58_restore_2025-12-08_12:01:50
       sp87c62512080408b2074:
         status: SUCCEEDED
         submission_id: sympol_pbt_num_envs_HalfCheetah-v5_2025-12-08_02:28:29
-      sp87c6251209015338e94:
-        status: SUCCEEDED
-        submission_id:
-          sympol_pbt_num_envs_HalfCheetah-v5_2025-12-07_21:16:58_restore_2025-12-08_12:01:50
     (Reacher-v5):
       sp87c6251207223720764:
         status: SUCCEEDED
@@ -482,11 +478,6 @@ sympol_pbt_num_envs:
         status: SUCCEEDED
         submission_id:
           sympol_pbt_num_envs_InvertedPendulum-v5_2025-12-08_02:28:29
-    (HalfCheetah-v5, 2025-12-07, 21:16:58, restore):
-      sp87c6251209015338e94:
-        status: SUCCEEDED
-        submission_id:
-          sympol_pbt_num_envs_HalfCheetah-v5_2025-12-07_21:16:58_restore_2025-12-08_12:01:50
     (HumanoidStandup-v5):
       sp87c62512111105a7f24:
         status: FAILED
@@ -720,9 +711,6 @@ sympol_pbt_lr_base_large:
           sympol_pbt_lr_base_large_LunarLander-v3_2025-12-10_13:48:43
     (CartPole-v1):
       sp87c62512101015be2d4:
-        status: RUNNING
-        submission_id: sympol_pbt_lr_base_large_CartPole-v1_2025-12-10_00:04:57
-      CartPole-v1:
         status: STOPPED
         submission_id: sympol_pbt_lr_base_large_CartPole-v1_2025-12-10_00:04:57
     (Acrobot-v1):
@@ -760,7 +748,7 @@ sympol_pbt_clip_param_base:
           sympol_pbt_clip_param_base_CartPole-v1_2025-12-11_11:04:52
     (Acrobot-v1):
       sp87c62512080056801f4:
-        status: STOPPED
+        status: SUCCEEDED  - but stopped
         submission_id:
           sympol_pbt_clip_param_base_Acrobot-v1_2025-12-07_21:16:58_restore_2025-12-09_18:29:13
       sp87c625121121337f424:
@@ -771,11 +759,6 @@ sympol_pbt_clip_param_base:
         status: SUCCEEDED
         submission_id:
           sympol_pbt_clip_param_base_LunarLander-v3_2025-12-07_21:16:58_restore_2025-12-09_18:29:13
-    (Acrobot-v1, 2025-12-07, 21:16:58, restore):
-      sp87c62512080056801f4:
-        status: RUNNING
-        submission_id:
-          sympol_pbt_clip_param_base_Acrobot-v1_2025-12-07_21:16:58_restore_2025-12-09_18:29:13
 sympol_pbt_clip_param:
   entrypoint_resources:
     persistent_node: 1
@@ -827,9 +810,9 @@ sympol_pbt_clip_param:
         submission_id: sympol_pbt_clip_param_Ant-v5_2025-12-08_02:28:29
     (InvertedDoublePendulum-v5):
       sp87c62512081126383b4:
-        status: RESTORE
+        status: SUCCEEDED - but stopped
         submission_id:
-          sympol_pbt_clip_param_InvertedDoublePendulum-v5_2025-12-08_02:28:29
+          sympol_pbt_clip_param_InvertedPendulum-v5_2025-12-08_02:28:29_restore_2025-12-09_18:29:13
       sp87c6251209142551694:
         status: SUCCEEDED
         submission_id:
@@ -847,11 +830,7 @@ sympol_pbt_clip_param:
       sp87c62512091051eb914:
         status: SUCCEEDED
         submission_id: sympol_pbt_clip_param_Pusher-v5_2025-12-09_02:11:04
-    (InvertedPendulum-v5, 2025-12-08, 02:28:29, restore):
-      sp87c62512081126d8ea4:
-        status: RUNNING
-        submission_id:
-          sympol_pbt_clip_param_InvertedPendulum-v5_2025-12-08_02:28:29_restore_2025-12-09_18:29:13
+
 sympol_pbt_entropy_coeff_base:
   # TODO: Change to base
   <ENV_TYPE>:

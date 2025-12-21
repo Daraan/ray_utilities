@@ -1,11 +1,14 @@
 # PLOTS TODOS
 # - Some logscale have not enough xticks
 # - Fontsize
+# Could make huge minibatch size runs with batch_size = 16384
+# or just do gradient accumulation
 
 from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Hashable, Mapping, Sequence
 
 import matplotlib.colors as mcolors
@@ -24,13 +27,39 @@ from ray_utilities.visualization.data import (
     MAX_ENV_LOWER_BOUND,
     _connect_groups,
     _drop_duplicate_steps,
+    _try_cast,
     get_and_check_group_stat,
+    logger,
     which_continued,
 )
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
     from matplotlib.figure import Figure
+
+# Set seaborn and matplotlib style for publication-quality plots
+# sns.set_theme()
+sns.set_theme(
+    style="dark",
+    context="talk",
+    rc={
+        "axes.grid": False,  # Disable all grid lines
+        "axes.spines.top": False,
+        "axes.spines.right": True,
+        "axes.titleweight": "bold",
+        "axes.labelweight": "bold",
+        "font.size": 16.0,
+        "axes.labelsize": 16.0,
+        "axes.titlesize": 16.0,
+        "legend.fontsize": 14,
+        "legend.title_fontsize": 15.0,
+        "xtick.direction": "out",
+        "ytick.direction": "out",
+        "legend.frameon": False,
+    },
+)
+
+# mpl.rcParams["savefig.facecolor"] = "#f7f7f7"
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +198,51 @@ def plot_error_distribution(
     ax_err.tick_params(axis="x", rotation=30)
     plt.tight_layout()
     return fig_err
+
+
+def _plot_metrics_of_group(
+    group: pd.DataFrame, metric_key: str, ax, color, background_colors, *, label, group_by_keys_only
+):
+    if not group_by_keys_only:
+        # default case
+        sns.lineplot(
+            data=group,
+            x="current_step",
+            y=metric_key,
+            ax=ax,
+            # linestyle="--",
+            color=color,
+            label=label,
+            linewidth=3,
+        )
+    else:
+        # There will be jumps at the end of each epoch, split the data and plot separately
+        # to avoid lines going across the plot
+        last_epoch_group = None
+        epoch_grouper = group.groupby("pbt_epoch", sort=True)
+        bg_color_idx = 0
+        for _, epoch_group in epoch_grouper:
+            # Shade background:
+            if last_epoch_group is not None:
+                _shade_background(
+                    ax,
+                    background_colors[bg_color_idx % 2],
+                    last_epoch_group["current_step"].max(),
+                    epoch_group["current_step"].max(),
+                )
+            last_epoch_group = epoch_group
+            bg_color_idx += 1
+            # Plot data
+            sns.lineplot(
+                data=epoch_group,
+                x="current_step",
+                y=metric_key,
+                ax=ax,
+                # linestyle="--",
+                color=color,
+                label=label,
+                linewidth=3,
+            )
 
 
 def plot_run_data(
@@ -387,6 +461,10 @@ def plot_run_data(
         # plot_df.sort_values(["training_iteration", "__pbt_main_branch__", metric], inplace=True)
         assert group_stat in plot_df
 
+        # TODO: for minibatch size have two different max sets
+        if group_stat == "minibatch_size":
+            # for consistency could scale upt to 8192 for all cases.
+            pass
         color_map, cmap, norm = make_cmap(plot_df[group_stat], log=log)
         # Sort each subgroup by their std from highest to lowest
         # Sort plot_df within each (group_by[0], group_stat) group by the std of the metric (descending)
@@ -557,15 +635,17 @@ def plot_run_data(
                         group = plot_df[(~plot_df.__pbt_main_branch__) & (plot_df[group_by[0]] == group0)]
                     else:
                         plot_df_last = plot_df[plot_df["pbt_epoch"] == max_epoch]
-                        group = plot_df_last[plot_df["__group_rank__"] < max_rank]
+                        group = plot_df_last[plot_df_last["__group_rank__"] < max_rank]
                     group = group.copy()
                     group[group_stat] = "other"  # <-- sets on a copy
                 except IndexError:
                     logger.error("Failed to group rest for epoch %s", pbt_epoch)
                     remote_breakpoint()
+                    raise
                 except Exception as e:
                     logger.error("Failed to group rest for epoch %s: %r", pbt_epoch, e)
                     remote_breakpoint()
+                    raise
             elif plot_option.main_only and not group_by_keys_only:
                 logger.debug("Skipping non-main group: %s %s", pbt_epoch, stat_val)
                 continue
@@ -620,53 +700,38 @@ def plot_run_data(
             #        remote_breakpoint()
 
             try:
-                if not group_by_keys_only:
-                    # default case
-                    sns.lineplot(
-                        data=group,
-                        x="current_step",
-                        y=metric_key,
-                        ax=ax,
-                        # linestyle="--",
-                        color=color_map[stat_val],
-                        label=str(stat_val) if stat_val not in seen_labels else None,
-                        linewidth=3,
-                    )
-                else:
-                    # There will be jumps at the end of each epoch, split the data and plot separately
-                    # to avoid lines going across the plot
-                    last_epoch_group = None
-                    epoch_grouper = group.groupby("pbt_epoch", sort=True)
-                    for _, epoch_group in epoch_grouper:
-                        # Shade background:
-                        if last_epoch_group is not None:
-                            _shade_background(
-                                ax,
-                                background_colors[bg_color_idx % 2],
-                                last_epoch_group["current_step"].max(),
-                                epoch_group["current_step"].max(),
-                            )
-                        last_epoch_group = epoch_group
-                        bg_color_idx += 1
-                        # Plot data
-                        sns.lineplot(
-                            data=epoch_group,
-                            x="current_step",
-                            y=metric_key,
-                            ax=ax,
-                            # linestyle="--",
-                            color=color_map[stat_val],
-                            label=str(stat_val) if stat_val not in seen_labels else None,
-                            linewidth=3,
-                        )
+                _plot_metrics_of_group(
+                    group,
+                    metric_key,
+                    ax,
+                    color_map[stat_val],
+                    background_colors=background_colors,
+                    label=str(stat_val) if stat_val not in seen_labels else None,
+                    group_by_keys_only=group_by_keys_only,
+                )
             except Exception as e:
                 logger.error("Failed to plot group for epoch %s stat %s: %r", pbt_epoch, stat_val, e)
                 group = group.set_index("current_step", append=True)
-                duplicated = group.index[group.index.duplicated(keep=False)].unique()
-                dupl_cols = group.loc[duplicated]
-                remote_breakpoint()
+                # duplicated = group.index[group.index.duplicated(keep=False)].unique()
+                # Keep last as these are the one we continue with;
+                # however there are examples where the group_stat was not consistent
+                if (df.config.experiment_id.iloc[0] != "tws47f2512191818752f4").all():
+                    remote_breakpoint()
+                group = group[~group.index.duplicated(keep="last")]
+                # duplicated = group.index.duplicated(keep=False)
+                # dupl_cols = group.loc[duplicated]
                 # wired thing both duplicated had wrong batch_size values
                 group = group.reset_index(level="current_step")
+                _plot_metrics_of_group(
+                    group,
+                    metric_key,
+                    ax,
+                    color_map[stat_val],
+                    background_colors=background_colors,
+                    label=str(stat_val) if stat_val not in seen_labels else None,
+                    group_by_keys_only=group_by_keys_only,
+                )
+
             seen_labels.add(stat_val)
         # Shade from last group's max step to right edge
         if "prev_group" in locals() and prev_group is not None:
@@ -813,3 +878,94 @@ def _shade_background(ax: Axes, color: str, left: float, right: float, **kwargs)
         zorder=0,
         **kwargs,
     )
+
+
+def plot_intra_group_variances(
+    group_variance_global: pd.DataFrame,
+    group_variance_per_epoch: pd.DataFrame,
+    out_path: Path,
+    path_base: str,
+    metric_str: str,
+    per_epoch_str: str,
+    format: str,
+):
+    # Plot group_variance_global var column as horizontal bar chart
+    group_variance_global = group_variance_global.copy()
+    group_variance_global.columns = group_variance_global.columns.get_level_values(-1)
+
+    # Global
+    split_idx = group_variance_global.index.str.split("=")
+    values = pd.Series([_try_cast(v[-1]) for v in split_idx])
+    group_variance_global.index = values
+    group_variance_global.sort_index(inplace=True)
+
+    group_stat = split_idx[0][0]
+    group_variance_global.index.names = [group_stat]
+    group_stat_str = " ".join(map(str.capitalize, group_stat.split("_")))
+    color_map, cmap, norm = make_cmap(values, log=group_stat in LOG_SETTINGS)
+
+    fig_global, ax_global = plt.subplots(figsize=(6, max(4, len(group_variance_global) * 0.33)))
+
+    sns.barplot(
+        group_variance_global,
+        x="var",
+        y=group_stat,
+        ax=ax_global,
+        hue=group_stat,
+        palette=color_map,
+        orient="h",
+        legend=False,
+        hue_norm=norm,
+    )
+    # group_variance_global["var"].plot.barh(ax=ax_global, colormap=cmap)#color="skyblue")
+    ax_global.set_xlabel("Variance")
+    ax_global.set_ylabel(group_stat_str)
+    ax_global.set_title("Group Variance Global")
+    fig_global.tight_layout()
+
+    # Save global variance plot
+    bar_path_global = out_path.with_name(f"{path_base}{metric_str}-group_variance_global{per_epoch_str}_bar.{format}")
+    fig_global.savefig(bar_path_global, format=format, bbox_inches="tight")
+    plt.close(fig_global)
+    logger.info("Saved group variance global bar chart to '%s'", bar_path_global)
+
+    del values, split_idx, group_variance_global
+
+    # Per Epoch
+    group_variance_per_epoch = group_variance_per_epoch.copy()
+    group_variance_per_epoch.columns = group_variance_per_epoch.columns.get_level_values(-1)
+    level2 = group_variance_per_epoch.index.get_level_values("pbt_group_key")
+    split_idx = level2.str.split("=")
+    values = [_try_cast(v[-1]) for v in split_idx]
+    group_variance_per_epoch.index = pd.MultiIndex.from_arrays(
+        [group_variance_per_epoch.index.get_level_values("pbt_epoch"), pd.Series(values)],
+        names=["pbt_epoch", group_stat],
+    )
+    group_variance_per_epoch.sort_index(inplace=True)
+    group_variance_per_epoch.index.names = ["pbt_epoch", group_stat]
+
+    # Plot group_variance_per_epoch var column as bar chart
+    fig_epoch, ax_epoch = plt.subplots(figsize=(max(6, min(len(group_variance_per_epoch) * 0.15, 16)), 6))
+    # group_variance_per_epoch["var"].plot.bar(ax=ax_epoch, color="lightcoral")
+    sns.barplot(
+        group_variance_per_epoch,
+        x="pbt_epoch",
+        y="var",
+        ax=ax_epoch,
+        hue=group_stat,
+        palette=color_map,
+        orient="v",
+    )
+    ax_epoch.set_ylabel("Variance")
+    ax_epoch.set_xlabel("Epoch")
+    ax_epoch.set_title("Group Variance Per Epoch")
+    ax_epoch.tick_params(axis="x", rotation=45)
+    fig_epoch.tight_layout()
+
+    # Save per epoch variance plot
+    bar_path_per_epoch = out_path.with_name(
+        f"{path_base}{metric_str}-group_variance_per_epoch{per_epoch_str}_bar.{format}"
+    )
+    fig_epoch.savefig(bar_path_per_epoch, format=format, bbox_inches="tight")
+    plt.close(fig_epoch)
+    logger.info("Saved group variance per epoch bar chart to '%s'", bar_path_per_epoch)

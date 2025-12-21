@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import sys
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -22,12 +23,15 @@ from ray_utilities.setup.extensions import load_distributions_from_json
 from ray_utilities.testing_utils import remote_breakpoint
 from ray_utilities.visualization._common import Placeholder
 from ray_utilities.visualization.data import (
+    SubmissionRun,
     check_metric_backport,
     clean_placeholder_keys,
     combine_df,
     get_and_check_group_stat,
     get_epoch_stats,
+    get_run_directories_from_submission,
     get_running_experiments,
+    get_runs_from_submission,
     ifill,
     load_excludes,
     load_run_data,
@@ -56,6 +60,10 @@ logger = logging.getLogger(__name__)
 _REPORT_INTERVAL = 32
 global DEBUG
 DEBUG = False
+
+from functools import partial
+
+remote_breakpoint = partial(remote_breakpoint, port=5681)
 
 
 @dataclass
@@ -472,6 +480,18 @@ def _get_storage(experiment_path: str | Path):
     return storage
 
 
+def make_study_name(base: str = "pbt_study", env: str | None = None, step: int | None = None, suffix: str = "") -> str:
+    study_name = base
+    if env is not None:
+        study_name += f"_env={env}"
+    if step is not None:
+        study_name += f"_step={step}"
+    else:
+        study_name += "_global"
+    study_name += suffix
+    return study_name
+
+
 def get_optuna_study(
     experiment_path: str | Path | optuna.storages.BaseStorage,
     env: str | None,
@@ -485,24 +505,27 @@ def get_optuna_study(
         storage = _get_storage(experiment_path)
     else:
         storage = experiment_path
-    study_name = "pbt_study"
-    if env is not None:
-        study_name += f"_env={env}"
-    if step is not None:
-        study_name += f"_step={step}"
-    else:
-        study_name += "_global"
+    study_name = make_study_name("pbt_study", env, step, suffix)
     if clear_study:
         if clear_study == "all":
             clear_study = True
-        elif isinstance(clear_study, (Sequence, Collection)):
-            if study_name in clear_study:
+        elif isinstance(clear_study, (Sequence, Collection)):  # includes single strings
+            if "step=" in study_name:
+                step_part = study_name.split("step=")[-1].split("_")[0]
+
+                study_name_no_step = re.sub(f"step={step_part}_?", "", study_name).rstrip("_")
+                study_name = study_name_no_step
+            if study_name.removesuffix(suffix) in clear_study or study_name in clear_study:
                 clear_study = True
             else:
                 clear_study = False
         if clear_study is True:
-            optuna.delete_study(study_name=study_name, storage=storage)
-    study_name += suffix
+            try:
+                optuna.delete_study(study_name=study_name, storage=storage)
+            except KeyError:
+                logger.info("Study with name %s does not exist, cannot delete it.", study_name)
+            else:
+                logger.info("Deleted and recreating study %s", study_name)
     study = optuna.create_study(
         study_name=study_name, storage=storage, load_if_exists=load_if_exists, direction="maximize"
     )
@@ -539,6 +562,12 @@ def create_finished_trial(
     intermediate_values: dict[int, float] | None = None,
     distributions: dict[str, optuna.distributions.BaseDistribution] | None = None,
 ):
+    params = params.copy()
+    user_attrs = {
+        "identifier": identifier,
+        "vf_share_layers": params.pop("vf_share_layers", True),
+        "use_kl_loss": params.pop("use_kl_loss", False),
+    }
     try:
         trial = optuna.trial.create_trial(
             state=optuna.trial.TrialState.COMPLETE,
@@ -546,11 +575,7 @@ def create_finished_trial(
             params=params,
             intermediate_values=intermediate_values,
             distributions=distributions,
-            user_attrs={
-                "identifier": identifier,
-                "vf_share_layers": params.pop("vf_share_layers", True),
-                "use_kl_loss": params.pop("use_kl_loss", False),
-            },
+            user_attrs=user_attrs,
         )
     except ValueError as ve:
         if not distributions or "not in" not in str(ve):
@@ -572,7 +597,7 @@ def create_finished_trial(
             params=params,
             intermediate_values=intermediate_values,
             distributions=distributions,
-            user_attrs={"identifier": identifier},
+            user_attrs=user_attrs,
         )
     return trial
 
@@ -619,12 +644,16 @@ def optuna_create_studies(
     clear_experiment_cache: bool = False,
     clear_study: Sequence[str] | Literal[False] = False,
     excludes: Collection[str] = (),
+    submission_study: str | None = None,
 ) -> dict[Any, optuna.Study]:
+    assert load_if_exists, "Not loading existing is unstable"
     metric_to_check = metric
     if disable_checks:
         _disable_distribution_check()
-    studies: dict[Any, optuna.Study] = {}
+    studies: dict[Literal["global"] | int, optuna.Study] = {}
     pbt_centered_studies: dict[optuna.Study, optuna.Study] = {}
+    submission_studies: dict[optuna.Study, optuna.Study] = {}
+    submission_studies_centered: dict[optuna.Study, optuna.Study] = {}
     storage = _get_storage(database_path or experiment_paths[0])
     if clear_experiment_cache:
         clear_tracking_study(storage)
@@ -635,6 +664,10 @@ def optuna_create_studies(
     if not study_each_epoch:
         study = get_optuna_study(storage, env, load_if_exists=load_if_exists, clear_study=clear_study)
         studies[GLOBAL_STUDY] = study
+        if submission_study:
+            submission_studies[studies[GLOBAL_STUDY]] = get_optuna_study(
+                storage, env, suffix=f"_{submission_study}", clear_study=clear_study, load_if_exists=load_if_exists
+            )
     if study_each_epoch is not False:
         # Create a study for each epoch at step 8192 * 4 until max_step
         for epoch in range(1, 32 + 1):
@@ -643,6 +676,17 @@ def optuna_create_studies(
             pbt_centered_studies[studies[step]] = get_optuna_study(
                 storage, env, step, suffix="_centered", clear_study=clear_study
             )
+            if submission_study:
+                submission_studies[studies[step]] = get_optuna_study(
+                    storage, env, step, suffix=f"_{submission_study}", clear_study=clear_study
+                )
+                submission_studies_centered[studies[step]] = get_optuna_study(
+                    storage,
+                    env,
+                    step,
+                    suffix=f"_{submission_study}_centered",
+                    clear_study=clear_study,
+                )
 
         # This is not sufficient for the 1/8 perturbation intervals
         for epoch in range(1, 8 + 1):
@@ -652,6 +696,34 @@ def optuna_create_studies(
                 pbt_centered_studies[studies[step]] = get_optuna_study(
                     storage, env, step, suffix="_centered", clear_study=clear_study
                 )
+                if submission_study:
+                    submission_studies[studies[step]] = get_optuna_study(
+                        storage, env, step, suffix=f"_{submission_study}", clear_study=clear_study
+                    )
+                    submission_studies_centered[studies[step]] = get_optuna_study(
+                        storage,
+                        env,
+                        step,
+                        suffix=f"_{submission_study}_centered",
+                        clear_study=clear_study,
+                    )
+
+    def get_all_studies():
+        for key, main_study in studies.items():
+            # key is "global" or step
+            if isinstance(key, int):
+                key = f"step={key}"  # noqa
+                if env and env not in key:
+                    key = f"{env}_{key}"  # noqa
+            elif env and env not in key:
+                key = f"{env}_{key}"  # noqa
+            yield (key, main_study)
+            if main_study in pbt_centered_studies:
+                yield (key + "_centered", pbt_centered_studies[main_study])
+            if main_study in submission_studies:
+                yield (key + f"_{submission_study}", submission_studies[main_study])
+            if main_study in submission_studies_centered:
+                yield (key + f"_{submission_study}_centered", submission_studies_centered[main_study])
 
     for experiment_path in experiment_paths:
         logger.info("Checking path for experiments: %s", experiment_path)
@@ -661,7 +733,7 @@ def optuna_create_studies(
             experiment_subdirs = Path(experiment_path).glob(f"*/{'/'.join(['*'] * dir_depth)}")
         running_experiments = set()
         if submission_file_path:
-            running_experiments = get_running_experiments(submission_file_path)
+            running_experiments = get_running_experiments(submission_file_path, include_restore=True)
         for experiment_dir in list(experiment_subdirs):
             if any(excl in str(experiment_dir) for excl in excludes) or "cometml" in str(experiment_dir):
                 if "cometml" not in str(experiment_dir):
@@ -688,6 +760,7 @@ def optuna_create_studies(
                 logger.warning("Directory %s does not appear to be a valid experiment directory.", experiment_dir)
                 continue
             if env and env not in experiment_dir.name:
+                logger.debug("Skpping experiment %s as env %s not in name", experiment_dir, env)
                 continue
 
             logger.debug("Processing experiment directory: %s", experiment_dir)
@@ -695,6 +768,9 @@ def optuna_create_studies(
             trials_to_add = {study: [] for study in studies.values()} | {
                 study: [] for study in pbt_centered_studies.values()
             }
+            if submission_study:
+                trials_to_add |= {study: [] for study in submission_studies.values()}
+                trials_to_add |= {study: [] for study in submission_studies_centered.values()}
             try:
                 # Load run data for this experiment
                 run_frames = load_run_data(experiment_dir)
@@ -714,13 +790,16 @@ def optuna_create_studies(
                     df, metric, individual_runs=False
                 )
 
+                # Get vf_share_layers info and use_kl_loss info and check that they are all equal
                 vf_share_layers = df.config.get("vf_share_layers", df.config.cli_args.get("vf_share_layers", True))
                 if not isinstance(vf_share_layers, bool):
                     assert (vf_share_layers.iloc[0] == vf_share_layers).all().item()
+                    vf_share_layers = vf_share_layers.iloc[0].item()
                 use_kl_loss = df.config.get("use_kl_loss", df.config.cli_args.get("use_kl_loss", False))
                 if not isinstance(use_kl_loss, bool):
                     _does_kl_match = (use_kl_loss.iloc[0] == use_kl_loss).all()
                     assert _does_kl_match.item() if hasattr(_does_kl_match, "item") else _does_kl_match
+                    use_kl_loss = use_kl_loss.iloc[0].item()
 
                 # Create trials for each run_id
                 # TODO: possibly groupkey -> take mean
@@ -772,10 +851,10 @@ def optuna_create_studies(
                             (group.current_step == group.current_step.max()).values  # noqa: PD011
                         ]
                         final_row = group_numeric.mean()
-                        if "grad_clip" in df.config:
-                            # is the None value cast to NaN?
-                            remote_breakpoint()
-                            assert "grad_clip" in final_row.config
+                        # if "grad_clip" in df.config:
+                        #    # is the None value cast to NaN? -> cast below
+                        #    remote_breakpoint()
+                        #    assert "grad_clip" in final_row.config
                     else:
                         run_id = group_key
                         trial_identifier = run_id
@@ -796,13 +875,15 @@ def optuna_create_studies(
                                     params[key] = getattr(DefaultArgumentParser, key)
                         params = {k: v for k, v in params.items() if not isinstance(v, str) or v != "NOT_FOUND"}
                     # Clean floating point errors from params
+                    params = cast_numpy_numbers(params)
                     params = round_floats(params)
+                    if group_stat == "lr":
+                        assert 0.00047713000000000003 not in params.values()
                     params["vf_share_layers"] = vf_share_layers
                     params["use_kl_loss"] = use_kl_loss
-                    params = cast_numpy_numbers(params)
                     if "grad_clip" in params and pd.isna(params["grad_clip"]):
                         params["grad_clip"] = None
-                    assert not math.isnan(params["grad_clip"])
+                    assert params["grad_clip"] is None or not math.isnan(params["grad_clip"])
                     # Clean placeholders
                     if metric not in final_row:
                         raise KeyError(f"Metric column '{metric}' not found in combined dataframe")  # noqa: TRY301
@@ -836,18 +917,23 @@ def optuna_create_studies(
                                 try:
                                     shift_values = value_shifter_with_first.loc[final_row.config.pbt_epoch.item()]
                                 except KeyError:
-                                    remote_breakpoint(5680)
+                                    # maybe need to remove parquet file and recreate it
+                                    remote_breakpoint()
+                                    raise
                                 if metric in shift_values:
                                     metric_centered = (metric_result - shift_values[metric]).item()
                                 elif isinstance(metric, str):
                                     raise KeyError(metric, "not in shift values")
                                 else:  # some Sequece
                                     metric_centered = (metric_result - shift_values["-".join(metric)]).item()
-
                             centered_trial = create_finished_trial(
                                 metric_result=metric_centered,
                                 identifier=trial_identifier + "_centered",
-                                params={k: v for k, v in params.items() if k in distributions}
+                                params={
+                                    k: v
+                                    for k, v in params.items()
+                                    if k in distributions or k in ("vf_share_layers", "use_kl_loss")
+                                }
                                 if distributions
                                 else params,
                                 distributions=distributions,
@@ -855,17 +941,25 @@ def optuna_create_studies(
                             )
                         except Exception:
                             logger.exception("Could not create centered trial for %s", trial_identifier)
-                            remote_breakpoint(5680)
+                            remote_breakpoint()
                     # Create and add trial to study
                     trial = create_finished_trial(
                         metric_result=metric_result,
                         identifier=trial_identifier,
-                        params={k: v for k, v in params.items() if k in distributions} if distributions else params,
+                        params={
+                            k: v
+                            for k, v in params.items()
+                            if k in distributions or k in ("vf_share_layers", "use_kl_loss")
+                        }
+                        if distributions
+                        else params,
                         distributions=distributions,
                         # intermediate_values=intermediate_values
                     )
                     if not per_pbt_epoch:
                         trials_to_add[studies[GLOBAL_STUDY]].append(trial)
+                        if submission_study:
+                            trials_to_add[submission_studies[studies[GLOBAL_STUDY]]].append(trial)
                     else:
                         # TODO: will not work if trial ended too early
                         current_step = int(final_row.current_step.iloc[0])
@@ -884,7 +978,9 @@ def optuna_create_studies(
                                 study_keys = sorted([step for step in studies.keys() if isinstance(step, int)])
                                 closest_key_idx = np.argmin([abs(current_step - step) for step in study_keys])
                                 closest_key = study_keys[closest_key_idx]
-                                upper_bound = closest_key + final_row.config.get("train_batch_size_per_learner", 2048)
+                                upper_bound = closest_key + final_row.get(
+                                    "batch_size", final_row.config.get("train_batch_size_per_learner", 2048)
+                                )
                                 if isinstance(upper_bound, pd.Series):
                                     upper_bound: float = upper_bound.iloc[-1]
                                 final_epoch = final_row.config.get("pbt_epoch", 0)
@@ -904,6 +1000,10 @@ def optuna_create_studies(
                                     else:
                                         study_to_add = studies[closest_key]
                                 else:
+                                    # Known to be trained a few steps over
+                                    if "tws47f25121306216cda4" in trial_identifier and current_step >= 1048576:
+                                        study_to_add = studies[1048576]
+
                                     logger.warning("Could not determine epoch of %s at step %s", run_id, current_step)
                                     # is in the lower half between two keys - ceil up
                                     try:
@@ -930,8 +1030,9 @@ def optuna_create_studies(
                                                 if current_step == 744448:
                                                     remote_breakpoint()
                                                 if closest_key < total_steps:
-                                                    # Why did this then fail with a Keyerror?
+                                                    # Why did this then fail with a KeyError?
                                                     remote_breakpoint()
+                                                    study_to_add = ...
                                                 else:
                                                     study_to_add = studies[int(total_steps)]
                                             elif current_step > study_keys[-2] + 8192 * 2:
@@ -959,16 +1060,20 @@ def optuna_create_studies(
                                                 study_to_add = None
                                                 no_errors = False
                                     else:
+                                        # No KeyError
                                         logger.warning(
                                             "Could not determine pbt epoch / current_step of trial %s with at step %s. "
-                                            "Added it to epoch of step %s.",
+                                            "Added it to next step. %s",
                                             run_id,
                                             current_step,
-                                            closest_key + 8192 * 4,
+                                            study_keys[closest_key_idx + 1],
                                         )
                         if study_to_add is not None:
                             trials_to_add[study_to_add].append(trial)
                             trials_to_add[pbt_centered_studies[study_to_add]].append(centered_trial)
+                            if submission_study:
+                                trials_to_add[submission_studies[study_to_add]].append(trial)
+                                trials_to_add[submission_studies_centered[study_to_add]].append(centered_trial)
 
                     if i % _REPORT_INTERVAL == 0:
                         if per_pbt_epoch:
@@ -1001,7 +1106,7 @@ def optuna_create_studies(
             if no_errors and study_each_epoch is None:  # add it as finished when we checked both types.
                 add_finished_experiment(experiment_id, tracking_study)
 
-    return studies
+    return dict(get_all_studies())
 
 
 PARAMS_TO_CHECK = {
@@ -1013,7 +1118,7 @@ PARAMS_TO_CHECK = {
 
 def _fix_distributions(study: optuna.Study, params: Collection[str]):
     if hasattr(study, "_fixed_trials"):  # backup for when we adjust what get_trials should
-        return study._fixed_trials
+        return study._fixed_trials  # pyright: ignore
     completed_trials = study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))
     distributions: dict[str, set[optuna.distributions.BaseDistribution]] = {}
     for trial in completed_trials:
@@ -1036,25 +1141,29 @@ def _fix_distributions(study: optuna.Study, params: Collection[str]):
         choices = set()
         for dist in dists:
             if isinstance(dist, optuna.distributions.CategoricalDistribution):
-                choices.update(dist.choices)
+                choices.update(round_floats(dist.choices))
             elif isinstance(dist, optuna.distributions.FloatDistribution):
-                choices.update([dist.low, dist.high])
+                choices.update(round_floats([dist.low, dist.high]))
             elif isinstance(dist, optuna.distributions.IntDistribution):
                 choices.update(range(dist.low, dist.high + 1))
             else:
                 logger.warning("Cannot merge distribution of type %s for parameter %s", type(dist), name)
         if all(isinstance(c, (int, float)) for c in choices):
             if all(isinstance(c, int) for c in choices):
-                new_dist = optuna.distributions.IntDistribution(low=min(choices), high=max(choices))
+                new_dist = optuna.distributions.IntDistribution(
+                    low=round_floats(min(choices)), high=round_floats(max(choices))
+                )
             else:
-                new_dist = optuna.distributions.FloatDistribution(low=min(choices), high=max(choices))
+                new_dist = optuna.distributions.FloatDistribution(
+                    low=round_floats(min(choices)), high=round_floats(max(choices))
+                )
         else:
             if None in choices:
                 choices.discard(None)
-                choices = (*sorted(choices), None)
+                choices = (*sorted(round_floats(choices)), None)
                 new_dist = optuna.distributions.CategoricalDistribution(choices=choices)
             else:
-                new_dist = optuna.distributions.CategoricalDistribution(choices=tuple(sorted(choices)))
+                new_dist = optuna.distributions.CategoricalDistribution(choices=tuple(sorted(round_floats(choices))))
         logger.debug("Setting merged distribution for parameter %s: %s", name, new_dist)
         # Now set it for all trials
         for trial in completed_trials:
@@ -1126,7 +1235,8 @@ def _get_importances(study, evaluator, params, *, use_kl_loss: bool | None = Non
         ]
     if not completed_trials:
         logger.warning(
-            "No completed trials found for filtering vf_share_layers=%s and use_kl_loss=%s",
+            "No completed trials found for study %s with filtering vf_share_layers=%s and use_kl_loss=%s",
+            study.study_name,
             vf_share_layers,
             use_kl_loss,
         )
@@ -1149,11 +1259,11 @@ def optuna_analyze_studies(
 
     evaluators = {
         "MeanDecreaseImpurity": MeanDecreaseImpurityImportanceEvaluator(),
-        "PedAnovaLocal": PedAnovaImportanceEvaluator(evaluate_on_local=True),
+        "PedAnovaLocal": PedAnovaImportanceEvaluator(evaluate_on_local=True),  # default
         "Fanova(default)": FanovaImportanceEvaluator(),  # default
-        "MeanDecreaseImpurity8": MeanDecreaseImpurityImportanceEvaluator(n_trees=12, max_depth=12),
-        "PedAnovaGlobal": PedAnovaImportanceEvaluator(evaluate_on_local=False),
-        "Fanova8": FanovaImportanceEvaluator(n_trees=12, max_depth=12),
+        # "MeanDecreaseImpurity8": MeanDecreaseImpurityImportanceEvaluator(n_trees=12, max_depth=12),
+        # "PedAnovaGlobal": PedAnovaImportanceEvaluator(evaluate_on_local=False),
+        # "Fanova8": FanovaImportanceEvaluator(n_trees=12, max_depth=12),
     }
 
     all_results = []
@@ -1163,6 +1273,8 @@ def optuna_analyze_studies(
     for key, study in studies.items():
         logger.info("Analyzing study for key: %s", key)
         completed_trials = None
+        if "524288_pbt_fine_base" in key:
+            remote_breakpoint()
         try:
             for filter_kl, filter_vf_share in kl_vf_combinations:
                 for evaluator_name, evaluator in evaluators.items():
@@ -1170,6 +1282,7 @@ def optuna_analyze_studies(
                         study, evaluator, params, use_kl_loss=filter_kl, vf_share_layers=filter_vf_share
                     )
                     if not completed_trials:
+                        # logger.info("No completed trials for key %s with filter kl_loss=%s, shared_encoder=%s", key, filter_kl, filter_vf_share)
                         continue
 
                     # Store results for combined DataFrame
@@ -1188,7 +1301,7 @@ def optuna_analyze_studies(
                                 "param": param,
                                 "importance": importance,
                                 "evaluator_name": evaluator_name,
-                                "key": str(key),
+                                "key": store_key,
                                 "number_of_trials": len(completed_trials),
                                 "study_name": study.study_name,
                             }
@@ -1204,6 +1317,10 @@ def optuna_analyze_studies(
                     logger.info("%s", report_str)
         except Exception as e:
             logger.exception("Failed to analyze study for key %s: %r", key, e)
+            if len(study.get_trials()) == 0:
+                pass
+            else:
+                remote_breakpoint()
 
     # Create combined DataFrame with multilevel columns
     if not all_results:
@@ -1244,6 +1361,7 @@ def plot_importance_studies(
 ) -> None:
     # note there is also import optuna.visualization as optuna_vis
     if isinstance(studies, dict):
+        remote_breakpoint()
         study_results = optuna_analyze_studies(studies, output_path, params=params)
     else:
         study_results = studies
@@ -1258,7 +1376,7 @@ def plot_importance_studies(
     for evaluator_name, importance_df in importances.items():
         # Create a figure with proper size and colormap
         importance_df = importance_df.sort_index(axis=1, key=__sort_columns)  # noqa: PLW2901
-        assert importance_df.columns[-1] == "global"
+        assert "global" in importance_df.columns[-1]
         fig, ax = plt.subplots(figsize=(12, max(6, 0.5 * len(importance_df))))
         # Plot heatmap
         cmap = sns.color_palette("magma", as_cmap=True)
@@ -1281,8 +1399,10 @@ def plot_importance_studies(
         xticks = ax.get_xticks()
         xlabels = importance_df.columns
         new_labels = []
+        add_global = False
         for i, col in enumerate(xlabels):
             if col == "global":
+                add_global = True
                 continue
             if i % 8 == 0:
                 try:
@@ -1293,7 +1413,8 @@ def plot_importance_studies(
                 new_labels.append(label)
             else:
                 new_labels.append("")
-        new_labels.append("G")
+        if add_global:
+            new_labels.append("G")
         ax.set_xticklabels(new_labels, rotation=45, ha="right")
         ax.set(ylabel=None)
 
@@ -1402,6 +1523,16 @@ if __name__ == "__main__":
         studies = optuna_analyze_studies(studies, output_path=paths[0], params=list(distributions.keys()))
         plot_importance_studies(studies, output_path=paths[0], params=list(distributions.keys()))
         sys.exit(0)
+    # clear_study = args.clear_study
+    clear_experiment_cache = args.clear_experiment_cache
+    if any(p.endswith(".yaml") for p in args.envs):
+        # yaml file passed positional
+        # assert default value:
+        paths_action = next(a for a in parser._actions if a.dest == "paths")
+        assert args.paths == paths_action.default, "When passing YAML files positionally, do not set --paths."
+        args.paths = args.envs
+        args.envs = []
+
     envs = args.envs or [
         "HumanoidStandup-v5",
         "Humanoid-v5",
@@ -1418,19 +1549,109 @@ if __name__ == "__main__":
         "Acrobot-v1",
         "LunarLander-v3",
     ]
+
+    if any(p.endswith(".yaml") for p in args.paths):
+        # ------------ Submission File(s) -------------------
+
+        assert all(p.endswith(".yaml") for p in args.paths), "Either all or none of the paths must be YAML files."
+        # Load experiment groups from YAML files
+        yaml_paths = args.paths
+        paths = []
+        all_run_paths: dict[str, Path] = {}
+        all_run_infos: dict[str, SubmissionRun] = {}
+        submissions_map = {}
+        args.single = True
+        for yaml_path in yaml_paths:
+            run_paths = get_run_directories_from_submission(yaml_path)
+            run_infos: dict[str, SubmissionRun] = get_runs_from_submission(yaml_path)
+            env_mapping = {info["run_id"]: info["run_key"] for info in run_infos.values()}
+            assert env_mapping.keys() == run_paths.keys()
+            if args.envs:
+                keep = set()
+                # filter:
+                for info in run_infos.values():
+                    if info["run_id"] in args.envs:  # TODO: does not work for multi HP tuning
+                        keep.add(info["run_id"])
+                run_paths = {k: v for k, v in run_paths.items() if k in keep}
+            all_run_paths.update(run_paths)
+            all_run_infos.update(run_infos)
+        # group by env and yaml_path to load less studies
+        clear_studies = args.clear_study
+        all_studies: dict[str, optuna.Study] = {}
+        for yaml_path in yaml_paths:
+            database_path = (
+                "outputs/shared/optuna_hp_study.db"
+                if "sympol" not in yaml_path.lower()
+                else "outputs/shared/optuna_hp_study_sympol.db"
+            )
+            submission_name = (
+                Path(yaml_path)
+                .name.removesuffix(".yaml")
+                .removeprefix("submissions")
+                .removeprefix("submission")
+                .strip("_")
+            )
+            for env in envs:
+                paths = [
+                    p
+                    for rid, p in all_run_paths.items()
+                    if all_run_infos[rid]["run_key"] == env and all_run_infos[rid]["submission_name"] == submission_name
+                ]
+                if not paths:
+                    logger.warning("No runs found for env %s in provided YAML files.", env)
+                    continue
+                # If clear studies is False we do not clear, if true turn into a string after the first interation to clear all iterations
+                # strings stay as strings.
+                clear_this_study = (
+                    clear_studies
+                    if clear_studies is not None
+                    else make_study_name("pbt_study", env, suffix=f"_{submission_name}")
+                )
+                studies = optuna_create_studies(
+                    *paths,
+                    database_path=database_path,
+                    env=env,
+                    dir_depth=0,
+                    distributions=distributions,
+                    load_if_exists=True,
+                    study_each_epoch=None,
+                    submission_file_path=None,  # used to filter RUNNING, but we already did
+                    clear_experiment_cache=clear_experiment_cache,
+                    clear_study=clear_this_study,  # TODO: Step studies are NOT cleared this way!
+                    excludes=load_excludes(),
+                    metric="episode_reward_mean",
+                    submission_study=submission_name,
+                )
+                clear_experiment_cache = False  # needs to be done only once.
+                # Plots for the global files are wrong until all yaml files are processed
+                plot_importance_studies(studies, output_path=paths[0], params=list(distributions.keys()))
+                all_studies.update(studies)
+            if clear_studies is not False and not isinstance(clear_studies, str):
+                clear_studies = None  # if false do not switch to clearning
+        logger.info("All Trials processed, plotting combined importance.")
+        plot_importance_studies(all_studies, output_path=paths[0], params=list(distributions.keys()))
+        sys.exit()
+    # ------------ ALL -------------------
+    database_path = "outputs/shared/optuna_hp_study.db"
+    if any("sympol" in p.lower() for p in args.paths):
+        if not all("sympol" in p.lower() for p in args.paths):
+            raise ValueError("Either all or none of the paths must be sympol experiments.")
+        database_path = "outputs/shared/optuna_hp_study_sympol.db"
     for env in envs:
         paths = [p % env for p in args.paths]
         studies = optuna_create_studies(
             *paths,
-            database_path="outputs/shared/optuna_hp_study.db",
+            database_path=database_path,
             env=env,
             dir_depth=1,
             distributions=distributions,
             load_if_exists=True,
             study_each_epoch=None,
             submission_file_path=Path("experiments"),
-            clear_experiment_cache=args.clear_experiment_cache,
+            clear_experiment_cache=clear_experiment_cache,
             clear_study=args.clear_study,
             excludes=load_excludes(),
+            metric="episode_reward_mean",
         )
+        clear_experiment_cache = False  # needs to be done only once.
         plot_importance_studies(studies, output_path=paths[0], params=list(distributions.keys()))
