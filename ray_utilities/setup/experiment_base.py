@@ -118,6 +118,14 @@ _MaybeNone = Any
 
 RESTORE_FILE_NAME = "experiment_setup.pkl"
 
+try:
+    import gymnasium as gym
+    import ale_py
+
+    gym.register_envs(ale_py)
+except ModuleNotFoundError:
+    pass
+
 
 class SetupCheckpointDict(TypedDict, Generic[ParserType_co, ConfigType_co, AlgorithmType_co]):
     """Type definition for experiment setup state data used for checkpointing.
