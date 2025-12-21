@@ -90,6 +90,9 @@ def setup_atari(args, env_name: str, config: AlgorithmConfig, model_config: dict
         return FrameStackingLearner(num_frames=4)
 
     def _env_creator(cfg):
+        import ale_py  # noqa: PLC0415
+
+        gym.register_envs(ale_py)
         return wrap_atari_for_new_api_stack(
             gym.make(env_name, **cfg, render_mode="rgb_array"),
             # Perform frame-stacking through ConnectorV2 API.

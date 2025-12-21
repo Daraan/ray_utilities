@@ -28,6 +28,8 @@ if __name__ == "__main__":
     parser.add_argument("--persistent_node", "-p", action="store_true")
     parser.add_argument("--num-cpus", "-c", type=int, default=1)
     args = parser.parse_args()
+    if args.label.replace("-", "_") in ("node_id",):
+        args.label = "ray.io/node-id"
 
     @ray.remote(
         label_selector={args.label: args.value},
