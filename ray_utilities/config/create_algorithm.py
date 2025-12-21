@@ -223,9 +223,12 @@ def create_algorithm_config(
         raise ValueError("No environment specified")
     env_spec: Final = env_type or args["env_type"]
     is_atari = "ALE" in args["env_type"]
+    args["env_type"] = args["env_type"].replace("ALE-", "ALE/")
     # provide as kwargs not override NotProvided Sentinel
     if isinstance(env_spec, str):
-        is_atari = "ALE" in env_spec
+        if "ALE" in env_spec:
+            is_atari = True
+            env_spec = env_spec.replace("ALE-", "ALE/")  # pyright: ignore[reportGeneralTypeIssues]
     if is_atari is not True:
         is_atari_kwargs = {}
     else:

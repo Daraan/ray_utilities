@@ -340,7 +340,8 @@ class _WandbLoggingActorWithArtifactSupport(_LocalWandbLoggingActor, _WandbLoggi
 
             try:
                 self._monitor = WandbRunMonitor.get_remote_monitor(
-                    entity=self.kwargs.get("entity", wandb_api().default_entity), project=self.kwargs["project"]
+                    entity=self.kwargs.get("entity", wandb_api().default_entity),
+                    project=clean_invalid_characters(self.kwargs["project"]),
                 )
                 if not ray.get(self._monitor.is_initialized.remote()):  # pyright: ignore[reportFunctionMemberAccess]
                     self._monitor.initialize.remote()  # pyright: ignore[reportFunctionMemberAccess]

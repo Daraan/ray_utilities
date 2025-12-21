@@ -295,8 +295,8 @@ class ExperimentSetupBase(
     def storage_path(self) -> str | Path:
         """Path where experiment outputs are stored."""
         if self.group_name:
-            return os.path.join(self.base_storage_path, self.project, self.group_name)
-        return os.path.join(self.base_storage_path, self.project)
+            return os.path.join(self.base_storage_path, self.project.replace("/", "-"), self.group_name)
+        return os.path.join(self.base_storage_path, self.project.replace("/", "-"))
 
     @property
     def project(self) -> str:
