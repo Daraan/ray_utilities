@@ -699,6 +699,12 @@ class _DefaultSetupArgumentParser(GoalParser, Tap):
             "--from_checkpoint", "-cp", "-load", default=None, type=str, help="Path to the checkpoint to load from."
         )
 
+    def process_args(self) -> None:
+        super().process_args()
+        if "ALE" in self.env_type:
+            # needed for raysubmit cannot have /
+            self.env_type = self.env_type.replace("ALE-", "ALE/")
+
 
 class _EnvRunnerParser(Tap):
     num_env_runners: NeverRestore[int] = 0

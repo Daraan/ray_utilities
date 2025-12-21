@@ -637,6 +637,7 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             import ale_py
 
             gym.register_envs(ale_py)
+            self._setup.args.env_type = self._setup.args.env_type.replace("ALE-", "ALE/")
 
         # _logger.debug("Sys argv during Trainable.setup(): %s", sys.argv)
         _logger.debug(
