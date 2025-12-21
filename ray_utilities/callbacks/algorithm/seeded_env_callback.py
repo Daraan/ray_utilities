@@ -251,7 +251,7 @@ class ResetSeedEnvsCallback(SeedEnvsCallbackBase):
             env_runner.config.in_evaluation,
             env_context.vector_index,
             suffix,
-            first_observation[:, 0],
+            str(first_observation[:, 0])[:100],
         )
         if metrics_logger:
             if RAY_METRICS_V2:

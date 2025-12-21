@@ -65,12 +65,67 @@ if TYPE_CHECKING:
     from ray_utilities.config import DefaultArgumentParser
     from ray_utilities.setup.experiment_base import NamespaceType
     from ray_utilities.typing.generic_rl_module import CatalogWithConfig, RLModuleWithConfig
+    from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
 
 _ConfigType = TypeVar("_ConfigType", bound="AlgorithmConfig")
 
 _ModelConfig = TypeVar("_ModelConfig", bound="None | dict | Any")
 
 logger = logging.getLogger(__name__)
+
+
+def setup_atari(args, env_name: str, config: AlgorithmConfig, model_config: dict | DefaultModelConfig | None):
+    # Based on https://github.com/ray-project/ray/blob/3b41c97fa90c58b0b72c0026f57005b92310160d/rllib/examples/algorithms/ppo/atari_ppo.py
+    # possible use env="ale_py:ALE/Pong-v5"
+    from ray.rllib.connectors.env_to_module.frame_stacking import FrameStackingEnvToModule
+    from ray.rllib.connectors.learner.frame_stacking import FrameStackingLearner
+    from ray.rllib.env.wrappers.atari_wrappers import wrap_atari_for_new_api_stack
+    from ray import tune
+    from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
+
+    def _make_env_to_module_connector(env, spaces, device):
+        return FrameStackingEnvToModule(num_frames=4)
+
+    def _make_learner_connector(input_observation_space, input_action_space):
+        return FrameStackingLearner(num_frames=4)
+
+    def _env_creator(cfg):
+        import ale_py  # noqa: PLC0415
+
+        gym.register_envs(ale_py)
+        return wrap_atari_for_new_api_stack(
+            gym.make(env_name, **cfg, render_mode="rgb_array"),
+            # Perform frame-stacking through ConnectorV2 API.
+            framestack=None,
+        )
+
+    tune.register_env("env", _env_creator)
+    config.environment(
+        "env",
+        env_config={
+            # Make analogous to old v4 + NoFrameskip.
+            "frameskip": 1,
+            "full_action_space": False,
+            "repeat_action_probability": 0.0,
+        },
+        clip_rewards=True,
+    )
+    config.env_runners(env_to_module_connector=_make_env_to_module_connector)
+    config.training(
+        learner_connector=_make_learner_connector,
+    )
+    if model_config is not None:
+        config.rl_module(model_config=model_config)
+    else:
+        model_config = (
+            DefaultModelConfig(
+                conv_filters=[[16, 4, 2], [32, 4, 2], [64, 4, 2], [128, 4, 2]],
+                conv_activation="relu",
+                head_fcnet_hiddens=[256],
+                vf_share_layers=True,
+            ),
+        )
+        config.rl_module(model_config=model_config)
 
 
 def create_algorithm_config(
@@ -167,6 +222,14 @@ def create_algorithm_config(
     if not env_type and not args["env_type"]:
         raise ValueError("No environment specified")
     env_spec: Final = env_type or args["env_type"]
+    is_atari = "ALE" in args["env_type"]
+    # provide as kwargs not override NotProvided Sentinel
+    if isinstance(env_spec, str):
+        is_atari = "ALE" in env_spec
+    if is_atari is not True:
+        is_atari_kwargs = {}
+    else:
+        is_atari_kwargs: dict[Literal["is_atari"], bool] = {"is_atari": is_atari}
     del env_type
     assert env_spec, "No environment specified"
     if base_config:
@@ -192,7 +255,7 @@ def create_algorithm_config(
         )
         env_config.update({"seed": env_seed, "env_type": env_spec})
         # Will use a SeededEnvCallback to apply seed and generators
-    config.environment(env_spec, env_config=env_config)
+    config.environment(env_spec, env_config=env_config, **is_atari_kwargs)
     # NOTE: This might needs adjustment when using VectorEnv
     if isinstance(config.env, str) and config.env != "seeded_env":
         init_env = gym.make(config.env)
@@ -453,18 +516,30 @@ def create_algorithm_config(
         model_config["vf_share_layers"] = DefaultModelConfig.vf_share_layers if algorithm_type != "ppo" else False
     # Create a single agent RL module spec.
     # Note: legacy keys are updated below
-    module_spec = RLModuleSpec(
-        module_class=module_class,
-        observation_space=init_env.observation_space,
-        action_space=init_env.action_space,
-        # NOTE: Do not set the model_config; it will be taken from config.model_config
-        catalog_class=catalog_class,
-    )
+    if module_class or catalog_class:
+        module_spec = RLModuleSpec(
+            module_class=module_class,
+            observation_space=init_env.observation_space,
+            action_space=init_env.action_space,
+            # NOTE: Do not set the model_config; it will be taken from config.model_config
+            catalog_class=catalog_class,
+        )
+        config.rl_module(  # only in RLModuleSpec is not sufficient
+            rl_module_spec=module_spec,
+        )
+    else:
+        module_spec = None
     init_env.close()
     # module = module_spec.build()
-    config.rl_module(  # only in RLModuleSpec is not sufficient
-        rl_module_spec=module_spec,
-    )
+    if is_atari:
+        setup_atari(args, env_spec if isinstance(env_spec, str) else env_spec.spec.id, config, None)
+        if model_config is not None:
+            ImportantLogger.important_warning(
+                logger, "When using atari and model config is provided check if it is compatible."
+            )
+        if args["gpu"]:
+            config.env_runners(num_gpus_per_env_runner=args["gpu"] / 4)
+            config.learners(num_gpus_per_learner=args["gpu"] / 2)
     if model_config is not None:
         config.rl_module(model_config=model_config)
     if algorithm_type == "dqn":

@@ -139,10 +139,8 @@ class SimpleMLPParser(Tap):
         # flatten list of lists
         self.fcnet_hiddens = tree.flatten(self.fcnet_hiddens)
         self.head_fcnet_hiddens = tree.flatten(self.head_fcnet_hiddens)
-        import sys, os  # XXX
+        import sys  # XXX
 
-        if "DEBUG" in os.environ:
-            breakpoint()
         if "--no_vf_share_layers" in sys.argv:
             assert not self.vf_share_layers
         super().process_args()

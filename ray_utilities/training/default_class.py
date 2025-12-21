@@ -631,6 +631,13 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
         # TODO: Possible unset setup._config to not confuse configs (or remove setup totally?)
         # use args = config["cli_args"] # XXX
 
+        # breakpoint()
+        if "ALE" in self._setup.args.env_type:
+            import gymnasium as gym
+            import ale_py
+
+            gym.register_envs(ale_py)
+
         # _logger.debug("Sys argv during Trainable.setup(): %s", sys.argv)
         _logger.debug(
             "args %s are:\n %s",
