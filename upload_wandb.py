@@ -377,7 +377,10 @@ def patch_offline_history(
             logger.warning("Could not find parent run %s: %s", parent_run_ids[0], e)
     parent_histories = {}
     if parent_runs:
-        min_step = min(online_iteration_data.keys())
+        if online_iteration_data:
+            min_step = min(online_iteration_data.keys())
+        else:
+            min_step = float("inf")
 
         # get online history of parents, trim to fork point
         def insert_parent_config(run, record):
