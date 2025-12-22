@@ -42,8 +42,10 @@ except ModuleNotFoundError:
         pass
 
     _WandbLoggingActorWithArtifactSupport = _WandbNotInstalled
+
+    clean_invalid_characters = lambda x: x  # noqa: E731
 else:
-    from ._adv_wandb_logging_actor import _WandbLoggingActorWithArtifactSupport
+    from ._adv_wandb_logging_actor import _WandbLoggingActorWithArtifactSupport, clean_invalid_characters
 
 
 from ._log_result_grouping import non_metric_results
@@ -109,7 +111,7 @@ class AdvWandbLoggerCallback(
         """
         kwargs.update(
             {
-                "project": project,
+                "project": clean_invalid_characters(project) if project else project,
                 "group": group,
                 "excludes": excludes or [],
                 "upload_checkpoints": upload_checkpoints,
@@ -354,7 +356,7 @@ class AdvWandbLoggerCallback(
             "reinit": "default",  # bool is deprecated
             "allow_val_change": True,
             "group": wandb_group,
-            "project": wandb_project,
+            "project": clean_invalid_characters(wandb_project) if wandb_project else wandb_project,
             "config": config,
             # possibly fork / resume
             "fork_from": fork_from,

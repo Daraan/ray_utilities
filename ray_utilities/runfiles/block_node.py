@@ -25,11 +25,19 @@ if __name__ == "__main__":
     )
     parser.add_argument("--number", "-n", type=int, default=None)
     parser.add_argument("--timeout", "-t", type=int, default=24 * 60 * 60)
+    parser.add_argument("--persistent_node", "-p", action="store_true")
+    parser.add_argument("--num-cpus", "-c", type=int, default=1)
+    parser.add_argument("--num-gpus", "-g", type=float, default=0)
     args = parser.parse_args()
     if args.label.replace("-", "_") in ("node_id",):
         args.label = "ray.io/node-id"
 
-    @ray.remote(label_selector={args.label: args.value}, num_cpus=1)
+    @ray.remote(
+        label_selector={args.label: args.value},
+        num_cpus=args.num_cpus,
+        num_gpus=args.num_gpus,
+        resources={"persistent_node": 1} if args.persistent_node else {},
+    )
     class BlockNode:
         timeout = args.timeout
 
