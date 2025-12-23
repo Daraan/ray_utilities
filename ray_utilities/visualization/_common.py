@@ -39,6 +39,9 @@ class PlotOption:
     exclude_groupby: Sequence[str] | Literal["_auto_"] | None = "_auto_"
     """If auto and groupby is only pbt_group_key will exclude main_* options"""
 
+    title: bool = True
+    """Whether to show titles on the plots."""
+
     def __post_init__(self):
         # at most one of these can be true
         if self.main_only + self.plot_reduced + self.main_vs_second_best + self.main_vs_rest > 1:

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import concurrent.futures
+import logging
+
 # TODOS
 # NOTE: That the current code stores and caches trials that might have failed/stopped and are restored later
 # cause of this caching the trial data might not be complete!
 # pyright: reportAttributeAccessIssue=warning
-import concurrent.futures
-import logging
+# ruff: noqa: G004
+import re
 import time
 import traceback
+from ast import literal_eval
 from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
@@ -127,6 +131,13 @@ def _cast_int_or_nan(v):
         return float("nan")
 
 
+def try_literal_eval(s):
+    try:
+        return literal_eval(s)
+    except (ValueError, SyntaxError):
+        return s
+
+
 def _try_cast(v: Any):
     try:
         v = float(v)
@@ -135,6 +146,29 @@ def _try_cast(v: Any):
     if v.is_integer():
         return int(v)
     return v
+
+
+def _relative_path_to_any_base(path: Path, bases: Sequence[Path]) -> Path | None:
+    """
+    Return `path` relative to the first matching base in `bases`.
+
+    Args:
+        path: The file path to relativize.
+        bases: Candidate base directories. If `path` lies under any of these
+            bases, the relative subpath is returned.
+
+    Returns:
+        The relative path if a base matches; otherwise `None`.
+    """
+    rp = path.resolve()
+    for base in bases:
+        try:
+            rel = rp.relative_to(Path(base).resolve())
+        except Exception:
+            continue
+        else:
+            return rel
+    return None
 
 
 def ifill(
@@ -371,6 +405,7 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
                             indices = history.index[history == experiment_key].map(_cast_int_or_nan)
                             idx = indices.max()
                             if idx > 0:
+                                # Note: clean history allows experiment_key fix
                                 assert (
                                     idx > 1
                                 )  # as this only happens when a fork is continued the index should be at least 2
@@ -414,17 +449,23 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
                                         [df.drop(("config", "trial_id_history"), axis=1), histories], axis=1
                                     ).sort_index(axis=1)
                             else:
-                                remote_breakpoint()
-                                raise ValueError(
-                                    "Experiment key %s does not match filename. Possibly the history is incomplete."
-                                )
+                                # Its possibly that the initial trial ID is written without being put into the history, which is correct
+                                latest_history_idx = history.index.map(_cast_int_or_nan).dropna().astype(int).max()
+                                if latest_history_idx > 0 and history[latest_history_idx] in result_file.name:
+                                    new_experiment_key = history[latest_history_idx]
+                                else:
+                                    # This can somehow happen if a wrong ID was written in a prior place
+                                    remote_breakpoint()
+                                    raise ValueError(
+                                        f"Experiment key {experiment_key} does not match filename. Possibly the history is incomplete or due to a bug written wrongly."
+                                    )
                         elif main_branch:
                             # no trial_id history but we are a main branch, believe this is a bug
                             new_experiment_key = result_file.name.split("-")[-1].split(".")[0]
                         else:
                             remote_breakpoint()
                             raise ValueError(
-                                "Experiment key %s does not match filename. Possibly the history is incomplete."
+                                f"Experiment key {experiment_key}does not match filename. Possibly the history is incomplete."
                             )
                         experiment_key_from_file = result_file.name.split("-")[-1].split(".")[0]
                         if "trial_id_history" in df.config:
@@ -446,7 +487,7 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
                         mask[:last_true_idx] = False
                         df.loc[mask, ("config", "experiment_key")] = new_experiment_key
                     else:
-                        logger.error("")
+                        logger.error("error with experiment_key cannot restore")
                         remote_breakpoint()  # some other bug
                         raise ValueError(
                             f"Experiment key {experiment_key} does not match id in file name {result_file}"
@@ -479,6 +520,10 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
                 if experiment_key in run_data:
                     remote_breakpoint()
                     raise ValueError(f"Duplicate experiment_key {experiment_key} already present in {offline_run}")  # noqa: B904
+                if result_file.name != "result.json" and experiment_key not in result_file.name:
+                    logger.error(f"Experiment key {experiment_key} does does not match id in file name {result_file}")
+                    remote_breakpoint()
+                    continue
         except Exception as e:  # noqa: PERF203
             if "patched.json" in str(result_file):
                 continue
@@ -488,6 +533,29 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
                 logger.error("Too many errors encountered while loading run data; aborting further attempts.")
                 raise
         else:
+            if experiment_key in run_data:
+                # how can this be, we check file names, then the first file must have? Backup or parent file
+                logger.warning(
+                    f"Duplicate experiment_key {experiment_key} found in {offline_run} for file {result_file}. "
+                    "This may be due to a bug where continued trials incorrectly recorded the original experiment key. "
+                    "Please verify the data integrity."
+                )
+                if experiment_key not in result_file.name:
+                    # take this one
+                    logger.error(
+                        f"Not taking data from file {result_file} for experiment_key {experiment_key}. Filename does not match."
+                    )
+                    continue
+                # this one seems correct
+                # take the one that is longer
+                present = run_data[experiment_key]
+                if len(present) >= len(df):
+                    logger.warning(
+                        "Existing data is longer, keeping existing data for experiment_key %s", experiment_key
+                    )
+                    continue
+                del present
+
             run_data[experiment_key] = df
 
     logger.info(f"Loaded data for run {offline_run} with {len(run_data.keys())} experiments")  # noqa: G004
@@ -673,6 +741,8 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
     combined_df = pd.concat(
         [combined_df.drop(ifill("config", "__pbt_main_branch__"), axis=1, errors="ignore"), main_branch_mask], axis=1
     ).sort_index(axis=1)
+    # This fixes a potential missing end step
+    _get_epoch_end_steps(combined_df)
     return combined_df
 
 
@@ -849,7 +919,7 @@ def which_continued(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     # Method 2
     if continued_legacy is not None:
         if set(continued_legacy.index) != set(continued.index):
-            logger.warning
+            logger.warning("A: Discrepancy between continued runs detected between methods.")
             remote_breakpoint()
         if (continued_legacy != continued).any().item():
             logger.warning("Discrepancy between continued runs detected between methods.")
@@ -911,28 +981,67 @@ def check_metric_backport(df: pd.DataFrame, metric: str | tuple[str, ...]) -> st
     return metric
 
 
-def get_epoch_stats(
-    df, metric, *, individual_runs: bool = False
-) -> tuple[pd.DataFrame, pd.DataFrame, tuple[pd.DataFrame, pd.DataFrame]]:
-    # region Variance
-    # backup = df
+def _get_epoch_end_steps(df):
     def ifill(*cols, n=df.columns.nlevels):
         return (*cols, *(Placeholder,) * (n - len(cols)))
 
-    metric_key = metric if isinstance(metric, str) else "-".join(metric)
     main_branch_data = df[df[ifill("config", "__pbt_main_branch__")]]
     try:
-        epoch_grouper = main_branch_data.groupby([ifill("config", "pbt_epoch")])[
-            [ifill(*((metric,) if isinstance(metric, str) else metric)), ifill("current_step")]
-        ]
+        epoch_grouper = main_branch_data.groupby([ifill("config", "pbt_epoch")])["current_step"]
     except KeyError as ke:
         if main_branch_data.empty:
             logger.error("No main branch data found for calculating hyperparam metrics.")
-            return None, None, (None, None)
+            return None
         remote_breakpoint()
         raise
     # Does not contain last epoch as there is no main branch
-    epoch_end_steps = epoch_grouper.last().current_step.copy()
+    epoch_end_steps = epoch_grouper.last().current_step.astype(int).copy()
+    expected_length = epoch_end_steps.index.max() - epoch_end_steps.index.min() + 1
+    if len(epoch_end_steps) != expected_length:
+        logger.warning(
+            "Some pbt_epochs are missing __pbt_main_branch__ likely not correct: expected length %s but got %s",
+            expected_length,
+            len(epoch_end_steps),
+        )
+        missing = set(epoch_end_steps.index) ^ set(
+            range(int(epoch_end_steps.index.min()), int(epoch_end_steps.index.max()) + 1)
+        )
+        # Use heuristic of most count
+        candidates, counts = np.unique(epoch_end_steps.diff().dropna().values, return_counts=True)
+        perturbation_interval = candidates[np.argmax(counts)]
+        for miss in sorted(missing):
+            epoch_end_steps.loc[miss] = epoch_end_steps.loc[miss - 1] + perturbation_interval
+            try:
+                missing_epoch = df[(df.config.pbt_epoch == miss).values]
+                run_ids_in_missing = missing_epoch.index.get_level_values("run_id").unique()
+                # check that they are a parent in the next epoch
+                next_epoch = df[(df.config.pbt_epoch == miss + 1).values]
+                parents_next_epoch = next_epoch[ifill("config", "fork_from", "parent_fork_id")].unique()
+                if set(parents_next_epoch) & set(run_ids_in_missing) == set(parents_next_epoch):
+                    # set main branch in miss; however likely we wont get there else it would already be correct
+                    missing_epoch.loc[parents_next_epoch, ifill("config", "__pbt_main_branch__")] = True
+                    main_branch_info = df[ifill("config", "__pbt_main_branch__")]
+                    main_branch_info[
+                        (df.config.pbt_epoch == miss).to_numpy().flatten()
+                        & df.index.get_level_values("run_id").isin(parents_next_epoch)  # ,
+                        # ifill("config", "__pbt_main_branch__"),  # this is a series
+                    ] = True
+                    df[ifill("config", "__pbt_main_branch__")] = main_branch_info
+                else:
+                    logger.warning(
+                        "Could not fix __pbt_main_branch__ for missing epoch %s "
+                        "as parents could not determined but could determine epoch end steps",
+                        miss,
+                    )
+            except Exception:
+                logger.exception("Could not fix __pbt_main_branch__ for missing epoch %s", miss)
+                remote_breakpoint(5679)
+
+        epoch_end_steps = epoch_end_steps.sort_index()
+        # Check which step is missing and fill it in
+        # remote_breakpoint()
+        # FIXME:
+        # df and main_branch_data are wrong at miss steps
     epoch_end_steps.index.names = ["pbt_epoch"]
     epoch_end_steps.columns = ["current_step"]
     # Find the ending position. This might be wrong as some trials have been trained for longer accidentially => use harded max step, but it should align with the last_step + perturb interval
@@ -956,7 +1065,22 @@ def get_epoch_stats(
                 1_179_648,
             )
         )
-    epoch_end_steps.drop_duplicates(keep="first", inplace=True)
+    return epoch_end_steps.drop_duplicates(keep="first")
+
+
+def get_epoch_stats(
+    df, metric, *, individual_runs: bool = False
+) -> tuple[pd.DataFrame, pd.DataFrame, tuple[pd.DataFrame, pd.DataFrame]]:
+    # region Variance
+    # backup = df
+    def ifill(*cols, n=df.columns.nlevels):
+        return (*cols, *(Placeholder,) * (n - len(cols)))
+
+    epoch_end_steps = _get_epoch_end_steps(df)
+    main_branch_data = df[df[ifill("config", "__pbt_main_branch__")]]
+    if main_branch_data.empty:
+        return None, None, (None, None)
+    metric_key = metric if isinstance(metric, str) else "-".join(metric)
     # NOTE: main_branch data is not backfilled here!
     main_branch_data = main_branch_data.set_index(ifill("current_step"), append=True)
     main_branch_data.index.names = [*main_branch_data.index.names[:-1], "current_step"]
@@ -1432,7 +1556,7 @@ def plot_n_save(
     plot_errors: bool | Literal["only"] | str | Sequence[str] = True,
     plot_errors_type: Literal["box", "violin"] = "box",
     **kwargs,
-) -> None:
+) -> list[Path] | None:
     # for metric in metrics: [metric]
     plot_errors = kwargs.pop("plot_errors", plot_errors)
     plot_errors_type = kwargs.pop("plot_errors_type", plot_errors_type)
@@ -1445,7 +1569,7 @@ def plot_n_save(
         "__pbt_main_branch__"
     ].any().item():
         logger.warning("Cannot plot main branch only data as no main branch found in DataFrame.")
-        return
+        return None
     fig, error_figures = plot_run_data(
         df,
         metrics,
@@ -1461,7 +1585,7 @@ def plot_n_save(
         **kwargs,
     )
     if fig is None:  # pyright: ignore[reportUnnecessaryComparison]
-        return
+        return None
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     if save_path.exists() and not save_path.is_dir():
@@ -1471,18 +1595,21 @@ def plot_n_save(
             f"({save_path.suffix} != .{format}). Change the name or format,"
         )
     fig.savefig(save_path, format=format, bbox_inches="tight")
+    if close:
+        plt.close(fig)
+    outfiles: list[Path] = [save_path]
     if error_figures:
         for metric_name, error_fig in error_figures.items():
             error_path = save_path.with_name(
                 f"{save_path.stem}_{metric_name.replace('/', '_') if metric_name not in save_path.stem else ''}_errors{save_path.suffix}"
             )
             error_fig.savefig(error_path, format=format, bbox_inches="tight")
+            outfiles.append(error_path)
             if close:
                 plt.close(error_fig)
             print(f"Saved error plot to {error_path}")
-    if close:
-        plt.close(fig)
     logger.info(f"Saved plot to {save_path}")  # noqa: G004
+    return outfiles
 
 
 def _join_nested(m, on="_"):
@@ -1492,14 +1619,21 @@ def _join_nested(m, on="_"):
 
 
 def calculate_experiment_stats(
-    combined_df: pd.DataFrame, metrics: Sequence[str | tuple[str, ...]], out_path: Path, format="pdf"
-) -> None:
+    combined_df: pd.DataFrame,
+    metrics: Sequence[str | tuple[str, ...]],
+    out_path: Path,
+    format="pdf",
+    *,
+    plot_option: PlotOption,
+    large: bool,
+) -> list[Path]:
     if not out_path.is_dir():
         # Single file names are normally to convoluted with extra keys
         base_dir = out_path.parent
         path_base = base_dir.stem
     else:
         path_base = out_path.stem
+    outfiles: list[Path] = []
     for per_epoch in (True, False):
         per_epoch_str = "-per_epoch" if per_epoch else ""
         for metric in metrics:
@@ -1517,26 +1651,32 @@ def calculate_experiment_stats(
             stats, stats_reduced, (group_variance_per_epoch, group_variance_global) = calculated_stats
 
             # 1. Save reduced stats
+            large_str = "-large" if large else ""
             stats_reduced_path = out_path.with_name(
-                f"{path_base}{metric_str}-hyperparam_stats{per_epoch_str}_reduced.txt"
+                f"{path_base}{metric_str}{large_str}-hyperparam_stats{per_epoch_str}_reduced.txt"
             )
             with open(stats_reduced_path, "w") as f:
                 f.write(stats_reduced)
+            outfiles.append(stats_reduced_path)
             if per_epoch:
                 pd.concat([group_variance_per_epoch, group_variance_global]).to_csv(
-                    out_path.with_name(f"{path_base}{metric_str}-hyperparam_variance_per_epoch.txt"), index=True
+                    out_path.with_name(f"{path_base}{metric_str}{large_str}-hyperparam_variance_per_epoch.txt"),
+                    index=True,
                 )
-                from ray_utilities.visualization.plot import plot_intra_group_variances  # cyclic
+                from ray_utilities.visualization.plot import plot_intra_group_variances  # cyclic  # noqa: PLC0415
 
-                plot_intra_group_variances(
+                var_files = plot_intra_group_variances(
                     group_variance_global,
                     group_variance_per_epoch,
                     out_path,
                     path_base,
                     metric_str,
                     per_epoch_str,
-                    format,
+                    format=format,
+                    plot_option=plot_option,
+                    large=large,
                 )
+                outfiles.extend(var_files)
             else:
                 from ray_utilities.visualization import plot as _plot  # will set theme; cyclic import  # noqa: F401
 
@@ -1569,7 +1709,8 @@ def calculate_experiment_stats(
                     columns_ax.set_xlabel("")
                     columns_ax.set_xticks([])
                     columns_ax.set_xticklabels([])
-                columns_ax.set_title(column, fontsize=11, fontweight="light")
+                if plot_option.title:
+                    columns_ax.set_title(column, fontsize=11, fontweight="light")
                 if "kendall" in column[0]:
                     stats_to_plot[column].dropna().plot(ax=columns_ax, label=column)
             # for stat in stats.columns.get_level_values(0).unique():
@@ -1577,7 +1718,10 @@ def calculate_experiment_stats(
             fig.savefig(stats_path, format=format, bbox_inches="tight")
             plt.close(fig)
             logger.info("Saved hyperparameter stats to '%s'", stats_path)
-            stats.to_csv(stats_path.with_suffix(".csv"), index=True)
+            stats_csv_paths = stats_path.with_suffix(".csv")
+            stats.to_csv(stats_csv_paths, index=True)
+            outfiles.extend([stats_path, stats_csv_paths])
+    return outfiles
 
 
 def get_and_check_group_stat(
@@ -1630,7 +1774,7 @@ def export_run_data(
     calc_stats: bool = True,
     use_cache: bool = True,
     **kwargs,
-) -> Path:
+) -> list[Path] | None:
     """
     TODO:
         - Some older runs do not have a pbt_group_key, and likely also no pbt_epoch
@@ -1653,8 +1797,9 @@ def export_run_data(
             if "pbt_epoch" not in combined_df.config and use_cache:
                 logger.warning("Loaded old cache but pbt_epoch not in data, reloading without cache.")
                 data = load_run_data(experiment_path, use_cache=False)
-                combined_df = combine_df(data)
-                save_run_data(experiment_path, combined_df)
+                if not isinstance(data, pd.DataFrame):
+                    combined_df = combine_df(data)
+                    save_run_data(experiment_path, combined_df)
         # Mark large experiments:
         large = ""
         if group_stat is None:
@@ -1674,12 +1819,21 @@ def export_run_data(
         combined_df = experiment_path
     logger.info("Plotting and saving...")
 
+    # If group_stat is None, do what?
+    outfiles: list[Path] = []
     if calc_stats:
         try:
-            calculate_experiment_stats(combined_df=combined_df, metrics=metrics, out_path=out_path, format=format)
+            outfiles = calculate_experiment_stats(
+                combined_df=combined_df,
+                metrics=metrics,
+                out_path=out_path,
+                format=format,
+                plot_option=plot_option,
+                large=large,
+            )
         except Exception as e:  # noqa: PERF203
             logger.exception("Failed to calculate experiment stats: %r", e)  # noqa: G004
-    plot_n_save(
+    files = plot_n_save(
         combined_df,
         plot_option=plot_option,
         metrics=metrics,
@@ -1692,7 +1846,10 @@ def export_run_data(
         format=format,
         **kwargs,
     )
-    return out_path
+    if not files:
+        # possibly no main data
+        return outfiles or None
+    return [*files, *outfiles]
 
 
 def _export_one(args, group_by, figsize, format, **kwargs):
@@ -1711,7 +1868,8 @@ def _export_one(args, group_by, figsize, format, **kwargs):
         logger.error("Failed to export run data for %s: %r", experiment_path, e, exc_info=True)  # noqa: G004
         return e, tb, experiment_path
     else:
-        logger.info("Exported run data for %s to %s", experiment_path, file_path)  # noqa: G004
+        if file_path is not None:
+            logger.info("Exported run data for %s to %s", experiment_path, file_path)  # noqa: G004
         return file_path
 
 
@@ -1831,7 +1989,7 @@ def _export_multiple(
                         "Exporting metric '%s' with options %s to '%s' ...", metric_str, combo_kwargs, out_path
                     )
                     try:
-                        file_path = export_run_data(
+                        file_paths = export_run_data(
                             combined_df,
                             plot_option=option,
                             metrics=(metric,),
@@ -1847,8 +2005,10 @@ def _export_multiple(
                         logger.error(f"Failed to export run data for {experiment_path}: {e!r}", exc_info=True)  # noqa: G004
                         errors.append((e, tb, experiment_path))
                     else:
-                        logger.info(f"Exported run data for '{experiment_path}' to '{file_path}'")  # noqa: G004
-                        saved_files.append(file_path)
+                        if file_paths is not None:
+                            dump_str = "\n".join(map(str, file_paths))
+                            logger.info(f"Exported run data for '{experiment_path}' to '{dump_str}'\n-----")  # noqa: G004
+                            saved_files.extend(file_paths)
         return saved_files, errors
     kws = cast("dict[str, Any]", kwargs)
     for option in plot_options:
@@ -1861,10 +2021,11 @@ def _export_multiple(
                 plot_option=option,
                 output_dir=experiment_path,
                 format=format,
+                large=large,
                 group_by=kws.get("group_by", DEFAULT_GROUP_BY),
             )
             try:
-                file_path = export_run_data(
+                file_paths = export_run_data(
                     combined_df,
                     plot_option=option,
                     metrics=(metric,),
@@ -1878,8 +2039,10 @@ def _export_multiple(
                 logger.error(f"Failed to export run data for {experiment_path}: {e!r}", exc_info=True)  # noqa: G004
                 errors.append((e, tb, experiment_path))
             else:
-                logger.info(f"Exported run data for {experiment_path} to {file_path}")  # noqa: G004
-                saved_files.append(file_path)
+                if file_paths is not None:
+                    dump_str = "\n".join(map(str, file_paths))
+                    logger.info(f"Exported run data for {experiment_path} to {dump_str}\n-----")  # noqa: G004
+                    saved_files.extend(file_paths)
     return saved_files, errors
 
 
@@ -1931,7 +2094,7 @@ def _create_image_output_path(
 
 
 def export_all_runs(
-    output_dir: str | Path,
+    output_dir: str | Path | Sequence[str | Path],
     plot_options: Sequence[PlotOption],
     *,
     single: bool = False,
@@ -1951,10 +2114,20 @@ def export_all_runs(
     **kwargs,
 ):
     """
-    Export all runs in the given output directory using multiple processes.
+    Export runs using multiple processes.
+
+    If `output_dir` is a single path, runs are discovered by globbing
+    `*/*/*` under that directory (unless `single=True`, in which case
+    only the provided directory is processed).
+
+    If `output_dir` is a sequence of paths, those paths are treated as the
+    complete set of run directories to process. In this mode, no globbing is
+    performed and `single` is ignored to allow parallel processing of the
+    provided runs.
 
     Args:
-        output_dir: Directory containing experiment runs.
+        output_dir: Directory containing experiment runs, or a list of explicit
+            run directories to process.
         format: Output file format.
         figsize: Figure size.
         group_by: Grouping columns.
@@ -1966,7 +2139,18 @@ def export_all_runs(
     Returns:
         List of saved file paths.
     """
-    output_dir = Path(output_dir)
+    # Normalize input into a list of experiment directories to process.
+    # Also record a base root for relative zip paths when applicable.
+    base_root: Path | None
+    if isinstance(output_dir, (str, Path)):
+        base_root = Path(output_dir)
+        # Discover runs under the base directory unless single is set
+        experiment_dirs: list[Path] = list(base_root.glob("*/*/*")) if not single else [base_root]
+    else:
+        # Explicit list of run directories provided; do not glob and ignore `single`
+        assert not single
+        experiment_dirs = [Path(p) for p in output_dir]
+        base_root = None
     saved_files: list[Path] = []
     test = int(test) - 1 if test else float("inf")
     # Submit tasks as soon as we get experiment paths from glob
@@ -1976,7 +2160,7 @@ def export_all_runs(
         futures = []
         i = 0
         skip_dirs = set()
-        for experiment_path in output_dir.glob("*/*/*") if not single else [output_dir]:
+        for experiment_path in experiment_dirs:
             if any(excl in str(experiment_path) for excl in excludes) or "cometml" in str(experiment_path):
                 if "cometml" not in str(experiment_path):
                     logger.info(f"Excluding experiment path {experiment_path} due to exclude patterns.")  # noqa: G004
@@ -2065,13 +2249,19 @@ def export_all_runs(
             if zip_plots:  # zip skipped files as we go
                 if not zip_file:
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    zip_path = output_dir / f"exported_plots_{timestamp}.zip"
+                    if base_root is not None:
+                        zip_path = base_root / f"exported_plots_{timestamp}.zip"
+                    else:
+                        zip_path = Path.cwd() / f"exported_plots_{timestamp}.zip"
                     zipf = ZipFile(zip_path, "w", compression=ZIP_DEFLATED, compresslevel=3)
                 else:
                     zip_path = zipf.fp
                 assert zipf
                 for file_path in file_paths:
-                    arcname = file_path.relative_to(output_dir)
+                    # Derive archive name relative to any known base (base_root and PATHS)
+                    base_candidates: list[Path] = ([base_root] if base_root is not None else []) + PATHS
+                    rel = _relative_path_to_any_base(file_path, base_candidates)
+                    arcname = rel if rel is not None else Path(file_path.name)
                     arcname_str = str(arcname).replace(":", "_")
                     zipf.write(file_path, arcname=arcname_str)
             try:
@@ -2086,7 +2276,10 @@ def export_all_runs(
                     print("Exported files:", file_paths)
                     saved_files.extend(file_paths)
                     for file_path in file_paths:
-                        arcname = file_path.relative_to(output_dir)
+                        # Derive archive name relative to any known base (base_root and PATHS)
+                        base_candidates: list[Path] = ([base_root] if base_root is not None else []) + PATHS
+                        rel = _relative_path_to_any_base(file_path, base_candidates)
+                        arcname = rel if rel is not None else Path(file_path.name)
                         if zipf is not None:
                             if not file_path.exists():
                                 logger.error(f"File {file_path} does not exist, cannot add to zip.")  # noqa: G004
@@ -2165,7 +2358,6 @@ if __name__ == "__main__":
     # cd /path/to/parent
     # find dir1 dir2 -type f -iname '*.pdf' -printf '%P\n' | sed 's|^[^/]*/||' | zip -@ all_pdfs.zip
     import argparse
-    from ast import literal_eval
     from datetime import datetime
 
     from ray_utilities import nice_logger
@@ -2207,6 +2399,7 @@ if __name__ == "__main__":
         default="box",
         help="Error plot type (box or violin).",
     )
+    parser.add_argument("--no-title", action="store_true", help="Disable titles in plots.")
     args = parser.parse_args()
 
     assert not args.all or not args.main_only, "Cannot use --all and --main_only together."
@@ -2218,11 +2411,11 @@ if __name__ == "__main__":
         args.metrics = list(map(literal_eval, args.metrics))
     excludes: set[str] = file_excludes.union(set(args.excludes)).union(running_experiments)
     plot_options = [
-        PlotOption(plot_reduced=False),  # plot all
-        PlotOption(plot_reduced=True),
-        PlotOption(main_only=True, plot_reduced=False),
-        PlotOption(main_vs_second_best=True, plot_reduced=False),
-        PlotOption(main_vs_rest=True, plot_reduced=False),
+        PlotOption(plot_reduced=False, title=not args.no_title),  # plot all
+        PlotOption(plot_reduced=True, title=not args.no_title),
+        PlotOption(main_only=True, plot_reduced=False, title=not args.no_title),
+        PlotOption(main_vs_second_best=True, plot_reduced=False, title=not args.no_title),
+        PlotOption(main_vs_rest=True, plot_reduced=False, title=not args.no_title),
     ]
     paths = args.path
     if not paths:
@@ -2237,16 +2430,21 @@ if __name__ == "__main__":
         # Load experiment groups from YAML files
         yaml_paths = paths
         paths = []
-        args.single = True
+        # Do not use single-run mode when aggregating from submissions;
+        # we'll parallelize across runs via common parent directories.
+        assert not args.single
         for yaml_path in yaml_paths:
             paths.extend(get_run_directories_from_submission(yaml_path).values())
         # need a common zipfile
-        submission_str = "-".join(
-            [Path(p).stem.replace("submission_", "").replace("pbt_", "").strip("_- ") for p in yaml_paths]
+        submission_str = "+".join(
+            [re.sub(r"submissions?_?", "", Path(p).stem).replace("pbt_", "").strip("_- ") for p in yaml_paths]
         )
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         zip_path = Path("outputs/shared/experiments") / f"exported_plots_{submission_str}_{timestamp}.zip"
         zipfile = ZipFile(zip_path, "w", compression=ZIP_DEFLATED, compresslevel=3)
+        # TODO: do not do for path in paths + single! No parallelism
+        paths = [paths]  # one iteration to parallelise
+
     try:
         for path in paths:
             export_all_runs(
@@ -2265,11 +2463,12 @@ if __name__ == "__main__":
                 redo=args.redo,
                 plot_errors=not args.no_error,
                 plot_errors_type=args.error_plot_type,
-                zipfile=zipfile,
+                zip_file=zipfile,
             )
     finally:
         if zipfile:
             zipfile.close()
+            logger.info("Zipped plots saved to %s", zipfile.fp)
 
 
 # Example for grouping by MultiIndex columns:

@@ -356,7 +356,7 @@ class AdvWandbLoggerCallback(
             "reinit": "default",  # bool is deprecated
             "allow_val_change": True,
             "group": wandb_group,
-            "project": clean_invalid_characters(wandb_project),
+            "project": clean_invalid_characters(wandb_project) if wandb_project else wandb_project,
             "config": config,
             # possibly fork / resume
             "fork_from": fork_from,

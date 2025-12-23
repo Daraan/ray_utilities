@@ -103,6 +103,7 @@ def plot_error_distribution(
     plot_errors_type: Literal["box", "violin"],
     palette: Mapping[Hashable, str] | None = None,
     epoch_col: str = "pbt_epoch",
+    plot_option: PlotOption,
 ) -> Figure | None:
     """Create a separate figure showing the distribution of *metric_key* per *group_stat*."""
     if epoch_col not in plot_df:
@@ -192,7 +193,8 @@ def plot_error_distribution(
     else:
         plot_kwargs["color"] = "#4c72b0"
     plot_fn(**plot_kwargs)
-    ax_err.set_title(f"{metric_key} distribution by {group_stat}")
+    if plot_option.title:
+        ax_err.set_title(f"{metric_key} distribution by {group_stat}")
     ax_err.set_xlabel(group_stat)
     ax_err.set_ylabel(metric_key)
     ax_err.tick_params(axis="x", rotation=30)
@@ -256,7 +258,7 @@ def plot_run_data(
     pbt_metric: str | tuple[str, ...] | None = None,
     log: bool | None = None,
     plot_option: PlotOption = PlotOption(),  # noqa: B008
-    show: bool = True,
+    show: bool = False,
     pbt_plot_interval: int = 4,
     plot_errors: bool | Literal["only"] | str | Sequence[str] = True,
     plot_errors_type: Literal["box", "violin"] = "box",
@@ -329,7 +331,7 @@ def plot_run_data(
     group_cols = [("config", k) for k in group_by]
     # Extract the group-by columns as a DataFrame (each column is 1D)
     if ("config", "pbt_group_key") in group_cols and ("config", "pbt_group_key") not in df:
-        df = which_continued(df)  # this sets pbt_group_key
+        _, df = which_continued(df)  # this sets pbt_group_key
     try:
         try:
             stat_columns = df[group_stat].droplevel(0, axis=1)
@@ -504,7 +506,8 @@ def plot_run_data(
                 lambda x: group_ranks.loc[(x[group_by[0]], x[group_stat])].item(), axis=1
             )
         except KeyError:  # noqa: TRY203
-            # remote_breakpoint()
+            # group stat is nan
+            remote_breakpoint()
             raise
 
         # ATTENTION # XXX - for older runs the pbt_epoch might go into the next epoch if a run was continued!
@@ -716,7 +719,8 @@ def plot_run_data(
                 # Keep last as these are the one we continue with;
                 # however there are examples where the group_stat was not consistent
                 if group_stat == "batch_size" and (df.config.experiment_id.iloc[0] != "tws47f2512191818752f4").all():
-                    remote_breakpoint(5679)
+                    if (df.batch_size.iloc[0] == df.batch_size).all().item():
+                        remote_breakpoint(5679)
                 group = group[~group.index.duplicated(keep="last")]
                 # duplicated = group.index.duplicated(keep=False)
                 # dupl_cols = group.loc[duplicated]
@@ -844,7 +848,8 @@ def plot_run_data(
         agent_type = df.iloc[0].config.cli_args.agent_type
         if not isinstance(agent_type, str):
             agent_type = agent_type.item()
-        ax.set_title(f"{env_type} - {agent_type.upper()} - {metrics[0]}")
+        if plot_option.title:
+            ax.set_title(f"{env_type} - {agent_type.upper()} - {metrics[0]}")
 
         if plot_errors and not plot_option.main_only and not plot_option.plot_reduced:
             err_fig = plot_error_distribution(
@@ -854,6 +859,7 @@ def plot_run_data(
                 plot_errors_type=plot_errors_type,
                 palette=color_map,
                 epoch_col=group_by[0],
+                plot_option=plot_option,
             )
             if err_fig is not None:
                 error_figures[metric_key] = err_fig
@@ -888,8 +894,13 @@ def plot_intra_group_variances(
     metric_str: str,
     per_epoch_str: str,
     format: str,
+    plot_option: PlotOption,
+    *,
+    large: bool,
 ):
     # Plot group_variance_global var column as horizontal bar chart
+    large_str = "_large" if large else ""
+
     group_variance_global = group_variance_global.copy()
     group_variance_global.columns = group_variance_global.columns.get_level_values(-1)
 
@@ -920,11 +931,14 @@ def plot_intra_group_variances(
     # group_variance_global["var"].plot.barh(ax=ax_global, colormap=cmap)#color="skyblue")
     ax_global.set_xlabel("Variance")
     ax_global.set_ylabel(group_stat_str)
-    ax_global.set_title("Group Variance Global")
+    if plot_option.title:
+        ax_global.set_title("Group Variance Global")
     fig_global.tight_layout()
 
     # Save global variance plot
-    bar_path_global = out_path.with_name(f"{path_base}{metric_str}-group_variance_global{per_epoch_str}_bar.{format}")
+    bar_path_global = out_path.with_name(
+        f"{path_base}{metric_str}{large_str}-group_variance_global{per_epoch_str}_bar.{format}"
+    )
     fig_global.savefig(bar_path_global, format=format, bbox_inches="tight")
     plt.close(fig_global)
     logger.info("Saved group variance global bar chart to '%s'", bar_path_global)
@@ -958,14 +972,16 @@ def plot_intra_group_variances(
     )
     ax_epoch.set_ylabel("Variance")
     ax_epoch.set_xlabel("Epoch")
-    ax_epoch.set_title("Group Variance Per Epoch")
+    if plot_option.title:
+        ax_epoch.set_title("Group Variance Per Epoch")
     ax_epoch.tick_params(axis="x", rotation=45)
     fig_epoch.tight_layout()
 
     # Save per epoch variance plot
     bar_path_per_epoch = out_path.with_name(
-        f"{path_base}{metric_str}-group_variance_per_epoch{per_epoch_str}_bar.{format}"
+        f"{path_base}{metric_str}{large_str}-group_variance_per_epoch{per_epoch_str}_bar.{format}"
     )
     fig_epoch.savefig(bar_path_per_epoch, format=format, bbox_inches="tight")
     plt.close(fig_epoch)
     logger.info("Saved group variance per epoch bar chart to '%s'", bar_path_per_epoch)
+    return bar_path_global, bar_path_per_epoch
