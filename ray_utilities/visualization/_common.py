@@ -1,9 +1,27 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from typing import Sequence
+from pathlib import Path
+from typing import Sequence, TypedDict
 
 from typing_extensions import Final, Literal
+
+_logger = logging.getLogger(__name__)
+
+
+class SubmissionRun(TypedDict):
+    group_name: str
+    run_key: str
+    """For example "(Cartpole-v5)\""""
+
+    run_id: str
+    status: str
+    submission_name: str | None
+    """Derived from the submission file name"""
+
+    file_path: str | None
+    submission_id: str | None
 
 
 class _PlaceholderType(str):
@@ -60,3 +78,88 @@ class PlotOption:
             if groupby in self.exclude_groupby:
                 return True
         return False
+
+
+def _relative_path_to_any_base(path: Path, bases: Sequence[Path]) -> Path | None:
+    """
+    Return `path` relative to the first matching base in `bases`.
+
+    Args:
+        path: The file path to relativize.
+        bases: Candidate base directories. If `path` lies under any of these
+            bases, the relative subpath is returned.
+
+    Returns:
+        The relative path if a base matches; otherwise `None`.
+    """
+    rp = path.resolve()
+    for base in bases:
+        try:
+            rel = rp.relative_to(Path(base).resolve())
+        except Exception:
+            continue
+        else:
+            return rel
+    return None
+
+
+# DIR_FLAGS = {"use_kl_loss", "vf_share_layers", "large", "no_kl_loss", "no_shared_layers"}
+
+
+def make_zip_arcname(
+    file_path,
+    base_candidates: list[Path],
+    run_infos: dict[str, SubmissionRun] | None = None,
+    *,
+    use_dir_flags: bool = True,
+) -> str:
+    """
+    Parts:
+     -1 filename
+     -2 metric
+     -3 "plots"
+     -4 experiment_dir
+     -5 tune group folder
+     -6 project dir
+    """
+    EXP_DIR_IDX = -4
+    GROUP_DIR_IDX = -5
+    rel = _relative_path_to_any_base(file_path, base_candidates)
+    parts = list(rel.parts) if rel else list(file_path.parts)
+    if run_infos:
+        run_id = "RunIDNotFound In path"
+        # get run_id from file_path
+        if len(parts) >= abs(EXP_DIR_IDX):
+            run_id = parts[EXP_DIR_IDX].rsplit("-")[-1]
+            run_info = run_infos.get(run_id)
+        else:
+            run_info = None
+        if not run_info:
+            _logger.warning("Could not get a runinfo from path %s <- %s", run_id, rel)
+        else:
+            parts[EXP_DIR_IDX] += run_info["group_name"].replace("pbt_", "")
+            if run_info.get("submission_name"):
+                parts[EXP_DIR_IDX] += run_info["submission_name"]  # pyright: ignore[reportOperatorIssue]
+            if use_dir_flags:
+                insert = []
+                submission_name = run_info.get("submission_name", "")
+                if submission_name:
+                    insert.append(submission_name)
+                submission_id = run_info.get("submission_id", "")
+                if submission_id and ("large" in submission_id or "8192" in submission_id):
+                    insert.append("large")
+                if insert:
+                    parts[GROUP_DIR_IDX + 1] = "_".join(insert)
+        rel = Path(*parts)
+    if "large" in str(file_path.name):
+        # rename parent
+        # path should have structure of **/experiment/plots/*large
+        # arcname to **/experiment(large)/plots/*large
+        if len(parts) >= abs(EXP_DIR_IDX) and not any("large" in p for p in parts[EXP_DIR_IDX]):
+            if "-mlp-" not in parts[EXP_DIR_IDX]:
+                _logger.warning("Part %s does not contain the expected '-mlp-' substring.", parts[-3])
+            parts[EXP_DIR_IDX] = parts[EXP_DIR_IDX] + "(large)"
+            rel = Path(*parts)
+    arcname = rel if rel is not None else Path(file_path.name)
+    arcname_str = str(arcname).replace(":", "_")
+    return arcname_str

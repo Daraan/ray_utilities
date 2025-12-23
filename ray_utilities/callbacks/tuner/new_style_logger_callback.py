@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, Mapping, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from ray.tune.logger import LoggerCallback
 

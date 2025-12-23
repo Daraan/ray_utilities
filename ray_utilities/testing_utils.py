@@ -67,7 +67,6 @@ import tree
 from ray.experimental import tqdm_ray
 from ray.rllib.algorithms import Algorithm, AlgorithmConfig
 from ray.rllib.algorithms import algorithm as algorithm_module
-from ray.rllib.algorithms.ppo.ppo import PPO
 from ray.rllib.callbacks.callbacks import RLlibCallback
 from ray.rllib.core import ALL_MODULES
 from ray.rllib.utils.metrics import (

@@ -15,7 +15,19 @@ from ast import literal_eval
 from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Collection, Hashable, Optional, Sequence, TypeAlias, TypedDict, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Collection,
+    Hashable,
+    Iterable,
+    Iterator,
+    Optional,
+    Sequence,
+    TypeAlias,
+    TypeVar,
+    cast,
+)
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import base62
@@ -27,7 +39,12 @@ from typing_extensions import Final, Literal, Sentinel, TypeVarTuple, Unpack
 
 from ray_utilities.misc import ExperimentKey
 from ray_utilities.testing_utils import remote_breakpoint
-from ray_utilities.visualization._common import Placeholder, PlotOption
+from ray_utilities.visualization._common import Placeholder, SubmissionRun, PlotOption, make_zip_arcname
+
+try:
+    from ray_submit import write_back
+except ImportError:
+    write_back = None  # type: ignore
 
 try:
     from ruamel.yaml import YAML
@@ -113,14 +130,6 @@ Ts = TypeVarTuple("Ts")
 # Project/group/Name*run_id/
 
 
-class SubmissionRun(TypedDict):
-    group_name: str
-    run_key: str
-    run_id: str
-    status: str
-    submission_name: str | None
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -146,29 +155,6 @@ def _try_cast(v: Any):
     if v.is_integer():
         return int(v)
     return v
-
-
-def _relative_path_to_any_base(path: Path, bases: Sequence[Path]) -> Path | None:
-    """
-    Return `path` relative to the first matching base in `bases`.
-
-    Args:
-        path: The file path to relativize.
-        bases: Candidate base directories. If `path` lies under any of these
-            bases, the relative subpath is returned.
-
-    Returns:
-        The relative path if a base matches; otherwise `None`.
-    """
-    rp = path.resolve()
-    for base in bases:
-        try:
-            rel = rp.relative_to(Path(base).resolve())
-        except Exception:
-            continue
-        else:
-            return rel
-    return None
 
 
 def ifill(
@@ -220,16 +206,20 @@ def get_runs_from_submission(
                 if re.match(r"^.+?-v\d\)$", run_id):
                     continue
                 status = str(run_info.get("status", "")).upper()
+                submission_id = run_info.get("submission_id")
                 if not (group_matches_filter or normalized_filter in status):
                     logger.info("Skipping run %s/%s with status %s", group_name, run_id, status)  # noqa: G004
                     continue
                 assert run_id not in runs, f"Duplicate run_id {run_id} found in submission file."
+                file_path = run_info.get("file_path")
                 runs[run_id] = SubmissionRun(
                     group_name=group_name,
                     run_key=normalized_run_key,
                     run_id=run_id,
                     status=status,
                     submission_name=submission_name,
+                    file_path=file_path,
+                    submission_id=submission_id,
                 )
     return runs
 
@@ -271,26 +261,67 @@ def get_run_directories_from_submission(
     *,
     status_filter: str = "SUCCEEDED",
     search_paths: Sequence[Path] | None = None,
-) -> dict[str, Path]:
+    test: Literal[False] | int = False,
+) -> Iterator[tuple[str, Path]]:
     """
-    Convenience helper that resolves directories for all runs matching ``status_filter`` in a submission file.
+    Yield directories for all runs matching ``status_filter`` in a submission file.
 
     Args:
         submission_file: Path to the submission YAML file.
         status_filter: Filter applied to group names and statuses.
         search_paths: Paths to scan for the runs; defaults to ``PATHS``.
 
-    Returns:
-        Mapping of run_id to the discovered directory.
+    Yields:
+        Tuples containing the run_id and the discovered directory.
     """
     run_infos = get_runs_from_submission(submission_file, status_filter=status_filter)
-    directories: dict[str, Path] = {}
+    collected = 0
+    if not test:
+        limit = float("inf")
+    elif test is True:  # type: ignore[comparison-overlap]
+        limit = 5
+    else:
+        limit = int(test)
     for run_id, info in run_infos.items():
         assert run_id == info["run_id"]
         if re.match(r"^.*-v\d$", run_id):
             continue
-        directories[run_id] = find_run_directory(info["run_key"], run_id, search_paths=search_paths)
-    return directories
+
+        # Check if file_path exists in cached data and is valid
+        cached_path = info.get("file_path")
+        if cached_path and Path(cached_path).exists():
+            directory = Path(cached_path)
+        else:
+            # Find the directory and write back to YAML
+            directory = find_run_directory(info["run_key"], run_id, search_paths=search_paths)
+
+            # Write back the discovered path to the YAML file
+            if write_back is not None:
+                try:
+                    # Construct job_id from group_name and run_key for write_back
+                    job_id = f"{info['group_name']}_{info['run_key']}"
+                    # Pass the file_path as part of the run_info dict
+                    run_info_update = {
+                        run_id: {
+                            "status": info["status"],
+                            "submission_id": info["submission_id"],
+                            "file_path": str(directory),
+                        }
+                    }
+                    write_back(
+                        group=info["group_name"],
+                        job_id=job_id,  # split into group_runkey
+                        run_id=run_info_update,
+                        file=submission_file,
+                        overwrite=True,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to write back file_path for run %s: %s", run_id, e)
+
+        yield run_id, directory
+        collected += 1
+        if collected >= limit:
+            return
 
 
 class _NoReprDict(dict):
@@ -558,6 +589,15 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
                     )
                     continue
                 del present
+            group_stat = _get_group_stat(df, "pbt_group_key")
+            if group_stat == "grad_clip":
+                # replace NaN with inf
+                if group_stat in df:
+                    df[group_stat] = df[group_stat].fillna(float("inf"))
+                if group_stat in df.config:
+                    df[ifill("config", group_stat, n=df.columns.nlevels)] = df[
+                        ifill("config", group_stat, n=df.columns.nlevels)
+                    ].fillna(float("inf"))
 
             run_data[experiment_key] = df
 
@@ -827,18 +867,29 @@ def _get_group_stat(df: pd.DataFrame | pd.Series, group_key: str | Hashable):
     if not tune:
         tune = first_row.config.experiment_group.values.item().split(":")[-1]
         if tune == "batch_size" and ("batch_size" not in df.config and "train_batch_size_per_learner" not in df.config):
+            try:
+                from experiments.create_tune_parameters import default_distributions
+
+                tune_candidates = set(default_distributions.keys())
+                tune_candidates.pop("minibatch_scale")
+            except ImportError:
+                tune_candidates = {
+                    "lr",
+                    "minibatch_size",
+                    "num_envs_per_env_runner",
+                    "accumulate_gradients_every",
+                    "clip_param",
+                    "vf_loss_coeff",
+                    "gamma",
+                    "grad_clip",
+                    "entropy_coeff",
+                }
             # experiment group can be helpful BUT batch_size was added to some that did NOT tune batch_size
             if isinstance(df.config, pd.Series):
                 columns = set(df.config.index.get_level_values(0))
             else:
                 columns = set(df.config.columns.get_level_values(0))
-            candidates = columns & {
-                "lr",
-                "minibatch_size",
-                "num_envs_per_env_runner",
-                "accumulate_gradients_every",
-                "clip_param",
-            }
+            candidates = columns & tune_candidates
             if candidates:
                 if len(candidates) == 1:
                     return candidates.pop()
@@ -847,7 +898,7 @@ def _get_group_stat(df: pd.DataFrame | pd.Series, group_key: str | Hashable):
                 return candidates.pop()
             logger.error("No suitable group key found - 'batch_size' is likely incorrect")
             remote_breakpoint()
-            raise
+            raise ValueError("No suitable group key detected. Is batch_size correct?")
         return tune
     return tune[0]
 
@@ -984,7 +1035,7 @@ def check_metric_backport(df: pd.DataFrame, metric: str | tuple[str, ...]) -> st
     return metric
 
 
-def _get_epoch_end_steps(df):
+def _get_epoch_end_steps(df) -> pd.DataFrame | None:
     def ifill(*cols, n=df.columns.nlevels):
         return (*cols, *(Placeholder,) * (n - len(cols)))
 
@@ -1015,11 +1066,17 @@ def _get_epoch_end_steps(df):
         for miss in sorted(missing):
             epoch_end_steps.loc[miss] = epoch_end_steps.loc[miss - 1] + perturbation_interval
             try:
-                missing_epoch = df[(df.config.pbt_epoch == miss).values]
+                epoch_mask = df.config.pbt_epoch == miss
+                if not epoch_mask.any().item():
+                    epoch_mask = (perturbation_interval * (miss) < df.current_step) & (
+                        df.current_step <= perturbation_interval * (miss + 1)
+                    )
+                    df.loc[epoch_mask.to_numpy().flatten(), ifill("config", "pbt_epoch")] = miss
+                missing_epoch = df[epoch_mask.values]
                 run_ids_in_missing = missing_epoch.index.get_level_values("run_id").unique()
                 # check that they are a parent in the next epoch
                 next_epoch = df[(df.config.pbt_epoch == miss + 1).values]
-                parents_next_epoch = next_epoch[ifill("config", "fork_from", "parent_fork_id")].unique()
+                parents_next_epoch = next_epoch[ifill("config", "fork_from", "parent_fork_id")].dropna().unique()
                 if set(parents_next_epoch) & set(run_ids_in_missing) == set(parents_next_epoch):
                     # set main branch in miss; however likely we wont get there else it would already be correct
                     missing_epoch.loc[parents_next_epoch, ifill("config", "__pbt_main_branch__")] = True
@@ -1059,8 +1116,9 @@ def _get_epoch_end_steps(df):
                 1_179_648,
             )
         )
-    except KeyError:
-        if max_epoch != -1:
+    except (KeyError, ValueError) as e:
+        if max_epoch != -1 or isinstance(e, ValueError):
+            # A value error happens if we cast int to nan
             remote_breakpoint()
         epoch_end_steps.loc[max_epoch + 1] = int(
             min(
@@ -1189,11 +1247,10 @@ def get_epoch_stats(
             for idx in last_epoch_values.index[last_epoch_values.index.get_level_values("pbt_epoch") == 0]:
                 first_loc = metric_agg.loc[idx].isna().idxmin()["mean"]
                 value_shifter_with_first.loc[idx, :] = metric_agg.loc[(*idx, first_loc)].values
-            value_shifter_with_first = value_shifter_with_first.sort_index()
     except (ValueError, KeyError):
         remote_breakpoint()
 
-    return metric_values, epoch_end_steps, (value_shifter, value_shifter_with_first)
+    return metric_values, epoch_end_steps, (value_shifter.sort_index(), value_shifter_with_first.sort_index())
 
 
 def calculate_hyperparam_metrics(
@@ -1309,6 +1366,7 @@ def calculate_hyperparam_metrics(
                 AB = pd.concat([A.reset_index(), B.reset_index()], axis=1, names=[metric_key, "rank2"])
                 AB = AB.loc[:, ~AB.columns.duplicated(keep="first")]
                 AB = AB.set_index(metric_values.index.names)
+                logger.info("Found a reduced way to calculate kendall tau")
         else:
             # ignore this error for short aborted runs, kendall will be NaN then
             AB = pd.concat([A, B], axis=1, names=[metric_key, "rank2"])
@@ -1655,15 +1713,16 @@ def calculate_experiment_stats(
 
             # 1. Save reduced stats
             large_str = "-large" if large else ""
+            out_path_name = out_path.stem
             stats_reduced_path = out_path.with_name(
-                f"{path_base}{metric_str}{large_str}-hyperparam_stats{per_epoch_str}_reduced.txt"
+                f"{out_path_name}{metric_str}{large_str}-hyperparam_stats{per_epoch_str}_reduced.txt"
             )
             with open(stats_reduced_path, "w") as f:
                 f.write(stats_reduced)
             outfiles.append(stats_reduced_path)
             if per_epoch:
                 pd.concat([group_variance_per_epoch, group_variance_global]).to_csv(
-                    out_path.with_name(f"{path_base}{metric_str}{large_str}-hyperparam_variance_per_epoch.txt"),
+                    out_path.with_name(f"{out_path_name}{metric_str}{large_str}-hyperparam_variance_per_epoch.txt"),
                     index=True,
                 )
                 from ray_utilities.visualization.plot import plot_intra_group_variances  # cyclic  # noqa: PLC0415
@@ -1672,7 +1731,7 @@ def calculate_experiment_stats(
                     group_variance_global,
                     group_variance_per_epoch,
                     out_path,
-                    path_base,
+                    out_path_name,
                     metric_str,
                     per_epoch_str,
                     format=format,
@@ -1685,7 +1744,9 @@ def calculate_experiment_stats(
 
             logger.info("Saved reduced hyperparameter stats to '%s'", stats_reduced_path)
             # 2nd plot the stats
-            stats_path = out_path.with_name(f"{path_base}{metric_str}_hyperparam_stats{per_epoch_str}.{format}")
+            stats_path = out_path.with_name(
+                f"{out_path_name}{metric_str}{large_str}_hyperparam_stats{per_epoch_str}.{format}"
+            )
             stats_to_plot = stats.drop(
                 [
                     c
@@ -2021,8 +2082,9 @@ def _export_multiple(
                             saved_files.extend(file_paths)
         return saved_files, errors
     kws = cast("dict[str, Any]", kwargs)
-    for option in plot_options:
-        for metric in metrics:
+    for metric in metrics:
+        calc_stats = True
+        for option in plot_options:
             if option.exclude(metric, kws.get("group_by", DEFAULT_GROUP_BY)):
                 continue
             out_path = _create_image_output_path(
@@ -2042,6 +2104,7 @@ def _export_multiple(
                     figsize=figsize,
                     format=format,
                     save_path=out_path,
+                    calc_stats=calc_stats,
                     **kws,
                 )
             except Exception as e:  # noqa: PERF203
@@ -2049,6 +2112,8 @@ def _export_multiple(
                 logger.error(f"Failed to export run data for {experiment_path}: {e!r}", exc_info=True)  # noqa: G004
                 errors.append((e, tb, experiment_path))
             else:
+                # Calc stats are only important for metric, plot options do not influence it (only title true false)
+                calc_stats = False
                 if file_paths is not None:
                     dump_str = "\n".join(map(str, file_paths))
                     logger.info(f"Exported run data for {experiment_path} to {dump_str}\n-----")  # noqa: G004
@@ -2104,7 +2169,7 @@ def _create_image_output_path(
 
 
 def export_all_runs(
-    output_dir: str | Path | Sequence[str | Path],
+    output_dir: str | Path | Iterable[str | Path],
     plot_options: Sequence[PlotOption],
     *,
     single: bool = False,
@@ -2121,6 +2186,7 @@ def export_all_runs(
     plot_errors: OptionalRepeat[bool] = True,
     plot_errors_type: OptionalRepeat[Literal["box", "violin"]] = "box",
     zip_file: Optional[ZipFile] = None,
+    run_infos: Optional[dict[str, SubmissionRun]] = None,
     **kwargs,
 ):
     """
@@ -2155,11 +2221,11 @@ def export_all_runs(
     if isinstance(output_dir, (str, Path)):
         base_root = Path(output_dir)
         # Discover runs under the base directory unless single is set
-        experiment_dirs: list[Path] = list(base_root.glob("*/*/*")) if not single else [base_root]
+        experiment_dirs: Iterable[Path] = base_root.glob("*/*/*") if not single else [base_root]
     else:
         # Explicit list of run directories provided; do not glob and ignore `single`
         assert not single
-        experiment_dirs = [Path(p) for p in output_dir]
+        experiment_dirs = (Path(p) for p in output_dir)
         base_root = None
     saved_files: list[Path] = []
     test = int(test) - 1 if test else float("inf")
@@ -2175,6 +2241,7 @@ def export_all_runs(
                 if "cometml" not in str(experiment_path):
                     logger.info(f"Excluding experiment path {experiment_path} due to exclude patterns.")  # noqa: G004
                 continue
+            logger.info("Processing experiment path %s ...", experiment_path)
             if not experiment_path.is_dir():
                 # possibly not yet sorted into groups
                 experiment_path = experiment_path.parent  # noqa: PLW2901
@@ -2267,12 +2334,11 @@ def export_all_runs(
                 else:
                     zip_path = zipf.fp
                 assert zipf
+                # If we not redo add files already present
                 for file_path in file_paths:
                     # Derive archive name relative to any known base (base_root and PATHS)
                     base_candidates: list[Path] = ([base_root] if base_root is not None else []) + PATHS
-                    rel = _relative_path_to_any_base(file_path, base_candidates)
-                    arcname = rel if rel is not None else Path(file_path.name)
-                    arcname_str = str(arcname).replace(":", "_")
+                    arcname_str = make_zip_arcname(file_path, base_candidates, run_infos, use_dir_flags=True)
                     zipf.write(file_path, arcname=arcname_str)
             try:
                 # Collect results as they complete
@@ -2285,16 +2351,13 @@ def export_all_runs(
                         file_paths = [Path(file_paths)]
                     print("Exported files:", file_paths)
                     saved_files.extend(file_paths)
-                    for file_path in file_paths:
-                        # Derive archive name relative to any known base (base_root and PATHS)
+                    if zipf is not None:
                         base_candidates: list[Path] = ([base_root] if base_root is not None else []) + PATHS
-                        rel = _relative_path_to_any_base(file_path, base_candidates)
-                        arcname = rel if rel is not None else Path(file_path.name)
-                        if zipf is not None:
+                        for file_path in file_paths:
                             if not file_path.exists():
                                 logger.error(f"File {file_path} does not exist, cannot add to zip.")  # noqa: G004
                                 continue
-                            arcname_str = str(arcname).replace(":", "_")
+                            arcname_str = make_zip_arcname(file_path, base_candidates, run_infos, use_dir_flags=True)
                             zipf.write(file_path, arcname=arcname_str)
                     for error_return in errors:
                         error, tb, failed_path = error_return
@@ -2427,7 +2490,9 @@ if __name__ == "__main__":
         PlotOption(main_vs_second_best=True, plot_reduced=False, title=not args.no_title),
         PlotOption(main_vs_rest=True, plot_reduced=False, title=not args.no_title),
     ]
-    paths = args.path
+    if args.test:
+        plot_options = plot_options[1:2]
+    paths = list(args.path)
     if not paths:
         paths = [
             "outputs/shared/experiments/",
@@ -2435,25 +2500,34 @@ if __name__ == "__main__":
             "outputs/shared_backup/",
         ]
     zipfile = None
-    if any(p.endswith(".yaml") for p in paths):
-        assert all(p.endswith(".yaml") for p in paths), "Either all or none of the paths must be YAML files."
+    run_infos: dict[str, SubmissionRun] = {}
+    processing_submissions = any(p.endswith(".yaml") for p in paths)
+    run_directory_iter: Iterable[Path] | None = None
+    if processing_submissions:
+        assert all(p.endswith(".yaml") for p in paths), (
+            f"Either all or none of the paths must be YAML files. Got: {paths}"
+        )
         # Load experiment groups from YAML files
-        yaml_paths = paths
-        paths = []
+        yaml_paths = [Path(p) for p in paths]
         # Do not use single-run mode when aggregating from submissions;
         # we'll parallelize across runs via common parent directories.
         assert not args.single
+        run_directory_iter = (
+            directory
+            for yaml_path in yaml_paths
+            for _, directory in get_run_directories_from_submission(yaml_path, test=args.test)
+        )
         for yaml_path in yaml_paths:
-            paths.extend(get_run_directories_from_submission(yaml_path).values())
+            run_infos.update(get_runs_from_submission(yaml_path))
         # need a common zipfile
         submission_str = "+".join(
-            [re.sub(r"submissions?_?", "", Path(p).stem).replace("pbt_", "").strip("_- ") for p in yaml_paths]
+            [re.sub(r"submissions?_?", "", yaml_path.stem).replace("pbt_", "").strip("_- ") for yaml_path in yaml_paths]
         )
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         zip_path = Path("outputs/shared/experiments") / f"exported_plots_{submission_str}_{timestamp}.zip"
         zipfile = ZipFile(zip_path, "w", compression=ZIP_DEFLATED, compresslevel=3)
         # TODO: do not do for path in paths + single! No parallelism
-        paths = [paths]  # one iteration to parallelise
+        paths = [run_directory_iter]  # one iteration to parallelise
 
     try:
         for path in paths:
@@ -2474,11 +2548,12 @@ if __name__ == "__main__":
                 plot_errors=not args.no_error,
                 plot_errors_type=args.error_plot_type,
                 zip_file=zipfile,
+                run_infos=run_infos,
             )
     finally:
         if zipfile:
-            zipfile.close()
             logger.info("Zipped plots saved to %s", zipfile.fp)
+            zipfile.close()
 
 
 # Example for grouping by MultiIndex columns:

@@ -2,38 +2,24 @@ global_pattern_1: >
   python experiments/tune_with_scheduler.py
   --env_type <ENV_TYPE>
   --tune <TUNE_PARAM> --num_samples 1
-  --no_vf_share_layers
+  --vf_share_layers
+  --gpu 0.5
   <OTHER_FLAGS:>
-  --tag:core --tag:pbt  --tag:pbt-grouped --tag:pbt-fine --tag:no-shared-encoder
-  --buffer_length auto
+  --tag:core --tag:pbt  --tag:pbt-grouped --tag:pbt-fine --tag:shared-encoder  -tag:atari
   --comet offline --wandb offline+upload@end --log_stats learners
   --hostname_selector '!in(dws-login-01,dws-login-02)'
-  --total_steps 1048576 --use_exact_total_steps
-  pbt --grouped --group_size 3 --perturbation_interval 0.03125 --quantile_fraction
-  0.01
+  --total_steps 262144 --use_exact_total_steps
+  pbt --grouped --group_size 3 --perturbation_interval 32768 --quantile_fraction 0.01
 # NOTE: Use set +H when using hostname selector
-# TODO: lr as > 10 options and so quantile_fraction = 0.1 -> 2 top groups
-submit_pattern: >
-  ray job submit --working-dir "." --entrypoint-memory 3000000000  --entrypoint-num-cpus
-  0.66 --entrypoint-resources '{"persistent_node":1}'
-  --submission-id pbt_fine_batch_size_mlp-xxxxxxxxx_restore -- \  python  experiments/tune_with_scheduler.py
-  --restore_path yyyyy  --hostname_selector '!in(dws-login-01,dws-login-02)'
-
-  --submission-id pbt_fine_batch_size_InvertedDoublePendulum-v5_7435_restore -- python  experiments/tune_with_scheduler.py
-  --restore_path /home/dsperber/master/repos/ray_utilities/outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:batch_size/Default-mlp-InvertedPendulum-v5-tws47f25112200240e674
-  --hostname_selector '!in(dws-login-01,dws-login-02)'
-notes: |
-  - All here do NOT use KL loss
-  - use entropy_coeff=0.01 (default 0.0)
-  - Use GAE and critic
 # --- Envs --- #
 <mujoco_envs>:
 - use another key
 <mujoco_envs_ext>:
 - use another key
 <basic_envs>:
-- Breakout
-- SpaceInvarders
+- "ALE-Pong-v5"
+- "ALE-Breakout-v5"
+- "ALE-SpaceInvaders-v5"
 # ---
 test_command:
   test:id:
@@ -50,6 +36,11 @@ pbt_fine_batch_size_base:
   entrypoint_resources:
     # custom resource to not schedule on SLURM nodes that time out too early
     persistent_node: 1
+  run_ids:
+    (Pong-v5):
+      tws47f2512220008700a4:
+        status: STOPPED
+        submission_id: pbt_fine_batch_size_base_ALE-Pong-v5_2025-12-22_00:07:54
 pbt_fine_batch_size_base_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -92,6 +83,14 @@ pbt_fine_accumulate:
       <ENV_TYPE>: <basic_envs>
   entrypoint_resources:
     persistent_node: 1
+  run_ids:
+    (Pong-v5):
+      tws47f25122200196b904:
+        status: STOPPED
+        submission_id: pbt_fine_accumulate_ALE-Pong-v5_2025-12-22_00:18:30
+      tws47f25122200424ba34:
+        status: FAILED
+        submission_id: pbt_fine_accumulate_ALE-Pong-v5_2025-12-22_00:40:31
 pbt_fine_num_envs:
   # This is a comment
   comment: small minibatch_size=256 and train_batch_size=2048
@@ -102,6 +101,11 @@ pbt_fine_num_envs:
       <ENV_TYPE>: <basic_envs>
   entrypoint_resources:
     persistent_node: 1
+  run_ids:
+    (Pong-v5):
+      tws47f2512220056185b4:
+        status: FAILED
+        submission_id: pbt_fine_num_envs_ALE-Pong-v5_2025-12-22_00:40:31
 pbt_fine_num_envs_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale
@@ -176,6 +180,11 @@ pbt_fine_gamma_base:
   entrypoint_resources:
     persistent_node: 1
 
+  run_ids:
+    (Pong-v5):
+      tws47f25122204121dc64:
+        status: RUNNING
+        submission_id: pbt_fine_gamma_base_ALE-Pong-v5_2025-12-22_00:40:31
 pbt_fine_gamma_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -195,6 +204,11 @@ pbt_fine_lr_base:
     substitutions:
       <TUNE_PARAM>: lr
       <ENV_TYPE>: <basic_envs>
+  run_ids:
+    (Pong-v5):
+      tws47f2512220414f8704:
+        status: STOPPED
+        submission_id: pbt_fine_lr_base_ALE-Pong-v5_2025-12-22_00:40:31
 pbt_fine_lr_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale  - need to repeat because of 2 top groups
@@ -220,6 +234,12 @@ pbt_fine_vf_clip_param_base:
 # --- Added gamma and grad_clip groups ---
 
 # region grad clip
+  run_ids:
+    (Pong-v5):
+      tws47f25122204214b754:
+        status: RUNNING
+        submission_id:
+          pbt_fine_vf_clip_param_base_ALE-Pong-v5_2025-12-22_00:40:31
 pbt_fine_grad_clip_base:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -229,6 +249,11 @@ pbt_fine_grad_clip_base:
   entrypoint_resources:
     persistent_node: 1
 
+  run_ids:
+    (Pong-v5):
+      tws47f2512220423f76d4:
+        status: RUNNING
+        submission_id: pbt_fine_grad_clip_base_ALE-Pong-v5_2025-12-22_00:40:31
 pbt_fine_grad_clip_base_large:
   entrypoint_pattern:
     pattern: global_pattern_1

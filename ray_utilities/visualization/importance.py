@@ -790,10 +790,10 @@ def optuna_create_studies(
                 yield (key + f"_{submission_study}", submission_studies[main_study])
             if main_study in submission_studies_centered:
                 yield (key + f"_{submission_study}_centered", submission_studies_centered[main_study])
-            if main_study in large_studies:
-                yield (key + "_large".large_studies[main_study])
-            if main_study in large_studies_centered:
-                yield (key + "_large_centered", large_studies_centered[main_study])
+            # if main_study in large_studies:
+            #     yield (key + "_large".large_studies[main_study])
+            # if main_study in large_studies_centered:
+            #    yield (key + "_large_centered", large_studies_centered[main_study])
 
     if load_studies_only:
         return dict(get_all_studies())
@@ -1351,7 +1351,7 @@ def _get_importances(study, evaluator, params, *, use_kl_loss: bool | None = Non
 def _analyze_single_study(
     key: Any,
     study: optuna.Study,
-    evaluators: dict[str, Any],
+    evaluators: dict[str, optuna.importance.BaseImportanceEvaluator],
     params: list[str] | None,
     excludes: Collection[Literal["kl_loss", "no_kl_loss", "vf_share_layers", "no_vf_share_layers"]] = (),
 ) -> list[dict[str, Any]]:
@@ -1371,9 +1371,13 @@ def _analyze_single_study(
                 continue
             for evaluator_name, evaluator in evaluators.items():
                 evaluator = deepcopy(evaluator)
-                importances, completed_trials = _get_importances(
-                    study, evaluator, params, use_kl_loss=filter_kl, vf_share_layers=filter_vf_share
-                )
+                try:
+                    importances, completed_trials = _get_importances(
+                        study, evaluator, params, use_kl_loss=filter_kl, vf_share_layers=filter_vf_share
+                    )
+                except (RuntimeError, ValueError) as e:
+                    logger.error("Could not calculate importances because of %s", e)
+                    continue
                 if not completed_trials:
                     continue
                 for param, importance in importances.items():
@@ -1425,11 +1429,9 @@ def _analyze_single_study(
     except Exception as e:
         logger.exception("Failed to analyze study for key %s: %r", key, e)
         try:
-            if len(study.get_trials()) <= 1:
-                pass
-            else:
+            if len(study.get_trials()) > 1:
                 remote_breakpoint()
-        except Exception:
+        except Exception:  # noqa: BLE001
             remote_breakpoint()
     return rows
 
@@ -1451,7 +1453,7 @@ def optuna_analyze_studies(
         "MeanDecreaseImpurity": MeanDecreaseImpurityImportanceEvaluator(),
         "PedAnovaLocal": PedAnovaImportanceEvaluator(evaluate_on_local=True),  # default
         "Fanova(default)": FanovaImportanceEvaluator(),  # default
-        "MeanDecreaseImpurity8": MeanDecreaseImpurityImportanceEvaluator(n_trees=12, max_depth=12),
+        # "MeanDecreaseImpurity8": MeanDecreaseImpurityImportanceEvaluator(n_trees=12, max_depth=12),
         "PedAnovaGlobal": PedAnovaImportanceEvaluator(evaluate_on_local=False),
         "Fanova8": FanovaImportanceEvaluator(n_trees=12, max_depth=12),
     }
@@ -1486,7 +1488,7 @@ def optuna_analyze_studies(
         index="param", columns=list(STUDY_COLUMN_NAMES), values="importance", fill_value=0.0
     )
     pivot_df.columns = pivot_df.columns.map(__try_step_cast)
-    pivot_df.sort_index(axis=1, key=__sort_columns, inplace=True)
+    pivot_df = pivot_df.sort_index(axis=1, key=__sort_columns)
 
     if output_path is not None:
         # should not save to a unique file when we write only for submissions
@@ -1498,6 +1500,7 @@ def optuna_analyze_studies(
                 raise ValueError("output_path must be a directory to save importances")
             pivot_df.to_csv(save_path, index=True)
             # Cast all integers to strings again if "global" is in columns
+            # When called via plot optuna will save the combined file
             save_analysis_to_parquet(pivot_df, save_path.with_suffix(".parquet"))
             logger.info("Saved combined importances to %s", save_path)
         except Exception:
@@ -1517,7 +1520,11 @@ import seaborn as sns
 
 
 def plot_importance_studies(
-    studies: dict[Any, optuna.Study] | pd.DataFrame, output_path: str | Path, params: list[str] | None = None
+    studies: dict[Any, optuna.Study] | pd.DataFrame,
+    output_path: str | Path,
+    params: list[str] | None = None,
+    *,
+    env: str,
 ) -> list[Path] | None:
     # note there is also import optuna.visualization as optuna_vis
     if isinstance(studies, dict):
@@ -1539,6 +1546,10 @@ def plot_importance_studies(
             importance_df.columns.names = STUDY_COLUMN_NAMES[1:]
         for key in importance_df.columns.get_level_values("key").unique():
             key_df = importance_df[key]
+            if "env" in key:
+                key_with_env = key
+            else:
+                key_with_env = f"{env}_{key}"
             for centered in key_df.columns.get_level_values("centered").unique():
                 fig = None
                 try:
@@ -1612,14 +1623,17 @@ def plot_importance_studies(
                                 zorder=10,
                             )
                             ax.add_patch(rect)
-                    plt.title(f"Hyperparameter Importance ({evaluator_name})")
+                    # TODO: disable title
+                    plt.title(f"Hyperparameter Importance {key_with_env} ({evaluator_name})")
                     plt.xlabel("Step")
+
                     file_path = Path(
                         output_path
-                    ) / f"hyperparameter_importance_{key}-centered={centered}-{evaluator_name}.pdf".replace(
+                    ) / f"hyperparameter_importance_{key_with_env}-centered={centered}-{evaluator_name}.pdf".replace(
                         "(default)", ""
                     )
                     assert file_path not in written_paths, "File path already written: %s" % file_path
+
                     fig.savefig(
                         file_path,
                         format="pdf",
@@ -1728,20 +1742,20 @@ if __name__ == "__main__":
     if "DEBUG" in os.environ or "test" in sys.argv:
         DEBUG = True
         paths = ("outputs/shared/experiments/Default-mlp-Acrobot-v1",)
-        env = "Acrobot-v1"
+        _env = "Acrobot-v1"
         paths = [
             "outputs/shared/experiments/Default-mlp-HumanoidStandup-v5",
             "outputs/shared_backup/needs_sync/Default-mlp-HumanoidStandup-v5",
             "outputs/shared_backup/Default-mlp-HumanoidStandup-v5",
         ]
-        env = "HumanoidStandup-v5"
+        _env = "HumanoidStandup-v5"
         # Determine whether to clear experiment cache for this env (DEBUG path)
-        _clear_now = clear_cache_present and (clear_cache_envs is None or env in clear_cache_envs)
+        _clear_now = clear_cache_present and (clear_cache_envs is None or _env in clear_cache_envs)
         studies = optuna_create_studies(
             *paths,
             # TESTING
-            database_path=f"outputs/shared/optuna_hp_study_{env}.db",
-            env=env,
+            database_path=f"outputs/shared/optuna_hp_study_{_env}.db",
+            env=_env,
             dir_depth=1,
             distributions=distributions,
             load_if_exists=True,
@@ -1753,7 +1767,7 @@ if __name__ == "__main__":
         )
         studies = optuna_analyze_studies(studies, output_path=paths[0], params=list(distributions.keys()))
         # Want to plot for each env.
-        plot_importance_studies(studies, output_path=paths[0], params=list(distributions.keys()))
+        plot_importance_studies(studies, output_path=paths[0], params=list(distributions.keys()), env=_env)
         sys.exit(0)
     # clear_study = args.clear_study
     if any(p.endswith(".yaml") for p in args.envs):
@@ -1816,7 +1830,7 @@ if __name__ == "__main__":
         submissions_map = {}
         args.single = True
         for yaml_path in yaml_paths:
-            run_paths = get_run_directories_from_submission(yaml_path)
+            run_paths = dict(get_run_directories_from_submission(yaml_path))
             run_infos: dict[str, SubmissionRun] = get_runs_from_submission(yaml_path)
             env_mapping = {info["run_id"]: info["run_key"] for info in run_infos.values()}
             # slight chanc this fail if a run just finished
@@ -1898,6 +1912,7 @@ if __name__ == "__main__":
                         importance_results,
                         output_path=f"outputs/shared/experiments/Default-mlp-{env}",
                         params=list(distributions.keys()),
+                        env=env,
                     )
                     studies = optuna_create_studies(
                         *env_paths,
@@ -1954,6 +1969,7 @@ if __name__ == "__main__":
                     study_results,
                     output_path=f"outputs/shared/experiments/Default-mlp-{env}",
                     params=list(distributions.keys()),
+                    env=env,
                 )
                 return env, studies, outfiles
 
@@ -2011,7 +2027,6 @@ if __name__ == "__main__":
                 first_submission = False
         logger.info("All Trials processed, plotting combined importance.")
         for env in envs:
-            remote_breakpoint()
             env_studies = {
                 k: v
                 for k, v in all_studies.items()
@@ -2021,6 +2036,7 @@ if __name__ == "__main__":
                 env_studies,
                 output_path=f"outputs/shared/experiments/Default-mlp-{env}",
                 params=list(distributions.keys()),
+                env=env,
             )
             if outfiles and zipfile:
                 for outfile in outfiles:
@@ -2062,7 +2078,7 @@ if __name__ == "__main__":
         )
         if clear_now_for_env:
             cleared_cache_once = True
-        outfiles = plot_importance_studies(studies, output_path=paths[0], params=list(distributions.keys()))
+        outfiles = plot_importance_studies(studies, output_path=paths[0], params=list(distributions.keys()), env=env)
         if outfiles and zipfile:
             for outfile in outfiles:
                 if outfile.exists():

@@ -75,7 +75,7 @@ def make_cmap(
     # Create a continuous colormap for the group_stat (logarithmic scale)
     if log:
         norm = mcolors.LogNorm(
-            vmin=values.replace(0, nan).min(),
+            vmin=values.replace(0, nan).replace(float("-inf"), nan).min(),
             vmax=values.max(),
         )
     else:
@@ -90,8 +90,9 @@ def make_cmap(
     color_map = {val: mcolors.to_hex(cmap(norm(val))) for val in unique_stats if not log or val > 0}
     # For zero or negative values, fallback to a default color
     for val in unique_stats:
-        if log and val <= 0:
+        if (log and val <= 0) or pd.isna(val) or val in (float("inf"), float("-inf"), None):
             color_map[val] = "#cccccc"
+    # add masked values color, included nan, -inf
     return color_map, cmap, norm
 
 
@@ -467,6 +468,8 @@ def plot_run_data(
         if group_stat == "minibatch_size":
             # for consistency could scale upt to 8192 for all cases.
             pass
+        if group_stat == "gradient_clip":
+            plot_df[group_stat] = plot_df[group_stat].fillna(float("inf"))
         color_map, cmap, norm = make_cmap(plot_df[group_stat], log=log)
         # Sort each subgroup by their std from highest to lowest
         # Sort plot_df within each (group_by[0], group_stat) group by the std of the metric (descending)
@@ -501,12 +504,13 @@ def plot_run_data(
 
         # For each (group_by[0], group_stat) assign their rank based on last iteration metric value
         # Assign group_ranks to the respective rows with matching (group_by[0], group_stat)
+
         try:
             plot_df["__group_rank__"] = plot_df[[group_by[0], group_stat]].apply(
                 lambda x: group_ranks.loc[(x[group_by[0]], x[group_stat])].item(), axis=1
             )
         except KeyError:  # noqa: TRY203
-            # group stat is nan
+            # group stat is nan. Possibly None value in choices
             remote_breakpoint()
             raise
 

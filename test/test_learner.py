@@ -5,7 +5,6 @@ from contextlib import nullcontext
 from typing import TYPE_CHECKING, NamedTuple
 from unittest import mock
 
-import pytest
 import torch
 from ray.rllib.algorithms import DQNConfig
 
@@ -18,7 +17,7 @@ from ray_utilities.learners.dqn_torch_learner_with_gradient_accumulation import 
 from ray_utilities.learners.ppo_torch_learner_with_gradient_accumulation import PPOTorchLearnerWithGradientAccumulation
 from ray_utilities.learners.remove_masked_samples_learner import RemoveMaskedSamplesLearner
 from ray_utilities.setup.ppo_mlp_setup import DQNMLPSetup, MLPSetup
-from ray_utilities.testing_utils import DisableLoggers, InitRay, TestHelpers, no_parallel_envs, patch_args
+from ray_utilities.testing_utils import DisableLoggers, InitRay, TestHelpers, patch_args
 from ray_utilities.training.helpers import is_algorithm_callback_added, make_divisible
 
 if TYPE_CHECKING:

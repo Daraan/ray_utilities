@@ -21,7 +21,7 @@ import sys
 import time
 from pathlib import Path
 from pprint import pformat
-from typing import AsyncIterator, Collection, Sequence, cast
+from typing import AsyncIterator, Collection, Sequence, cast, Mapping
 
 from ray.job_submission import JobStatus, JobSubmissionClient
 
@@ -538,10 +538,11 @@ def deep_update(original: dict, updates: dict) -> dict:
 def write_back(
     group: str,
     job_id: str,
-    run_id: str | dict[str, str | dict[str, str]],
+    run_id: str | dict[str, str | Mapping[str, str]],
     *,
     file: str | Path,
     is_restore: bool = False,
+    overwrite: bool = False,
 ):
     file_path = Path(file)
     lock_file = file_path.with_suffix(file_path.suffix + ".lock")
@@ -612,8 +613,6 @@ def write_back(
                 env_name = job_id.removeprefix(actual_group + "_").split("_")[0]
                 run_key = f"({env_name})"
             else:
-                data[actual_group].setdefault("run_ids", {})
-
                 # Extract the environment/replacement parts from job_id
                 job_id_without_group = job_id.removeprefix(actual_group + "_")
 
@@ -653,7 +652,8 @@ def write_back(
                         if current_status in JOB_END_STATES:
                             # no need to update end states
                             run_id = run_id.copy()
-                            run_id[run_key_id] = {}
+                            if not overwrite:
+                                run_id[run_key_id] = {}
                             continue
 
                         # If only_update_running is True, skip update if status is not RUNNING or PENDING

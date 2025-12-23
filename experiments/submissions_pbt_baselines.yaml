@@ -47,64 +47,92 @@ pbt_fine_batch_size_base:
       tws47f2512171504d9064:
         status: SUCCEEDED
         submission_id: pbt_fine_batch_size_base_CartPole-v1_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-CartPole-v1/pbt-tune_tune:batch_size/Default-mlp-CartPole-v1-PPO-tws47f2512171504d9064
     (Acrobot-v1):
       tws47f2512171504302f4:
         status: SUCCEEDED
         submission_id: pbt_fine_batch_size_base_Acrobot-v1_2025-12-17_15:04:05
+        file_path:
+          outputs/shared_backup/needs_sync/Default-mlp-Acrobot-v1/pbt-tune_tune:batch_size/Default-mlp-Acrobot-v1-PPO-tws47f2512171504302f4
     (LunarLander-v3):
       tws47f2512171504db1c4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_LunarLander-v3_2025-12-17_15:04:05
+        file_path:
+          outputs/shared_backup/needs_sync/Default-mlp-LunarLander-v3/pbt-tune_tune:batch_size/Default-mlp-LunarLander-v3-PPO-tws47f2512171504db1c4
     (Ant-v5):
       tws47f2512171504e0994:
         status: SUCCEEDED
         submission_id: pbt_fine_batch_size_base_Ant-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Ant-v5/pbt-tune_tune:batch_size/Default-mlp-Ant-v5-PPO-tws47f2512171504e0994
     (InvertedDoublePendulum-v5):
       tws47f2512171505441a4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_InvertedDoublePendulum-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:batch_size/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f2512171505441a4
     (Hopper-v5):
       tws47f2512171505d7d74:
         status: SUCCEEDED
         submission_id: pbt_fine_batch_size_base_Hopper-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Hopper-v5/pbt-tune_tune:batch_size/Default-mlp-Hopper-v5-PPO-tws47f2512171505d7d74
     (Humanoid-v5):
       tws47f251217171832da4:
         status: SUCCEEDED
         submission_id: pbt_fine_batch_size_base_Humanoid-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Humanoid-v5/pbt-tune_tune:batch_size/Default-mlp-Humanoid-v5-PPO-tws47f251217171832da4
     (HalfCheetah-v5):
       tws47f251217173667514:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_HalfCheetah-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-HalfCheetah-v5/pbt-tune_tune:batch_size/Default-mlp-HalfCheetah-v5-PPO-tws47f251217173667514
     (HumanoidStandup-v5):
       tws47f2512191424c0674:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_HumanoidStandup-v5_2025-12-19_14:23:36_restore_2025-12-20_00:51:13
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:batch_size/Default-mlp-HumanoidStandup-v5-PPO-tws47f2512191424c0674
     (Pusher-v5):
       tws47f2512191427a7f64:
         status: SUCCEEDED
         submission_id: pbt_fine_batch_size_base_Pusher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Pusher-v5/pbt-tune_tune:batch_size/Default-mlp-Pusher-v5-PPO-tws47f2512191427a7f64
     (InvertedPendulum-v5):
       tws47f25121914576f424:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_InvertedPendulum-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:batch_size/Default-mlp-InvertedPendulum-v5-PPO-tws47f25121914576f424
     (Reacher-v5):
       tws47f25121915440b0e4:
         status: SUCCEEDED
         submission_id: pbt_fine_batch_size_base_Reacher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Reacher-v5/pbt-tune_tune:batch_size/Default-mlp-Reacher-v5-PPO-tws47f25121915440b0e4
     (Walker2d-v5):
       tws47f2512191812f2ef4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_Walker2d-v5_2025-12-19_14:23:36_restore_2025-12-20_00:51:13
+        file_path:
+          outputs/shared/experiments/Default-mlp-Walker2d-v5/pbt-tune_tune:batch_size/Default-mlp-Walker2d-v5-PPO-tws47f2512191812f2ef4
     (Swimmer-v5):
       tws47f251219181558754:
         status: SUCCEEDED
         submission_id: pbt_fine_batch_size_base_Swimmer-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:batch_size/Default-mlp-Swimmer-v5-PPO-tws47f251219181558754
 pbt_fine_batch_size_base_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -123,70 +151,98 @@ pbt_fine_batch_size_base_large:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_large_CartPole-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-CartPole-v1/pbt-tune_tune:batch_size/Default-mlp-CartPole-v1-PPO-tws47f25121811587f1f4
     (Acrobot-v1):
       tws47f2512181158db734:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_large_Acrobot-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Acrobot-v1/pbt-tune_tune:batch_size/Default-mlp-Acrobot-v1-PPO-tws47f2512181158db734
     (LunarLander-v3):
       tws47f25121811591c154:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_large_LunarLander-v3_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-LunarLander-v3/pbt-tune_tune:batch_size/Default-mlp-LunarLander-v3-PPO-tws47f25121811591c154
     (Ant-v5):
       tws47f251218115961ca4:
         status: SUCCEEDED
         submission_id: pbt_fine_batch_size_base_large_Ant-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Ant-v5/pbt-tune_tune:batch_size/Default-mlp-Ant-v5-PPO-tws47f251218115961ca4
     (InvertedDoublePendulum-v5):
       tws47f2512181159adea4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_large_InvertedDoublePendulum-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:batch_size/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f2512181159adea4
     (Hopper-v5):
       tws47f2512181159c2824:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_large_Hopper-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Hopper-v5/pbt-tune_tune:batch_size/Default-mlp-Hopper-v5-PPO-tws47f2512181159c2824
     (Humanoid-v5):
       tws47f2512181205354a4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_large_Humanoid-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Humanoid-v5/pbt-tune_tune:batch_size/Default-mlp-Humanoid-v5-PPO-tws47f2512181205354a4
     (HalfCheetah-v5):
       tws47f251218120523084:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_large_HalfCheetah-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-HalfCheetah-v5/pbt-tune_tune:batch_size/Default-mlp-HalfCheetah-v5-PPO-tws47f251218120523084
     (HumanoidStandup-v5):
       tws47f2512191818752f4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_large_HumanoidStandup-v5_2025-12-19_14:23:36_restore_2025-12-20_00:51:13
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:batch_size/Default-mlp-HumanoidStandup-v5-PPO-tws47f2512191818752f4
     (Pusher-v5):
       tws47f251219193699dd4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_large_Pusher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Pusher-v5/pbt-tune_tune:batch_size/Default-mlp-Pusher-v5-PPO-tws47f251219193699dd4
     (InvertedPendulum-v5):
       tws47f251219202706924:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_large_InvertedPendulum-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:batch_size/Default-mlp-InvertedPendulum-v5-PPO-tws47f251219202706924
     (Reacher-v5):
       tws47f25121921061aa44:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_large_Reacher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Reacher-v5/pbt-tune_tune:batch_size/Default-mlp-Reacher-v5-PPO-tws47f25121921061aa44
     (Walker2d-v5):
       tws47f25121921514c694:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_large_Walker2d-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Walker2d-v5/pbt-tune_tune:batch_size/Default-mlp-Walker2d-v5-PPO-tws47f25121921514c694
     (Swimmer-v5):
       tws47f25121921540bb84:
         status: SUCCEEDED
         submission_id:
           pbt_fine_batch_size_base_large_Swimmer-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:batch_size/Default-mlp-Swimmer-v5-PPO-tws47f25121921540bb84
 pbt_fine_minibatch_size_base:
   comment: tune minibatch_size with fixed train_batch_size_per_learner=2048
   entrypoint_resources:
@@ -204,70 +260,98 @@ pbt_fine_minibatch_size_base:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_base_Acrobot-v1_2025-12-17_15:04:05
+        file_path:
+          outputs/shared_backup/needs_sync/Default-mlp-Acrobot-v1/pbt-tune_tune:minibatch_size/Default-mlp-Acrobot-v1-PPO-tws47f2512171751ce3f4
     (LunarLander-v3):
       tws47f251217175428ba4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_base_LunarLander-v3_2025-12-17_15:04:05
+        file_path:
+          outputs/shared_backup/needs_sync/Default-mlp-LunarLander-v3/pbt-tune_tune:minibatch_size/Default-mlp-LunarLander-v3-PPO-tws47f251217175428ba4
     (Ant-v5):
       tws47f2512171816c6fd4:
         status: SUCCEEDED
         submission_id: pbt_fine_minibatch_size_base_Ant-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Ant-v5/pbt-tune_tune:minibatch_size/Default-mlp-Ant-v5-PPO-tws47f2512171816c6fd4
     (InvertedDoublePendulum-v5):
       tws47f25121718217eeb4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_base_InvertedDoublePendulum-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:minibatch_size/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f25121718217eeb4
     (Hopper-v5):
       tws47f2512171833239f4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_base_Hopper-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Hopper-v5/pbt-tune_tune:minibatch_size/Default-mlp-Hopper-v5-PPO-tws47f2512171833239f4
     (Humanoid-v5):
       tws47f251217190043094:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_base_Humanoid-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Humanoid-v5/pbt-tune_tune:minibatch_size/Default-mlp-Humanoid-v5-PPO-tws47f251217190043094
     (HalfCheetah-v5):
       tws47f2512171900a32f4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_base_HalfCheetah-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-HalfCheetah-v5/pbt-tune_tune:minibatch_size/Default-mlp-HalfCheetah-v5-PPO-tws47f2512171900a32f4
     (CartPole-v1):
       tws47f251218130803024:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_base_CartPole-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-CartPole-v1/pbt-tune_tune:minibatch_size/Default-mlp-CartPole-v1-PPO-tws47f251218130803024
     (HumanoidStandup-v5):
       tws47f251219215755884:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_base_HumanoidStandup-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:minibatch_size/Default-mlp-HumanoidStandup-v5-PPO-tws47f251219215755884
     (Pusher-v5):
       tws47f251219220013794:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_base_Pusher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Pusher-v5/pbt-tune_tune:minibatch_size/Default-mlp-Pusher-v5-PPO-tws47f251219220013794
     (InvertedPendulum-v5):
       tws47f2512192203774f4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_base_InvertedPendulum-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:minibatch_size/Default-mlp-InvertedPendulum-v5-PPO-tws47f2512192203774f4
     (Reacher-v5):
       tws47f25121922090f304:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_base_Reacher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Reacher-v5/pbt-tune_tune:minibatch_size/Default-mlp-Reacher-v5-PPO-tws47f25121922090f304
     (Walker2d-v5):
       tws47f251219220939304:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_base_Walker2d-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Walker2d-v5/pbt-tune_tune:minibatch_size/Default-mlp-Walker2d-v5-PPO-tws47f251219220939304
     (Swimmer-v5):
       tws47f2512192212097c4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_base_Swimmer-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:minibatch_size/Default-mlp-Swimmer-v5-PPO-tws47f2512192212097c4
 pbt_fine_minibatch_size_large_base:
   comment: tune minibatch_size with fixed train_batch_size_per_learner=8192
   entrypoint_resources:
@@ -285,71 +369,99 @@ pbt_fine_minibatch_size_large_base:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_large_base_CartPole-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-CartPole-v1/pbt-tune_tune:minibatch_size/Default-mlp-CartPole-v1-PPO-tws47f2512181308c8204
     (Acrobot-v1):
       tws47f251218130890e24:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_large_base_Acrobot-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Acrobot-v1/pbt-tune_tune:minibatch_size/Default-mlp-Acrobot-v1-PPO-tws47f251218130890e24
     (LunarLander-v3):
       tws47f251218130857e54:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_large_base_LunarLander-v3_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-LunarLander-v3/pbt-tune_tune:minibatch_size/Default-mlp-LunarLander-v3-PPO-tws47f251218130857e54
     (Ant-v5):
       tws47f251218130946374:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_large_base_Ant-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Ant-v5/pbt-tune_tune:minibatch_size/Default-mlp-Ant-v5-PPO-tws47f251218130946374
     (InvertedDoublePendulum-v5):
       tws47f251218144862994:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_large_base_InvertedDoublePendulum-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:minibatch_size/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f251218144862994
     (Hopper-v5):
       tws47f251218144872d64:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_large_base_Hopper-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Hopper-v5/pbt-tune_tune:minibatch_size/Default-mlp-Hopper-v5-PPO-tws47f251218144872d64
     (Humanoid-v5):
       tws47f251218144812ed4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_large_base_Humanoid-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Humanoid-v5/pbt-tune_tune:minibatch_size/Default-mlp-Humanoid-v5-PPO-tws47f251218144812ed4
     (HalfCheetah-v5):
       tws47f2512181533e54a4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_large_base_HalfCheetah-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-HalfCheetah-v5/pbt-tune_tune:minibatch_size/Default-mlp-HalfCheetah-v5-PPO-tws47f2512181533e54a4
     (HumanoidStandup-v5):
       tws47f251219221576c24:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_large_base_HumanoidStandup-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:minibatch_size/Default-mlp-HumanoidStandup-v5-PPO-tws47f251219221576c24
     (Pusher-v5):
       tws47f251219222141ce4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_large_base_Pusher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Pusher-v5/pbt-tune_tune:minibatch_size/Default-mlp-Pusher-v5-PPO-tws47f251219222141ce4
     (InvertedPendulum-v5):
       tws47f2512192239fab24:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_large_base_InvertedPendulum-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:minibatch_size/Default-mlp-InvertedPendulum-v5-PPO-tws47f2512192239fab24
     (Reacher-v5):
       tws47f251219225404cf4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_large_base_Reacher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Reacher-v5/pbt-tune_tune:minibatch_size/Default-mlp-Reacher-v5-PPO-tws47f251219225404cf4
     (Walker2d-v5):
       tws47f2512192313a46b4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_large_base_Walker2d-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Walker2d-v5/pbt-tune_tune:minibatch_size/Default-mlp-Walker2d-v5-PPO-tws47f2512192313a46b4
     (Swimmer-v5):
       tws47f2512200025673c4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_minibatch_size_large_base_Swimmer-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:minibatch_size/Default-mlp-Swimmer-v5-PPO-tws47f2512200025673c4
 pbt_fine_num_envs:
   # This is a comment
   comment: small minibatch_size=256 and train_batch_size=2048
@@ -365,59 +477,87 @@ pbt_fine_num_envs:
       tws47f251217191519d44:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_CartPole-v1_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-CartPole-v1/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-CartPole-v1-PPO-tws47f251217191519d44
     (Acrobot-v1):
       tws47f251217193985c44:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_Acrobot-v1_2025-12-17_15:04:05
+        file_path:
+          outputs/shared_backup/needs_sync/Default-mlp-Acrobot-v1/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Acrobot-v1-PPO-tws47f251217193985c44
     (LunarLander-v3):
       tws47f2512171942e2714:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_LunarLander-v3_2025-12-17_15:04:05
+        file_path:
+          outputs/shared_backup/needs_sync/Default-mlp-LunarLander-v3/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-LunarLander-v3-PPO-tws47f2512171942e2714
     (Ant-v5):
       tws47f2512172007dcb14:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_Ant-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Ant-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Ant-v5-PPO-tws47f2512172007dcb14
     (InvertedDoublePendulum-v5):
       tws47f2512172024b1e64:
         status: SUCCEEDED
         submission_id:
           pbt_fine_num_envs_InvertedDoublePendulum-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f2512172024b1e64
     (Hopper-v5):
       tws47f2512172036ca534:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_Hopper-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Hopper-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Hopper-v5-PPO-tws47f2512172036ca534
     (Humanoid-v5):
       tws47f2512172055a59c4:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_Humanoid-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Humanoid-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Humanoid-v5-PPO-tws47f2512172055a59c4
     (HalfCheetah-v5):
       tws47f251217213965414:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_HalfCheetah-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-HalfCheetah-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-HalfCheetah-v5-PPO-tws47f251217213965414
     (HumanoidStandup-v5):
       tws47f2512200046fdee4:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_HumanoidStandup-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-HumanoidStandup-v5-PPO-tws47f2512200046fdee4
     (Pusher-v5):
       tws47f251220004635f54:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_Pusher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Pusher-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Pusher-v5-PPO-tws47f251220004635f54
     (InvertedPendulum-v5):
       tws47f2512200049b90a4:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_InvertedPendulum-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-InvertedPendulum-v5-PPO-tws47f2512200049b90a4
     (Reacher-v5):
       tws47f2512200133b2324:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_Reacher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Reacher-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Reacher-v5-PPO-tws47f2512200133b2324
     (Walker2d-v5):
       tws47f2512200154e60c4:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_Walker2d-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Walker2d-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Walker2d-v5-PPO-tws47f2512200154e60c4
     (Swimmer-v5):
       tws47f2512200157c89f4:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_Swimmer-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Swimmer-v5-PPO-tws47f2512200157c89f4
 pbt_fine_num_envs_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale
@@ -437,63 +577,91 @@ pbt_fine_num_envs_large:
       tws47f2512181532b4094:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_large_Ant-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Ant-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Ant-v5-PPO-tws47f2512181532b4094
     (InvertedDoublePendulum-v5):
       tws47f25121815322abd4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_num_envs_large_InvertedDoublePendulum-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f25121815322abd4
     (Hopper-v5):
       tws47f251218153258d54:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_large_Hopper-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Hopper-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Hopper-v5-PPO-tws47f251218153258d54
     (CartPole-v1):
       tws47f25121815332aa94:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_large_CartPole-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-CartPole-v1/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-CartPole-v1-PPO-tws47f25121815332aa94
     (Acrobot-v1):
       tws47f251218153330814:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_large_Acrobot-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Acrobot-v1/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Acrobot-v1-PPO-tws47f251218153330814
     (LunarLander-v3):
       tws47f251218153374434:
         status: SUCCEEDED
         submission_id:
           pbt_fine_num_envs_large_LunarLander-v3_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-LunarLander-v3/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-LunarLander-v3-PPO-tws47f251218153374434
     (HalfCheetah-v5):
       tws47f2512181639367e4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_num_envs_large_HalfCheetah-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-HalfCheetah-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-HalfCheetah-v5-PPO-tws47f2512181639367e4
     (Humanoid-v5):
       tws47f251218163911124:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_large_Humanoid-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Humanoid-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Humanoid-v5-PPO-tws47f251218163911124
     (HumanoidStandup-v5):
       tws47f2512200218df584:
         status: SUCCEEDED
         submission_id:
           pbt_fine_num_envs_large_HumanoidStandup-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-HumanoidStandup-v5-PPO-tws47f2512200218df584
     (Pusher-v5):
       tws47f25122002362b1f4:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_large_Pusher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Pusher-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Pusher-v5-PPO-tws47f25122002362b1f4
     (InvertedPendulum-v5):
       tws47f2512200333334f4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_num_envs_large_InvertedPendulum-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-InvertedPendulum-v5-PPO-tws47f2512200333334f4
     (Reacher-v5):
       tws47f2512200336109c4:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_large_Reacher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Reacher-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Reacher-v5-PPO-tws47f2512200336109c4
     (Walker2d-v5):
       tws47f2512200342e8d34:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_large_Walker2d-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Walker2d-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Walker2d-v5-PPO-tws47f2512200342e8d34
     (Swimmer-v5):
       tws47f25122004272baa4:
         status: SUCCEEDED
         submission_id: pbt_fine_num_envs_large_Swimmer-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Swimmer-v5-PPO-tws47f25122004272baa4
 pbt_fine_clip_param:
   # TODO: Change to base
   <ENV_TYPE>:
@@ -512,14 +680,20 @@ pbt_fine_clip_param:
       tws47f2512172142019a4:
         status: SUCCEEDED
         submission_id: pbt_fine_clip_param_CartPole-v1_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-CartPole-v1/pbt-tune_tune:clip_param/Default-mlp-CartPole-v1-PPO-tws47f2512172142019a4
     (Acrobot-v1):
       tws47f2512172201c8b04:
         status: SUCCEEDED
         submission_id: pbt_fine_clip_param_Acrobot-v1_2025-12-17_15:04:05
+        file_path:
+          outputs/shared_backup/needs_sync/Default-mlp-Acrobot-v1/pbt-tune_tune:clip_param/Default-mlp-Acrobot-v1-PPO-tws47f2512172201c8b04
     (LunarLander-v3):
       tws47f25121722161b164:
         status: SUCCEEDED
         submission_id: pbt_fine_clip_param_LunarLander-v3_2025-12-17_15:04:05
+        file_path:
+          outputs/shared_backup/needs_sync/Default-mlp-LunarLander-v3/pbt-tune_tune:clip_param/Default-mlp-LunarLander-v3-PPO-tws47f25121722161b164
 pbt_fine_clip_param_base_large:
   # Change to non-base
   entrypoint_resources:
@@ -538,70 +712,98 @@ pbt_fine_clip_param_base_large:
         status: SUCCEEDED
         submission_id:
           pbt_fine_clip_param_base_large_CartPole-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-CartPole-v1/pbt-tune_tune:clip_param/Default-mlp-CartPole-v1-PPO-tws47f25121816397c4a4
     (Acrobot-v1):
       tws47f2512181639f60b4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_clip_param_base_large_Acrobot-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Acrobot-v1/pbt-tune_tune:clip_param/Default-mlp-Acrobot-v1-PPO-tws47f2512181639f60b4
     (LunarLander-v3):
       tws47f2512181724f0054:
         status: SUCCEEDED
         submission_id:
           pbt_fine_clip_param_base_large_LunarLander-v3_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-LunarLander-v3/pbt-tune_tune:clip_param/Default-mlp-LunarLander-v3-PPO-tws47f2512181724f0054
     (Ant-v5):
       tws47f251218172460074:
         status: SUCCEEDED
         submission_id: pbt_fine_clip_param_base_large_Ant-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Ant-v5/pbt-tune_tune:clip_param/Default-mlp-Ant-v5-PPO-tws47f251218172460074
     (InvertedDoublePendulum-v5):
       tws47f251218172467e54:
         status: SUCCEEDED
         submission_id:
           pbt_fine_clip_param_base_large_InvertedDoublePendulum-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:clip_param/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f251218172467e54
     (Hopper-v5):
       tws47f2512181724647c4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_clip_param_base_large_Hopper-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Hopper-v5/pbt-tune_tune:clip_param/Default-mlp-Hopper-v5-PPO-tws47f2512181724647c4
     (Humanoid-v5):
       tws47f251218172426a64:
         status: SUCCEEDED
         submission_id:
           pbt_fine_clip_param_base_large_Humanoid-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Humanoid-v5/pbt-tune_tune:clip_param/Default-mlp-Humanoid-v5-PPO-tws47f251218172426a64
     (HalfCheetah-v5):
       tws47f2512181724abcb4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_clip_param_base_large_HalfCheetah-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-HalfCheetah-v5/pbt-tune_tune:clip_param/Default-mlp-HalfCheetah-v5-PPO-tws47f2512181724abcb4
     (HumanoidStandup-v5):
       tws47f2512200522a4494:
         status: SUCCEEDED
         submission_id:
           pbt_fine_clip_param_base_large_HumanoidStandup-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:clip_param/Default-mlp-HumanoidStandup-v5-PPO-tws47f2512200522a4494
     (Pusher-v5):
       tws47f251220053120be4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_clip_param_base_large_Pusher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Pusher-v5/pbt-tune_tune:clip_param/Default-mlp-Pusher-v5-PPO-tws47f251220053120be4
     (InvertedPendulum-v5):
       tws47f251220054690404:
         status: SUCCEEDED
         submission_id:
           pbt_fine_clip_param_base_large_InvertedPendulum-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:clip_param/Default-mlp-InvertedPendulum-v5-PPO-tws47f251220054690404
     (Reacher-v5):
       tws47f2512200607f4b84:
         status: SUCCEEDED
         submission_id:
           pbt_fine_clip_param_base_large_Reacher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Reacher-v5/pbt-tune_tune:clip_param/Default-mlp-Reacher-v5-PPO-tws47f2512200607f4b84
     (Walker2d-v5):
       tws47f2512200610cacf4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_clip_param_base_large_Walker2d-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Walker2d-v5/pbt-tune_tune:clip_param/Default-mlp-Walker2d-v5-PPO-tws47f2512200610cacf4
     (Swimmer-v5):
       tws47f25122006252a0f4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_clip_param_base_large_Swimmer-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:clip_param/Default-mlp-Swimmer-v5-PPO-tws47f25122006252a0f4
 pbt_fine_entropy_coeff_base:
   # TODO: Change to base
   <ENV_TYPE>:
@@ -621,16 +823,22 @@ pbt_fine_entropy_coeff_base:
         status: SUCCEEDED
         submission_id:
           pbt_fine_entropy_coeff_base_CartPole-v1_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-CartPole-v1/pbt-tune_tune:entropy_coeff/Default-mlp-CartPole-v1-PPO-tws47f251217222909984
     (Acrobot-v1):
       tws47f251217232050134:
         status: SUCCEEDED
         submission_id:
           pbt_fine_entropy_coeff_base_Acrobot-v1_2025-12-17_15:04:05
+        file_path:
+          outputs/shared_backup/needs_sync/Default-mlp-Acrobot-v1/pbt-tune_tune:entropy_coeff/Default-mlp-Acrobot-v1-PPO-tws47f251217232050134
     (LunarLander-v3):
       tws47f25121723329ef94:
         status: SUCCEEDED
         submission_id:
           pbt_fine_entropy_coeff_base_LunarLander-v3_2025-12-17_15:04:05
+        file_path:
+          outputs/shared_backup/needs_sync/Default-mlp-LunarLander-v3/pbt-tune_tune:entropy_coeff/Default-mlp-LunarLander-v3-PPO-tws47f25121723329ef94
 pbt_fine_vf_loss_coeff_base:
   # TODO: Change to base
   <ENV_TYPE>:
@@ -650,16 +858,22 @@ pbt_fine_vf_loss_coeff_base:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_loss_coeff_base_CartPole-v1_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-CartPole-v1/pbt-tune_tune:vf_loss_coeff/Default-mlp-CartPole-v1-PPO-tws47f25121723355e2b4
     (Acrobot-v1):
       tws47f2512180135fe0b4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_loss_coeff_base_Acrobot-v1_2025-12-17_15:04:05
+        file_path:
+          outputs/shared_backup/needs_sync/Default-mlp-Acrobot-v1/pbt-tune_tune:vf_loss_coeff/Default-mlp-Acrobot-v1-PPO-tws47f2512180135fe0b4
     (LunarLander-v3):
       tws47f251218020547624:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_loss_coeff_base_LunarLander-v3_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-LunarLander-v3/pbt-tune_tune:vf_loss_coeff/Default-mlp-LunarLander-v3-PPO-tws47f251218020547624
 pbt_fine_gamma_base:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -674,6 +888,8 @@ pbt_fine_gamma_base:
       tws47f2512180208723c4:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_base_CartPole-v1_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-CartPole-v1/pbt-tune_tune:gamma/Default-mlp-CartPole-v1-PPO-tws47f2512180208723c4
     (Acrobot-v1):
       tws47f251218022698b54:
         status: RESTORE - but have succes
@@ -681,6 +897,8 @@ pbt_fine_gamma_base:
       tws47f251218181255654:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_base_Acrobot-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Acrobot-v1/pbt-tune_tune:gamma/Default-mlp-Acrobot-v1-PPO-tws47f251218181255654
     (LunarLander-v3):
       tws47f25121802299f8e4:
         status: RESTORE - but have success
@@ -688,10 +906,14 @@ pbt_fine_gamma_base:
       tws47f251218181248674:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_base_LunarLander-v3_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-LunarLander-v3/pbt-tune_tune:gamma/Default-mlp-LunarLander-v3-PPO-tws47f251218181248674
     (Ant-v5):
       tws47f251218024793f64:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_base_Ant-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Ant-v5/pbt-tune_tune:gamma/Default-mlp-Ant-v5-PPO-tws47f251218024793f64
     (InvertedDoublePendulum-v5):
       tws47f25121802509d874:
         status: RESTORE - but have success
@@ -701,14 +923,20 @@ pbt_fine_gamma_base:
         status: SUCCEEDED
         submission_id:
           pbt_fine_gamma_base_InvertedDoublePendulum-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:gamma/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f2512181812d5c84
     (Hopper-v5):
       tws47f2512180329c7e54:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_base_Hopper-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Hopper-v5/pbt-tune_tune:gamma/Default-mlp-Hopper-v5-PPO-tws47f2512180329c7e54
     (Humanoid-v5):
       tws47f25121803357e034:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_base_Humanoid-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Humanoid-v5/pbt-tune_tune:gamma/Default-mlp-Humanoid-v5-PPO-tws47f25121803357e034
     (HalfCheetah-v5):
       tws47f251218033810454:
         status: RESTORE - but have success
@@ -716,32 +944,46 @@ pbt_fine_gamma_base:
       tws47f251218181257934:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_base_HalfCheetah-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-HalfCheetah-v5/pbt-tune_tune:gamma/Default-mlp-HalfCheetah-v5-PPO-tws47f251218181257934
     (HumanoidStandup-v5):
       tws47f25122006348af94:
         status: SUCCEEDED
         submission_id:
           pbt_fine_gamma_base_HumanoidStandup-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:gamma/Default-mlp-HumanoidStandup-v5-PPO-tws47f25122006348af94
     (Pusher-v5):
       tws47f2512200701f41f4:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_base_Pusher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Pusher-v5/pbt-tune_tune:gamma/Default-mlp-Pusher-v5-PPO-tws47f2512200701f41f4
     (InvertedPendulum-v5):
       tws47f25122007227d314:
         status: SUCCEEDED
         submission_id:
           pbt_fine_gamma_base_InvertedPendulum-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:gamma/Default-mlp-InvertedPendulum-v5-PPO-tws47f25122007227d314
     (Reacher-v5):
       tws47f2512200728aec54:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_base_Reacher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Reacher-v5/pbt-tune_tune:gamma/Default-mlp-Reacher-v5-PPO-tws47f2512200728aec54
     (Walker2d-v5):
       tws47f25122007318f244:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_base_Walker2d-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Walker2d-v5/pbt-tune_tune:gamma/Default-mlp-Walker2d-v5-PPO-tws47f25122007318f244
     (Swimmer-v5):
       tws47f25122007439d134:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_base_Swimmer-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:gamma/Default-mlp-Swimmer-v5-PPO-tws47f25122007439d134
 pbt_fine_gamma_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -758,61 +1000,89 @@ pbt_fine_gamma_large:
       tws47f25121818122fe14:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_large_Acrobot-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Acrobot-v1/pbt-tune_tune:gamma/Default-mlp-Acrobot-v1-PPO-tws47f25121818122fe14
     (Ant-v5):
       tws47f2512181812bbd94:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_large_Ant-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Ant-v5/pbt-tune_tune:gamma/Default-mlp-Ant-v5-PPO-tws47f2512181812bbd94
     (CartPole-v1):
       tws47f2512181812d3504:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_large_CartPole-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-CartPole-v1/pbt-tune_tune:gamma/Default-mlp-CartPole-v1-PPO-tws47f2512181812d3504
     (LunarLander-v3):
       tws47f25121818128ba54:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_large_LunarLander-v3_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-LunarLander-v3/pbt-tune_tune:gamma/Default-mlp-LunarLander-v3-PPO-tws47f25121818128ba54
     (InvertedDoublePendulum-v5):
       tws47f2512182029a2024:
         status: SUCCEEDED
         submission_id:
           pbt_fine_gamma_large_InvertedDoublePendulum-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:gamma/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f2512182029a2024
     (Hopper-v5):
       tws47f25121820325f114:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_large_Hopper-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Hopper-v5/pbt-tune_tune:gamma/Default-mlp-Hopper-v5-PPO-tws47f25121820325f114
     (Humanoid-v5):
       tws47f2512182057fa914:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_large_Humanoid-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Humanoid-v5/pbt-tune_tune:gamma/Default-mlp-Humanoid-v5-PPO-tws47f2512182057fa914
     (HalfCheetah-v5):
       tws47f2512182112796c4:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_large_HalfCheetah-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-HalfCheetah-v5/pbt-tune_tune:gamma/Default-mlp-HalfCheetah-v5-PPO-tws47f2512182112796c4
     (HumanoidStandup-v5):
       tws47f251220074609034:
         status: SUCCEEDED
         submission_id:
           pbt_fine_gamma_large_HumanoidStandup-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:gamma/Default-mlp-HumanoidStandup-v5-PPO-tws47f251220074609034
     (Pusher-v5):
       tws47f2512200810143d4:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_large_Pusher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Pusher-v5/pbt-tune_tune:gamma/Default-mlp-Pusher-v5-PPO-tws47f2512200810143d4
     (InvertedPendulum-v5):
       tws47f25122008224b7c4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_gamma_large_InvertedPendulum-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:gamma/Default-mlp-InvertedPendulum-v5-PPO-tws47f25122008224b7c4
     (Reacher-v5):
       tws47f251220084975114:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_large_Reacher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Reacher-v5/pbt-tune_tune:gamma/Default-mlp-Reacher-v5-PPO-tws47f251220084975114
     (Walker2d-v5):
       tws47f25122009010dbd4:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_large_Walker2d-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Walker2d-v5/pbt-tune_tune:gamma/Default-mlp-Walker2d-v5-PPO-tws47f25122009010dbd4
     (Swimmer-v5):
       tws47f2512200928ddca4:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_large_Swimmer-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:gamma/Default-mlp-Swimmer-v5-PPO-tws47f2512200928ddca4
 pbt_fine_lr_base:
   entrypoint_resources:
     persistent_node: 1
@@ -827,58 +1097,86 @@ pbt_fine_lr_base:
         status: SUCCEEDED
         submission_id:
           pbt_fine_lr_base_InvertedDoublePendulum-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:lr/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f25121804112d724
     (Hopper-v5):
       tws47f25121804140a3f4:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_base_Hopper-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Hopper-v5/pbt-tune_tune:lr/Default-mlp-Hopper-v5-PPO-tws47f25121804140a3f4
     (Humanoid-v5):
       tws47f2512180417d0624:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_base_Humanoid-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Humanoid-v5/pbt-tune_tune:lr/Default-mlp-Humanoid-v5-PPO-tws47f2512180417d0624
     (HalfCheetah-v5):
       tws47f25121804209b6f4:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_base_HalfCheetah-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-HalfCheetah-v5/pbt-tune_tune:lr/Default-mlp-HalfCheetah-v5-PPO-tws47f25121804209b6f4
     (CartPole-v1):
       tws47f251218220039f74:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_base_CartPole-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-CartPole-v1/pbt-tune_tune:lr/Default-mlp-CartPole-v1-PPO-tws47f251218220039f74
     (Acrobot-v1):
       tws47f251218221201334:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_base_Acrobot-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Acrobot-v1/pbt-tune_tune:lr/Default-mlp-Acrobot-v1-PPO-tws47f251218221201334
     (LunarLander-v3):
       tws47f2512182218cedc4:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_base_LunarLander-v3_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-LunarLander-v3/pbt-tune_tune:lr/Default-mlp-LunarLander-v3-PPO-tws47f2512182218cedc4
     (Ant-v5):
       tws47f25121822394d8e4:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_base_Ant-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Ant-v5/pbt-tune_tune:lr/Default-mlp-Ant-v5-PPO-tws47f25121822394d8e4
     (HumanoidStandup-v5):
       tws47f2512201019d5914:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_base_HumanoidStandup-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:lr/Default-mlp-HumanoidStandup-v5-PPO-tws47f2512201019d5914
     (Pusher-v5):
       tws47f2512201034789c4:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_base_Pusher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Pusher-v5/pbt-tune_tune:lr/Default-mlp-Pusher-v5-PPO-tws47f2512201034789c4
     (InvertedPendulum-v5):
       tws47f2512201104cefa4:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_base_InvertedPendulum-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:lr/Default-mlp-InvertedPendulum-v5-PPO-tws47f2512201104cefa4
     (Reacher-v5):
       tws47f2512201107bf3a4:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_base_Reacher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Reacher-v5/pbt-tune_tune:lr/Default-mlp-Reacher-v5-PPO-tws47f2512201107bf3a4
     (Walker2d-v5):
       tws47f251220111055df4:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_base_Walker2d-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Walker2d-v5/pbt-tune_tune:lr/Default-mlp-Walker2d-v5-PPO-tws47f251220111055df4
     (Swimmer-v5):
       tws47f2512201122d4774:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_base_Swimmer-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:lr/Default-mlp-Swimmer-v5-PPO-tws47f2512201122d4774
 pbt_fine_lr_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale  - need to repeat because of 2 top groups
@@ -897,59 +1195,87 @@ pbt_fine_lr_large:
       tws47f25121822516c884:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_large_CartPole-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-CartPole-v1/pbt-tune_tune:lr/Default-mlp-CartPole-v1-PPO-tws47f25121822516c884
     (Acrobot-v1):
       tws47f2512182339ac314:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_large_Acrobot-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Acrobot-v1/pbt-tune_tune:lr/Default-mlp-Acrobot-v1-PPO-tws47f2512182339ac314
     (LunarLander-v3):
       tws47f251218234882094:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_large_LunarLander-v3_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-LunarLander-v3/pbt-tune_tune:lr/Default-mlp-LunarLander-v3-PPO-tws47f251218234882094
     (Ant-v5):
       tws47f251219000027db4:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_large_Ant-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Ant-v5/pbt-tune_tune:lr/Default-mlp-Ant-v5-PPO-tws47f251219000027db4
     (InvertedDoublePendulum-v5):
       tws47f2512190009dd944:
         status: SUCCEEDED
         submission_id:
           pbt_fine_lr_large_InvertedDoublePendulum-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:lr/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f2512190009dd944
     (Hopper-v5):
       tws47f25121901216e364:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_large_Hopper-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Hopper-v5/pbt-tune_tune:lr/Default-mlp-Hopper-v5-PPO-tws47f25121901216e364
     (Humanoid-v5):
       tws47f25121902243cc04:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_large_Humanoid-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Humanoid-v5/pbt-tune_tune:lr/Default-mlp-Humanoid-v5-PPO-tws47f25121902243cc04
     (HalfCheetah-v5):
       tws47f2512190259bccb4:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_large_HalfCheetah-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-HalfCheetah-v5/pbt-tune_tune:lr/Default-mlp-HalfCheetah-v5-PPO-tws47f2512190259bccb4
     (HumanoidStandup-v5):
       tws47f251220113425054:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_large_HumanoidStandup-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:lr/Default-mlp-HumanoidStandup-v5-PPO-tws47f251220113425054
     (Pusher-v5):
       tws47f251220121250b44:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_large_Pusher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Pusher-v5/pbt-tune_tune:lr/Default-mlp-Pusher-v5-PPO-tws47f251220121250b44
     (InvertedPendulum-v5):
       tws47f2512201257bf674:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_large_InvertedPendulum-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:lr/Default-mlp-InvertedPendulum-v5-PPO-tws47f2512201257bf674
     (Reacher-v5):
       tws47f2512201306612a4:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_large_Reacher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Reacher-v5/pbt-tune_tune:lr/Default-mlp-Reacher-v5-PPO-tws47f2512201306612a4
     (Walker2d-v5):
       tws47f251220134306ea4:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_large_Walker2d-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Walker2d-v5/pbt-tune_tune:lr/Default-mlp-Walker2d-v5-PPO-tws47f251220134306ea4
     (Swimmer-v5):
       tws47f2512201559c78c4:
         status: SUCCEEDED
         submission_id: pbt_fine_lr_large_Swimmer-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:lr/Default-mlp-Swimmer-v5-PPO-tws47f2512201559c78c4
 pbt_fine_vf_clip_param_base:
   entrypoint_resources:
     persistent_node: 1
@@ -967,68 +1293,96 @@ pbt_fine_vf_clip_param_base:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_clip_param_base_CartPole-v1_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-CartPole-v1/pbt-tune_tune:vf_clip_param/Default-mlp-CartPole-v1-PPO-tws47f25121804235bd04
     (Acrobot-v1):
       tws47f251218042638224:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_clip_param_base_Acrobot-v1_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Acrobot-v1/pbt-tune_tune:vf_clip_param/Default-mlp-Acrobot-v1-PPO-tws47f251218042638224
     (LunarLander-v3):
       tws47f251218055969bc4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_clip_param_base_LunarLander-v3_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-LunarLander-v3/pbt-tune_tune:vf_clip_param/Default-mlp-LunarLander-v3-PPO-tws47f251218055969bc4
     (Ant-v5):
       tws47f25121806023e8b4:
         status: SUCCEEDED
         submission_id: pbt_fine_vf_clip_param_base_Ant-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Ant-v5/pbt-tune_tune:vf_clip_param/Default-mlp-Ant-v5-PPO-tws47f25121806023e8b4
     (InvertedDoublePendulum-v5):
       tws47f25121806443e8f4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_clip_param_base_InvertedDoublePendulum-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:vf_clip_param/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f25121806443e8f4
     (Hopper-v5):
       tws47f2512180647a6024:
         status: SUCCEEDED
         submission_id: pbt_fine_vf_clip_param_base_Hopper-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Hopper-v5/pbt-tune_tune:vf_clip_param/Default-mlp-Hopper-v5-PPO-tws47f2512180647a6024
     (Humanoid-v5):
       tws47f2512180724c99a4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_clip_param_base_Humanoid-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Humanoid-v5/pbt-tune_tune:vf_clip_param/Default-mlp-Humanoid-v5-PPO-tws47f2512180724c99a4
     (HalfCheetah-v5):
       tws47f251218072644224:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_clip_param_base_HalfCheetah-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-HalfCheetah-v5/pbt-tune_tune:vf_clip_param/Default-mlp-HalfCheetah-v5-PPO-tws47f251218072644224
     (HumanoidStandup-v5):
       tws47f2512201611cc3d4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_clip_param_base_HumanoidStandup-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:vf_clip_param/Default-mlp-HumanoidStandup-v5-PPO-tws47f2512201611cc3d4
     (Pusher-v5):
       tws47f25122016142ed84:
         status: SUCCEEDED
         submission_id: pbt_fine_vf_clip_param_base_Pusher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Pusher-v5/pbt-tune_tune:vf_clip_param/Default-mlp-Pusher-v5-PPO-tws47f25122016142ed84
     (InvertedPendulum-v5):
       tws47f2512201632eb284:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_clip_param_base_InvertedPendulum-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:vf_clip_param/Default-mlp-InvertedPendulum-v5-PPO-tws47f2512201632eb284
     (Reacher-v5):
       tws47f2512201645df1a4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_clip_param_base_Reacher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Reacher-v5/pbt-tune_tune:vf_clip_param/Default-mlp-Reacher-v5-PPO-tws47f2512201645df1a4
     (Walker2d-v5):
       tws47f251220164890214:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_clip_param_base_Walker2d-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Walker2d-v5/pbt-tune_tune:vf_clip_param/Default-mlp-Walker2d-v5-PPO-tws47f251220164890214
     (Swimmer-v5):
       tws47f251220171236474:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_clip_param_base_Swimmer-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:vf_clip_param/Default-mlp-Swimmer-v5-PPO-tws47f251220171236474
 pbt_fine_grad_clip_base:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -1043,63 +1397,91 @@ pbt_fine_grad_clip_base:
       tws47f2512180729c8724:
         status: SUCCEEDED
         submission_id: pbt_fine_grad_clip_base_CartPole-v1_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-CartPole-v1/pbt-tune_tune:grad_clip/Default-mlp-CartPole-v1-PPO-tws47f2512180729c8724
     (Acrobot-v1):
       tws47f25121807381f7e4:
         status: SUCCEEDED
         submission_id: pbt_fine_grad_clip_base_Acrobot-v1_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Acrobot-v1/pbt-tune_tune:grad_clip/Default-mlp-Acrobot-v1-PPO-tws47f25121807381f7e4
     (LunarLander-v3):
       tws47f251218082103754:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_LunarLander-v3_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-LunarLander-v3/pbt-tune_tune:grad_clip/Default-mlp-LunarLander-v3-PPO-tws47f251218082103754
     (Ant-v5):
       tws47f251218084532fc4:
         status: SUCCEEDED
         submission_id: pbt_fine_grad_clip_base_Ant-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Ant-v5/pbt-tune_tune:grad_clip/Default-mlp-Ant-v5-PPO-tws47f251218084532fc4
     (InvertedDoublePendulum-v5):
       tws47f251218085110d24:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_InvertedDoublePendulum-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:grad_clip/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f251218085110d24
     (Hopper-v5):
       tws47f2512180900355b4:
         status: SUCCEEDED
         submission_id: pbt_fine_grad_clip_base_Hopper-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Hopper-v5/pbt-tune_tune:grad_clip/Default-mlp-Hopper-v5-PPO-tws47f2512180900355b4
     (Humanoid-v5):
       tws47f25121809129ee14:
         status: SUCCEEDED
         submission_id: pbt_fine_grad_clip_base_Humanoid-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-Humanoid-v5/pbt-tune_tune:grad_clip/Default-mlp-Humanoid-v5-PPO-tws47f25121809129ee14
     (HalfCheetah-v5):
       tws47f2512180948f8004:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_HalfCheetah-v5_2025-12-17_15:04:05
+        file_path:
+          outputs/shared/experiments/Default-mlp-HalfCheetah-v5/pbt-tune_tune:grad_clip/Default-mlp-HalfCheetah-v5-PPO-tws47f2512180948f8004
     (HumanoidStandup-v5):
       tws47f2512201730afb34:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_HumanoidStandup-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:grad_clip/Default-mlp-HumanoidStandup-v5-PPO-tws47f2512201730afb34
     (Pusher-v5):
       tws47f25122018254f8c4:
         status: SUCCEEDED
         submission_id: pbt_fine_grad_clip_base_Pusher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Pusher-v5/pbt-tune_tune:grad_clip/Default-mlp-Pusher-v5-PPO-tws47f25122018254f8c4
     (InvertedPendulum-v5):
       tws47f25122018375dac4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_InvertedPendulum-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:grad_clip/Default-mlp-InvertedPendulum-v5-PPO-tws47f25122018375dac4
     (Reacher-v5):
       tws47f25122018407ffd4:
         status: SUCCEEDED
         submission_id: pbt_fine_grad_clip_base_Reacher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Reacher-v5/pbt-tune_tune:grad_clip/Default-mlp-Reacher-v5-PPO-tws47f25122018407ffd4
     (Walker2d-v5):
       tws47f2512201853121b4:
         status: SUCCEEDED
         submission_id: pbt_fine_grad_clip_base_Walker2d-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Walker2d-v5/pbt-tune_tune:grad_clip/Default-mlp-Walker2d-v5-PPO-tws47f2512201853121b4
     (Swimmer-v5):
       tws47f251220190276204:
         status: SUCCEEDED
         submission_id: pbt_fine_grad_clip_base_Swimmer-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:grad_clip/Default-mlp-Swimmer-v5-PPO-tws47f251220190276204
 pbt_fine_grad_clip_base_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -1117,67 +1499,95 @@ pbt_fine_grad_clip_base_large:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_large_CartPole-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-CartPole-v1/pbt-tune_tune:grad_clip/Default-mlp-CartPole-v1-PPO-tws47f25121903003b724
     (Acrobot-v1):
       tws47f2512190309a2ed4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_large_Acrobot-v1_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Acrobot-v1/pbt-tune_tune:grad_clip/Default-mlp-Acrobot-v1-PPO-tws47f2512190309a2ed4
     (LunarLander-v3):
       tws47f2512190513bbaf4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_large_LunarLander-v3_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-LunarLander-v3/pbt-tune_tune:grad_clip/Default-mlp-LunarLander-v3-PPO-tws47f2512190513bbaf4
     (Ant-v5):
       tws47f2512190737de544:
         status: SUCCEEDED
         submission_id: pbt_fine_grad_clip_base_large_Ant-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Ant-v5/pbt-tune_tune:grad_clip/Default-mlp-Ant-v5-PPO-tws47f2512190737de544
     (InvertedDoublePendulum-v5):
       tws47f251219074059224:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_large_InvertedDoublePendulum-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:grad_clip/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f251219074059224
     (Hopper-v5):
       tws47f251219074388154:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_large_Hopper-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Hopper-v5/pbt-tune_tune:grad_clip/Default-mlp-Hopper-v5-PPO-tws47f251219074388154
     (Humanoid-v5):
       tws47f2512191210678d4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_large_Humanoid-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-Humanoid-v5/pbt-tune_tune:grad_clip/Default-mlp-Humanoid-v5-PPO-tws47f2512191210678d4
     (HalfCheetah-v5):
       tws47f251219121025854:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_large_HalfCheetah-v5_2025-12-18_11:58:37
+        file_path:
+          outputs/shared/experiments/Default-mlp-HalfCheetah-v5/pbt-tune_tune:grad_clip/Default-mlp-HalfCheetah-v5-PPO-tws47f251219121025854
     (HumanoidStandup-v5):
       tws47f251220190889e14:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_large_HumanoidStandup-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:grad_clip/Default-mlp-HumanoidStandup-v5-PPO-tws47f251220190889e14
     (Pusher-v5):
       tws47f2512201944b50d4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_large_Pusher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Pusher-v5/pbt-tune_tune:grad_clip/Default-mlp-Pusher-v5-PPO-tws47f2512201944b50d4
     (InvertedPendulum-v5):
       tws47f251220195601204:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_large_InvertedPendulum-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:grad_clip/Default-mlp-InvertedPendulum-v5-PPO-tws47f251220195601204
     (Reacher-v5):
       tws47f25122020206a334:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_large_Reacher-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Reacher-v5/pbt-tune_tune:grad_clip/Default-mlp-Reacher-v5-PPO-tws47f25122020206a334
     (Walker2d-v5):
       tws47f2512202158b2d84:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_large_Walker2d-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Walker2d-v5/pbt-tune_tune:grad_clip/Default-mlp-Walker2d-v5-PPO-tws47f2512202158b2d84
     (Swimmer-v5):
       tws47f25122022016af24:
         status: SUCCEEDED
         submission_id:
           pbt_fine_grad_clip_base_large_Swimmer-v5_2025-12-19_14:23:36
+        file_path:
+          outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:grad_clip/Default-mlp-Swimmer-v5-PPO-tws47f25122022016af24
