@@ -60,7 +60,7 @@ MetricKey = str | tuple[Any, ...]
 logger = logging.getLogger(__name__)
 
 _REPORT_INTERVAL = 32
-global DEBUG
+
 DEBUG = False
 
 from functools import partial
@@ -462,6 +462,8 @@ import os
 
 import optuna
 
+STUDY_COLUMN_NAMES = ("evaluator_name", "key", "centered", "step")
+
 
 def load_study_results(parquet_file: str | Path, **kwargs) -> pd.DataFrame:
     try:
@@ -478,6 +480,7 @@ def load_study_results(parquet_file: str | Path, **kwargs) -> pd.DataFrame:
         ]
         mc_columns = pd.MultiIndex.from_tuples(clean_columns)
         df.columns = mc_columns
+        df.columns.names = STUDY_COLUMN_NAMES
         df.index = index
         return df.sort_index(axis=1, key=__sort_columns)
 
@@ -724,6 +727,8 @@ def optuna_create_studies(
     pbt_centered_studies: dict[optuna.Study, optuna.Study] = {}
     submission_studies: dict[optuna.Study, optuna.Study] = {}
     submission_studies_centered: dict[optuna.Study, optuna.Study] = {}
+    large_studies: dict[optuna.Study, optuna.Study] = {}
+    large_studies_centered: dict[optuna.Study, optuna.Study] = {}
     storage = _get_storage(database_path or experiment_paths[0])
     if clear_experiment_cache:
         clear_tracking_study(storage)
@@ -732,51 +737,42 @@ def optuna_create_studies(
     if clear_experiment_cache:
         assert not STORED_EXPERIMENTS
     if not study_each_epoch:
-        study = get_optuna_study(storage, env, load_if_exists=load_if_exists, clear_study=clear_study)
-        studies[GLOBAL_STUDY] = study
+        studies[GLOBAL_STUDY] = get_optuna_study(storage, env, load_if_exists=load_if_exists, clear_study=clear_study)
         if submission_study:
             submission_studies[studies[GLOBAL_STUDY]] = get_optuna_study(
                 storage, env, suffix=f"_{submission_study}", clear_study=clear_study, load_if_exists=load_if_exists
             )
+        if group_stat not in ("batch_site", "train_batch_size_per_learner"):
+            large_studies[studies[GLOBAL_STUDY]] = get_optuna_study(
+                storage, env, suffix="_large", clear_study=clear_study, load_if_exists=load_if_exists
+            )
     if study_each_epoch is not False:
         # Create a study for each epoch at step 8192 * 4 until max_step
-        for epoch in range(1, 32 + 1):
+        for epoch in sorted(set(range(1, 32 + 1)) | set(range(1, 8 + 1))):
             step = epoch * 8192 * 4
-            studies[step] = get_optuna_study(storage, env, step, clear_study=clear_study)
-            pbt_centered_studies[studies[step]] = get_optuna_study(
+            studies[step] = step_study = get_optuna_study(storage, env, step, clear_study=clear_study)
+            pbt_centered_studies[step_study] = get_optuna_study(
                 storage, env, step, suffix="_centered", clear_study=clear_study
             )
             if submission_study:
-                submission_studies[studies[step]] = get_optuna_study(
+                submission_studies[step_study] = get_optuna_study(
                     storage, env, step, suffix=f"_{submission_study}", clear_study=clear_study
                 )
-                submission_studies_centered[studies[step]] = get_optuna_study(
+                submission_studies_centered[step_study] = get_optuna_study(
                     storage,
                     env,
                     step,
                     suffix=f"_{submission_study}_centered",
                     clear_study=clear_study,
                 )
-
-        # This is not sufficient for the 1/8 perturbation intervals
-        for epoch in range(1, 8 + 1):
-            step = epoch * 147456
-            if step not in studies:
-                studies[step] = get_optuna_study(storage, env, step, clear_study=clear_study)
-                pbt_centered_studies[studies[step]] = get_optuna_study(
-                    storage, env, step, suffix="_centered", clear_study=clear_study
+            if group_stat not in ("batch_site", "train_batch_size_per_learner"):
+                large_studies[step_study] = get_optuna_study(
+                    storage, env, suffix="_large", clear_study=clear_study, load_if_exists=load_if_exists
                 )
-                if submission_study:
-                    submission_studies[studies[step]] = get_optuna_study(
-                        storage, env, step, suffix=f"_{submission_study}", clear_study=clear_study
-                    )
-                    submission_studies_centered[studies[step]] = get_optuna_study(
-                        storage,
-                        env,
-                        step,
-                        suffix=f"_{submission_study}_centered",
-                        clear_study=clear_study,
-                    )
+                large_studies_centered[step_study] = get_optuna_study(
+                    storage, env, suffix="_large_centered", clear_study=clear_study, load_if_exists=load_if_exists
+                )
+                # TODO: add for trials_to_add
 
     def get_all_studies():
         for key, main_study in studies.items():
@@ -794,6 +790,10 @@ def optuna_create_studies(
                 yield (key + f"_{submission_study}", submission_studies[main_study])
             if main_study in submission_studies_centered:
                 yield (key + f"_{submission_study}_centered", submission_studies_centered[main_study])
+            if main_study in large_studies:
+                yield (key + "_large".large_studies[main_study])
+            if main_study in large_studies_centered:
+                yield (key + "_large_centered", large_studies_centered[main_study])
 
     if load_studies_only:
         return dict(get_all_studies())
@@ -844,6 +844,9 @@ def optuna_create_studies(
             if submission_study:
                 trials_to_add |= {study: [] for study in submission_studies.values()}
                 trials_to_add |= {study: [] for study in submission_studies_centered.values()}
+            if group_stat not in ("batch_site", "train_batch_size_per_learner"):
+                trials_to_add |= {study: [] for study in large_studies.values()}
+                trials_to_add |= {study: [] for study in large_studies_centered.values()}
             try:
                 # Load run data for this experiment
                 run_frames = load_run_data(experiment_dir)
@@ -856,6 +859,15 @@ def optuna_create_studies(
                 else:
                     df = run_frames
                 _group_stat, df = get_and_check_group_stat(df, group_stat=None, group_by=("pbt_group_key",))
+                if group_stat is None:
+                    group_stat = _group_stat
+                is_large = None
+                if group_stat not in ("batch_size", "train_batch_size_per_learner"):
+                    batch_size = df.iloc[0].config.get(
+                        "train_batch_size_per_learner",
+                        df.iloc[0].config.get("batch_size", df.iloc[0].get("batch_size", None)),
+                    )
+                    is_large = batch_size >= 8192
 
                 metric = check_metric_backport(df, metric_to_check)
                 # Get tools to center epochs
@@ -1262,7 +1274,7 @@ def _fix_distributions(study: optuna.Study, params: Collection[str]):
     return completed_trials
 
 
-def __sort_columns(col):
+def __sort_columns(col: pd.Index):
     if isinstance(col, pd.Index):
         return tuple(__sort_columns(c) for c in col)
 
@@ -1439,9 +1451,9 @@ def optuna_analyze_studies(
         "MeanDecreaseImpurity": MeanDecreaseImpurityImportanceEvaluator(),
         "PedAnovaLocal": PedAnovaImportanceEvaluator(evaluate_on_local=True),  # default
         "Fanova(default)": FanovaImportanceEvaluator(),  # default
-        # "MeanDecreaseImpurity8": MeanDecreaseImpurityImportanceEvaluator(n_trees=12, max_depth=12),
-        # "PedAnovaGlobal": PedAnovaImportanceEvaluator(evaluate_on_local=False),
-        # "Fanova8": FanovaImportanceEvaluator(n_trees=12, max_depth=12),
+        "MeanDecreaseImpurity8": MeanDecreaseImpurityImportanceEvaluator(n_trees=12, max_depth=12),
+        "PedAnovaGlobal": PedAnovaImportanceEvaluator(evaluate_on_local=False),
+        "Fanova8": FanovaImportanceEvaluator(n_trees=12, max_depth=12),
     }
 
     all_results: list[dict[str, Any]] = []
@@ -1471,7 +1483,7 @@ def optuna_analyze_studies(
     results_df = pd.DataFrame(all_results)
 
     pivot_df = results_df.pivot_table(
-        index="param", columns=["evaluator_name", "key", "centered", "step"], values="importance", fill_value=0.0
+        index="param", columns=list(STUDY_COLUMN_NAMES), values="importance", fill_value=0.0
     )
     pivot_df.columns = pivot_df.columns.map(__try_step_cast)
     pivot_df.sort_index(axis=1, key=__sort_columns, inplace=True)
@@ -1523,8 +1535,8 @@ def plot_importance_studies(
         importances = {"_": study_results}
     written_paths: set[Path] = set()
     for evaluator_name, importance_df in importances.items():
-        if "key" not in importance_df.columns.names:
-            remote_breakpoint()
+        if "key" not in importance_df.columns.names and all(name is None for name in importance_df.columns.names):
+            importance_df.columns.names = STUDY_COLUMN_NAMES[1:]
         for key in importance_df.columns.get_level_values("key").unique():
             key_df = importance_df[key]
             for centered in key_df.columns.get_level_values("centered").unique():

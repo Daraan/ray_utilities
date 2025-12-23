@@ -217,6 +217,8 @@ def get_runs_from_submission(
             for run_id, run_info in run_entries.items():
                 if not isinstance(run_info, dict):
                     continue
+                if re.match(r"^.+?-v\d\)$", run_id):
+                    continue
                 status = str(run_info.get("status", "")).upper()
                 if not (group_matches_filter or normalized_filter in status):
                     logger.info("Skipping run %s/%s with status %s", group_name, run_id, status)  # noqa: G004
@@ -256,9 +258,8 @@ def find_run_directory(run_key: str, run_id: str, *, search_paths: Sequence[Path
         if not base_path.exists():
             continue
         matches.extend(base_path.glob(pattern))
-    unique_matches = list(dict.fromkeys(matches))
+    unique_matches: list[Path] = list(dict.fromkeys(matches))
     if not unique_matches:
-        breakpoint()
         raise FileNotFoundError(f"No run directory found for run_id={run_id} (run_key={run_key}).")
     if len(unique_matches) > 1:
         raise ValueError(f"Multiple run directories found for run_id={run_id} (run_key={run_key}): {unique_matches}")
@@ -286,6 +287,8 @@ def get_run_directories_from_submission(
     directories: dict[str, Path] = {}
     for run_id, info in run_infos.items():
         assert run_id == info["run_id"]
+        if re.match(r"^.*-v\d$", run_id):
+            continue
         directories[run_id] = find_run_directory(info["run_key"], run_id, search_paths=search_paths)
     return directories
 
@@ -1800,23 +1803,30 @@ def export_run_data(
                 if not isinstance(data, pd.DataFrame):
                     combined_df = combine_df(data)
                     save_run_data(experiment_path, combined_df)
-        # Mark large experiments:
-        large = ""
-        if group_stat is None:
-            group_stat = _get_group_stat(combined_df, group_by[-1])
-        if group_stat not in ("batch_size", "train_batch_size_per_learner"):
-            batch_size = combined_df.iloc[0].config.get(
-                "train_batch_size_per_learner",
-                combined_df.iloc[0].config.get("batch_size", combined_df.iloc[0].get("batch_size", None)),
-            )
-            if batch_size >= 8192:
-                large = "(large)"
-        out_path = save_path / f"{experiment_path.name}_{metric_str}{large}.{format}"
+        out_path = None
     elif save_path is None:
         raise ValueError("When providing a DataFrame directly, save_path must be specified.")
     else:
         out_path = Path(save_path)
         combined_df = experiment_path
+    # Mark large experiments:
+    large = ""
+    if group_stat is None:
+        group_stat = _get_group_stat(combined_df, group_by[-1])
+    if group_stat not in ("batch_size", "train_batch_size_per_learner"):
+        batch_size = combined_df.iloc[0].config.get(
+            "train_batch_size_per_learner",
+            combined_df.iloc[0].config.get("batch_size", combined_df.iloc[0].get("batch_size", None)),
+        )
+        if not isinstance(batch_size, (int, float, np.integer, np.floating)):
+            if isinstance(batch_size, pd.Series):
+                batch_size = batch_size.iloc[0]
+            else:
+                batch_size = batch_size.item()
+        if batch_size >= 8192:
+            large = "(large)"
+    if out_path is None:
+        out_path = Path(save_path, f"{experiment_path.name}_{metric_str}{large}.{format}")
     logger.info("Plotting and saving...")
 
     # If group_stat is None, do what?
@@ -1829,7 +1839,7 @@ def export_run_data(
                 out_path=out_path,
                 format=format,
                 plot_option=plot_option,
-                large=large,
+                large=bool(large),
             )
         except Exception as e:  # noqa: PERF203
             logger.exception("Failed to calculate experiment stats: %r", e)  # noqa: G004
