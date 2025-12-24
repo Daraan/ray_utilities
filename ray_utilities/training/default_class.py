@@ -1493,7 +1493,19 @@ class TrainableBase(Checkpointable, tune.Trainable, Generic[_ParserType, _Config
             minibatch_size=self.algorithm_config.minibatch_size,
             num_envs_per_env_runner=self.algorithm_config.num_envs_per_env_runner,
         )
+
         # callbacks are not called by the above methods.
+        # Workaround for https://github.com/ray-project/ray/issues/51560 on Atari environments.
+        def betas_tensor_to_float(learner):
+            try:
+                param_grp = next(iter(learner._optimizer_parameters.keys())).param_groups[0]
+                if "betas" in param_grp:
+                    param_grp["betas"] = tuple(beta.item() for beta in param_grp["betas"])
+            except Exception:
+                _logger.exception("Could not set betas after checkpoint load.")
+
+        if self.algorithm.learner_group is not None:
+            self.algorithm.learner_group.foreach_learner(betas_tensor_to_float)
         make_callback(
             "on_checkpoint_loaded",
             # ray has a wrong type signature here, accepting only list
