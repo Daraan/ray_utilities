@@ -79,6 +79,7 @@ default_distributions: dict[str, DistributionDefinition] = {
     "vf_clip_param": {"grid_search": [0.05, 0.125, 0.33, 1.0, 2.0, 10.0, 100.0]},
     # kl_coeff if use_kl_loss; default is 0.2, target is 0.1
     "kl_coeff": {"grid_search": [0.025, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3]},
+    # num_epochs: {"grid_search": [1, 4, 8, 16, 32, 64, 128]},
     # endregion PPO
     # Dummy value --tune test
     "test": {"grid_search": [1, 2, 3]},
