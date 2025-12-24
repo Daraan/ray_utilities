@@ -3,7 +3,7 @@ global_pattern_1: >
   --env_type <ENV_TYPE>
   --tune <TUNE_PARAM> --num_samples 1
   --vf_share_layers
-  --gpu 0.5
+  --gpu 0.2
   <OTHER_FLAGS:>
   --tag:core --tag:pbt  --tag:pbt-grouped --tag:pbt-fine --tag:shared-encoder  -tag:atari
   --comet offline --wandb offline+upload@end --log_stats learners
@@ -91,6 +91,9 @@ pbt_fine_accumulate:
       tws47f25122200424ba34:
         status: FAILED
         submission_id: pbt_fine_accumulate_ALE-Pong-v5_2025-12-22_00:40:31
+      tws47f2512240030d77e4:
+        status: RUNNING
+        submission_id: pbt_fine_accumulate_ALE-Pong-v5_2025-12-24_00:30:12
 pbt_fine_num_envs:
   # This is a comment
   comment: small minibatch_size=256 and train_batch_size=2048
@@ -106,6 +109,9 @@ pbt_fine_num_envs:
       tws47f2512220056185b4:
         status: FAILED
         submission_id: pbt_fine_num_envs_ALE-Pong-v5_2025-12-22_00:40:31
+      tws47f251224003126dc4:
+        status: RUNNING
+        submission_id: pbt_fine_num_envs_ALE-Pong-v5_2025-12-24_00:30:12
 pbt_fine_num_envs_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale
@@ -122,10 +128,6 @@ pbt_fine_num_envs_large:
 
 pbt_fine_clip_param:
   # TODO: Change to base
-  <ENV_TYPE>:
-  - CartPole-v1
-  - Acrobot-v1
-  - LunarLander-v3
   entrypoint_resources:
     persistent_node: 1
   entrypoint_pattern:
@@ -183,7 +185,7 @@ pbt_fine_gamma_base:
   run_ids:
     (Pong-v5):
       tws47f25122204121dc64:
-        status: RUNNING
+        status: FAILED
         submission_id: pbt_fine_gamma_base_ALE-Pong-v5_2025-12-22_00:40:31
 pbt_fine_gamma_large:
   entrypoint_pattern:
@@ -237,7 +239,7 @@ pbt_fine_vf_clip_param_base:
   run_ids:
     (Pong-v5):
       tws47f25122204214b754:
-        status: RUNNING
+        status: FAILED
         submission_id:
           pbt_fine_vf_clip_param_base_ALE-Pong-v5_2025-12-22_00:40:31
 pbt_fine_grad_clip_base:
@@ -252,7 +254,7 @@ pbt_fine_grad_clip_base:
   run_ids:
     (Pong-v5):
       tws47f2512220423f76d4:
-        status: RUNNING
+        status: FAILED
         submission_id: pbt_fine_grad_clip_base_ALE-Pong-v5_2025-12-22_00:40:31
 pbt_fine_grad_clip_base_large:
   entrypoint_pattern:

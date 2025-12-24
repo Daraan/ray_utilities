@@ -5,9 +5,32 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence, TypedDict
 
+import seaborn as sns
 from typing_extensions import Final, Literal
 
 _logger = logging.getLogger(__name__)
+
+# Set seaborn and matplotlib style for publication-quality plots
+# sns.set_theme()
+sns.set_theme(
+    style="dark",
+    context="talk",
+    rc={
+        "axes.grid": False,  # Disable all grid lines
+        "axes.spines.top": False,
+        "axes.spines.right": True,
+        "axes.titleweight": "bold",
+        "axes.labelweight": "bold",
+        "font.size": 20.0,
+        "axes.labelsize": 20.0,
+        "axes.titlesize": 20.0,
+        "legend.fontsize": 18,
+        "legend.title_fontsize": 20.0,
+        "xtick.direction": "out",
+        "ytick.direction": "out",
+        "legend.frameon": False,
+    },
+)
 
 
 class SubmissionRun(TypedDict):

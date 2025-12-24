@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
 from typing import TYPE_CHECKING, Hashable, Mapping, Sequence
 
 import matplotlib.colors as mcolors
@@ -34,30 +33,11 @@ from ray_utilities.visualization.data import (
 )
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from matplotlib.axes import Axes
     from matplotlib.figure import Figure
 
-# Set seaborn and matplotlib style for publication-quality plots
-# sns.set_theme()
-sns.set_theme(
-    style="dark",
-    context="talk",
-    rc={
-        "axes.grid": False,  # Disable all grid lines
-        "axes.spines.top": False,
-        "axes.spines.right": True,
-        "axes.titleweight": "bold",
-        "axes.labelweight": "bold",
-        "font.size": 16.0,
-        "axes.labelsize": 16.0,
-        "axes.titlesize": 16.0,
-        "legend.fontsize": 14,
-        "legend.title_fontsize": 15.0,
-        "xtick.direction": "out",
-        "ytick.direction": "out",
-        "legend.frameon": False,
-    },
-)
 
 # mpl.rcParams["savefig.facecolor"] = "#f7f7f7"
 
@@ -422,7 +402,7 @@ def plot_run_data(
             secax.set_xlabel("PBT Epoch")
             secax.set_xticks([e for e in range(num_pbt_epochs) if e % pbt_plot_interval == 1])
             # Show tick labels for secondary xaxis, inside and closer to the plot
-            secax.xaxis.set_tick_params(which="both", bottom=False, top=False, labelbottom=True, labeltop=False, pad=-2)
+            secax.xaxis.set_tick_params(which="both", bottom=False, top=False, labelbottom=True, labeltop=False, pad=-3)
             secax.xaxis.set_label_position("top")
             # Also move the label closer to the plot
             secax.set_xlabel("PBT Epoch", labelpad=3)
@@ -916,7 +896,9 @@ def plot_intra_group_variances(
 
     group_stat = split_idx[0][0]
     group_variance_global.index.names = [group_stat]
-    group_stat_str = " ".join(map(str.capitalize, group_stat.split("_")))
+    group_stat_str = " ".join(
+        map(str.capitalize, group_stat.replace("train_batch_size_per_per_learner", "batch size").split("_"))
+    )
     color_map, cmap, norm = make_cmap(values, log=group_stat in LOG_SETTINGS)
 
     fig_global, ax_global = plt.subplots(figsize=(6, max(4, len(group_variance_global) * 0.33)))

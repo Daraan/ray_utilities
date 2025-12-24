@@ -1,23 +1,32 @@
 from __future__ import annotations
 
+import argparse
+import atexit
 import logging
 import math
+import os
 import re
 import sys
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import datetime
+from functools import partial
 from itertools import chain, product
 from pathlib import Path
-from typing import Any, Callable, Collection, Iterable, Sequence, cast
+from typing import Any, Callable, Collection, Iterable, NamedTuple, Sequence, cast
+from zipfile import ZipFile
 
 import numpy as np
+import optuna
 import optuna.importance
 import pandas as pd
+import seaborn as sns
 from matplotlib import pyplot as plt
 from typing_extensions import Literal
 
-from experiments.create_tune_parameters import write_distributions_to_json
+from experiments.create_tune_parameters import default_distributions, write_distributions_to_json
 from ray_utilities.config.parser.default_argument_parser import DefaultArgumentParser
 from ray_utilities.misc import cast_numpy_numbers, round_floats
 from ray_utilities.setup.extensions import load_distributions_from_json
@@ -55,6 +64,17 @@ except ImportError:
 ImportanceMethod = str
 RegressorFactory = Callable[[], Any]
 MetricKey = str | tuple[Any, ...]
+LargeMode = Literal["all", "large", "non_large"]
+
+
+class ImportanceTask(NamedTuple):
+    filter_kl: bool | None
+    filter_vf_share: bool | None
+    centered_flag: bool
+    large_mode: LargeMode
+    submission_label: str | None
+    evaluator_name: str
+    evaluator_template: optuna.importance.BaseImportanceEvaluator
 
 
 logger = logging.getLogger(__name__)
@@ -62,8 +82,6 @@ logger = logging.getLogger(__name__)
 _REPORT_INTERVAL = 32
 
 DEBUG = False
-
-from functools import partial
 
 remote_breakpoint = partial(remote_breakpoint, port=5681)
 
@@ -456,13 +474,7 @@ def _encode_features(features: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, di
     return encoded, category_mappings
 
 
-# ----------
-
-import os
-
-import optuna
-
-STUDY_COLUMN_NAMES = ("evaluator_name", "key", "centered", "step")
+STUDY_COLUMN_NAMES = ("evaluator_name", "key", "centered", "large_mode", "step")
 
 
 def load_study_results(parquet_file: str | Path, **kwargs) -> pd.DataFrame:
@@ -511,8 +523,6 @@ def save_analysis_to_parquet(df, parquet_file: str | Path):
             df.columns = pd.MultiIndex.from_tuples(new_columns, names=df.columns.names)
 
     # Try to write to parquet and convert pandas UserWarnings into exceptions when relevant
-    import warnings
-
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         df.to_parquet(parquet_file)
@@ -631,13 +641,29 @@ def create_finished_trial(
     params: dict[str, Any],
     intermediate_values: dict[int, float] | None = None,
     distributions: dict[str, optuna.distributions.BaseDistribution] | None = None,
+    *,
+    centered_metric: float | None = None,
+    analysis_step: int | str = "global",
+    is_large: bool = False,
+    submission_label: str | None = None,
+    per_pbt_epoch: bool = False,
+    extra_user_attrs: dict[str, Any] | None = None,
 ):
     params = params.copy()
     user_attrs = {
         "identifier": identifier,
         "vf_share_layers": params.pop("vf_share_layers"),
         "use_kl_loss": params.pop("use_kl_loss"),
+        "analysis_step": analysis_step,
+        "per_pbt_epoch": per_pbt_epoch,
+        "submission_study": submission_label,
+        "raw_metric": metric_result,
+        "centered_metric": centered_metric,
+        "_centered": centered_metric is not None,
+        "_large": is_large,
     }
+    if extra_user_attrs:
+        user_attrs.update(extra_user_attrs)
     assert isinstance(user_attrs["vf_share_layers"], bool)
     assert isinstance(user_attrs["use_kl_loss"], bool)
     try:
@@ -723,12 +749,6 @@ def optuna_create_studies(
     metric_to_check = metric
     if disable_checks:
         _disable_distribution_check()
-    studies: dict[Literal["global"] | int, optuna.Study] = {}
-    pbt_centered_studies: dict[optuna.Study, optuna.Study] = {}
-    submission_studies: dict[optuna.Study, optuna.Study] = {}
-    submission_studies_centered: dict[optuna.Study, optuna.Study] = {}
-    large_studies: dict[optuna.Study, optuna.Study] = {}
-    large_studies_centered: dict[optuna.Study, optuna.Study] = {}
     storage = _get_storage(database_path or experiment_paths[0])
     if clear_experiment_cache:
         clear_tracking_study(storage)
@@ -736,67 +756,70 @@ def optuna_create_studies(
     tracking_study = get_experiment_track_study(storage)
     if clear_experiment_cache:
         assert not STORED_EXPERIMENTS
+    studies: dict[Literal["global"] | int, optuna.Study] = {}
     if not study_each_epoch:
-        studies[GLOBAL_STUDY] = get_optuna_study(storage, env, load_if_exists=load_if_exists, clear_study=clear_study)
-        if submission_study:
-            submission_studies[studies[GLOBAL_STUDY]] = get_optuna_study(
-                storage, env, suffix=f"_{submission_study}", clear_study=clear_study, load_if_exists=load_if_exists
-            )
-        if group_stat not in ("batch_site", "train_batch_size_per_learner"):
-            large_studies[studies[GLOBAL_STUDY]] = get_optuna_study(
-                storage, env, suffix="_large", clear_study=clear_study, load_if_exists=load_if_exists
-            )
+        global_study = get_optuna_study(storage, env, load_if_exists=load_if_exists, clear_study=clear_study)
+        global_study.set_user_attr("analysis_step", "global")
+        studies[GLOBAL_STUDY] = global_study
     if study_each_epoch is not False:
-        # Create a study for each epoch at step 8192 * 4 until max_step
-        for epoch in sorted(set(range(1, 32 + 1)) | set(range(1, 8 + 1))):
+        for epoch in sorted(set(range(1, 33)) | set(range(1, 9))):
             step = epoch * 8192 * 4
-            studies[step] = step_study = get_optuna_study(storage, env, step, clear_study=clear_study)
-            pbt_centered_studies[step_study] = get_optuna_study(
-                storage, env, step, suffix="_centered", clear_study=clear_study
-            )
-            if submission_study:
-                submission_studies[step_study] = get_optuna_study(
-                    storage, env, step, suffix=f"_{submission_study}", clear_study=clear_study
-                )
-                submission_studies_centered[step_study] = get_optuna_study(
-                    storage,
-                    env,
-                    step,
-                    suffix=f"_{submission_study}_centered",
-                    clear_study=clear_study,
-                )
-            if group_stat not in ("batch_site", "train_batch_size_per_learner"):
-                large_studies[step_study] = get_optuna_study(
-                    storage, env, suffix="_large", clear_study=clear_study, load_if_exists=load_if_exists
-                )
-                large_studies_centered[step_study] = get_optuna_study(
-                    storage, env, suffix="_large_centered", clear_study=clear_study, load_if_exists=load_if_exists
-                )
-                # TODO: add for trials_to_add
+            step_study = get_optuna_study(storage, env, step, clear_study=clear_study)
+            step_study.set_user_attr("analysis_step", step)
+            studies[step] = step_study
 
-    def get_all_studies():
-        for key, main_study in studies.items():
-            # key is "global" or step
-            if isinstance(key, int):
-                key = f"step={key}"  # noqa
-                if env and env not in key:
-                    key = f"{env}_{key}"  # noqa
-            elif env and env not in key:
-                key = f"{env}_{key}"  # noqa
-            yield (key, main_study)
-            if main_study in pbt_centered_studies:
-                yield (key + "_centered", pbt_centered_studies[main_study])
-            if main_study in submission_studies:
-                yield (key + f"_{submission_study}", submission_studies[main_study])
-            if main_study in submission_studies_centered:
-                yield (key + f"_{submission_study}_centered", submission_studies_centered[main_study])
-            # if main_study in large_studies:
-            #     yield (key + "_large".large_studies[main_study])
-            # if main_study in large_studies_centered:
-            #    yield (key + "_large_centered", large_studies_centered[main_study])
+    step_keys = sorted(step for step in studies if isinstance(step, int))
+
+    def _format_analysis_key(raw_key: Literal["global"] | int) -> str:
+        if raw_key == GLOBAL_STUDY:
+            key_label = GLOBAL_STUDY
+        else:
+            key_label = f"step={raw_key}"
+        if env and env not in key_label:
+            key_label = f"{env}_{key_label}"
+        return key_label
+
+    def _coerce_to_int(value: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, (int, np.integer)):
+            return int(value)
+        if isinstance(value, pd.Series):
+            if value.empty:
+                return None
+            return _coerce_to_int(value.iloc[0])
+        if hasattr(value, "item"):
+            try:
+                return int(value.item())
+            except Exception:  # noqa: BLE001
+                return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _coerce_to_float(value: Any) -> float:
+        if isinstance(value, (float, int, np.floating, np.integer)):
+            return float(value)
+        if isinstance(value, pd.Series):
+            if value.empty:
+                raise ValueError("Empty series cannot be coerced to float.")
+            return float(value.iloc[0])
+        if hasattr(value, "item"):
+            return float(value.item())
+        return float(value)
+
+    def _resolve_step_key(current_step: int, total_steps: int | None) -> int:
+        if current_step in studies:
+            return current_step
+        if total_steps is not None and total_steps in studies:
+            return total_steps
+        if not step_keys:
+            raise KeyError("No per-step studies configured.")
+        return min(step_keys, key=lambda step: (abs(step - current_step), step))
 
     if load_studies_only:
-        return dict(get_all_studies())
+        return {_format_analysis_key(key): study for key, study in studies.items()}
 
     for experiment_path in experiment_paths:
         logger.info("Checking path for experiments: %s", experiment_path)
@@ -838,15 +861,7 @@ def optuna_create_studies(
 
             logger.debug("Processing experiment directory: %s", experiment_dir)
 
-            trials_to_add = {study: [] for study in studies.values()} | {
-                study: [] for study in pbt_centered_studies.values()
-            }
-            if submission_study:
-                trials_to_add |= {study: [] for study in submission_studies.values()}
-                trials_to_add |= {study: [] for study in submission_studies_centered.values()}
-            if group_stat not in ("batch_site", "train_batch_size_per_learner"):
-                trials_to_add |= {study: [] for study in large_studies.values()}
-                trials_to_add |= {study: [] for study in large_studies_centered.values()}
+            trials_to_add = {study: [] for study in studies.values()}
             try:
                 # Load run data for this experiment
                 run_frames = load_run_data(experiment_dir)
@@ -861,13 +876,14 @@ def optuna_create_studies(
                 _group_stat, df = get_and_check_group_stat(df, group_stat=None, group_by=("pbt_group_key",))
                 if group_stat is None:
                     group_stat = _group_stat
-                is_large = None
+                is_large_flag = False
                 if group_stat not in ("batch_size", "train_batch_size_per_learner"):
-                    batch_size = df.iloc[0].config.get(
+                    batch_size_raw = df.iloc[0].config.get(
                         "train_batch_size_per_learner",
-                        df.iloc[0].config.get("batch_size", df.iloc[0].get("batch_size", None)),
+                        df.iloc[0].config.get("batch_size", df.iloc[0].get("batch_size")),
                     )
-                    is_large = batch_size >= 8192
+                    batch_size_value = _coerce_to_int(batch_size_raw)
+                    is_large_flag = bool(batch_size_value is not None and batch_size_value >= 8192)
 
                 metric = check_metric_backport(df, metric_to_check)
                 # Get tools to center epochs
@@ -887,7 +903,7 @@ def optuna_create_studies(
                     use_kl_loss = use_kl_loss.iloc[0].item()
 
                 # Create trials for each run_id
-                # TODO: possibly groupkey -> take mean
+                # Consider using groupkey to take mean over duplicates.
                 # pbt_epoch should be always present when using combine_df
                 try:
                     max_epoch = df.config.pbt_epoch.max().item()
@@ -919,8 +935,6 @@ def optuna_create_studies(
                             ]
                         ),
                     )
-                # TODO: to have a more local evaluation over PBT epochs standardise the results
-                # for that subtract the result of the parent run
                 group_key: Literal["run_id"] | tuple[Literal["pbt_epoch"], Literal["pbt_group_key"]]
                 for i, (group_key, group) in enumerate(iterator):  # pyright: ignore[reportAssignmentType]
                     if group.empty:
@@ -966,7 +980,7 @@ def optuna_create_studies(
                         assert 0.00047713000000000003 not in params.values()
                     params["vf_share_layers"] = vf_share_layers
                     params["use_kl_loss"] = use_kl_loss
-                    if "grad_clip" in params and pd.isna(params["grad_clip"]):
+                    if "grad_clip" in params and (pd.isna(params["grad_clip"]) or params["grad_clip"] == float("inf")):
                         params["grad_clip"] = None
                     assert params["grad_clip"] is None or not math.isnan(params["grad_clip"])
                     # Clean placeholders
@@ -976,219 +990,83 @@ def optuna_create_studies(
                         metric_result = float(final_row[metric].iloc[0])
                     except Exception:
                         metric_result = float(final_row[metric])
+                    metric_centered: float | None = None
                     if per_pbt_epoch:
                         try:
-                            # need to either substract the parent metric, of if run was continued value from previous epoch
-                            # For individual runs:
-                            if False:
-                                if not final_row.config.fork_from.parent_fork_id.isna().any():
-                                    shift_values = value_shifter_with_first.loc[
-                                        final_row.config.pbt_epoch.item(),
-                                        final_row.config.fork_from.parent_fork_id.item(),
-                                    ]
-                                    assert (
-                                        shift_values["current_step"].item()
-                                        == final_row.config.fork_from.parent_env_steps.item()
-                                    )
-                                    metric_centered = (metric_result - shift_values[metric]).item()
-                                else:
-                                    # first epoch oder continued from self
-                                    # FIXME: run_id is NOT the experiment_key
-                                    shift_values = value_shifter.loc[final_row.config.pbt_epoch.item(), run_id]
-                                    assert (shift_values["current_step"].item() < final_row.current_step).all()
-                                    metric_centered = (metric_result - shift_values[metric]).item()
-                            else:
-                                # for group
-                                try:
-                                    shift_values = value_shifter_with_first.loc[final_row.config.pbt_epoch.item()]
-                                except KeyError:
-                                    # maybe need to remove parquet file and recreate it
-                                    remote_breakpoint()
-                                    raise
-                                if metric in shift_values:
-                                    metric_centered = (metric_result - shift_values[metric]).item()
-                                elif isinstance(metric, str):
-                                    raise KeyError(metric, "not in shift values")
-                                else:  # some Sequece
-                                    metric_centered = (metric_result - shift_values["-".join(metric)]).item()
-                            centered_trial = create_finished_trial(
-                                metric_result=metric_centered,
-                                identifier=trial_identifier + "_centered",
-                                params={
-                                    k: v
-                                    for k, v in params.items()
-                                    if k in distributions or k in ("vf_share_layers", "use_kl_loss")
-                                }
-                                if distributions
-                                else params,
-                                distributions=distributions,
-                                # intermediate_values=intermediate_values
-                            )
-                        except Exception:
-                            logger.exception("Could not create centered trial for %s", trial_identifier)
+                            shift_values = value_shifter_with_first.loc[final_row.config.pbt_epoch.item()]
+                            metric_key_name = metric if isinstance(metric, str) else "-".join(metric)
+                            reference_value = shift_values.get(metric_key_name)
+                            if reference_value is None:
+                                raise KeyError(metric_key_name, "not in shift values")
+                            metric_centered = metric_result - _coerce_to_float(reference_value)
+                        except Exception:  # noqa: BLE001
+                            logger.exception("Could not compute centered metric for %s", trial_identifier)
                             remote_breakpoint()
-                    # Create and add trial to study
-                    trial = create_finished_trial(
-                        metric_result=metric_result,
-                        identifier=trial_identifier,
-                        params={
+                            metric_centered = None
+
+                    if not per_pbt_epoch:
+                        analysis_step_key: Literal["global"] | int = GLOBAL_STUDY
+                    else:
+                        current_step_value = _coerce_to_int(final_row.current_step)
+                        if current_step_value is None:
+                            logger.warning(
+                                "Skipping trial %s as current_step could not be determined.", trial_identifier
+                            )
+                            no_errors = False
+                            continue
+                        total_steps_raw = final_row.config.get("cli_args", {}).get("total_steps")
+                        total_steps_value = _coerce_to_int(total_steps_raw)
+                        try:
+                            analysis_step_key = _resolve_step_key(current_step_value, total_steps_value)
+                        except Exception:  # noqa: BLE001
+                            logger.warning(
+                                "Could not map step %s for trial %s to configured studies.",
+                                current_step_value,
+                                trial_identifier,
+                            )
+                            no_errors = False
+                            continue
+
+                    study_to_add = studies.get(analysis_step_key)
+                    if study_to_add is None:
+                        logger.warning("No study configured for key %s", analysis_step_key)
+                        no_errors = False
+                        continue
+
+                    filtered_params = (
+                        {
                             k: v
                             for k, v in params.items()
                             if k in distributions or k in ("vf_share_layers", "use_kl_loss")
                         }
                         if distributions
-                        else params,
-                        distributions=distributions,
-                        # intermediate_values=intermediate_values
+                        else params
                     )
-                    if not per_pbt_epoch:
-                        trials_to_add[studies[GLOBAL_STUDY]].append(trial)
-                        if submission_study:
-                            trials_to_add[submission_studies[studies[GLOBAL_STUDY]]].append(trial)
-                    else:
-                        # TODO: will not work if trial ended too early
-                        current_step = int(final_row.current_step.iloc[0])
-                        if current_step in studies:
-                            study_to_add = studies[current_step]
-                        else:
-                            # do we have perturbation interval
-                            perturbation_interval = df.attrs.get("perturbation_interval")
-                            if perturbation_interval is not None:
-                                try:
-                                    study_to_add = studies[perturbation_interval * group_key[0]]
-                                except (KeyError, IndexError):
-                                    study_to_add = studies[perturbation_interval * (final_row.config.pbt_epoch + 1)]
-                            else:
-                                # if current_step is not slightly above <= 2048 on another key ceil it
-                                study_keys = sorted([step for step in studies.keys() if isinstance(step, int)])
-                                closest_key_idx = np.argmin([abs(current_step - step) for step in study_keys])
-                                closest_key = study_keys[closest_key_idx]
-                                upper_bound = closest_key + final_row.get(
-                                    "batch_size", final_row.config.get("train_batch_size_per_learner", 2048)
-                                )
-                                if isinstance(upper_bound, pd.Series):
-                                    upper_bound: float = upper_bound.iloc[-1]
-                                final_epoch = final_row.config.get("pbt_epoch", 0)
-                                total_steps = final_row.config.get("cli_args", {}).get("total_steps").item()
-                                if total_steps is not None:
-                                    total_steps = int(total_steps)
-                                if closest_key > current_step or current_step <= upper_bound:
-                                    if closest_key == study_keys[-2] and total_steps == study_keys[-1]:
-                                        # special case where we are close to -2 but wanted to train to -1
-                                        logger.warning(
-                                            "Trial with steps %s did not reach the exact end of %s but has total_steps %s putting it into that epoch.",
-                                            current_step,
-                                            study_keys[-1],
-                                            total_steps,
-                                        )
-                                        study_to_add = studies[total_steps]
-                                    else:
-                                        study_to_add = studies[closest_key]
-                                else:
-                                    # Known to be trained a few steps over
-                                    if (
-                                        "tws47f25121306216cda4" in trial_identifier
-                                        or "tws47f25122106101b634" in trial_identifier
-                                    ) and current_step >= 1048576:
-                                        study_to_add = studies[1048576]
 
-                                    logger.warning(
-                                        "Could not determine epoch of %s %s at step %s", run_id, env, current_step
-                                    )
-                                    # is in the lower half between two keys - ceil up
-                                    try:
-                                        if closest_key_idx == len(study_keys) - 2 and current_step >= study_keys[-2]:
-                                            # This can happen when we restored after the last epoch and it trained 1-2 steps more
-                                            logger.warning(
-                                                "Trial with steps %s did not reach the exact end of %s but has total_steps %s putting it into that epoch.",
-                                                current_step,
-                                                study_keys[closest_key_idx],
-                                                total_steps,
-                                            )
-                                            study_to_add = studies[study_keys[closest_key_idx]]
-                                            log_added_to_step = study_keys[closest_key_idx]
-                                        else:
-                                            study_to_add = studies[study_keys[closest_key_idx + 1]]
-                                            log_added_to_step = study_keys[closest_key_idx + 1]
-                                    except (KeyError, IndexError):
-                                        if current_step > study_keys[-1]:
-                                            # was trained to long add to max
-                                            logger.warning(
-                                                "Trial was likely trained to long adding it to epoch matching step %s",
-                                                study_keys[-1],
-                                            )
-                                            study_to_add = studies[study_keys[-1]]
-                                        else:
-                                            # if it is between the second largest and largest add to the largest.
-                                            # Problem there is the total_steps 1_179_648 case and the 1_048_576 of 8 / 32 epochs
-                                            # and possibly old trials not fitting in both.
-                                            if total_steps is not None and total_steps in studies:
-                                                logger.warning(
-                                                    "Trial with steps %s did not reach the exact end of %s but has total_steps %s putting it into that epoch.",
-                                                    current_step,
-                                                    study_keys[-1],
-                                                    total_steps,
-                                                )
-                                                if current_step == 744448:
-                                                    remote_breakpoint()
-                                                if closest_key < total_steps:
-                                                    # Why did this then fail with a KeyError?
-                                                    remote_breakpoint()
-                                                    study_to_add = ...
-                                                else:
-                                                    study_to_add = studies[int(total_steps)]
-                                            elif current_step > study_keys[-2] + 8192 * 2:
-                                                logger.warning(
-                                                    "Trial with steps %s did not reach the exact end of %s and is > %s putting it into the last epoch.",
-                                                    current_step,
-                                                    study_keys[-1],
-                                                    study_keys[-2],
-                                                )
-                                                study_to_add = studies[max(study_keys)]
-                                            elif current_step > study_keys[-2] and final_epoch >= 6:
-                                                # Do we have a total steps info?
-                                                if 6 <= final_epoch <= 12:
-                                                    study_to_add = studies[study_keys[-1]]
-                                                else:
-                                                    # ~32 epoch case
-                                                    study_to_add = studies[study_keys[-2]]
-                                            else:
-                                                # should not happen
-                                                logger.error(
-                                                    "Cannot determine pbt epoch / current_step of trial %s with at step %s.",
-                                                    run_id,
-                                                    current_step,
-                                                )
-                                                study_to_add = None
-                                                no_errors = False
-                                    else:
-                                        # No KeyError
-                                        logger.warning(
-                                            "Could not determine pbt epoch / current_step of trial %s with at step %s. "
-                                            "Added it to next step. %s",
-                                            run_id,
-                                            current_step,
-                                            log_added_to_step,
-                                        )
-                        if study_to_add is not None:
-                            trials_to_add[study_to_add].append(trial)
-                            trials_to_add[pbt_centered_studies[study_to_add]].append(centered_trial)
-                            if submission_study:
-                                trials_to_add[submission_studies[study_to_add]].append(trial)
-                                trials_to_add[submission_studies_centered[study_to_add]].append(centered_trial)
-
+                    trial = create_finished_trial(
+                        metric_result=metric_result,
+                        identifier=trial_identifier,
+                        params=filtered_params,
+                        distributions=distributions,
+                        centered_metric=metric_centered,
+                        analysis_step="global" if analysis_step_key == GLOBAL_STUDY else analysis_step_key,
+                        is_large=is_large_flag,
+                        submission_label=submission_study,
+                        per_pbt_epoch=per_pbt_epoch,
+                    )
+                    trials_to_add[study_to_add].append(trial)
                     if i % _REPORT_INTERVAL == 0:
                         if per_pbt_epoch:
                             logger.debug(
-                                "Adding trial for run %s pbt_epoch %s with metric %s - and %d more trials",
+                                "Adding trial for run %s at step %s with metric %s - processed %d trials",
                                 run_id,
-                                group_key[0],
+                                analysis_step_key,
                                 metric_result,
                                 _REPORT_INTERVAL,
                             )
                         else:
                             logger.debug(
-                                "Adding trial for run %s with metric %s - and %d more trials",
+                                "Adding trial for run %s with metric %s - processed %d trials",
                                 run_id,
                                 metric_result,
                                 _REPORT_INTERVAL,
@@ -1208,7 +1086,7 @@ def optuna_create_studies(
             if no_errors and study_each_epoch is None:  # add it as finished when we checked both types.
                 add_finished_experiment(experiment_id, tracking_study)
 
-    return dict(get_all_studies())
+    return {_format_analysis_key(key): study for key, study in studies.items()}
 
 
 PARAMS_TO_CHECK = {
@@ -1216,6 +1094,56 @@ PARAMS_TO_CHECK = {
     "lr",
     "gamma",
 }
+
+
+def _compose_submission_key(base_key: str, submission_label: str | None) -> str:
+    if not submission_label:
+        return base_key
+    safe_label = re.sub(r"[^A-Za-z0-9_.-]", "_", submission_label)
+    return f"{base_key}|submission={safe_label}"
+
+
+def _filter_trials_for_view(
+    trials: Sequence[optuna.trial.FrozenTrial],
+    *,
+    analysis_step: int | str,
+    centered: bool,
+    large_mode: LargeMode,
+    submission_label: str | None,
+    use_kl_loss: bool | None,
+    vf_share_layers: bool | None,
+) -> list[optuna.trial.FrozenTrial]:
+    filtered: list[optuna.trial.FrozenTrial] = []
+    for trial in trials:
+        attrs = trial.user_attrs
+        if attrs.get("analysis_step", "global") != analysis_step:
+            continue
+        if submission_label is not None and attrs.get("submission_study") != submission_label:
+            continue
+        is_large_trial = bool(attrs.get("_large", False))
+        if large_mode == "large" and not is_large_trial:
+            continue
+        if large_mode == "non_large" and is_large_trial:
+            continue
+        if vf_share_layers is not None and attrs.get("vf_share_layers") != vf_share_layers:
+            continue
+        if use_kl_loss is not None and attrs.get("use_kl_loss") != use_kl_loss:
+            continue
+        trial_copy = deepcopy(trial)
+        raw_metric = attrs.get("raw_metric")
+        if raw_metric is not None:
+            trial_copy.value = raw_metric
+        trial_copy.user_attrs = dict(trial_copy.user_attrs)
+        trial_copy.user_attrs["view_centered"] = centered
+        trial_copy.user_attrs["view_large_mode"] = large_mode
+        trial_copy.user_attrs["view_submission"] = submission_label
+        if centered:
+            centered_metric = attrs.get("centered_metric")
+            if centered_metric is None:
+                continue
+            trial_copy.value = centered_metric
+        filtered.append(trial_copy)
+    return filtered
 
 
 def _fix_distributions(study: optuna.Study, params: Collection[str]):
@@ -1299,52 +1227,55 @@ def __try_step_cast(col):
     return col
 
 
-def _get_importances(study, evaluator, params, *, use_kl_loss: bool | None = None, vf_share_layers: bool | None = None):
-    if use_kl_loss is None and vf_share_layers is None:
-        if hasattr(study, "_fixed_trials"):
-            study.get_trials = lambda *args, **kwargs: study._fixed_trials  # noqa
-        try:
-            importances = optuna.importance.get_param_importances(study, evaluator=evaluator, params=params)
-        except ValueError as ve:
-            if "dynamic search" in str(ve):
-                study = deepcopy(study)  # noqa: PLW2901
-                completed_trials = _fix_distributions(study, params or PARAMS_TO_CHECK)
-                study.get_trials = lambda *args, **kwargs: completed_trials  # noqa
-                importances = optuna.importance.get_param_importances(study, evaluator=evaluator, params=params)
-            else:
-                raise
-        else:
-            completed_trials = study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))
-        return importances, completed_trials
-    if hasattr(study, "_fixed_trials"):
-        completed_trials = study._fixed_trials  # noqa
-    else:
-        study = deepcopy(study)  # noqa: PLW2901
-        completed_trials = _fix_distributions(study, params or PARAMS_TO_CHECK)
-    # Filter trials based on vf_share_layers and use_kl_loss
-    # NOTE: currently there is not combination of use_kl_loss and not vf_share_layers in our experiments
-    if vf_share_layers is not None:
-        completed_trials = [
-            t
-            for t in completed_trials
-            if t.user_attrs["vf_share_layers"] == vf_share_layers  # If this raises a KeyError recreate the study :(
-        ]
-    if use_kl_loss is not None:
-        completed_trials = [
-            t
-            for t in completed_trials
-            if t.user_attrs["use_kl_loss"] == use_kl_loss  # If this raises a KeyError recreate the study :(
-        ]
-    if not completed_trials:
-        logger.warning(
-            "No completed trials found for study %s with filtering vf_share_layers=%s and use_kl_loss=%s",
-            study.study_name,
-            vf_share_layers,
-            use_kl_loss,
-        )
+def _get_importances(
+    study: optuna.Study,
+    evaluator: optuna.importance.BaseImportanceEvaluator,
+    params: list[str],
+    *,
+    analysis_step: int | str,
+    centered: bool,
+    large_mode: LargeMode,
+    submission_label: str | None,
+    use_kl_loss: bool | None = None,
+    vf_share_layers: bool | None = None,
+    base_trials: Sequence[optuna.trial.FrozenTrial] | None = None,
+):
+    base_trials = (
+        list(base_trials)
+        if base_trials is not None
+        else study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))
+    )
+    filtered_trials = _filter_trials_for_view(
+        base_trials,
+        analysis_step=analysis_step,
+        centered=centered,
+        large_mode=large_mode,
+        submission_label=submission_label,
+        use_kl_loss=use_kl_loss,
+        vf_share_layers=vf_share_layers,
+    )
+    if not filtered_trials:
         return {}, []
-    study.get_trials = lambda *args, **kwargs: completed_trials  # noqa
-    importances = optuna.importance.get_param_importances(study, evaluator=evaluator, params=params)
+
+    working_study = deepcopy(study)
+
+    def _patched_get_trials(*args, **kwargs):
+        if kwargs.get("deepcopy", True):
+            return deepcopy(filtered_trials)
+        return filtered_trials
+
+    working_study.get_trials = _patched_get_trials  # type: ignore[assignment]
+    try:
+        completed_trials = _fix_distributions(working_study, params or PARAMS_TO_CHECK)
+        importances = optuna.importance.get_param_importances(working_study, evaluator=evaluator, params=params)
+    except ValueError as ve:
+        if "dynamic search" not in str(ve):
+            raise
+        retry_study = deepcopy(working_study)
+        retry_study.get_trials = _patched_get_trials  # type: ignore[assignment]
+        completed_trials = _fix_distributions(retry_study, params or PARAMS_TO_CHECK)
+        importances = optuna.importance.get_param_importances(retry_study, evaluator=evaluator, params=params)
+        working_study = retry_study
     return importances, completed_trials
 
 
@@ -1354,80 +1285,138 @@ def _analyze_single_study(
     evaluators: dict[str, optuna.importance.BaseImportanceEvaluator],
     params: list[str] | None,
     excludes: Collection[Literal["kl_loss", "no_kl_loss", "vf_share_layers", "no_vf_share_layers"]] = (),
+    base_trials: Sequence[optuna.trial.FrozenTrial] | None = None,
 ) -> list[dict[str, Any]]:
     """Analyze one study and return result rows."""
     rows: list[dict[str, Any]] = []
     logger.info("Analyzing study for key: %s", key)
-    completed_trials = None
-    try:
-        for filter_kl, filter_vf_share in product([None, True, False], [None, True, False]):
-            if filter_kl is False and "no_kl_loss" in excludes:
-                continue
-            if filter_kl is True and "kl_loss" in excludes:
-                continue
-            if filter_vf_share is False and "no_vf_share_layers" in excludes:
-                continue
-            if filter_vf_share is True and "vf_share_layers" in excludes:
-                continue
-            for evaluator_name, evaluator in evaluators.items():
-                evaluator = deepcopy(evaluator)
-                try:
-                    importances, completed_trials = _get_importances(
-                        study, evaluator, params, use_kl_loss=filter_kl, vf_share_layers=filter_vf_share
-                    )
-                except (RuntimeError, ValueError) as e:
-                    logger.error("Could not calculate importances because of %s", e)
-                    continue
-                if not completed_trials:
-                    continue
-                for param, importance in importances.items():
-                    store_key = key
-                    if isinstance(store_key, int):
-                        # should normally have env name in key now
-                        step = store_key
-                        centered = False
-                    else:
-                        centered = "centered" in store_key
-                        store_key = store_key.replace("_centered", "")
+    analysis_step_value: int | str = study.user_attrs.get("analysis_step", "global")
+    base_trials = (
+        list(base_trials)
+        if base_trials is not None
+        else study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))
+    )
+    submission_labels = sorted(
+        {
+            cast("str", label)
+            for label in (trial.user_attrs.get("submission_study") for trial in base_trials)
+            if isinstance(label, str) and label
+        }
+    )
+    has_centered = any(trial.user_attrs.get("centered_metric") is not None for trial in base_trials)
+    has_large = any(trial.user_attrs.get("_large", False) for trial in base_trials)
 
-                        match = re.search(r"step=(\d+)", store_key)
-                        if match:
-                            step = match.groups()[0]
-                            store_key = re.sub(r"_?step=\d+", "", store_key)
-                        else:
-                            step = "global"
-                            store_key = store_key.replace("_global", "")
-                    if filter_kl is True:
-                        store_key = f"{store_key}_kl_loss"
-                    elif filter_kl is False:
-                        store_key = f"{store_key}_no_kl_loss"
-                    if filter_vf_share is True:
-                        store_key = f"{store_key}_shared_encoder"
-                    elif filter_vf_share is False:
-                        store_key = f"{store_key}_shared_encoder"
-                    rows.append(
-                        {
-                            "param": param,
-                            "importance": importance,
-                            "evaluator_name": evaluator_name,
-                            "key": store_key,
-                            "centered": centered,
-                            "step": step,
-                            "number_of_trials": len(completed_trials),
-                            "study_name": study.study_name,
-                        }
+    view_specs: list[tuple[bool, LargeMode, str | None]] = []
+
+    def _append_spec(spec: tuple[bool, LargeMode, str | None]) -> None:
+        if spec not in view_specs:
+            view_specs.append(spec)
+
+    large_modes: list[LargeMode] = ["all"]
+    if has_large:
+        large_modes.extend(["large", "non_large"])
+
+    for large_mode in large_modes:
+        _append_spec((False, large_mode, None))
+        if has_centered:
+            _append_spec((True, large_mode, None))
+        for submission in submission_labels:
+            _append_spec((False, large_mode, submission))
+            if has_centered:
+                _append_spec((True, large_mode, submission))
+
+    tasks: list[ImportanceTask] = []
+    for filter_kl, filter_vf_share in product([None, True, False], [None, True, False]):
+        if filter_kl is False and "no_kl_loss" in excludes:
+            continue
+        if filter_kl is True and "kl_loss" in excludes:
+            continue
+        if filter_vf_share is False and "no_vf_share_layers" in excludes:
+            continue
+        if filter_vf_share is True and "vf_share_layers" in excludes:
+            continue
+        for centered_flag, large_mode, submission_label in view_specs:
+            for evaluator_name, evaluator_template in evaluators.items():
+                tasks.append(
+                    ImportanceTask(
+                        filter_kl,
+                        filter_vf_share,
+                        centered_flag,
+                        large_mode,
+                        submission_label,
+                        evaluator_name,
+                        evaluator_template,
                     )
-                sorted_importances = sorted(importances.items(), key=lambda item: item[1], reverse=True)
-                report_str = (
-                    f"Hyperparameter importances for study {study.study_name} "
-                    f"(filtered for kl_loss: {filter_kl}, shared encoder: {filter_vf_share}) ({evaluator_name}) "
-                    f"with {len(completed_trials)} trials:\n"
                 )
-                for param, importance in sorted_importances:
-                    report_str += f"  {param}: {importance:.5f}\n"
-                logger.info("%s", report_str)
-    except Exception as e:
-        logger.exception("Failed to analyze study for key %s: %r", key, e)
+
+    def _run_task(task: ImportanceTask):
+        (
+            filter_kl,
+            filter_vf_share,
+            centered_flag,
+            large_mode,
+            submission_label,
+            evaluator_name,
+            evaluator_template,
+        ) = task
+        evaluator_instance = deepcopy(evaluator_template)
+        importances, completed_trials = _get_importances(
+            study,
+            evaluator_instance,
+            params,
+            analysis_step=analysis_step_value,
+            centered=centered_flag,
+            large_mode=large_mode,
+            submission_label=submission_label,
+            use_kl_loss=filter_kl,
+            vf_share_layers=filter_vf_share,
+            base_trials=base_trials,
+        )
+        if not completed_trials:
+            return [], None
+
+        submission_value = submission_label or "default"
+        step_value = analysis_step_value
+        rows_local: list[dict[str, Any]] = []
+        for param, importance in importances.items():
+            variant_key = _compose_submission_key(str(key), submission_label)
+            rows_local.append(
+                {
+                    "param": param,
+                    "importance": importance,
+                    "evaluator_name": evaluator_name,
+                    "key": variant_key,
+                    "centered": centered_flag,
+                    "large_mode": large_mode,
+                    "step": step_value,
+                    "number_of_trials": len(completed_trials),
+                    "study_name": study.study_name,
+                }
+            )
+        sorted_importances = sorted(importances.items(), key=lambda item: item[1], reverse=True)
+        report_lines = [
+            f"Hyperparameter importances for study {study.study_name} "
+            f"(kl_loss: {filter_kl}, vf_share_layers: {filter_vf_share}, "
+            f"centered: {centered_flag}, large_mode: {large_mode}, submission: {submission_value}) "
+            f"({evaluator_name}) with {len(completed_trials)} trials:",
+        ]
+        for param, importance in sorted_importances:
+            report_lines.append(f"  {param}: {importance:.5f}")
+        return rows_local, "\n".join(report_lines)
+
+    try:
+        if tasks:
+            cpu_count = os.cpu_count() or 20
+            inner_cap = max(1, cpu_count // 2)
+            worker_count = min(len(tasks), inner_cap)
+            with ThreadPoolExecutor(max_workers=worker_count) as combo_executor:
+                for combo_rows, report in combo_executor.map(_run_task, tasks):
+                    if combo_rows:
+                        rows.extend(combo_rows)
+                    if report:
+                        logger.info("%s", report)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to analyze study for key %s", key)
         try:
             if len(study.get_trials()) > 1:
                 remote_breakpoint()
@@ -1461,10 +1450,18 @@ def optuna_analyze_studies(
     all_results: list[dict[str, Any]] = []
 
     # Parallelize per-study processing
-    workers = max_workers or max(1, min((os.cpu_count() or 6), len(studies), 22))
+    workers = max_workers or max(1, min((os.cpu_count() or 6), len(studies), 20))
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
-            executor.submit(_analyze_single_study, key, study, evaluators, params, excludes): key
+            executor.submit(
+                _analyze_single_study,
+                key,
+                study,
+                evaluators,
+                params,
+                excludes,
+                None,
+            ): key
             for key, study in studies.items()
         }
         try:
@@ -1512,11 +1509,8 @@ _check_distribution_compatibility = optuna.distributions.check_distribution_comp
 
 
 def _disable_distribution_check():
-    # TODO: Alternatively move all trials to a new study with the changed distribution
+    # Alternative: move all trials to a new study with the changed distribution
     optuna.distributions.check_distribution_compatibility = lambda a, b: None
-
-
-import seaborn as sns
 
 
 def plot_importance_studies(
@@ -1540,7 +1534,24 @@ def plot_importance_studies(
         }
     else:
         importances = {"_": study_results}
+    output_dir = Path(output_path)
     written_paths: set[Path] = set()
+
+    def _iter_level(frame: pd.DataFrame, level_name: str) -> list[tuple[Any, pd.DataFrame]]:
+        if level_name not in frame.columns.names:
+            return [(None, frame)]
+        unique_values = list(dict.fromkeys(frame.columns.get_level_values(level_name)))
+        level_frames: list[tuple[Any, pd.DataFrame]] = []
+        for value in unique_values:
+            try:
+                sub_frame = frame.xs(value, level=level_name, axis=1)
+            except KeyError:
+                continue
+            if isinstance(sub_frame, pd.Series):
+                sub_frame = sub_frame.to_frame()
+            level_frames.append((value, sub_frame))
+        return level_frames
+
     for evaluator_name, importance_df in importances.items():
         if "key" not in importance_df.columns.names and all(name is None for name in importance_df.columns.names):
             importance_df.columns.names = STUDY_COLUMN_NAMES[1:]
@@ -1550,111 +1561,131 @@ def plot_importance_studies(
                 key_with_env = key
             else:
                 key_with_env = f"{env}_{key}"
-            for centered in key_df.columns.get_level_values("centered").unique():
-                fig = None
-                try:
-                    centered_df = key_df[centered]
-
-                    # Create a figure with proper size and colormap
-                    centered_df = centered_df.sort_index(axis=1, key=__sort_columns)  # noqa: PLW2901
-
-                    # Cannot center global study so only assert for False
-                    if centered is False:
-                        assert "global" == centered_df.columns[-1], (
-                            f"Expected last column to be 'global' not {centered_df.columns[-1]}"
-                        )
-                    add_global = "global" in centered_df.columns
-                    fig, ax = plt.subplots(figsize=(12, max(6, 0.5 * len(centered_df))))
-                    # Plot heatmap
-                    cmap = sns.color_palette("magma", as_cmap=True)
-                    # Find the max value in each column and create a mask for those cells
-                    max_mask = centered_df.eq(centered_df.max())
-                    # Plot heatmap
-                    sns.heatmap(
-                        centered_df,
-                        annot=False,
-                        xticklabels=True,
-                        ax=ax,
-                        cmap=cmap,
-                        vmin=0.0,
-                        vmax=1.0,
-                        yticklabels=True,
-                        linewidths=0.5,
-                        linecolor="gray",
-                    )
-                    # Set every 8th x ticklabel in fraction of 1e6 (e.g., 100000 -> 0.1)
-                    xticks = ax.get_xticks()
-                    xlabels = centered_df.columns
-                    new_labels = []
-                    for i, col in enumerate(xlabels):
-                        if col == "global":
+            submission_tag = "default"
+            if "|submission=" in str(key):
+                submission_tag = str(key).split("|submission=", 1)[1]
+            for centered_value, centered_df in _iter_level(key_df, "centered"):
+                centered_bool = bool(centered_value) if centered_value is not None else False
+                for large_value, large_df in _iter_level(centered_df, "large_mode"):
+                    large_mode = str(large_value) if large_value is not None else "all"
+                    fig = None
+                    try:
+                        view_df = large_df.sort_index(axis=1, key=__sort_columns)
+                        if view_df.empty:
                             continue
-                        if i % 8 == 0 or i == len(xlabels) - (2 if add_global else 1):
-                            try:
-                                val = int(col)
-                                label = f"{val / 1e6:.1f}"
-                            except Exception:
-                                label = str(col)
-                            new_labels.append(label)
-                        else:
-                            new_labels.append("")
-                    if add_global:
-                        new_labels.append("G")
-                    ax.set_xticklabels(new_labels, rotation=45, ha="center")
-                    ytick_labels = ax.get_yticklabels()
-                    ax.set_yticklabels(ytick_labels, rotation=22, va="top")
-                    ax.set(ylabel=None)
-
-                    # Draw a black rectangle around the max value in each column
-                    for col_idx, col in enumerate(centered_df.columns):
-                        if max_mask[col].all() or sum(max_mask[col]) <= 1:  # do not draw if all 0 or only 1 value
-                            continue
-                        max_rows = centered_df.index[max_mask[col]]
-                        for row in max_rows:
-                            row_idx = centered_df.index.get_loc(row)
-                            # Rectangle: (x, y) is top left, width=1, height=1
-                            rect = plt.Rectangle(
-                                (col_idx, row_idx),
-                                1,
-                                1,
-                                fill=False,
-                                edgecolor="white",
-                                linewidth=2,
-                                zorder=10,
+                        if centered_bool is False and "global" in view_df.columns:
+                            assert view_df.columns[-1] == "global", (
+                                f"Expected last column to be 'global' not {view_df.columns[-1]}"
                             )
-                            ax.add_patch(rect)
-                    # TODO: disable title
-                    plt.title(f"Hyperparameter Importance {key_with_env} ({evaluator_name})")
-                    plt.xlabel("Step")
+                        add_global = "global" in view_df.columns
+                        fig, ax = plt.subplots(figsize=(12, max(6, 0.5 * len(view_df))))
+                        cmap = sns.color_palette("magma", as_cmap=True)
+                        max_mask = view_df.eq(view_df.max())
+                        sns.heatmap(
+                            view_df,
+                            annot=False,
+                            xticklabels=True,
+                            ax=ax,
+                            cmap=cmap,
+                            vmin=0.0,
+                            vmax=1.0,
+                            yticklabels=True,
+                            linewidths=0.5,
+                            linecolor="gray",
+                        )
+                        xlabels = list(view_df.columns)
+                        new_labels: list[str] = []
+                        for idx, column in enumerate(xlabels):
+                            if column == "global":
+                                continue
+                            if idx % 8 == 0 or idx == len(xlabels) - (2 if add_global else 1):
+                                try:
+                                    step_value = int(column)
+                                    label = f"{step_value / 1e6:.1f}"
+                                except (TypeError, ValueError):
+                                    label = str(column)
+                                new_labels.append(label)
+                            else:
+                                new_labels.append("")
+                        if add_global:
+                            new_labels.append("G")
+                        ax.set_xticklabels(new_labels, rotation=45, ha="center")
+                        ytick_labels = ax.get_yticklabels()
+                        ytick_labels = [lbl.get_text() for lbl in ytick_labels]
+                        ytick_labels = [
+                            " ".join(
+                                map(
+                                    str.capitalize,
+                                    ylabel.replace("train_batch_size_per_per_learner", "batch size")
+                                    .replace("accumulate_gradients_every", "grad accumu.")
+                                    .split("_"),
+                                )
+                            )
+                            for ylabel in ytick_labels
+                        ]
 
-                    file_path = Path(
-                        output_path
-                    ) / f"hyperparameter_importance_{key_with_env}-centered={centered}-{evaluator_name}.pdf".replace(
-                        "(default)", ""
-                    )
-                    assert file_path not in written_paths, "File path already written: %s" % file_path
+                        ax.set_yticklabels(ytick_labels, rotation=0, va="top")
+                        ax.set(ylabel=None)
 
-                    fig.savefig(
-                        file_path,
-                        format="pdf",
-                        bbox_inches="tight",
-                    )
-                    written_paths.add(file_path)
-                    logger.info("Saved heatmap for %s key centered=%s at '%s", key, centered, file_path)
-                except Exception:
-                    logger.error("Could not plot heatmap for %s key centered=%s", key, centered)
-                    remote_breakpoint()
-                finally:
-                    if fig:
-                        plt.close(fig)
+                        for col_idx, column in enumerate(view_df.columns):
+                            column_mask = max_mask[column]
+                            if column_mask.all() or int(column_mask.sum()) <= 1:
+                                continue
+                            max_rows = view_df.index[column_mask]
+                            for row in max_rows:
+                                row_idx = view_df.index.get_loc(row)
+                                rect = plt.Rectangle(
+                                    (col_idx, row_idx),
+                                    1,
+                                    1,
+                                    fill=False,
+                                    edgecolor="white",
+                                    linewidth=2,
+                                    zorder=10,
+                                )
+                                ax.add_patch(rect)
+                        plt.title(f"Hyperparameter Importance {key_with_env} ({evaluator_name})")
+                        plt.xlabel("Step")
+                        safe_submission_tag = re.sub(r"[^A-Za-z0-9_.-]", "_", submission_tag)
+                        safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", str(key_with_env))
+                        safe_evaluator = re.sub(r"[^A-Za-z0-9_.-]", "_", evaluator_name)
+                        file_name = (
+                            f"hyperparameter_importance_{safe_key}-centered={centered_bool}-"
+                            f"large_mode={large_mode}-submission={safe_submission_tag}-{safe_evaluator}.pdf"
+                        )
+                        file_name = file_name.replace("(default)", "")
+                        file_path = output_dir / file_name
+                        assert file_path not in written_paths, "File path already written: %s" % file_path
+                        fig.savefig(
+                            file_path,
+                            format="pdf",
+                            bbox_inches="tight",
+                        )
+                        written_paths.add(file_path)
+                        logger.info(
+                            "Saved heatmap for key=%s centered=%s large_mode=%s submission=%s at %s",
+                            key,
+                            centered_bool,
+                            large_mode,
+                            submission_tag,
+                            file_path,
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.error(
+                            "Could not plot heatmap for key=%s centered=%s large_mode=%s submission=%s",
+                            key,
+                            centered_bool,
+                            large_mode,
+                            submission_tag,
+                        )
+                        remote_breakpoint()
+                    finally:
+                        if fig:
+                            plt.close(fig)
     return sorted(written_paths)
 
 
 def __create_zipfile(suffix: str = ""):
-    import atexit
-    from datetime import datetime
-    from zipfile import ZipFile
-
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     if suffix:
         suffix += "_"
@@ -1670,12 +1701,12 @@ def __create_zipfile(suffix: str = ""):
 
 
 if __name__ == "__main__":
-    #  python ray_utilities/visualization/importance.py experiments/submissions_pbt_fine_base.yaml vf_share_layers kl_loss no_kl_loss no_vf_share_layers \
-    #  experiments/submissions_pbt_grouped.yaml kl_loss no_kl_loss \
-    #  experiments/submissions_ppo_with_kl.yaml no_kl_loss  no_vf_share_layers
-    import argparse
-
-    from experiments.create_tune_parameters import default_distributions
+    # Example invocation:
+    #   python ray_utilities/visualization/importance.py \
+    #       experiments/submissions_pbt_fine_base.yaml \
+    #       vf_share_layers kl_loss no_kl_loss no_vf_share_layers \
+    #       experiments/submissions_pbt_grouped.yaml kl_loss no_kl_loss \
+    #       experiments/submissions_ppo_with_kl.yaml no_kl_loss no_vf_share_layers
     from ray_utilities import nice_logger
 
     os.chdir(Path(__file__).parent.parent.parent)
@@ -1841,7 +1872,7 @@ if __name__ == "__main__":
                 keep = set()
                 # filter:
                 for info in run_infos.values():
-                    if info["run_id"] in args.envs:  # TODO: does not work for multi HP tuning
+                    if info["run_id"] in args.envs:  # Limitation: this branch ignores multi HP tuning
                         keep.add(info["run_id"])
                 run_paths = {k: v for k, v in run_paths.items() if k in keep}
             all_run_paths.update(run_paths)
@@ -1865,7 +1896,6 @@ if __name__ == "__main__":
             )
             submission_names.add(submission_name)
             # Process each environment in parallel using per-env databases
-            from concurrent.futures import ThreadPoolExecutor, as_completed
 
             def _process_env(
                 env: str,
@@ -1973,7 +2003,7 @@ if __name__ == "__main__":
                 )
                 return env, studies, outfiles
 
-            with ThreadPoolExecutor(max_workers=min(len(envs), os.cpu_count() or 4, 8)) as executor:
+            with ThreadPoolExecutor(max_workers=min(len(envs), 2 * (os.cpu_count() or 2), 28)) as executor:
                 futures = {
                     # For the first submission, pass clear_studies as-is. For later submissions,
                     # if clearing was requested (True or "all"), clear only the submission-specific studies.

@@ -1051,6 +1051,9 @@ def _get_epoch_end_steps(df) -> pd.DataFrame | None:
     # Does not contain last epoch as there is no main branch
     epoch_end_steps = epoch_grouper.last().current_step.astype(int).copy()
     expected_length = epoch_end_steps.index.max() - epoch_end_steps.index.min() + 1
+    if pd.isna(expected_length) and len(epoch_end_steps) == 0:
+        # When we have a baseline there is no max
+        return df
     if len(epoch_end_steps) != expected_length:
         logger.warning(
             "Some pbt_epochs are missing __pbt_main_branch__ likely not correct: expected length %s but got %s",
@@ -1355,7 +1358,7 @@ def calculate_hyperparam_metrics(
                 AB = pd.concat([A, B], axis=1, names=[metric_key, "rank2"])
                 # try to throw away those in the last epoch that are not present in A, ignore the step
             except Exception:
-                logger.exception("Failed to align A and B for kendall tau calculation")
+                logger.error("Failed to align A and B for kendall tau calculation")
                 B: pd.Series = metric_values.loc[epoch_end_steps.current_step, metric_key].drop(
                     epoch_end_steps.iloc[-1]
                 )
@@ -1573,9 +1576,34 @@ def _drop_duplicate_steps(df: pd.DataFrame) -> pd.DataFrame:
                     )
                 ).iloc[0]
             )
+
+    perturbation_interval_alt = None
+    try:
+        if "__pbt_main_branch__" in df.config:
+            df[ifill("config", "__pbt_main_branch__")] = (
+                df[ifill("config", "__pbt_main_branch__")].infer_objects(copy=False).fillna(False)
+            )
+            epoch_end_steps = _get_epoch_end_steps(df)
+            unique, counts = np.unique(epoch_end_steps.diff().dropna().values, return_counts=True)
+            perturbation_interval_alt = unique[np.argmax(counts)]
+    except Exception:
+        logger.exception("Could not get epoch end steps")
+    else:
+        if perturbation_interval_alt != perturbation_interval:
+            logger.warning(
+                "Disagreement between perturbation interval detection methods: %d vs %d",
+                perturbation_interval,
+                perturbation_interval_alt,
+            )
+            if perturbation_interval_alt in (32768, 147456):
+                # common interval trust that one.
+                perturbation_interval = perturbation_interval_alt
     if perturbation_interval > 200_000:
         logger.warning("Too large perturbation interval detected: %d", perturbation_interval)
+        epoch_end_steps = _get_epoch_end_steps(df)
         remote_breakpoint()
+        if perturbation_interval_alt is not None:
+            perturbation_interval = perturbation_interval_alt
     df.attrs["perturbation_interval"] = perturbation_interval
     # TODO: Does pbt_epoch need to be fixed?
     # This disrupts seed, pbt_epoch
@@ -1843,7 +1871,7 @@ def export_run_data(
     TODO:
         - Some older runs do not have a pbt_group_key, and likely also no pbt_epoch
     """
-    metric_str = metrics if isinstance(metrics, str) else "-".join(map(_join_nested, metrics))
+    metric_str: str = metrics if isinstance(metrics, str) else "-".join(map(_join_nested, metrics))
     if not isinstance(experiment_path, pd.DataFrame):
         experiment_path = Path(experiment_path)
         if save_path is None:
@@ -2434,11 +2462,13 @@ if __name__ == "__main__":
     from datetime import datetime
 
     from ray_utilities import nice_logger
+    from ray_utilities.visualization.plot import logger as plot_logger
 
     file_excludes = load_excludes()
     running_experiments = get_running_experiments(Path(__file__).parent.parent.parent / "experiments")
 
     logger = nice_logger(logger, logging.INFO)
+    plot_logger.setLevel(logging.INFO)
     # logging.info("Set handle")  # noqa: LOG015
     # logger.setLevel()
     logger.info("Running data export script...")
@@ -2472,7 +2502,7 @@ if __name__ == "__main__":
         default="box",
         help="Error plot type (box or violin).",
     )
-    parser.add_argument("--no-title", action="store_true", help="Disable titles in plots.")
+    parser.add_argument("--title", action="store_true", help="Disable titles in plots.")
     args = parser.parse_args()
 
     assert not args.all or not args.main_only, "Cannot use --all and --main_only together."
@@ -2484,11 +2514,11 @@ if __name__ == "__main__":
         args.metrics = list(map(literal_eval, args.metrics))
     excludes: set[str] = file_excludes.union(set(args.excludes)).union(running_experiments)
     plot_options = [
-        PlotOption(plot_reduced=False, title=not args.no_title),  # plot all
-        PlotOption(plot_reduced=True, title=not args.no_title),
-        PlotOption(main_only=True, plot_reduced=False, title=not args.no_title),
-        PlotOption(main_vs_second_best=True, plot_reduced=False, title=not args.no_title),
-        PlotOption(main_vs_rest=True, plot_reduced=False, title=not args.no_title),
+        PlotOption(plot_reduced=False, title=args.title),  # plot all
+        PlotOption(plot_reduced=True, title=args.title),
+        PlotOption(main_only=True, plot_reduced=False, title=args.title),
+        PlotOption(main_vs_second_best=True, plot_reduced=False, title=args.title),
+        PlotOption(main_vs_rest=True, plot_reduced=False, title=args.title),
     ]
     if args.test:
         plot_options = plot_options[1:2]

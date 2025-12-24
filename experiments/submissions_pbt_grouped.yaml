@@ -303,6 +303,22 @@ pbt_num_envs:
         - none
         file_path:
           outputs/shared_backup/Default-mlp-Hopper-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Hopper-v5-PPO-tws47f2512050152e72d4
+    (Walker2d-v5):
+      tws47f25122400093f4c4:
+        status: RUNNING
+        submission_id: pbt_num_envs_Walker2d-v5_2025-12-24_00:09:07
+    (HalfCheetah-v5):
+      tws47f2512240009c2314:
+        status: STOPPED
+        submission_id: pbt_num_envs_HalfCheetah-v5_2025-12-24_00:09:07
+    (Reacher-v5):
+      tws47f2512240017c8c44:
+        status: STOPPED
+        submission_id: pbt_num_envs_Reacher-v5_2025-12-24_00:09:07
+    (Swimmer-v5):
+      tws47f2512240017baf24:
+        status: STOPPED
+        submission_id: pbt_num_envs_Swimmer-v5_2025-12-24_00:09:07
 pbt_num_envs_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale
@@ -606,6 +622,9 @@ pbt_lr:
         - none
         file_path:
           outputs/shared_backup/Default-mlp-HalfCheetah-v5/pbt-tune_tune:lr/Default-mlp-HalfCheetah-v5-tws47f251129014074574
+      tws47f2512240215d1434:
+        status: RUNNING
+        submission_id: pbt_lr_HalfCheetah-v5_2025-12-24_00:09:07
     (Reacher-v5):
       tws47f2511260233b9984:
         status: FAILED
@@ -1797,6 +1816,11 @@ pbt_gamma_base:
   entrypoint_resources:
     persistent_node: 1
 
+  run_ids:
+    (CartPole-v1):
+      tws47f2512240232ce874:
+        status: RUNNING
+        submission_id: pbt_gamma_base_CartPole-v1_2025-12-24_00:09:07
 pbt_gamma:
   entrypoint_pattern:
     pattern: global_pattern_1

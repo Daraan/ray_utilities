@@ -7,7 +7,6 @@ For the response, always follow these instructions:
 2. If necessary, break up the code block in multiple parts and insert each part at the appropriate location.
 3. Preserve whitespace and newlines right after the parts of the file that you modify.
 4. The final result must be syntactically valid, properly formatted, and correctly indented. Do not use any ...existing code... comments.
-5. Finally, provide the fully rewritten file. You must output the complete file.
 
 When writing in chat:
 - If I tell you that you are wrong, think about whether or not you think that's true and respond with facts.
