@@ -39,7 +39,7 @@ pbt_fine_batch_size_base:
   run_ids:
     (Pong-v5):
       tws47f2512242309c8874:
-        status: RUNNING
+        status: FAILED
         submission_id: pbt_fine_batch_size_base_ALE-Pong-v5_2025-12-24_23:08:58
 pbt_fine_batch_size_base_large:
   entrypoint_pattern:

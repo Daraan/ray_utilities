@@ -163,7 +163,7 @@ sympol_pbt_batch_size:
         status: RESTORE
         submission_id: sympol_pbt_batch_size_Ant-v5_2025-12-22_09:44:12
       sp87c62512231841f7624:
-        status: RUNNING
+        status: STOPPED
         submission_id: sympol_pbt_batch_size_Ant-v5_2025-12-23_18:41:40
     (Walker2d-v5):
       sp87c62512052243dbd74:
@@ -200,7 +200,7 @@ sympol_pbt_batch_size:
         status: STOPPED
         submission_id: sympol_pbt_batch_size_Swimmer-v5_2025-12-22_09:44:12
       sp87c62512231842ac5a4:
-        status: RUNNING
+        status: STOPPED
         submission_id: sympol_pbt_batch_size_Swimmer-v5_2025-12-23_18:41:40
     (HalfCheetah-v5):
       sp87c62512052245ff3e4:
@@ -232,7 +232,7 @@ sympol_pbt_batch_size:
         status: RESTORE
         submission_id: sympol_pbt_batch_size_HalfCheetah-v5_2025-12-22_09:44:12
       sp87c62512231842f9314:
-        status: RUNNING
+        status: STOPPED
         submission_id: sympol_pbt_batch_size_HalfCheetah-v5_2025-12-23_18:41:40
     (Reacher-v5):
       sp87c6251205224924524:

@@ -14,15 +14,14 @@ from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, Thr
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
-from functools import partial
 from itertools import chain, product
 from pathlib import Path
 from typing import Any, Callable, Collection, Iterable, Mapping, NamedTuple, Sequence, cast, overload
 from zipfile import ZipFile
 
-import matplotlib  # fmt: skip
+import matplotlib as mpl  # fmt: skip
 
-matplotlib.use("Agg")  # Non-interactive backend safe for multiprocessing
+mpl.use("Agg")  # Non-interactive backend safe for multiprocessing
 import numpy as np
 import optuna
 import optuna.importance
@@ -175,8 +174,8 @@ _REPORT_INTERVAL = 32
 
 DEBUG = False
 
-remote_breakpoint = partial(remote_breakpoint, port=5681)
-remote_breakpoint = lambda port: None
+# remote_breakpoint = partial(remote_breakpoint, port=5681)
+# remote_breakpoint = lambda port=None: None
 
 
 @dataclass
@@ -1849,13 +1848,13 @@ def _disable_distribution_check():
 def _clean_key_col(cols):
     return (
         cols[0],
-        re.sub(r"-v(\d)_\|", r"-v\1|", re.sub(r"_?step=\d+", "", re.sub("_global", "", cols[1]))),
+        re.sub(r"-v(\d)_\|", r"-v\1|", re.sub(r"_?step=\d+", "", re.sub("_global", "", cols[1]))).rstrip("_"),
         *cols[2:],
     )
 
 
 def __sort_index(idx: str | Any):
-    if not isinstance(str):
+    if not isinstance(idx, str):
         return str
     if idx in ("batch_size", "minibatch_size", "accumulate_gradients_every", "minibatch_scale"):
         return 0
@@ -1903,7 +1902,7 @@ def plot_importance_studies(
     else:
         importances = {"": study_results}
     output_dir = Path(output_path)
-    written_paths: set[Path] = set()
+    written_paths: list[Path] = []
 
     def _iter_level(frame: pd.DataFrame, level_name: str) -> list[tuple[Any, pd.DataFrame]]:
         if level_name not in frame.columns.names:
@@ -2037,18 +2036,21 @@ def plot_importance_studies(
                         if "vf_share_layers" in key:
                             subdirs.append("no_vf_share_layers" if "no_vf_share_layers" in key else "vf_share_layers")
 
-                        file_name = f"hp_importance_{safe_key}{safe_submission_tag}-{safe_evaluator}.pdf"
+                        if "default" in safe_submission_tag:
+                            safe_submission_tag = "all"
+                        file_name = f"hp_importance_{safe_key}-{safe_submission_tag}-{safe_evaluator}.pdf"
                         if large_mode != "all":
                             file_name += f"_{large_mode}"
                         file_name = file_name.replace("(default)", "").replace("__", "_").replace("--", "-")
                         file_path = Path(output_dir, *subdirs, file_name)
                         assert file_path not in written_paths, "File path already written: %s" % file_path
+                        file_path.parent.mkdir(parents=True, exist_ok=True)
                         fig.savefig(
                             file_path,
                             format="pdf",
                             bbox_inches="tight",
                         )
-                        written_paths.add(file_path)
+                        written_paths.append(file_path)
                         logger.info(
                             "Saved heatmap for key '%s' centered %s large_mode %s submission=%s at\n'%s'",
                             key,
@@ -2059,7 +2061,7 @@ def plot_importance_studies(
                             stacklevel=2,
                         )
                     except Exception:  # noqa: BLE001
-                        logger.error(
+                        logger.exception(
                             "Could not plot heatmap for key=%s centered=%s large_mode=%s submission=%s",
                             key,
                             centered_bool,
@@ -2070,22 +2072,23 @@ def plot_importance_studies(
                     finally:
                         if fig:
                             plt.close(fig)
-    return sorted(written_paths)
+    return written_paths
 
 
-def __create_zipfile(suffix: str = ""):
+def __create_zipfile(suffix: str = "") -> ZipFile:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     if suffix:
         suffix += "_"
+    zippath = f"outputs/shared/optuna_hp_study_plots_{suffix}{timestamp}.zip"
+    zipfile = ZipFile(zippath, "w")
 
-    zipfile = ZipFile(f"outputs/shared/optuna_hp_study_plots_{suffix}{timestamp}.zip", "w")
-
-    def __close_zipfile():
+    def __close_zipfile(path=zippath):
         if zipfile:
             zipfile.close()
-            logger.info("Closed zip file.")
+            logger.info("Closed zip file. %s created.", path)
 
     atexit.register(__close_zipfile)
+    return zipfile
 
 
 if __name__ == "__main__":
@@ -2213,8 +2216,8 @@ if __name__ == "__main__":
         args.envs = []
 
     envs = args.envs or [
-        "CartPole-v1",
         "Acrobot-v1",
+        "CartPole-v1",
         "LunarLander-v3",
         "Hopper-v5",
         "HumanoidStandup-v5",
@@ -2710,6 +2713,7 @@ if __name__ == "__main__":
         # Run plotting in parallel using ProcessPoolExecutor
         plot_workers = max(1, min(len(envs), int((os.cpu_count() or 2) * 0.75)))
         plot_workers = len(envs)
+        plot_workers = 1
         with ProcessPoolExecutor(max_workers=plot_workers) as plot_executor:
             plot_futures = {}
             for env in envs:

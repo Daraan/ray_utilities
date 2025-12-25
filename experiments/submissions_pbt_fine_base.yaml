@@ -1179,7 +1179,7 @@ pbt_fine_clip_param:
         submission_id: pbt_fine_clip_param_Swimmer-v5_2025-12-24_20:46:21
     (Ant-v5):
       tws47f2512242132b15c4:
-        status: RUNNING
+        status: STOPPED
         submission_id: pbt_fine_clip_param_Ant-v5_2025-12-24_20:46:21
     (Walker2d-v5):
       tws47f2512242211e23f4:
@@ -1209,7 +1209,7 @@ pbt_fine_clip_param:
         submission_id: pbt_fine_clip_param_Humanoid-v5_2025-12-24_20:46:21
     (HalfCheetah-v5):
       tws47f2512251110fb3f4:
-        status: RUNNING
+        status: FAILED
         submission_id: pbt_fine_clip_param_HalfCheetah-v5_2025-12-24_20:46:21
 pbt_fine_clip_param_base_large:
   # Change to non-base
@@ -1365,12 +1365,12 @@ pbt_fine_entropy_coeff_base:
           outputs/shared_backup/needs_sync/Default-mlp-LunarLander-v3/pbt-tune_tune:entropy_coeff/Default-mlp-LunarLander-v3-PPO-tws47f251210163697d54
     (HumanoidStandup-v5):
       tws47f251225112370114:
-        status: RUNNING
+        status: STOPPED
         submission_id:
           pbt_fine_entropy_coeff_base_HumanoidStandup-v5_2025-12-24_20:46:21
     (Pusher-v5):
       tws47f2512251127bbcf4:
-        status: RUNNING
+        status: STOPPED
         submission_id: pbt_fine_entropy_coeff_base_Pusher-v5_2025-12-24_20:46:21
     (Reacher-v5):
       tws47f2512251249da784:
@@ -1382,6 +1382,39 @@ pbt_fine_entropy_coeff_base:
         status: RUNNING
         submission_id:
           pbt_fine_entropy_coeff_base_Swimmer-v5_2025-12-24_20:46:21
+    (Ant-v5):
+      tws47f251225184559524:
+        status: FAILED
+        submission_id: pbt_fine_entropy_coeff_base_Ant-v5_2025-12-24_20:46:21
+    (Walker2d-v5):
+      tws47f251225201589b54:
+        status: FAILED
+        submission_id:
+          pbt_fine_entropy_coeff_base_Walker2d-v5_2025-12-24_20:46:21
+    (InvertedPendulum-v5):
+      tws47f251225202146c64:
+        status: FAILED
+        submission_id:
+          pbt_fine_entropy_coeff_base_InvertedPendulum-v5_2025-12-24_20:46:21
+    (InvertedDoublePendulum-v5):
+      tws47f2512252027603a4:
+        status: STOPPED
+        submission_id:
+          pbt_fine_entropy_coeff_base_InvertedDoublePendulum-v5_2025-12-24_20:46:21
+    (Hopper-v5):
+      tws47f2512252029dee94:
+        status: STOPPED
+        submission_id: pbt_fine_entropy_coeff_base_Hopper-v5_2025-12-24_20:46:21
+    (Humanoid-v5):
+      tws47f25122520327dda4:
+        status: STOPPED
+        submission_id:
+          pbt_fine_entropy_coeff_base_Humanoid-v5_2025-12-24_20:46:21
+    (HalfCheetah-v5):
+      tws47f251225203460e04:
+        status: RUNNING
+        submission_id:
+          pbt_fine_entropy_coeff_base_HalfCheetah-v5_2025-12-24_20:46:21
 pbt_fine_vf_loss_coeff_base:
   # TODO: Change to base
   entrypoint_resources:
