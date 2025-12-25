@@ -39,6 +39,7 @@ from ray_utilities.setup.extensions import load_distributions_from_json
 from ray_utilities.testing_utils import remote_breakpoint
 from ray_utilities.visualization._common import Placeholder
 from ray_utilities.visualization.data import (
+    LOG_SETTINGS,
     SubmissionRun,
     check_metric_backport,
     clean_placeholder_keys,
@@ -573,12 +574,14 @@ STUDY_COLUMN_NAMES = ("evaluator_name", "key", "centered", "large_mode", "step")
 
 
 def __clean_wrong_key(col: tuple[Any, ...]):
-    return (col[0], col[1].replace("_|", "|"), *col[2:])
+    return (col[0], col[1].replace("_|", "|").rstrip("_"), *col[2:])
 
 
 def load_study_results(parquet_file: str | Path, **kwargs) -> pd.DataFrame | None:
     try:
         df = pd.read_parquet(parquet_file, **kwargs)
+    except FileNotFoundError:
+        return None
     except ValueError:
         import pyarrow.parquet as pq
 
@@ -791,6 +794,7 @@ def create_finished_trial(
     submission_label: str | None = None,
     per_pbt_epoch: bool = False,
     extra_user_attrs: dict[str, Any] | None = None,
+    hparam: str | None = None,
 ):
     params = params.copy()
     user_attrs = {
@@ -803,6 +807,7 @@ def create_finished_trial(
         "raw_metric": metric_result,
         "centered_metric": centered_metric,
         "_centered": centered_metric is not None,
+        "hparam": hparam,
         "_large": is_large,
     }
     if extra_user_attrs:
@@ -854,6 +859,8 @@ def maybe_add_trials_to_study(
 ):
     if isinstance(trial, Iterable) and not force:
         trial = [t for t in trial if t.user_attrs["identifier"] not in TRIAL_CACHE[study]]
+    if not trial:
+        return
     if isinstance(trial, Iterable):
         study.add_trials(trial)
         return
@@ -1027,7 +1034,7 @@ def optuna_create_studies(
         logger.info("Checking path for experiments: %s", experiment_path)
         running_experiments = set()
         if dir_depth == 0:
-            experiment_path = Path(experiment_path)
+            experiment_path = Path(experiment_path)  # noqa: PLW2901
             experiment_id = experiment_path.name.split("-")[-1]
             if experiment_id in STORED_EXPERIMENTS:
                 logger.info("Skipping run %s as the id is already stored", experiment_id)
@@ -1280,6 +1287,7 @@ def optuna_create_studies(
                         is_large=is_large_flag,
                         submission_label=submission_study,
                         per_pbt_epoch=per_pbt_epoch,
+                        hparam=group_stat,
                     )
                     trials_to_add[study_to_add].append(trial)
                     if i % _REPORT_INTERVAL == 0:
@@ -1376,6 +1384,12 @@ def _filter_trials_for_view(
     return filtered
 
 
+_STEP_SETTINGS = {
+    "vf_loss_coeff": 0.05,
+    "kl_coeff": 0.005,
+}
+
+
 def _fix_distributions(study: optuna.Study, params: Collection[str]):
     if hasattr(study, "_fixed_trials"):  # backup for when we adjust what get_trials should
         return study._fixed_trials  # pyright: ignore
@@ -1397,6 +1411,13 @@ def _fix_distributions(study: optuna.Study, params: Collection[str]):
         if len(dists) <= 1:
             continue
         logger.debug("Parameter %s has multiple distributions: %s", name, dists)
+        is_log = LOG_SETTINGS.get(name, False)
+        step: float | None = None
+        if not is_log:
+            step = _STEP_SETTINGS.get(name)
+        # cannot have step and log
+        if not step:
+            step = None
         # Merge
         choices = set()
         for dist in dists:
@@ -1408,14 +1429,19 @@ def _fix_distributions(study: optuna.Study, params: Collection[str]):
                 choices.update(range(dist.low, dist.high + 1))
             else:
                 logger.warning("Cannot merge distribution of type %s for parameter %s", type(dist), name)
-        if all(isinstance(c, (int, float)) for c in choices):
+        if all(isinstance(c, (int, float, np.floating, np.number)) for c in choices):
             if all(isinstance(c, int) for c in choices):
                 new_dist = optuna.distributions.IntDistribution(
-                    low=round_floats(min(choices)), high=round_floats(max(choices))
+                    low=round_floats(min(choices)),
+                    high=round_floats(max(choices)),
+                    log=bool(is_log),
                 )
             else:
+                if min(choices) == 0 and is_log:
+                    # log scale cannot include zero - this is the entropy coefficient.
+                    choices.discard(0)
                 new_dist = optuna.distributions.FloatDistribution(
-                    low=round_floats(min(choices)), high=round_floats(max(choices))
+                    low=round_floats(min(choices)), high=round_floats(max(choices)), log=bool(is_log), step=step
                 )
         else:
             if None in choices:
@@ -1721,7 +1747,7 @@ def optuna_analyze_studies(
         "Fanova(default)": FanovaImportanceEvaluator(),  # default
         # "MeanDecreaseImpurity8": MeanDecreaseImpurityImportanceEvaluator(n_trees=12, max_depth=12),
         "PedAnovaGlobal": PedAnovaImportanceEvaluator(evaluate_on_local=False),
-        "Fanova8": FanovaImportanceEvaluator(n_trees=12, max_depth=12),
+        # "Fanova8": FanovaImportanceEvaluator(n_trees=12, max_depth=12),
     }
 
     all_results: list[dict[str, Any]] = []
@@ -1828,6 +1854,30 @@ def _clean_key_col(cols):
     )
 
 
+def __sort_index(idx: str | Any):
+    if not isinstance(str):
+        return str
+    if idx in ("batch_size", "minibatch_size", "accumulate_gradients_every", "minibatch_scale"):
+        return 0
+    if "num_env" in idx:
+        return 1
+    if idx in ("lr", "learning_rate"):
+        return 2
+    if "coeff" in idx:
+        return 3
+    if "clip" in idx:
+        if "vf" not in idx:
+            return 4
+        return 5
+    if "vf" in idx:
+        return 5
+    return 5
+
+
+def _sort_index(idx: pd.Index):
+    return idx.map(__sort_index)
+
+
 def plot_importance_studies(
     studies: Mapping[Any, optuna.Study | tuple[str, Path]] | pd.DataFrame,
     output_path: str | Path,
@@ -1835,6 +1885,7 @@ def plot_importance_studies(
     *,
     env: str,
     submission_filter: str | bool | Collection[str] = True,
+    title: bool = False,
 ) -> list[Path] | None:
     # note there is also import optuna.visualization as optuna_vis
     if not isinstance(studies, pd.DataFrame):
@@ -1878,10 +1929,11 @@ def plot_importance_studies(
                 key_with_env = key
             else:
                 key_with_env = f"{env}_{key}"
-            key_with_env = key_with_env.replace("|", " ")
+            key_with_env = key_with_env.replace("|", " ").rstrip("_")
             submission_tag = "default"
             if "|submission=" in str(key):
                 submission_tag = str(key).split("|submission=", 1)[1]
+
             for centered_value, centered_df in _iter_level(key_df, "centered"):
                 centered_bool = bool(centered_value) if centered_value is not None else False
                 for large_value, large_df in _iter_level(centered_df, "large_mode"):
@@ -1895,6 +1947,9 @@ def plot_importance_studies(
                             assert view_df.columns[-1] == "global", (
                                 f"Expected last column to be 'global' not {view_df.columns[-1]}"
                             )
+                        # Group index to have batch_size, vf and other parameters nearby.
+                        view_df = view_df.sort_index(axis=0, key=_sort_index)
+
                         add_global = "global" in view_df.columns
                         fig, ax = plt.subplots(figsize=(12, max(6, 0.5 * len(view_df))))
                         cmap = sns.color_palette("magma", as_cmap=True)
@@ -1927,7 +1982,7 @@ def plot_importance_studies(
                                 new_labels.append("")
                         if add_global:
                             new_labels.append("G")
-                        ax.set_xticklabels(new_labels, rotation=45, ha="center")
+                        ax.set_xticklabels(new_labels, rotation=0, ha="center")
                         ytick_labels = ax.get_yticklabels()
                         ytick_labels = [lbl.get_text() for lbl in ytick_labels]
                         ytick_labels = [
@@ -1960,21 +2015,33 @@ def plot_importance_studies(
                                     zorder=10,
                                 )
                                 ax.add_patch(rect)
-                        plt.title(f"Hyperparameter Importance {key_with_env} ({evaluator_name})")
+                        if title:
+                            plt.title(f"Hyperparameter Importance {key_with_env} ({evaluator_name})")
                         plt.xlabel("Step")
-                        safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", str(key_with_env))
+                        safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", str(key_with_env)).replace("pbt_study_env_", "")
                         safe_submission_tag = re.sub(r"[^A-Za-z0-9_.-]", "_", submission_tag)
                         if submission_tag in safe_key:
                             safe_submission_tag = ""
                         else:
                             safe_submission_tag = f"submission={safe_submission_tag}"
                         safe_evaluator = re.sub(r"[^A-Za-z0-9_.-]", "_", evaluator_name).rstrip("_.-")
-                        file_name = (
-                            f"hyperparameter_importance_{safe_key}-centered={centered_bool}-"
-                            f"large_mode={large_mode}-{safe_submission_tag}-{safe_evaluator}.pdf"
+                        subdirs = [submission_tag] if submission_tag != "default" else []
+                        subdirs.extend(
+                            [
+                                "centered=True" if centered_bool else "centered=False",
+                                f"{large_mode}",
+                            ]
                         )
+                        if "kl_loss" in key:
+                            subdirs.append("no_kl_loss" if "no_kl_loss" in key else "kl_loss")
+                        if "vf_share_layers" in key:
+                            subdirs.append("no_vf_share_layers" if "no_vf_share_layers" in key else "vf_share_layers")
+
+                        file_name = f"hp_importance_{safe_key}{safe_submission_tag}-{safe_evaluator}.pdf"
+                        if large_mode != "all":
+                            file_name += f"_{large_mode}"
                         file_name = file_name.replace("(default)", "").replace("__", "_").replace("--", "-")
-                        file_path = output_dir / file_name
+                        file_path = Path(output_dir, *subdirs, file_name)
                         assert file_path not in written_paths, "File path already written: %s" % file_path
                         fig.savefig(
                             file_path,
@@ -2071,6 +2138,8 @@ if __name__ == "__main__":
         "--update-db-only", action="store_true", help="Only update the Optuna database, do not analyze or plot."
     )
     parser.add_argument("--zip", "-z", action="store_true", help="Whether to zip the output analysis files.")
+    parser.add_argument("--add-title", "-t", action="store_true", help="Whether to add titles to the plots.")
+
     args = parser.parse_args()
     file_excludes = load_excludes()
     assert not args.update_db_only or (not args.plot_only or not args.analyze_only), (
@@ -2130,7 +2199,9 @@ if __name__ == "__main__":
         # Want to plot for each env.
         if studies is None:
             sys.exit(1)
-        plot_importance_studies(studies, output_path=paths[0], params=list(distributions.keys()), env=_env)
+        plot_importance_studies(
+            studies, output_path=paths[0], params=list(distributions.keys()), env=_env, title=args.add_title
+        )
         sys.exit(0)
     # clear_study = args.clear_study
     if any(p.endswith(".yaml") for p in args.envs):
@@ -2142,20 +2213,20 @@ if __name__ == "__main__":
         args.envs = []
 
     envs = args.envs or [
-        "HumanoidStandup-v5",
-        "Humanoid-v5",
-        "Ant-v5",
-        "Hopper-v5",
-        "Walker2d-v5",
-        "HalfCheetah-v5",
-        "Reacher-v5",
-        "Swimmer-v5",
-        "Pusher-v5",
-        "InvertedDoublePendulum-v5",
-        "InvertedPendulum-v5",
         "CartPole-v1",
         "Acrobot-v1",
         "LunarLander-v3",
+        "Hopper-v5",
+        "HumanoidStandup-v5",
+        "Humanoid-v5",
+        "Walker2d-v5",
+        "HalfCheetah-v5",
+        "Swimmer-v5",
+        "InvertedDoublePendulum-v5",
+        "InvertedPendulum-v5",
+        "Reacher-v5",
+        "Pusher-v5",
+        "Ant-v5",
     ]
 
     zipfile = None
@@ -2280,14 +2351,23 @@ if __name__ == "__main__":
                         logger.error("Plot only specified but data file %s does not exist.", data_file)
                         return env, {}, None, None
                     importance_results = load_study_results(data_file)
-
-                    # PLOT ONLY
-                    outfiles = plot_importance_studies(
-                        importance_results,
-                        output_path=f"outputs/shared/experiments/Default-mlp-{env}",
-                        params=list(distributions.keys()),
-                        env=env,
-                    )
+                    if importance_results is None:
+                        logger.error("Plot only specified but could not load results from %s.", data_file)
+                        outfiles = None
+                    else:
+                        # PLOT ONLY
+                        param_choices = list(distributions.keys())
+                        if env not in ("CartPole-v1", "Acrobot-v1", "LunarLander-v3", "Hopper-v5"):
+                            param_choices.remove("vf_loss_coeff")
+                            param_choices.remove("entropy_coeff")
+                        # PLOT ONLY
+                        outfiles = plot_importance_studies(
+                            importance_results,
+                            output_path=f"outputs/shared/experiments/Default-mlp-{env}",
+                            params=param_choices,
+                            env=env,
+                            title=args.add_title,
+                        )
                     studies = optuna_create_studies(
                         *env_paths,
                         database_path=database_path,
@@ -2499,6 +2579,10 @@ if __name__ == "__main__":
                             parquet_file = Path(
                                 f"outputs/shared/experiments/Default-mlp-{env}/hyperparameter_importance_{submission_name}.parquet"
                             )
+                            param_choices = params = list(distributions.keys())
+                            if env not in ("CartPole-v1", "Acrobot-v1", "LunarLander-v3", "Hopper-v5"):
+                                param_choices = param_choices.copy()
+                                param_choices.remove("vf_loss_coeff")
                             if parquet_file.exists():
                                 logger.info("Generating plots for env %s", env)
                                 study_results = load_study_results(parquet_file)
@@ -2506,8 +2590,9 @@ if __name__ == "__main__":
                                     outfiles = plot_importance_studies(
                                         study_results,
                                         output_path=f"outputs/shared/experiments/Default-mlp-{env}",
-                                        params=list(distributions.keys()),
+                                        params=param_choices,
                                         env=env,
+                                        title=args.title,
                                     )
                                     if outfiles and zipfile:
                                         for outfile in outfiles:
@@ -2539,6 +2624,10 @@ if __name__ == "__main__":
                         sys.exit("1")
             logger.info("Exiting executor context (will shutdown executors) for submission %s...", submission_name)
 
+        if args.update_db_only:
+            logger.info("Update DB only specified; exiting after DB update.")
+            sys.exit(0)
+
         if args.plot_only:
             is_sympol_paths = False
             if any("sympol" in p.lower() for p in args.paths):
@@ -2568,42 +2657,95 @@ if __name__ == "__main__":
                 )
                 all_studies.update(studies)
 
-            breakpoint()
         # After first submission, do not clear experiment cache again
         if first_submission:
             first_submission = False
         logger.info("All Trials processed, plotting combined importance.")
-        for env in envs:
-            # Check if we have a parquet file
+
+        # Parallelize combined importance plotting across environments
+        def _plot_combined_importance(
+            env: str,
+            all_studies_data: dict,
+            param_list: list[str],
+            submission_filter_val: bool | list[str],
+            add_title: bool = False,
+        ) -> tuple[str, list[Path] | None]:
+            """Worker function to plot combined importance for one environment."""
+            import matplotlib  # noqa: PLC0415
+
+            matplotlib.use("Agg")  # Non-interactive backend for multiprocessing
+
             parquet_file = Path(
                 f"outputs/shared/experiments/Default-mlp-{env}/hyperparameter_importance_combined.parquet"
             )
             importance_results = load_study_results(parquet_file)
             if importance_results is None:
-                if not args.try_plot_only:
+                env_studies2 = {k: v for k, v in all_studies_data.items() if env in k}
+                if not env_studies2:
+                    logger.warning(
+                        "No combined importance results found for env %s; skipping plotting combined importance.",
+                        env,
+                    )
+                    return env, None
+            else:
+                env_studies2 = importance_results
+            params_choices = param_list
+            if env not in ("CartPole-v1", "Acrobot-v1", "LunarLander-v3", "Hopper-v5"):
+                param_choices = param_list.copy()
+                param_choices.remove("vf_loss_coeff")
+            outfiles = plot_importance_studies(
+                env_studies2,
+                output_path=f"outputs/shared/experiments/Default-mlp-{env}",
+                params=params_choices,
+                env=env,
+                submission_filter=submission_filter_val,
+                title=add_title,
+            )
+            logger.info("Completed plotting combined importance for env %s", env)
+            return env, outfiles
+
+        # Determine submission filter value
+        submission_filter_val: bool | list[str] = False
+
+        # Run plotting in parallel using ProcessPoolExecutor
+        plot_workers = max(1, min(len(envs), int((os.cpu_count() or 2) * 0.75)))
+        plot_workers = len(envs)
+        with ProcessPoolExecutor(max_workers=plot_workers) as plot_executor:
+            plot_futures = {}
+            for env in envs:
+                # Skip if no data available and not in try_plot_only mode
+                parquet_file = Path(
+                    f"outputs/shared/experiments/Default-mlp-{env}/hyperparameter_importance_combined.parquet"
+                )
+                if not parquet_file.exists() and not args.try_plot_only:
                     logger.warning(
                         "No combined importance results found for env %s; skipping plotting combined importance. "
                         "Use try_plot_only to create analysis.",
                         env,
                     )
                     continue
-                env_studies2 = {k: v for k, v in all_studies.items() if env in k}
-            else:
-                env_studies2 = importance_results
-            outfiles = plot_importance_studies(
-                env_studies2,
-                output_path=f"outputs/shared/experiments/Default-mlp-{env}",
-                params=list(distributions.keys()),
-                env=env,
-                submission_filter=submission_names
-                if submission_names
-                else False,  # True: do not plot any submissions, False: (re) plot all submissions, pass yaml only plot these
-            )
-            if outfiles and zipfile:
-                for outfile in outfiles:
-                    if outfile.exists():
-                        zipfile.write(outfile, arcname=outfile.name)
-                        saved_files.append(outfile)
+
+                future = plot_executor.submit(
+                    _plot_combined_importance,
+                    env,
+                    all_studies,
+                    list(distributions.keys()),
+                    submission_filter_val,
+                    add_title=args.add_title,
+                )
+                plot_futures[future] = env
+
+            # Collect results and add to zipfile
+            for future in as_completed(plot_futures):
+                env, outfiles = future.result()
+                logger.info("Received plotting results for env %s", env)
+                if outfiles and zipfile:
+                    for outfile in outfiles:
+                        if outfile.exists():
+                            zipfile.write(outfile, arcname=outfile.name)
+                            saved_files.append(outfile)
+
+        logger.info("Completed all combined importance plotting")
         sys.exit()
     # ------------ ALL -------------------
     # Per-env databases; append _sympol if all paths indicate sympol experiments
@@ -2640,7 +2782,11 @@ if __name__ == "__main__":
         )
         if clear_now_for_env:
             cleared_cache_once = True
-        outfiles = plot_importance_studies(studies, output_path=paths[0], params=list(distributions.keys()), env=env)
+        param_choices = params = list(distributions.keys())
+        if env not in ("CartPole-v1", "Acrobot-v1", "LunarLander-v3", "Hopper-v5"):
+            param_choices = param_choices.copy()
+            param_choices.remove("vf_loss_coeff")
+        outfiles = plot_importance_studies(studies, output_path=paths[0], params=param_choices, env=env)
         if outfiles and zipfile:
             for outfile in outfiles:
                 if outfile.exists():
