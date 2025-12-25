@@ -1518,12 +1518,12 @@ sympol_pbt_grad_clip_large:
           outputs/shared/experiments/SYMPOL-mlp-Walker2d-v5/pbt-tune_tune:grad_clip/SYMPOL-mlp-Walker2d-v5-PPO-sp87c6251224163579054
     (HalfCheetah-v5):
       sp87c62512241756d8394:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           sympol_pbt_grad_clip_large_HalfCheetah-v5_2025-12-23_18:41:40
     (Swimmer-v5):
       sp87c625122418147ffd4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: sympol_pbt_grad_clip_large_Swimmer-v5_2025-12-23_18:41:40
     (InvertedPendulum-v5):
       sp87c62512241820b93d4:

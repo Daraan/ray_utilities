@@ -2106,8 +2106,10 @@ pbt_grad_clip:
           outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:grad_clip/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f2512241845b5414
     (InvertedPendulum-v5):
       tws47f2512241903fd274:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_grad_clip_InvertedPendulum-v5_2025-12-24_10:09:16
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:grad_clip/Default-mlp-InvertedPendulum-v5-PPO-tws47f2512241903fd274
 pbt_grad_clip_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -2123,9 +2125,11 @@ pbt_grad_clip_large:
   run_ids:
     (HumanoidStandup-v5):
       tws47f25122420035b884:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_grad_clip_large_HumanoidStandup-v5_2025-12-24_10:09:16
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:grad_clip/Default-mlp-HumanoidStandup-v5-PPO-tws47f25122420035b884
 pbt_grad_clip_base_large:
   entrypoint_pattern:
     pattern: global_pattern_1

@@ -8,6 +8,7 @@ import logging
 # cause of this caching the trial data might not be complete!
 # pyright: reportAttributeAccessIssue=warning
 # ruff: noqa: G004
+import pickle
 import re
 import time
 import traceback
@@ -1657,6 +1658,7 @@ def plot_n_save(
     close: bool = True,
     plot_errors: bool | Literal["only"] | str | Sequence[str] = True,
     plot_errors_type: Literal["box", "violin"] = "box",
+    use_cached_figures: bool = False,
     **kwargs,
 ) -> list[Path] | None:
     # for metric in metrics: [metric]
@@ -1672,6 +1674,11 @@ def plot_n_save(
     ].any().item():
         logger.warning("Cannot plot main branch only data as no main branch found in DataFrame.")
         return None
+    save_path = Path(save_path)
+    cached_fig = None
+    if use_cached_figures and save_path.with_suffix(".pkl").exists():
+        with open(save_path.with_suffix(".pkl"), "wb") as f:
+            cached_fig = pickle.load(f)
     fig, error_figures = plot_run_data(
         df,
         metrics,
@@ -1684,11 +1691,11 @@ def plot_n_save(
         show=False,
         plot_errors=plot_errors,
         plot_errors_type=plot_errors_type,
+        fig=cached_fig,
         **kwargs,
     )
     if fig is None:  # pyright: ignore[reportUnnecessaryComparison]
         return None
-    save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     if save_path.exists() and not save_path.is_dir():
         # check extension
@@ -1697,6 +1704,9 @@ def plot_n_save(
             f"({save_path.suffix} != .{format}). Change the name or format,"
         )
     fig.savefig(save_path, format=format, bbox_inches="tight")
+    # pickle figure
+    with open(save_path.with_suffix(".pkl"), "wb") as f:
+        pickle.dump(fig, f)
     if close:
         plt.close(fig)
     outfiles: list[Path] = [save_path]
@@ -2507,6 +2517,9 @@ if __name__ == "__main__":
         "--excludes", nargs="*", type=str, default=["def-workspace", "TESTING"], help="Experiment keys to exclude."
     )
     parser.add_argument("--redo", action="store_true", help="Redo existing plots.")
+    parser.add_argument(
+        "--load-figures", "-f", action="store_true", help="Load cached figure data for faster re-plotting."
+    )
     parser.add_argument("--single", "-s", action="store_true", help="Export a single run instead of all runs.")
     parser.add_argument("--no_error", "-nb", action="store_true", help="Disable error bars in plots.")
     parser.add_argument(

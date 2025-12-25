@@ -253,11 +253,35 @@ def with_seaborn_context(
         @wraps(func)
         def wrapper(*args, **kwargs):
             with sns.plotting_context(context, font_scale=font_scale):
-                return func(*args, **kwargs)
+                return func(*args, **kwargs, sns_context=context, font_scale=font_scale)
 
         return wrapper
 
     return decorator
+
+
+def apply_context_fonts(fig, ctx):
+    for ax in fig.axes:
+        # --- Axes title ---
+        ax.title.set_fontsize(ctx["axes.titlesize"])
+
+        # --- Axis labels ---
+        ax.xaxis.label.set_fontsize(ctx["axes.labelsize"])
+        ax.yaxis.label.set_fontsize(ctx["axes.labelsize"])
+
+        # --- Tick labels ---
+        for t in ax.get_xticklabels():
+            t.set_fontsize(ctx["xtick.labelsize"])
+        for t in ax.get_yticklabels():
+            t.set_fontsize(ctx["ytick.labelsize"])
+
+        # --- Legend ---
+        legend = ax.get_legend()
+        if legend:
+            for t in legend.get_texts():
+                t.set_fontsize(ctx["legend.fontsize"])
+            if legend.get_title():
+                legend.get_title().set_fontsize(ctx.get("legend.title_fontsize", ctx["legend.fontsize"]))
 
 
 @with_seaborn_context(font_scale=1.6)
@@ -273,9 +297,13 @@ def plot_run_data(
     log: bool | None = None,
     plot_option: PlotOption = PlotOption(),  # noqa: B008
     show: bool = False,
-    pbt_plot_interval: int = 4,
+    pbt_plot_interval: int | bool = True,
     plot_errors: bool | Literal["only"] | str | Sequence[str] = True,
     plot_errors_type: Literal["box", "violin"] = "box",
+    fig: Figure | None = None,
+    # auto parameter by decorator, only use for unpickling
+    sns_context=None,
+    font_scale=None,
 ) -> tuple[Figure, dict[str, Figure]]:
     """Plot specified metrics from the run data.
 
@@ -398,7 +426,35 @@ def plot_run_data(
 
     # Example usage: grouped = df.groupby([group_df[k] for k in group_keys])
     num_metrics = len(metrics)
-    fig, axes = plt.subplots(num_metrics, 1, figsize=figsize)
+    ax2 = secax = None
+    restored_figure = False
+    if fig is None:
+        fig, axes = plt.subplots(num_metrics, 1, figsize=figsize)
+    elif len(metrics) > 1:
+        logger.warning("Cannot use a figure for more than one metric, creating a new figure.")
+        fig, axes = plt.subplots(num_metrics, 1, figsize=figsize)
+    else:
+        from matplotlib.axes._secondary_axes import SecondaryAxis
+
+        main_axes = []
+        twin_axes = []
+        secondary_axes = []
+
+        for a in fig.axes:
+            if isinstance(a, SecondaryAxis):
+                secondary_axes.append(a)
+            elif a.get_shared_x_axes().joined(a, fig.axes[0]) and a is not fig.axes[0]:
+                twin_axes.append(a)
+            else:
+                main_axes.append(a)
+
+        assert len(main_axes) == 1, "Expected exactly one main axis in the provided figure."
+        assert len(twin_axes) <= 1, "Expected at most one twin axis in the provided figure."
+        assert len(secondary_axes) <= 1, "Expected at most one secondary axis in the provided figure."
+        ax = main_axes[0]
+        ax2 = twin_axes[0] if twin_axes else None
+        secax = secondary_axes[0] if secondary_axes else None
+        restored_figure = True
 
     if num_metrics == 1:
         axes = [axes]
@@ -431,25 +487,12 @@ def plot_run_data(
                 metric = backport_metric  # noqa: PLW2901
         assert pbt_metric is not None
         ax: Axes = axes[i]
-        ax2 = ax.twinx()
+        if ax2 is None:
+            ax2 = ax.twinx()
         ax_2handles = ax2_labels = None
         ax2.set_ylabel(" ".join(group_stat.split("_")))
         # we did not save perturbation interval, check where pbt_epoch first changes
         # Use transform to add it relative to the data
-        if pbt_plot_interval:
-            secax = ax.secondary_xaxis("top", functions=(main_to_secondary, secondary_to_main), transform=None)
-            secax.set_xlabel("PBT Epoch")
-            secax.set_xticks([e for e in range(num_pbt_epochs) if e % pbt_plot_interval == 1])
-            # Show tick labels for secondary xaxis, inside and closer to the plot
-            secax.xaxis.set_tick_params(which="both", bottom=False, top=False, labelbottom=True, labeltop=False, pad=-5)
-            secax.xaxis.set_label_position("top")
-            # Also move the label closer to the plot
-            secax.set_xlabel("PBT Epoch", labelpad=4)
-        # Move main x-axis tick labels closer to the plot
-        ax.xaxis.set_tick_params(pad=2)
-        ax.set_xlabel("Environment Steps", labelpad=3)
-        if log:
-            ax2.set_yscale("log", base=log_base or 10)
 
         metric_key = metric if isinstance(metric, str) else metric[-1]
 
@@ -482,9 +525,6 @@ def plot_run_data(
         plot_df["__pbt_main_branch__"] = plot_df["__pbt_main_branch__"].infer_objects(copy=False).fillna(False)  # noqa: FBT003
         # plot_df.sort_values(["training_iteration", "__pbt_main_branch__", metric], inplace=True)
         assert group_stat in plot_df
-
-        # Remove overstepped trials
-        plot_df = plot_df[plot_df["current_step"] <= 1_180_000]
 
         # TODO: for minibatch size have two different max sets
         if group_stat == "minibatch_size":
@@ -584,12 +624,54 @@ def plot_run_data(
             last_data = plot_df[plot_df["pbt_epoch"] == max_epoch]
         except KeyError:
             # will happen if group_by[0] != "pbt_epoch", but should now always be present
-            max_epoch = 1
-            remote_breakpoint()
+            max_epoch = 0
+            # remote_breakpoint()
         else:
             # TODO: What about those runs that were trained too long
             last_data = last_data.sort_values(["training_iteration", "__group_sort__", "__group_rank__", metric_key])
             last_group_iter = iter(last_data.groupby([group_by[0], group_stat], sort=False))
+            # Remove overstepped trials
+        if plot_df.current_step.max() >= 1_175_000 or 1 < max_epoch <= 10:
+            plot_df = plot_df[plot_df["current_step"] <= 1_179_648]
+        elif max_epoch == 0 or max_epoch >= 24:
+            plot_df = plot_df[plot_df["current_step"] <= 1_048_576]
+
+        if pbt_plot_interval:
+            if pbt_plot_interval is True:
+                pbt_plot_interval = max(2, (4 if max_epoch >= 20 else max_epoch // 5))
+            # do not draw for only one epoch
+            if secax is None:
+                secax = ax.secondary_xaxis("top", functions=(main_to_secondary, secondary_to_main), transform=None)
+            secax.set_xlabel("PBT Epoch", labelpad=4)
+            if max_epoch == 0:
+                secax.xaxis.label.set_visible(False)
+            else:
+                secax.set_xticks([e for e in range(num_pbt_epochs) if e % pbt_plot_interval == 1])
+            # Show tick labels for secondary xaxis, inside and closer to the plot
+            secax.xaxis.set_tick_params(which="both", bottom=False, top=False, labelbottom=True, labeltop=False, pad=-5)
+            secax.xaxis.set_label_position("top")
+            # Also move the label closer to the plot
+            secax.set_xlabel("PBT Epoch", labelpad=4)
+        if max_epoch == 0:
+            # Assume baseline run
+            # Shade the background in steps of 147456
+            step_size = 147456
+            x_min, x_max = ax.get_xlim()
+            current = x_min
+            color_idx = 0
+            background_colors = ["#f0f0f0", "#909090"]
+            while current < x_max:
+                left = current
+                right = min(current + step_size, x_max)
+                _shade_background(ax, background_colors[color_idx % 2], left, right)
+                current = right
+                color_idx += 1
+        # Move main x-axis tick labels closer to the plot
+        ax.xaxis.set_tick_params(pad=2)
+        ax.set_xlabel("Environment Steps", labelpad=3)
+        if log:
+            ax2.set_yscale("log", base=log_base or 10)
+
         grouper = plot_df.groupby([group_by[0], group_stat], sort=False)
 
         # Plot Non continues
@@ -635,17 +717,18 @@ def plot_run_data(
                 logger.debug("Main group: %s %s", pbt_epoch, stat_val)
                 last_main_group = group.copy()
                 # Print the group_stat value over time on the secondary y-axis
-                sns.lineplot(
-                    data=group[["current_step", group_stat]].drop_duplicates().sort_values("current_step"),
-                    x="current_step",
-                    y=group_stat,
-                    ax=ax2,
-                    color=GROUP_STAT_COLOR,  # color_map[stat_val],
-                    linestyle="-",
-                    linewidth=2,
-                    legend=True,
-                    path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
-                )
+                if not restored_figure:
+                    sns.lineplot(
+                        data=group[["current_step", group_stat]].drop_duplicates().sort_values("current_step"),
+                        x="current_step",
+                        y=group_stat,
+                        ax=ax2,
+                        color=GROUP_STAT_COLOR,  # color_map[stat_val],
+                        linestyle="-",
+                        linewidth=2,
+                        legend=True,
+                        path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
+                    )
                 # Add one of the legend handles to the legend of ax 1
 
                 # On a secondary axis we want to plot the group_stat value over time
@@ -728,39 +811,43 @@ def plot_run_data(
             #    if len(group.index) != group.index.nunique():
             #        remote_breakpoint()
 
-            try:
-                _plot_metrics_of_group(
-                    group,
-                    metric_key,
-                    ax,
-                    color_map[stat_val],
-                    background_colors=background_colors,
-                    label=str(stat_val) if stat_val not in seen_labels else None,
-                    group_by_keys_only=group_by_keys_only,
-                )
-            except Exception as e:
-                logger.error("Failed to plot group for epoch %s stat %s: %r", pbt_epoch, stat_val, e)
-                group = group.set_index("current_step", append=True)
-                # duplicated = group.index[group.index.duplicated(keep=False)].unique()
-                # Keep last as these are the one we continue with;
-                # however there are examples where the group_stat was not consistent
-                if group_stat == "batch_size" and (df.config.experiment_id.iloc[0] != "tws47f2512191818752f4").all():
-                    if (df.batch_size.iloc[0] == df.batch_size).all().item():
-                        remote_breakpoint(5679)
-                group = group[~group.index.duplicated(keep="last")]
-                # duplicated = group.index.duplicated(keep=False)
-                # dupl_cols = group.loc[duplicated]
-                # wired thing both duplicated had wrong batch_size values
-                group = group.reset_index(level="current_step")
-                _plot_metrics_of_group(
-                    group,
-                    metric_key,
-                    ax,
-                    color_map[stat_val],
-                    background_colors=background_colors,
-                    label=str(stat_val) if stat_val not in seen_labels else None,
-                    group_by_keys_only=group_by_keys_only,
-                )
+            if not restored_figure:
+                try:
+                    _plot_metrics_of_group(
+                        group,
+                        metric_key,
+                        ax,
+                        color_map[stat_val],
+                        background_colors=background_colors,
+                        label=str(stat_val) if stat_val not in seen_labels else None,
+                        group_by_keys_only=group_by_keys_only,
+                    )
+                except Exception as e:
+                    logger.error("Failed to plot group for epoch %s stat %s: %r", pbt_epoch, stat_val, e)
+                    group = group.set_index("current_step", append=True)
+                    # duplicated = group.index[group.index.duplicated(keep=False)].unique()
+                    # Keep last as these are the one we continue with;
+                    # however there are examples where the group_stat was not consistent
+                    if (
+                        group_stat == "batch_size"
+                        and (df.config.experiment_id.iloc[0] != "tws47f2512191818752f4").all()
+                    ):
+                        if (df.batch_size.iloc[0] == df.batch_size).all().item():
+                            remote_breakpoint(5679)
+                    group = group[~group.index.duplicated(keep="last")]
+                    # duplicated = group.index.duplicated(keep=False)
+                    # dupl_cols = group.loc[duplicated]
+                    # wired thing both duplicated had wrong batch_size values
+                    group = group.reset_index(level="current_step")
+                    _plot_metrics_of_group(
+                        group,
+                        metric_key,
+                        ax,
+                        color_map[stat_val],
+                        background_colors=background_colors,
+                        label=str(stat_val) if stat_val not in seen_labels else None,
+                        group_by_keys_only=group_by_keys_only,
+                    )
 
             seen_labels.add(stat_val)
         # Shade from last group's max step to right edge
@@ -927,6 +1014,9 @@ def plot_run_data(
                 if curr_y < MAX_ENV_LOWER_BOUND[env_type]:
                     y_min = MAX_ENV_LOWER_BOUND[env_type]
             ax.set_ylim(bottom=y_min, top=y_max)
+    if restored_figure:
+        plotting_context = sns.plotting_context(sns_context, font_scale=font_scale or 1.6)
+        apply_context_fonts(fig, plotting_context)
 
     plt.tight_layout()
     if show:

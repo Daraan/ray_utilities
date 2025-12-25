@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import re
+import signal
 import sys
 import warnings
 from collections.abc import Sized
@@ -174,6 +175,7 @@ _REPORT_INTERVAL = 32
 DEBUG = False
 
 remote_breakpoint = partial(remote_breakpoint, port=5681)
+remote_breakpoint = lambda port: None
 
 
 @dataclass
@@ -1515,7 +1517,8 @@ def _analyze_single_study(
     excludes: Collection[Literal["kl_loss", "no_kl_loss", "vf_share_layers", "no_vf_share_layers"]] = (),
     base_trials: Sequence[optuna.trial.FrozenTrial] | None = None,
     workers_per_study: int | None = 4,
-    submission_filter: str | None = None,
+    *,
+    submission_filter: str | Collection[str] | bool = True,
 ) -> list[dict[str, Any]]:
     """Analyze one study and return result rows."""
     rows: list[dict[str, Any]] = []
@@ -1524,6 +1527,8 @@ def _analyze_single_study(
         # load study
         study_name, storage_path = study
         storage = _get_storage(storage_path)
+        if isinstance(study_name, tuple):
+            study_name = study_name[0]
         study = optuna.load_study(study_name=study_name, storage=storage)
     analysis_step_value: int | str = study.user_attrs.get("analysis_step", "global")
     base_trials = (
@@ -1556,14 +1561,28 @@ def _analyze_single_study(
             _append_spec((False, large_mode, None))
             if has_centered:
                 _append_spec((True, large_mode, None))
-        else:
-            for submission in submission_labels:
-                if submission_filter and submission_filter not in submission:
-                    logger.info("Skipping submission label %s due to filter %s", submission, submission_filter)
-                    continue
-                _append_spec((False, large_mode, submission))
-                if has_centered:
-                    _append_spec((True, large_mode, submission))
+        if submission_filter is True:
+            continue  # filter out all submissionsl
+        for submission in submission_labels:
+            # submission_filter == False includes all submissions
+            if submission_filter:
+                if isinstance(submission_filter, str):
+                    if submission_filter not in submission:
+                        logger.info("Skipping submission label %s due to filter %s", submission, submission_filter)
+                        continue
+                else:
+                    # REVERSE: if present they are added!
+                    for subfilter in submission_filter:
+                        if subfilter in submission:
+                            break
+                    else:
+                        logger.info(
+                            "Skipping submission label %s not found in collection %s", submission, submission_filter
+                        )
+                        continue
+            _append_spec((False, large_mode, submission))
+            if has_centered:
+                _append_spec((True, large_mode, submission))
 
     tasks: list[ImportanceTask] = []
     for filter_kl, filter_vf_share in product([None, True, False], [None, True, False]):
@@ -1665,7 +1684,7 @@ def _analyze_single_study(
                     if report:
                         logger.info("%s", report)
         else:
-            logger.warning("No tasks generated for study with key %s", key)
+            logger.warning("No tasks generated for study with key %s and submission filter %s", key, submission_filter)
     except Exception:  # noqa: BLE001
         logger.exception("Failed to analyze study for key %s", key)
         try:
@@ -1682,8 +1701,9 @@ def optuna_analyze_studies(
     params: list[str] | None = None,
     max_workers: int | None = None,
     excludes: Collection[Literal["kl_loss", "no_kl_loss", "vf_share_layers", "no_vf_share_layers"]] = (),
-    submission_filter: str | None = None,
     progress_bar: tqdm | None = None,
+    *,
+    submission_filter: str | Collection[str] | bool = True,
 ) -> pd.DataFrame | None:
     logger.info(
         "Starting optuna study analysis for %s studies",
@@ -1736,7 +1756,7 @@ def optuna_analyze_studies(
             executor.submit(
                 _analyze_single_study,
                 key,
-                study if not isinstance(study, Path) else (key, study),
+                study if not isinstance(study, (Path, str)) else (key, study),
                 evaluators,
                 params,
                 excludes,
@@ -1814,22 +1834,23 @@ def plot_importance_studies(
     params: list[str] | None = None,
     *,
     env: str,
+    submission_filter: str | bool | Collection[str] = True,
 ) -> list[Path] | None:
     # note there is also import optuna.visualization as optuna_vis
     if not isinstance(studies, pd.DataFrame):
         # remote_breakpoint()
-        study_results = optuna_analyze_studies(studies, output_path, params=params)
+        study_results = optuna_analyze_studies(studies, output_path, params=params, submission_filter=submission_filter)
     else:
         study_results = studies
     if study_results is None:
         return None
-    studies.columns = studies.columns.map(_clean_key_col)
+    study_results.columns = study_results.columns.map(_clean_key_col)
     if study_results.columns.nlevels > 1:
         importances = {
             evaluator_name: study_results[evaluator_name] for evaluator_name in study_results.columns.levels[0]
         }
     else:
-        importances = {"_": study_results}
+        importances = {"": study_results}
     output_dir = Path(output_path)
     written_paths: set[Path] = set()
 
@@ -1857,6 +1878,7 @@ def plot_importance_studies(
                 key_with_env = key
             else:
                 key_with_env = f"{env}_{key}"
+            key_with_env = key_with_env.replace("|", " ")
             submission_tag = "default"
             if "|submission=" in str(key):
                 submission_tag = str(key).split("|submission=", 1)[1]
@@ -2044,10 +2066,18 @@ if __name__ == "__main__":
     )
     parser.add_argument("--try-plot-only", action="store_true", help="Try to plot only from existing analysis files.")
     parser.add_argument("--analyze-only", "-a", action="store_true", help="Only analyze studies, do not plot.")
-    parser.add_argument("--plot_only", action="store_true", help="Only plot from existing analysis files.")
+    parser.add_argument("--plot-only", action="store_true", help="Only plot from existing analysis files.")
+    parser.add_argument(
+        "--update-db-only", action="store_true", help="Only update the Optuna database, do not analyze or plot."
+    )
     parser.add_argument("--zip", "-z", action="store_true", help="Whether to zip the output analysis files.")
     args = parser.parse_args()
     file_excludes = load_excludes()
+    assert not args.update_db_only or (not args.plot_only or not args.analyze_only), (
+        "--update-db-only cannot be combined with --analyze-only or --plot-only; "
+        "--analyze-only cannot be combined with --plot-only."
+    )
+    assert not args.update_db_only or not args.zip, "--update-db-only cannot be combined with --zip."
 
     # possibly for repair sqlite3 "outputs/shared/optuna_hp_study.db" ".dump" | sqlite3 new.db
 
@@ -2148,7 +2178,7 @@ if __name__ == "__main__":
         for path_str in args.paths:
             if path_str.endswith(".yaml"):
                 yaml_p = Path(path_str)
-                assert yaml_p.exists()
+                assert yaml_p.exists() or yaml_p == "submissions.yaml"
                 yaml_paths.append(yaml_p)
                 last_yaml_path = yaml_p
                 submission_excludes[last_yaml_path.stem] = set()
@@ -2188,6 +2218,7 @@ if __name__ == "__main__":
         all_studies: dict[str, optuna.Study | tuple[str, Path]] = {}
         submission_names = set()
         first_submission = True
+
         for yaml_path in yaml_paths:
             submission_name = (
                 Path(yaml_path)
@@ -2196,8 +2227,12 @@ if __name__ == "__main__":
                 .removeprefix("submission")
                 .strip("_")
             )
-            submission_names.add(submission_name)
+            if submission_name:
+                # can use submissions.yaml --plot-only
+                submission_names.add(submission_name)
             # Process each environment in parallel using per-env databases
+            if args.plot_only:
+                continue
 
             def _process_env(
                 env: str,
@@ -2234,6 +2269,7 @@ if __name__ == "__main__":
                 database_path = f"outputs/shared/optuna_hp_study_{env}{db_suffix}.db"
 
                 if args.plot_only:
+                    # DEPRECTED: Unreachable!
                     data_file = parquet_file
                     if not data_file.exists():
                         data_file = (
@@ -2301,6 +2337,8 @@ if __name__ == "__main__":
                 study_names = [
                     study.study_name if isinstance(study, optuna.Study) else study[0] for study in studies.values()
                 ]
+                if args.update_db_only:
+                    return env, studies, None, None
                 analysis_task = EnvAnalysisProcessTask(
                     env=env,
                     submission_name=submission_name_param,
@@ -2349,7 +2387,10 @@ if __name__ == "__main__":
                     for idx, env in enumerate(envs)
                 }
                 try:
+                    not_done_envs = set(envs)
+                    not_done_tasks = {}
                     env_studies: dict[Any, optuna.Study] | dict[Any, tuple[str, Path]]
+                    # _process_env execution
                     for future in as_completed(futures):
                         _env, env_studies, analysis_task, outfiles = future.result()
                         study_update = {
@@ -2374,41 +2415,83 @@ if __name__ == "__main__":
                             tqdm_indices_used.add(tqdm_idx)
 
                             # Submit the future
-                            process_future = process_executor.submit(_run_env_analysis_process, analysis_task, tqdm_idx)
+                            not_done_tasks[analysis_task.env] = analysis_task
+                            process_future = process_executor.submit(
+                                _run_env_analysis_process, analysis_task, tqdm_idx=None
+                            )
                             process_futures.add(process_future)
 
                             # Immediately drain completed futures to prevent queue buildup
+                            timeouts = 0
                             while len(process_futures) >= process_workers:
                                 logger.info(
                                     "Draining completed processes... tasks in flight: %s/%s",
                                     len(process_futures),
                                     process_workers,
                                 )
-                                done_futures, process_futures = wait(process_futures, return_when=FIRST_COMPLETED)
-                                for done_future in done_futures:
-                                    result: EnvAnalysisProcessResult = done_future.result()
-                                    tqdm_indices_used.discard(result.tqdm_idx)
-                                    if result.outfiles and zipfile:
-                                        for outfile in result.outfiles:
-                                            if outfile.exists():
-                                                zipfile.write(outfile, arcname=outfile.name)
-                                                saved_files.append(outfile)
+                                try:
+                                    done_futures, process_futures = wait(
+                                        process_futures, return_when=FIRST_COMPLETED, timeout=900
+                                    )
+                                except TimeoutError:
+                                    logger.error("No analysis processes completed within the last 15 min")
+                                    timeouts += 1
+                                    if timeouts >= 3:
+                                        logger.error("Multiple timeouts reached while waiting for analysis processes.")
+                                        if process_executor._processes:
+                                            try:
+                                                for p in process_executor._processes.values():
+                                                    os.kill(p.pid, signal.SIGKILL)  # or SIGINT / SIGTERM
+                                            except Exception as e:
+                                                logger.error(
+                                                    "Error killing process: %s. Not completed envs %s, Tasks %s ",
+                                                    e,
+                                                    not_done_envs,
+                                                    not_done_tasks,
+                                                )
+                                            raise
+                                else:
+                                    for done_future in done_futures:
+                                        result: EnvAnalysisProcessResult = done_future.result()
+                                        not_done_envs.discard(result.env)
+                                        not_done_tasks.pop(result.env, None)
+                                        logger.info(
+                                            "Analysis process for env %s completed. Remaining: %d",
+                                            result.env,
+                                            len(not_done_envs),
+                                        )
+                                        tqdm_indices_used.discard(result.tqdm_idx)
+                                        if result.outfiles and zipfile:
+                                            for outfile in result.outfiles:
+                                                if outfile.exists():
+                                                    zipfile.write(outfile, arcname=outfile.name)
+                                                    saved_files.append(outfile)
                     # complete all processes
                     if process_futures:
                         logger.info("Waiting for remaining %s analysis processes to complete...", len(process_futures))
-                        for process_future in as_completed(process_futures):
-                            result = process_future.result()
-                            logger.info("Analysis process for env %s completed.", result.env)
-                            if result.outfiles and zipfile:
-                                for outfile in tqdm(result.outfiles, desc="Adding to zip", unit="file"):
-                                    if outfile.exists():
-                                        zipfile.write(outfile, arcname=outfile.name)
-                                        saved_files.append(outfile)
-                        logger.info(
-                            "All %s analysis processes completed for submission %s",
-                            len(process_futures),
-                            submission_name,
-                        )
+                        try:
+                            for process_future in as_completed(process_futures, timeout=1800):
+                                result = process_future.result()
+                                not_done_envs.discard(result.env)
+                                not_done_tasks.pop(result.env, None)
+                                logger.info(
+                                    "Analysis process for env %s completed. Remaining: %d",
+                                    result.env,
+                                    len(not_done_envs),
+                                )
+                                if result.outfiles and zipfile:
+                                    for outfile in tqdm(result.outfiles, desc="Adding to zip", unit="file"):
+                                        if outfile.exists():
+                                            zipfile.write(outfile, arcname=outfile.name)
+                                            saved_files.append(outfile)
+                        except TimeoutError:
+                            logger.error("Not all futures completed within the timeout period.")
+                        else:
+                            logger.info(
+                                "All %s analysis processes completed for submission %s",
+                                len(process_futures),
+                                submission_name,
+                            )
 
                         # Now generate plots in main process (not in workers) to avoid matplotlib issues
                         logger.info("Generating plots in main process for submission %s...", submission_name)
@@ -2456,17 +2539,65 @@ if __name__ == "__main__":
                         sys.exit("1")
             logger.info("Exiting executor context (will shutdown executors) for submission %s...", submission_name)
 
+        if args.plot_only:
+            is_sympol_paths = False
+            if any("sympol" in p.lower() for p in args.paths):
+                if not all("sympol" in p.lower() for p in args.paths):
+                    raise ValueError("Either all or none of the paths must be sympol experiments.")
+                is_sympol_paths = True
+                zip_suffix += "sympol"
+            all_studies = {}
+            for env in envs:
+                db_suffix = "_sympol" if is_sympol_paths else ""
+                database_path = f"outputs/shared/optuna_hp_study_{env}{db_suffix}.db"
+
+                studies = optuna_create_studies(
+                    None,
+                    database_path=database_path,
+                    env=env,
+                    dir_depth=0,
+                    distributions=optuna_dists,
+                    load_if_exists=True,
+                    study_each_epoch=None,
+                    submission_file_path=None,
+                    clear_experiment_cache=args.clear_experiment_cache,
+                    clear_study=args.clear_study,
+                    excludes=file_excludes,
+                    metric="episode_reward_mean",
+                    load_studies_only="names_only",
+                )
+                all_studies.update(studies)
+
+            breakpoint()
         # After first submission, do not clear experiment cache again
         if first_submission:
             first_submission = False
         logger.info("All Trials processed, plotting combined importance.")
         for env in envs:
-            env_studies2 = {k: v for k, v in all_studies.items() if env in k}
+            # Check if we have a parquet file
+            parquet_file = Path(
+                f"outputs/shared/experiments/Default-mlp-{env}/hyperparameter_importance_combined.parquet"
+            )
+            importance_results = load_study_results(parquet_file)
+            if importance_results is None:
+                if not args.try_plot_only:
+                    logger.warning(
+                        "No combined importance results found for env %s; skipping plotting combined importance. "
+                        "Use try_plot_only to create analysis.",
+                        env,
+                    )
+                    continue
+                env_studies2 = {k: v for k, v in all_studies.items() if env in k}
+            else:
+                env_studies2 = importance_results
             outfiles = plot_importance_studies(
                 env_studies2,
                 output_path=f"outputs/shared/experiments/Default-mlp-{env}",
                 params=list(distributions.keys()),
                 env=env,
+                submission_filter=submission_names
+                if submission_names
+                else False,  # True: do not plot any submissions, False: (re) plot all submissions, pass yaml only plot these
             )
             if outfiles and zipfile:
                 for outfile in outfiles:
@@ -2487,7 +2618,8 @@ if __name__ == "__main__":
         zipfile = __create_zipfile(zip_suffix)
     for env in envs:
         paths = [p % env for p in args.paths]
-        database_path = f"outputs/shared/optuna_hp_study_{env}{'_sympol' if is_sympol_paths else ''}.db"
+        db_suffix = "_sympol" if is_sympol_paths else ""
+        database_path = f"outputs/shared/optuna_hp_study_{env}{db_suffix}.db"
         # Decide if we clear cache for this env
         clear_now_for_env = False
         if not cleared_cache_once and clear_cache_present and (clear_cache_envs is None or env in clear_cache_envs):
