@@ -8,22 +8,27 @@ import os
 import re
 import sys
 import warnings
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Sized
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, ThreadPoolExecutor, as_completed, wait
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import partial
 from itertools import chain, product
 from pathlib import Path
-from typing import Any, Callable, Collection, Iterable, NamedTuple, Sequence, cast
+from typing import Any, Callable, Collection, Iterable, Mapping, NamedTuple, Sequence, cast, overload
 from zipfile import ZipFile
 
+import matplotlib  # fmt: skip
+
+matplotlib.use("Agg")  # Non-interactive backend safe for multiprocessing
 import numpy as np
 import optuna
 import optuna.importance
 import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
+from tqdm import tqdm
 from typing_extensions import Literal
 
 from experiments.create_tune_parameters import default_distributions, write_distributions_to_json
@@ -66,6 +71,9 @@ RegressorFactory = Callable[[], Any]
 MetricKey = str | tuple[Any, ...]
 LargeMode = Literal["all", "large", "non_large"]
 
+StudyName = str
+DatabasePath = Path
+
 
 class ImportanceTask(NamedTuple):
     filter_kl: bool | None
@@ -78,6 +86,88 @@ class ImportanceTask(NamedTuple):
 
 
 logger = logging.getLogger(__name__)
+
+
+class EnvAnalysisProcessTask(NamedTuple):
+    env: str
+    submission_name: str
+    database_path: str
+    study_names: list[str]
+    parquet_file: str
+    param_names: list[str]
+    excludes: frozenset[Literal["kl_loss", "no_kl_loss", "vf_share_layers", "no_vf_share_layers"]]
+    output_path: str
+    has_cached_results: bool
+
+
+class EnvAnalysisProcessResult(NamedTuple):
+    env: str
+    outfiles: list[Path] | None
+    tqdm_idx: int | None = None
+
+
+def _run_env_analysis_process(task: EnvAnalysisProcessTask, tqdm_idx: int | None) -> EnvAnalysisProcessResult:
+    # Set matplotlib backend for multiprocessing - must be done before importing pyplot
+    import matplotlib
+
+    matplotlib.use("Agg")  # Non-interactive backend safe for multiprocessing
+
+    logger.info(
+        "Starting analysis for env %s submission %s with studies %s", task.env, task.submission_name, task.study_names
+    )
+
+    # Create progress bar for this process
+    pbar = None
+    if tqdm_idx is not None:
+        pbar = tqdm(total=len(task.study_names), desc=f"Analyzing {task.env}", position=tqdm_idx, leave=False)
+
+    try:
+        parquet_path = Path(task.parquet_file)
+        study_results = None
+        if task.has_cached_results and parquet_path.exists():
+            study_results = load_study_results(parquet_path)
+
+        if study_results is None:
+            logger.info(
+                "No cached results found for env %s submission %s - analyzing studies", task.env, task.submission_name
+            )
+            # Pass tuples to enable parallel loading in worker threads
+            study_generator = ((name, Path(task.database_path)) for name in task.study_names)
+            if len(task.study_names) == 0:
+                logger.warning(
+                    "No studies to check for env %s submission %s. Studies: %s",
+                    task.env,
+                    task.submission_name,
+                    task.study_names,
+                )
+                return EnvAnalysisProcessResult(task.env, None, tqdm_idx=tqdm_idx)
+            study_results = optuna_analyze_studies(
+                study_generator,
+                None,
+                params=task.param_names,
+                excludes=cast(
+                    "Collection[Literal['kl_loss', 'no_kl_loss', 'vf_share_layers', 'no_vf_share_layers']]",
+                    set(task.excludes),
+                ),
+                max_workers=max(1, min(len(task.study_names), os.cpu_count() or 6, 28)),
+                submission_filter=task.submission_name,
+                progress_bar=pbar,
+            )
+            if study_results is None or study_results.empty:
+                logger.warning("No study results for env %s submission %s", task.env, task.submission_name)
+                return EnvAnalysisProcessResult(task.env, None, tqdm_idx=tqdm_idx)
+            save_analysis_to_parquet(study_results, parquet_path)
+
+        # Return results for plotting in main process
+        # Don't plot in worker process to avoid matplotlib/multiprocessing issues
+        logger.info(
+            "Analysis complete for env %s submission %s, skipping plots in worker", task.env, task.submission_name
+        )
+        return EnvAnalysisProcessResult(task.env, None, tqdm_idx)
+    finally:
+        if pbar is not None:
+            pbar.close()
+
 
 _REPORT_INTERVAL = 32
 
@@ -145,12 +235,15 @@ def experiment_importance(
         logger.debug("Processing experiment at %s", path)
         # We do not want load trials that are currently running
         run_frames = load_run_data(path)
-        if not run_frames:
-            logger.warning("No runs found for experiment at %s", path)
-            continue
         if not isinstance(run_frames, pd.DataFrame):
+            if not run_frames:
+                logger.warning("No runs found for experiment at %s", path)
+                continue
             combined_df = combine_df(run_frames)
             save_run_data(path, combined_df)
+        elif run_frames.empty:
+            logger.warning("No runs found for experiment at %s", path)
+            continue
         else:
             combined_df = run_frames
         summary = summarise_epochs(combined_df, metric, min_group_size=min_group_size)
@@ -477,9 +570,13 @@ def _encode_features(features: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, di
 STUDY_COLUMN_NAMES = ("evaluator_name", "key", "centered", "large_mode", "step")
 
 
-def load_study_results(parquet_file: str | Path, **kwargs) -> pd.DataFrame:
+def __clean_wrong_key(col: tuple[Any, ...]):
+    return (col[0], col[1].replace("_|", "|"), *col[2:])
+
+
+def load_study_results(parquet_file: str | Path, **kwargs) -> pd.DataFrame | None:
     try:
-        return pd.read_parquet(parquet_file, **kwargs)
+        df = pd.read_parquet(parquet_file, **kwargs)
     except ValueError:
         import pyarrow.parquet as pq
 
@@ -490,11 +587,21 @@ def load_study_results(parquet_file: str | Path, **kwargs) -> pd.DataFrame:
             tuple(try_literal_eval(b) for b in multi) if isinstance(multi := try_literal_eval(c), tuple) else multi
             for c in df.columns
         ]
-        mc_columns = pd.MultiIndex.from_tuples(clean_columns)
-        df.columns = mc_columns
-        df.columns.names = STUDY_COLUMN_NAMES
+        try:
+            mc_columns = pd.MultiIndex.from_tuples(clean_columns, names=STUDY_COLUMN_NAMES)
+            df.columns = mc_columns
+            df.columns.names = STUDY_COLUMN_NAMES
+        except ValueError as ve:
+            logger.error("Could not load parquet file %s with columns %s: %r", parquet_file, clean_columns[:5], ve)
+            return None
+            # old format with out large
         df.index = index
-        return df.sort_index(axis=1, key=__sort_columns)
+        df = df.sort_index(axis=1, key=__sort_columns)
+
+    if "_|" in df.columns.get_level_values("key")[0]:
+        df.columns = df.columns.map(__clean_wrong_key)
+        save_analysis_to_parquet(df, parquet_file)
+    return df
 
 
 def save_analysis_to_parquet(df, parquet_file: str | Path):
@@ -533,7 +640,7 @@ def save_analysis_to_parquet(df, parquet_file: str | Path):
                 # raise ValueError(msg)
 
 
-def _get_storage(experiment_path: str | Path):
+def _get_storage(experiment_path: str | Path, direction: str | None = "maximize") -> optuna.storages.BaseStorage:
     experiment_path = Path(experiment_path)
     if experiment_path.is_dir():
         db_path = f"{experiment_path}/optuna_study.db"
@@ -556,7 +663,12 @@ def _get_storage(experiment_path: str | Path):
     except Exception:
         logger.error("Could not oben RDBStorage %s", db_path)
         raise
-    logger.info("Opened db %s", db_path)
+    if direction is not None:
+        # Save query at study setup
+        storage.get_study_directions = lambda study_id: [
+            optuna.study.StudyDirection.MAXIMIZE if direction == "maximize" else optuna.study.StudyDirection.MINIMIZE
+        ]  # noqa: ARG005
+    logger.info("Opened db %s", db_path, stacklevel=2)
     return storage
 
 
@@ -572,6 +684,7 @@ def make_study_name(base: str = "pbt_study", env: str | None = None, step: int |
     return study_name
 
 
+@overload
 def get_optuna_study(
     experiment_path: str | Path | optuna.storages.BaseStorage,
     env: str | None,
@@ -580,7 +693,33 @@ def get_optuna_study(
     *,
     load_if_exists=True,
     clear_study: bool | Literal["all"] | Sequence[str] = False,
-):
+    name_only: Literal[False] = False,
+) -> optuna.Study: ...
+
+
+@overload
+def get_optuna_study(
+    experiment_path: str | Path | optuna.storages.BaseStorage,
+    env: str | None,
+    step: int | None = None,
+    suffix: str = "",
+    *,
+    load_if_exists=True,
+    clear_study: bool | Literal["all"] | Sequence[str] = False,
+    name_only: Literal[True],
+) -> str: ...
+
+
+def get_optuna_study(
+    experiment_path: str | Path | optuna.storages.BaseStorage,
+    env: str | None,
+    step: int | None = None,
+    suffix: str = "",
+    *,
+    load_if_exists=True,
+    clear_study: bool | Literal["all"] | Sequence[str] = False,
+    name_only: bool = False,
+) -> optuna.Study | str:
     if isinstance(experiment_path, (Path, str)):
         storage = _get_storage(experiment_path)
     else:
@@ -606,6 +745,8 @@ def get_optuna_study(
                 logger.info("Study with name %s does not exist, cannot delete it.", study_name)
             else:
                 logger.info("Deleted and recreating study %s", study_name)
+    if name_only:
+        return study_name
     study = optuna.create_study(
         study_name=study_name, storage=storage, load_if_exists=load_if_exists, direction="maximize"
     )
@@ -727,6 +868,7 @@ def maybe_add_trials_to_study(
 __DEBUG_SKIP_EXISTING = False
 
 
+@overload
 def optuna_create_studies(
     *experiment_paths,
     database_path: str | Path | None = None,
@@ -744,29 +886,87 @@ def optuna_create_studies(
     excludes: Collection[str] = (),
     submission_study: str | None = None,
     load_studies_only: bool = False,
-) -> dict[Any, optuna.Study]:
+) -> dict[Any, optuna.Study]: ...
+
+
+@overload
+def optuna_create_studies(
+    *experiment_paths,
+    database_path: str | Path | None = None,
+    env: str | None,
+    study_each_epoch: bool | None = False,
+    dir_depth=1,
+    metric="episode_reward_mean",
+    group_stat: str | None = None,
+    distributions: dict[str, optuna.distributions.BaseDistribution] | None = None,
+    load_if_exists: bool = True,
+    submission_file_path: Path | None = None,
+    disable_checks: bool = True,
+    clear_experiment_cache: bool = False,
+    clear_study: Sequence[str] | Literal[False] = False,
+    excludes: Collection[str] = (),
+    submission_study: str | None = None,
+    load_studies_only: Literal["names_only"],
+) -> dict[Any, tuple[str, Path]]: ...
+
+
+def optuna_create_studies(
+    *experiment_paths,
+    database_path: str | Path | None = None,
+    env: str | None,
+    study_each_epoch: bool | None = False,
+    dir_depth=1,
+    metric="episode_reward_mean",
+    group_stat: str | None = None,
+    distributions: dict[str, optuna.distributions.BaseDistribution] | None = None,
+    load_if_exists: bool = True,
+    submission_file_path: Path | None = None,
+    disable_checks: bool = True,
+    clear_experiment_cache: bool = False,
+    clear_study: Sequence[str] | Literal[False] = False,
+    excludes: Collection[str] = (),
+    submission_study: str | None = None,
+    load_studies_only: bool | Literal["names_only"] = False,
+) -> dict[Any, optuna.Study] | dict[Any, tuple[str, Path]]:
+    """
+    Create or load Optuna studies for one or many PBT experiments.
+
+    Args:
+        disable_checks: If True, disable Optuna's distribution checks. This is useful when
+            loading studies where the hyperparameter distributions have changed over time.
+    """
     assert load_if_exists, "Not loading existing is unstable"
     metric_to_check = metric
     if disable_checks:
         _disable_distribution_check()
-    storage = _get_storage(database_path or experiment_paths[0])
+    storage_path = Path(database_path or experiment_paths[0])
+    storage = _get_storage(storage_path)
     if clear_experiment_cache:
         clear_tracking_study(storage)
         STORED_EXPERIMENTS.clear()
     tracking_study = get_experiment_track_study(storage)
     if clear_experiment_cache:
         assert not STORED_EXPERIMENTS
-    studies: dict[Literal["global"] | int, optuna.Study] = {}
+    study_names_only = load_studies_only == "names_only"
+    studies: dict[Literal["global"] | int, optuna.Study] | dict[Literal["global"] | int, tuple[str, Path]] = {}
     if not study_each_epoch:
-        global_study = get_optuna_study(storage, env, load_if_exists=load_if_exists, clear_study=clear_study)
-        global_study.set_user_attr("analysis_step", "global")
-        studies[GLOBAL_STUDY] = global_study
+        global_study = get_optuna_study(
+            storage, env, load_if_exists=load_if_exists, clear_study=clear_study, name_only=study_names_only
+        )
+        if isinstance(global_study, optuna.Study):
+            global_study.set_user_attr("analysis_step", "global")
+            studies[GLOBAL_STUDY] = global_study
+        else:
+            studies[GLOBAL_STUDY] = (global_study, storage_path)
     if study_each_epoch is not False:
         for epoch in sorted(set(range(1, 33)) | set(range(1, 9))):
             step = epoch * 8192 * 4
-            step_study = get_optuna_study(storage, env, step, clear_study=clear_study)
-            step_study.set_user_attr("analysis_step", step)
-            studies[step] = step_study
+            step_study = get_optuna_study(storage, env, step, clear_study=clear_study, name_only=study_names_only)
+            if isinstance(step_study, optuna.Study):
+                step_study.set_user_attr("analysis_step", step)
+                studies[step] = step_study
+            else:
+                studies[step] = (step_study, storage_path)
 
     step_keys = sorted(step for step in studies if isinstance(step, int))
 
@@ -823,11 +1023,20 @@ def optuna_create_studies(
 
     for experiment_path in experiment_paths:
         logger.info("Checking path for experiments: %s", experiment_path)
+        running_experiments = set()
         if dir_depth == 0:
-            experiment_subdirs = [Path(experiment_path)]
+            experiment_path = Path(experiment_path)
+            experiment_id = experiment_path.name.split("-")[-1]
+            if experiment_id in STORED_EXPERIMENTS:
+                logger.info("Skipping run %s as the id is already stored", experiment_id)
+                continue
+            if any(excl in str(experiment_path) for excl in excludes) or "cometml" in str(experiment_path):
+                if "cometml" not in str(experiment_path):
+                    logger.info(f"Excluding experiment path {experiment_path} due to exclude patterns.")  # noqa: G004
+                continue
+            experiment_subdirs = [experiment_path]
         else:
             experiment_subdirs = Path(experiment_path).glob(f"*/{'/'.join(['*'] * dir_depth)}")
-        running_experiments = set()
         if submission_file_path:
             running_experiments = get_running_experiments(submission_file_path, include_restore=True)
         for experiment_dir in list(experiment_subdirs):
@@ -881,6 +1090,13 @@ def optuna_create_studies(
                     batch_size_raw = df.iloc[0].config.get(
                         "train_batch_size_per_learner",
                         df.iloc[0].config.get("batch_size", df.iloc[0].get("batch_size")),
+                    )
+                    batch_size_value = _coerce_to_int(batch_size_raw)
+                    is_large_flag = bool(batch_size_value is not None and batch_size_value >= 8192)
+                else:
+                    batch_size_raw = df.iloc[0].config.get(
+                        "minibatch_size",
+                        df.iloc[0].config.get("minibatch_size", df.iloc[0].get("minibatch_size")),
                     )
                     batch_size_value = _coerce_to_int(batch_size_raw)
                     is_large_flag = bool(batch_size_value is not None and batch_size_value >= 8192)
@@ -999,7 +1215,16 @@ def optuna_create_studies(
                             if reference_value is None:
                                 raise KeyError(metric_key_name, "not in shift values")
                             metric_centered = metric_result - _coerce_to_float(reference_value)
+                        except KeyError as ke:
+                            logger.error(
+                                "Could not compute centered metric for %s at epoch %r: %r",
+                                trial_identifier,
+                                final_row.config.pbt_epoch,
+                                ke,
+                            )
+                            metric_centered = None
                         except Exception:  # noqa: BLE001
+                            # Most common KeyError as some epoch and main data is missing.
                             logger.exception("Could not compute centered metric for %s", trial_identifier)
                             remote_breakpoint()
                             metric_centered = None
@@ -1097,6 +1322,9 @@ PARAMS_TO_CHECK = {
 
 
 def _compose_submission_key(base_key: str, submission_label: str | None) -> str:
+    # Study names should share the same key base
+    base_key = re.sub(r"step=\d+_?", "", base_key)
+    base_key = re.sub(r"_global", "", base_key)
     if not submission_label:
         return base_key
     safe_label = re.sub(r"[^A-Za-z0-9_.-]", "_", submission_label)
@@ -1166,7 +1394,7 @@ def _fix_distributions(study: optuna.Study, params: Collection[str]):
         # merge them
         if len(dists) <= 1:
             continue
-        logger.info("Parameter %s has multiple distributions: %s", name, dists)
+        logger.debug("Parameter %s has multiple distributions: %s", name, dists)
         # Merge
         choices = set()
         for dist in dists:
@@ -1254,7 +1482,7 @@ def _get_importances(
         use_kl_loss=use_kl_loss,
         vf_share_layers=vf_share_layers,
     )
-    if not filtered_trials:
+    if not filtered_trials or len(filtered_trials) <= 1:
         return {}, []
 
     working_study = deepcopy(study)
@@ -1281,15 +1509,22 @@ def _get_importances(
 
 def _analyze_single_study(
     key: Any,
-    study: optuna.Study,
+    study: optuna.Study | tuple[StudyName, DatabasePath],
     evaluators: dict[str, optuna.importance.BaseImportanceEvaluator],
     params: list[str] | None,
     excludes: Collection[Literal["kl_loss", "no_kl_loss", "vf_share_layers", "no_vf_share_layers"]] = (),
     base_trials: Sequence[optuna.trial.FrozenTrial] | None = None,
+    workers_per_study: int | None = 4,
+    submission_filter: str | None = None,
 ) -> list[dict[str, Any]]:
     """Analyze one study and return result rows."""
     rows: list[dict[str, Any]] = []
     logger.info("Analyzing study for key: %s", key)
+    if isinstance(study, tuple):
+        # load study
+        study_name, storage_path = study
+        storage = _get_storage(storage_path)
+        study = optuna.load_study(study_name=study_name, storage=storage)
     analysis_step_value: int | str = study.user_attrs.get("analysis_step", "global")
     base_trials = (
         list(base_trials)
@@ -1300,7 +1535,7 @@ def _analyze_single_study(
         {
             cast("str", label)
             for label in (trial.user_attrs.get("submission_study") for trial in base_trials)
-            if isinstance(label, str) and label
+            if isinstance(label, str) and label  # and (not submission_filter or submission_filter in label)
         }
     )
     has_centered = any(trial.user_attrs.get("centered_metric") is not None for trial in base_trials)
@@ -1317,13 +1552,18 @@ def _analyze_single_study(
         large_modes.extend(["large", "non_large"])
 
     for large_mode in large_modes:
-        _append_spec((False, large_mode, None))
-        if has_centered:
-            _append_spec((True, large_mode, None))
-        for submission in submission_labels:
-            _append_spec((False, large_mode, submission))
+        if not submission_filter:
+            _append_spec((False, large_mode, None))
             if has_centered:
-                _append_spec((True, large_mode, submission))
+                _append_spec((True, large_mode, None))
+        else:
+            for submission in submission_labels:
+                if submission_filter and submission_filter not in submission:
+                    logger.info("Skipping submission label %s due to filter %s", submission, submission_filter)
+                    continue
+                _append_spec((False, large_mode, submission))
+                if has_centered:
+                    _append_spec((True, large_mode, submission))
 
     tasks: list[ImportanceTask] = []
     for filter_kl, filter_vf_share in product([None, True, False], [None, True, False]):
@@ -1406,15 +1646,26 @@ def _analyze_single_study(
 
     try:
         if tasks:
-            cpu_count = os.cpu_count() or 20
-            inner_cap = max(1, cpu_count // 2)
-            worker_count = min(len(tasks), inner_cap)
-            with ThreadPoolExecutor(max_workers=worker_count) as combo_executor:
-                for combo_rows, report in combo_executor.map(_run_task, tasks):
+            if False:
+                cpu_count = os.cpu_count() or 4
+                inner_cap = max(1, workers_per_study or cpu_count)
+                worker_count = min(len(tasks), inner_cap)
+                with ThreadPoolExecutor(max_workers=worker_count) as combo_executor:
+                    for combo_rows, report in combo_executor.map(_run_task, tasks):
+                        if combo_rows:
+                            rows.extend(combo_rows)
+                        if report:
+                            logger.info("%s", report)
+            else:
+                # do sequential as CPU bound
+                for task in tasks:
+                    combo_rows, report = _run_task(task)
                     if combo_rows:
                         rows.extend(combo_rows)
                     if report:
                         logger.info("%s", report)
+        else:
+            logger.warning("No tasks generated for study with key %s", key)
     except Exception:  # noqa: BLE001
         logger.exception("Failed to analyze study for key %s", key)
         try:
@@ -1426,12 +1677,18 @@ def _analyze_single_study(
 
 
 def optuna_analyze_studies(
-    studies: dict[Any, optuna.Study],
+    studies: Mapping[Any, optuna.Study | tuple[StudyName, DatabasePath]] | Iterable[tuple[StudyName, DatabasePath]],
     output_path: str | Path | None,
     params: list[str] | None = None,
     max_workers: int | None = None,
     excludes: Collection[Literal["kl_loss", "no_kl_loss", "vf_share_layers", "no_vf_share_layers"]] = (),
+    submission_filter: str | None = None,
+    progress_bar: tqdm | None = None,
 ) -> pd.DataFrame | None:
+    logger.info(
+        "Starting optuna study analysis for %s studies",
+        len(studies) if isinstance(studies, (Mapping, Sized)) else "an unknown number of",
+    )
     from optuna.importance import (  # noqa: PLC0415
         FanovaImportanceEvaluator,
         MeanDecreaseImpurityImportanceEvaluator,
@@ -1450,22 +1707,51 @@ def optuna_analyze_studies(
     all_results: list[dict[str, Any]] = []
 
     # Parallelize per-study processing
-    workers = max_workers or max(1, min((os.cpu_count() or 6), len(studies), 20))
+    inner_workers = None
+    try:
+        number_studies = len(studies)  # pyright: ignore[reportArgumentType]
+    except TypeError:
+        number_studies = 33
+    if not max_workers and not isinstance(studies, (Mapping, Sized)):
+        logger.warning("max_workers not set and studies is not sized; defaulting to 4 workers.")
+        max_workers = 4
+        inner_workers = 4
+    workers = max_workers or max(1, min((os.cpu_count() or 6), number_studies, 20))
+
+    # Convert generator to list to avoid blocking during dict comprehension
+    # Studies passed as tuples will be loaded in parallel by worker threads
+    if not isinstance(studies, Mapping):
+        logger.info("Converting study generator to list...")
+        study_items = list(studies)
+        logger.info("Prepared %s study references for parallel loading", len(study_items))
+    else:
+        study_items = list(studies.items())
+        logger.info("Using %s studies from mapping", len(study_items))
+
     with ThreadPoolExecutor(max_workers=workers) as executor:
+        logger.info(
+            "Submitting %s study analysis tasks to ThreadPoolExecutor with %s workers", len(study_items), workers
+        )
         futures = {
             executor.submit(
                 _analyze_single_study,
                 key,
-                study,
+                study if not isinstance(study, Path) else (key, study),
                 evaluators,
                 params,
                 excludes,
                 None,
+                workers_per_study=inner_workers or max(4, (os.cpu_count() or 6)),
+                submission_filter=submission_filter,
             ): key
-            for key, study in studies.items()
+            for key, study in study_items
         }
+        logger.info("Submitted %s futures, waiting for completion...", len(futures))
         try:
             for future in as_completed(futures):
+                if progress_bar is not None:
+                    progress_bar.update(1)
+                logger.info("Completed analysis for study with key: %s", futures[future])
                 rows = future.result()
                 if rows:
                     all_results.extend(rows)
@@ -1479,6 +1765,7 @@ def optuna_analyze_studies(
     # Create combined DataFrame with multilevel columns
     if not all_results:
         return None
+    logger.info("Combining results from %d analyses", len(all_results))
     results_df = pd.DataFrame(all_results)
 
     pivot_df = results_df.pivot_table(
@@ -1513,21 +1800,30 @@ def _disable_distribution_check():
     optuna.distributions.check_distribution_compatibility = lambda a, b: None
 
 
+def _clean_key_col(cols):
+    return (
+        cols[0],
+        re.sub(r"-v(\d)_\|", r"-v\1|", re.sub(r"_?step=\d+", "", re.sub("_global", "", cols[1]))),
+        *cols[2:],
+    )
+
+
 def plot_importance_studies(
-    studies: dict[Any, optuna.Study] | pd.DataFrame,
+    studies: Mapping[Any, optuna.Study | tuple[str, Path]] | pd.DataFrame,
     output_path: str | Path,
     params: list[str] | None = None,
     *,
     env: str,
 ) -> list[Path] | None:
     # note there is also import optuna.visualization as optuna_vis
-    if isinstance(studies, dict):
+    if not isinstance(studies, pd.DataFrame):
         # remote_breakpoint()
         study_results = optuna_analyze_studies(studies, output_path, params=params)
     else:
         study_results = studies
     if study_results is None:
         return None
+    studies.columns = studies.columns.map(_clean_key_col)
     if study_results.columns.nlevels > 1:
         importances = {
             evaluator_name: study_results[evaluator_name] for evaluator_name in study_results.columns.levels[0]
@@ -1557,7 +1853,7 @@ def plot_importance_studies(
             importance_df.columns.names = STUDY_COLUMN_NAMES[1:]
         for key in importance_df.columns.get_level_values("key").unique():
             key_df = importance_df[key]
-            if "env" in key:
+            if env in key:
                 key_with_env = key
             else:
                 key_with_env = f"{env}_{key}"
@@ -1614,12 +1910,10 @@ def plot_importance_studies(
                         ytick_labels = [lbl.get_text() for lbl in ytick_labels]
                         ytick_labels = [
                             " ".join(
-                                map(
-                                    str.capitalize,
-                                    ylabel.replace("train_batch_size_per_per_learner", "batch size")
-                                    .replace("accumulate_gradients_every", "grad accumu.")
-                                    .split("_"),
-                                )
+                                # capitalize
+                                ylabel.replace("train_batch_size_per_per_learner", "batch size")
+                                .replace("accumulate_gradients_every", "grad accumu.")
+                                .split("_"),
                             )
                             for ylabel in ytick_labels
                         ]
@@ -1646,14 +1940,18 @@ def plot_importance_studies(
                                 ax.add_patch(rect)
                         plt.title(f"Hyperparameter Importance {key_with_env} ({evaluator_name})")
                         plt.xlabel("Step")
-                        safe_submission_tag = re.sub(r"[^A-Za-z0-9_.-]", "_", submission_tag)
                         safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", str(key_with_env))
-                        safe_evaluator = re.sub(r"[^A-Za-z0-9_.-]", "_", evaluator_name)
+                        safe_submission_tag = re.sub(r"[^A-Za-z0-9_.-]", "_", submission_tag)
+                        if submission_tag in safe_key:
+                            safe_submission_tag = ""
+                        else:
+                            safe_submission_tag = f"submission={safe_submission_tag}"
+                        safe_evaluator = re.sub(r"[^A-Za-z0-9_.-]", "_", evaluator_name).rstrip("_.-")
                         file_name = (
                             f"hyperparameter_importance_{safe_key}-centered={centered_bool}-"
-                            f"large_mode={large_mode}-submission={safe_submission_tag}-{safe_evaluator}.pdf"
+                            f"large_mode={large_mode}-{safe_submission_tag}-{safe_evaluator}.pdf"
                         )
-                        file_name = file_name.replace("(default)", "")
+                        file_name = file_name.replace("(default)", "").replace("__", "_").replace("--", "-")
                         file_path = output_dir / file_name
                         assert file_path not in written_paths, "File path already written: %s" % file_path
                         fig.savefig(
@@ -1663,12 +1961,13 @@ def plot_importance_studies(
                         )
                         written_paths.add(file_path)
                         logger.info(
-                            "Saved heatmap for key=%s centered=%s large_mode=%s submission=%s at %s",
+                            "Saved heatmap for key '%s' centered %s large_mode %s submission=%s at\n'%s'",
                             key,
                             centered_bool,
                             large_mode,
                             submission_tag,
                             file_path,
+                            stacklevel=2,
                         )
                     except Exception:  # noqa: BLE001
                         logger.error(
@@ -1744,6 +2043,7 @@ if __name__ == "__main__":
         help="Experiment directories to analyze (default: three HumanoidStandup-v5 paths).",
     )
     parser.add_argument("--try-plot-only", action="store_true", help="Try to plot only from existing analysis files.")
+    parser.add_argument("--analyze-only", "-a", action="store_true", help="Only analyze studies, do not plot.")
     parser.add_argument("--plot_only", action="store_true", help="Only plot from existing analysis files.")
     parser.add_argument("--zip", "-z", action="store_true", help="Whether to zip the output analysis files.")
     args = parser.parse_args()
@@ -1751,7 +2051,7 @@ if __name__ == "__main__":
 
     # possibly for repair sqlite3 "outputs/shared/optuna_hp_study.db" ".dump" | sqlite3 new.db
 
-    logger = nice_logger(logger, logging.INFO)
+    logger = nice_logger(logger, logging.DEBUG)
     # Interpret --clear-experiment-cache values: None = not provided; [] = provided without envs (global);
     # [envs...] = provided env names to clear (only on first submission in submissions mode)
     _clear_cache_arg = args.clear_experiment_cache  # None | list[str]
@@ -1782,7 +2082,7 @@ if __name__ == "__main__":
         _env = "HumanoidStandup-v5"
         # Determine whether to clear experiment cache for this env (DEBUG path)
         _clear_now = clear_cache_present and (clear_cache_envs is None or _env in clear_cache_envs)
-        studies = optuna_create_studies(
+        ot_studies = optuna_create_studies(
             *paths,
             # TESTING
             database_path=f"outputs/shared/optuna_hp_study_{_env}.db",
@@ -1796,8 +2096,10 @@ if __name__ == "__main__":
             excludes=file_excludes,
             # TESTING
         )
-        studies = optuna_analyze_studies(studies, output_path=paths[0], params=list(distributions.keys()))
+        studies = optuna_analyze_studies(ot_studies, output_path=paths[0], params=list(distributions.keys()))
         # Want to plot for each env.
+        if studies is None:
+            sys.exit(1)
         plot_importance_studies(studies, output_path=paths[0], params=list(distributions.keys()), env=_env)
         sys.exit(0)
     # clear_study = args.clear_study
@@ -1872,7 +2174,7 @@ if __name__ == "__main__":
                 keep = set()
                 # filter:
                 for info in run_infos.values():
-                    if info["run_id"] in args.envs:  # Limitation: this branch ignores multi HP tuning
+                    if info["run_key"] in args.envs:  # Limitation: this branch ignores multi HP tuning
                         keep.add(info["run_id"])
                 run_paths = {k: v for k, v in run_paths.items() if k in keep}
             all_run_paths.update(run_paths)
@@ -1883,7 +2185,7 @@ if __name__ == "__main__":
 
         # group by env and yaml_path to load less studies
         clear_studies = args.clear_study
-        all_studies: dict[str, optuna.Study] = {}
+        all_studies: dict[str, optuna.Study | tuple[str, Path]] = {}
         submission_names = set()
         first_submission = True
         for yaml_path in yaml_paths:
@@ -1904,7 +2206,12 @@ if __name__ == "__main__":
                 clear_studies_val: str | bool | None,
                 clear_exp_cache_now: bool,
                 yaml_path_param: Path,
-            ) -> tuple[str, dict[str, optuna.Study], list[Path] | None]:
+            ) -> tuple[
+                str,
+                dict[Any, optuna.Study] | dict[Any, tuple[str, Path]],
+                EnvAnalysisProcessTask | None,
+                list[Path] | None,
+            ]:
                 parquet_file = Path(
                     f"outputs/shared/experiments/Default-mlp-{env}/hyperparameter_importance_{submission_name_param}.parquet"
                 )
@@ -1916,7 +2223,7 @@ if __name__ == "__main__":
                 ]
                 if not env_paths:
                     logger.warning("No runs found for env %s in provided YAML files.", env)
-                    return env, {}, None
+                    return env, {}, None, None
                 clear_this_study = (
                     clear_studies_val
                     if clear_studies_val is not None
@@ -1935,9 +2242,10 @@ if __name__ == "__main__":
                         )
                     if not data_file.exists():
                         logger.error("Plot only specified but data file %s does not exist.", data_file)
-                        return env, {}, None
+                        return env, {}, None, None
                     importance_results = load_study_results(data_file)
 
+                    # PLOT ONLY
                     outfiles = plot_importance_studies(
                         importance_results,
                         output_path=f"outputs/shared/experiments/Default-mlp-{env}",
@@ -1960,50 +2268,61 @@ if __name__ == "__main__":
                         submission_study=submission_name_param,
                         load_studies_only=True,
                     )
-                    return env, studies, outfiles
+                    return env, studies, None, outfiles
                 # Non-plot-only path
-                study_results = None
-                if args.try_plot_only and parquet_file.exists():
-                    study_results = load_study_results(parquet_file)
-                studies = optuna_create_studies(
-                    *env_paths,
-                    database_path=database_path,
-                    env=env,
-                    dir_depth=0,
-                    distributions=optuna_dists,
-                    load_if_exists=True,
-                    study_each_epoch=None,
-                    submission_file_path=None,
-                    clear_experiment_cache=clear_exp_cache_now,
-                    clear_study=cast("Sequence[str] | Literal[False]", clear_this_study),
-                    excludes=file_excludes,
-                    metric="episode_reward_mean",
-                    submission_study=submission_name_param,
-                    load_studies_only=study_results is not None,
-                )
-                # Plots for the global files are wrong until all yaml files are processed
-                # Sufficient to do this only for the submission file studies, as the others are incomplete
-                if study_results is None:
-                    reduced_studies = {k: v for k, v in studies.items() if submission_name_param in k}
-                    study_results = optuna_analyze_studies(
-                        reduced_studies,
-                        None,
-                        params=list(distributions.keys()),
-                        excludes=submission_excludes[yaml_path_param.stem],
-                    )
-                    if study_results is None or study_results.empty:
-                        logger.warning("No study results for env %s submission %s", env, submission_name_param)
-                        return env, studies, None
-                    save_analysis_to_parquet(study_results, parquet_file)
-                outfiles = plot_importance_studies(
-                    study_results,
-                    output_path=f"outputs/shared/experiments/Default-mlp-{env}",
-                    params=list(distributions.keys()),
-                    env=env,
-                )
-                return env, studies, outfiles
 
-            with ThreadPoolExecutor(max_workers=min(len(envs), 2 * (os.cpu_count() or 2), 28)) as executor:
+                has_cached_results = bool(args.try_plot_only and parquet_file.exists())
+                if has_cached_results and load_study_results(parquet_file) is None:
+                    # Outdated version; does not mean we need to query all trials again,
+                    # just need to build analysis and parquet file again
+                    has_cached_results = False
+                load_studies_only: Literal["names_only"] | bool = (
+                    "names_only" if has_cached_results or args.analyze_only else False
+                )
+                _clear_this_study: Sequence[str] | Literal[False] = clear_this_study
+                studies: dict[str | int, optuna.study.Study] | dict[str | int, tuple[str, Path]] = (
+                    optuna_create_studies(
+                        *env_paths,
+                        database_path=database_path,
+                        env=env,
+                        dir_depth=0,
+                        distributions=optuna_dists,
+                        load_if_exists=True,
+                        study_each_epoch=None,
+                        submission_file_path=None,
+                        clear_experiment_cache=clear_exp_cache_now,
+                        clear_study=cast("Any", _clear_this_study),
+                        excludes=file_excludes,
+                        metric="episode_reward_mean",
+                        submission_study=submission_name_param,
+                        load_studies_only=load_studies_only,
+                    )
+                )
+                study_names = [
+                    study.study_name if isinstance(study, optuna.Study) else study[0] for study in studies.values()
+                ]
+                analysis_task = EnvAnalysisProcessTask(
+                    env=env,
+                    submission_name=submission_name_param,
+                    database_path=database_path,
+                    study_names=study_names,
+                    parquet_file=str(parquet_file),
+                    param_names=list(distributions.keys()),
+                    excludes=frozenset(submission_excludes[yaml_path_param.stem]),
+                    output_path=f"outputs/shared/experiments/Default-mlp-{env}",
+                    has_cached_results=has_cached_results,
+                )
+                return env, studies, analysis_task, None
+
+            process_workers = max(1, min(len(envs), int((os.cpu_count() or 2) * 0.75)))
+            max_process_workers = min(len(envs), 2 * (os.cpu_count() or 2), 28)
+            with (
+                ProcessPoolExecutor(max_workers=process_workers) as process_executor,
+                ThreadPoolExecutor(max_workers=max_process_workers) as executor,
+            ):
+                tqdm_indices = set(range(max_process_workers))
+                tqdm_indices_used = set()
+                process_futures: set[Future[EnvAnalysisProcessResult]] = set()
                 futures = {
                     # For the first submission, pass clear_studies as-is. For later submissions,
                     # if clearing was requested (True or "all"), clear only the submission-specific studies.
@@ -2030,40 +2349,121 @@ if __name__ == "__main__":
                     for idx, env in enumerate(envs)
                 }
                 try:
+                    env_studies: dict[Any, optuna.Study] | dict[Any, tuple[str, Path]]
                     for future in as_completed(futures):
-                        _env, env_studies, outfiles = future.result()
-                        all_studies.update(env_studies)
-                        if outfiles and zipfile:
+                        _env, env_studies, analysis_task, outfiles = future.result()
+                        study_update = {
+                            k: (
+                                study if isinstance(study, optuna.Study) else (study, Path(analysis_task.database_path))
+                            )
+                            for k, study in env_studies.items()
+                        }
+                        all_studies.update(study_update)
+                        if outfiles and zipfile:  # have no outfiles here currently
                             for outfile in outfiles:
                                 if outfile.exists():
                                     zipfile.write(outfile, arcname=outfile.name)
                                     saved_files.append(outfile)
+                        if analysis_task:
+                            # Submit and immediately wait to avoid queue deadlock
+                            logger.info("Submitting analysis process for env %s submission %s", _env, submission_name)
+                            try:
+                                tqdm_idx = min(tqdm_indices - tqdm_indices_used)
+                            except ValueError:
+                                tqdm_idx = 0
+                            tqdm_indices_used.add(tqdm_idx)
+
+                            # Submit the future
+                            process_future = process_executor.submit(_run_env_analysis_process, analysis_task, tqdm_idx)
+                            process_futures.add(process_future)
+
+                            # Immediately drain completed futures to prevent queue buildup
+                            while len(process_futures) >= process_workers:
+                                logger.info(
+                                    "Draining completed processes... tasks in flight: %s/%s",
+                                    len(process_futures),
+                                    process_workers,
+                                )
+                                done_futures, process_futures = wait(process_futures, return_when=FIRST_COMPLETED)
+                                for done_future in done_futures:
+                                    result: EnvAnalysisProcessResult = done_future.result()
+                                    tqdm_indices_used.discard(result.tqdm_idx)
+                                    if result.outfiles and zipfile:
+                                        for outfile in result.outfiles:
+                                            if outfile.exists():
+                                                zipfile.write(outfile, arcname=outfile.name)
+                                                saved_files.append(outfile)
+                    # complete all processes
+                    if process_futures:
+                        logger.info("Waiting for remaining %s analysis processes to complete...", len(process_futures))
+                        for process_future in as_completed(process_futures):
+                            result = process_future.result()
+                            logger.info("Analysis process for env %s completed.", result.env)
+                            if result.outfiles and zipfile:
+                                for outfile in tqdm(result.outfiles, desc="Adding to zip", unit="file"):
+                                    if outfile.exists():
+                                        zipfile.write(outfile, arcname=outfile.name)
+                                        saved_files.append(outfile)
+                        logger.info(
+                            "All %s analysis processes completed for submission %s",
+                            len(process_futures),
+                            submission_name,
+                        )
+
+                        # Now generate plots in main process (not in workers) to avoid matplotlib issues
+                        logger.info("Generating plots in main process for submission %s...", submission_name)
+                        for env in envs:
+                            parquet_file = Path(
+                                f"outputs/shared/experiments/Default-mlp-{env}/hyperparameter_importance_{submission_name}.parquet"
+                            )
+                            if parquet_file.exists():
+                                logger.info("Generating plots for env %s", env)
+                                study_results = load_study_results(parquet_file)
+                                if study_results is not None and not study_results.empty:
+                                    outfiles = plot_importance_studies(
+                                        study_results,
+                                        output_path=f"outputs/shared/experiments/Default-mlp-{env}",
+                                        params=list(distributions.keys()),
+                                        env=env,
+                                    )
+                                    if outfiles and zipfile:
+                                        for outfile in outfiles:
+                                            if outfile.exists():
+                                                zipfile.write(outfile, arcname=outfile.name)
+                                                saved_files.append(outfile)
+                        logger.info("Plotting complete for submission %s", submission_name)
                 except KeyboardInterrupt:
                     logger.warning(
                         "KeyboardInterrupt received; canceling all tasks and aborting. Waiting 5s to finish writes"
                     )
                     for future in futures:
                         future.cancel()
+                    for process_future in process_futures:
+                        process_future.cancel()
                     import time
 
                     time.sleep(5)
                     try:
                         executor.shutdown(wait=False, cancel_futures=True)
+                        process_executor.shutdown(wait=False, cancel_futures=True)
                     except TypeError:
                         executor.shutdown(wait=False)
-                    sys.exit(1)
-            # After first submission, do not clear experiment cache again
-            if first_submission:
-                first_submission = False
+                        process_executor.shutdown(wait=False)
+                    try:
+                        if input("Exit now? (y/n): ").lower().startswith("y"):
+                            sys.exit(1)
+                    except KeyboardInterrupt:
+                        sys.exit("1")
+            logger.info("Exiting executor context (will shutdown executors) for submission %s...", submission_name)
+
+        # After first submission, do not clear experiment cache again
+        if first_submission:
+            first_submission = False
         logger.info("All Trials processed, plotting combined importance.")
         for env in envs:
-            env_studies = {
-                k: v
-                for k, v in all_studies.items()
-                if env in k and not any(sub_name in k for sub_name in submission_names)
-            }
+            env_studies2 = {k: v for k, v in all_studies.items() if env in k}
             outfiles = plot_importance_studies(
-                env_studies,
+                env_studies2,
                 output_path=f"outputs/shared/experiments/Default-mlp-{env}",
                 params=list(distributions.keys()),
                 env=env,

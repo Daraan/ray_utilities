@@ -24,6 +24,7 @@ from ray_utilities.visualization.data import (
     DEFAULT_GROUP_BY,
     LOG_SETTINGS,
     MAX_ENV_LOWER_BOUND,
+    ENV_BOUNDS,
     _connect_groups,
     _drop_duplicate_steps,
     _try_cast,
@@ -176,8 +177,8 @@ def plot_error_distribution(
     plot_fn(**plot_kwargs)
     if plot_option.title:
         ax_err.set_title(f"{metric_key} distribution by {group_stat}")
-    ax_err.set_xlabel(group_stat)
-    ax_err.set_ylabel(metric_key)
+    ax_err.set_xlabel(" ".join(group_stat.split("_")))
+    ax_err.set_ylabel(" ".join(metric_key.split("_")))
     ax_err.tick_params(axis="x", rotation=30)
     plt.tight_layout()
     return fig_err
@@ -228,6 +229,38 @@ def _plot_metrics_of_group(
             )
 
 
+# Decorator to temporarily set the seaborn plotting context for a function
+from typing import Callable
+import seaborn as sns
+from functools import wraps
+
+
+def with_seaborn_context(
+    context: Literal["paper", "notebook", "talk", "poster"] = "talk", font_scale: float = 1.2
+) -> Callable:
+    """
+    Decorator to temporarily set the seaborn plotting context for a function.
+
+    Args:
+        context: The seaborn context to use (e.g., "paper", "notebook", "talk", "poster").
+        font_scale: Scaling factor for fonts.
+
+    Returns:
+        The decorated function, which will run with the specified seaborn context.
+    """
+
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            with sns.plotting_context(context, font_scale=font_scale):
+                return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+@with_seaborn_context(font_scale=1.6)
 def plot_run_data(
     df: pd.DataFrame,
     metrics: Sequence[str | tuple[str, ...]],
@@ -282,7 +315,13 @@ def plot_run_data(
             experiment_keys = experiment_keys[:5]
     group_stat, df = get_and_check_group_stat(df, group_stat, group_by)
     final_metric_was_none = pbt_metric is None
-    log = log if log is not None else group_stat in LOG_SETTINGS
+    if log is True:
+        log_base = LOG_SETTINGS[group_stat]
+    elif log is False:
+        log_base = None
+    else:
+        log = bool(LOG_SETTINGS.get(group_stat, False))
+        log_base = LOG_SETTINGS[group_stat] if log else None
 
     # Secondary x-axis mappers
     first_change: tuple[str, int] = df[ifill("config", "pbt_epoch")].diff().iloc[1:].ne(0).idxmax()  # pyright: ignore[reportAssignmentType]
@@ -394,7 +433,7 @@ def plot_run_data(
         ax: Axes = axes[i]
         ax2 = ax.twinx()
         ax_2handles = ax2_labels = None
-        ax2.set_ylabel(group_stat)
+        ax2.set_ylabel(" ".join(group_stat.split("_")))
         # we did not save perturbation interval, check where pbt_epoch first changes
         # Use transform to add it relative to the data
         if pbt_plot_interval:
@@ -402,15 +441,15 @@ def plot_run_data(
             secax.set_xlabel("PBT Epoch")
             secax.set_xticks([e for e in range(num_pbt_epochs) if e % pbt_plot_interval == 1])
             # Show tick labels for secondary xaxis, inside and closer to the plot
-            secax.xaxis.set_tick_params(which="both", bottom=False, top=False, labelbottom=True, labeltop=False, pad=-3)
+            secax.xaxis.set_tick_params(which="both", bottom=False, top=False, labelbottom=True, labeltop=False, pad=-5)
             secax.xaxis.set_label_position("top")
             # Also move the label closer to the plot
-            secax.set_xlabel("PBT Epoch", labelpad=3)
+            secax.set_xlabel("PBT Epoch", labelpad=4)
         # Move main x-axis tick labels closer to the plot
         ax.xaxis.set_tick_params(pad=2)
         ax.set_xlabel("Environment Steps", labelpad=3)
         if log:
-            ax2.set_yscale("log")
+            ax2.set_yscale("log", base=log_base or 10)
 
         metric_key = metric if isinstance(metric, str) else metric[-1]
 
@@ -443,6 +482,9 @@ def plot_run_data(
         plot_df["__pbt_main_branch__"] = plot_df["__pbt_main_branch__"].infer_objects(copy=False).fillna(False)  # noqa: FBT003
         # plot_df.sort_values(["training_iteration", "__pbt_main_branch__", metric], inplace=True)
         assert group_stat in plot_df
+
+        # Remove overstepped trials
+        plot_df = plot_df[plot_df["current_step"] <= 1_180_000]
 
         # TODO: for minibatch size have two different max sets
         if group_stat == "minibatch_size":
@@ -729,9 +771,9 @@ def plot_run_data(
         # Add a colorbar for the continuous group_stat
         sm = cm.ScalarMappable(cmap=cmap, norm=norm)
         sm.set_array([])
-        sm.set_clim(norm.vmin * 0.95, norm.vmax * 1.05)  # pyright: ignore[reportOptionalOperand]
+        sm.set_clim(norm.vmin * 0.95, norm.vmax * 1.10)  # pyright: ignore[reportOptionalOperand]
         ax.set_xlim(-1000, plot_df.current_step.max() + 1000)
-        ax2.set_ylim(norm.vmin * 0.95, norm.vmax * 1.05)  # pyright: ignore[reportOptionalOperand]
+        ax2.set_ylim(norm.vmin * 0.95, norm.vmax * 1.10)  # pyright: ignore[reportOptionalOperand]
         # Make the colorbar 20% smaller by adjusting its fraction
         ax2.tick_params(axis="y", which="both", left=False, right=False, labelleft=False, labelright=True)
         if plot_option.colorbar:
@@ -754,7 +796,10 @@ def plot_run_data(
 
         # ax.set_title(f"Metric: {metric_key}")
         # ax.set_xlabel("Training Steps")
-        ax.set_ylabel(metric_key)
+        y_label = " ".join(
+            metric_key.replace("episode_reward_mean", "episode reward (ema)").split("_"),
+        )
+        ax.set_ylabel(y_label)
         # Custom legend: one entry per unique pbt_group_key
         handles, labels = ax.get_legend_handles_labels()
         # Remove duplicate labels, keep order
@@ -803,14 +848,42 @@ def plot_run_data(
             handles = (h2, *handles)
             labels = ("best", *labels)
         # Place the legend below the plot in a fancybox
+        group_stat = str(group_stat)
+        if group_stat == "lr":
+            legend_title = "learning rate"
+            ax2.set_ylabel("learning rate")
+            # Apply scientific notation to small float labels
+            if isinstance(labels, tuple):
+                labels = list(labels)
+            formatted_labels = []
+            for label in labels:
+                try:
+                    val = float(label)
+                    # Check if it's a small float and not already in scientific notation
+                    if val < 0.001 and len(str(label)) > 7 and "e" not in str(label).lower():
+                        formatted_labels.append(f"{val:.2e}")
+                    else:
+                        formatted_labels.append(label)
+                except (ValueError, TypeError):
+                    formatted_labels.append(label)
+            labels = tuple(formatted_labels)
+        else:
+            legend_title = " ".join(
+                map(
+                    str.lower,
+                    group_stat.replace("train_batch_size_per_per_learner", "batch size")
+                    .replace("accumulate_gradients_every", "grad accumu.")
+                    .split("_"),
+                )
+            )
         try:
             legend = ax.legend(
                 handles,
                 labels,
-                title=group_stat,
+                title=legend_title,
                 loc="upper center",
                 bbox_to_anchor=(0.5, -0.12),
-                ncol=min(len(labels), 6),
+                ncol=min(len(labels), 5),
                 fancybox=True,
                 framealpha=0.8,
             )
@@ -847,11 +920,13 @@ def plot_run_data(
             )
             if err_fig is not None:
                 error_figures[metric_key] = err_fig
-
-        if env_type in MAX_ENV_LOWER_BOUND:
-            curr_y, _ = ax.get_ylim()
-            if curr_y < MAX_ENV_LOWER_BOUND[env_type]:
-                ax.set_ylim(bottom=MAX_ENV_LOWER_BOUND[env_type])
+        if env_type in ENV_BOUNDS or env_type in MAX_ENV_LOWER_BOUND:
+            y_min, y_max = ENV_BOUNDS.get(env_type, (None, None))
+            if env_type in MAX_ENV_LOWER_BOUND:
+                curr_y, _ = ax.get_ylim()
+                if curr_y < MAX_ENV_LOWER_BOUND[env_type]:
+                    y_min = MAX_ENV_LOWER_BOUND[env_type]
+            ax.set_ylim(bottom=y_min, top=y_max)
 
     plt.tight_layout()
     if show:
@@ -897,7 +972,9 @@ def plot_intra_group_variances(
     group_stat = split_idx[0][0]
     group_variance_global.index.names = [group_stat]
     group_stat_str = " ".join(
-        map(str.capitalize, group_stat.replace("train_batch_size_per_per_learner", "batch size").split("_"))
+        group_stat.replace("train_batch_size_per_per_learner", "batch size")
+        .replace("Train Batch Size Per Learner", "Batch Size")
+        .split("_"),
     )
     color_map, cmap, norm = make_cmap(values, log=group_stat in LOG_SETTINGS)
 

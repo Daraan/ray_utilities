@@ -1206,6 +1206,8 @@ def collect_restore_jobs(yaml_file: str, excludes: Sequence[str] = ()) -> dict[s
                     old_submission_id = run_info.get("submission_id", "")
                     # Find restore folder
                     restore_glob = f"outputs/shared/experiments/*{env}*/*/*-{run_id}*"
+                    if "ALE" in env or "atari" in yaml_file:
+                        restore_glob = f"outputs/shared/experiments/*{env.replace('/', '-')}*/*/*/*-{run_id}*/*"
                     restore_folders = [Path(p).absolute() for p in Path(".").glob(restore_glob)]
                     restore_folder = str(restore_folders[0]) if restore_folders else ""
                     if not restore_folder:

@@ -38,9 +38,9 @@ pbt_fine_batch_size_base:
     persistent_node: 1
   run_ids:
     (Pong-v5):
-      tws47f2512220008700a4:
-        status: STOPPED
-        submission_id: pbt_fine_batch_size_base_ALE-Pong-v5_2025-12-22_00:07:54
+      tws47f2512242309c8874:
+        status: RUNNING
+        submission_id: pbt_fine_batch_size_base_ALE-Pong-v5_2025-12-24_23:08:58
 pbt_fine_batch_size_base_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -85,14 +85,8 @@ pbt_fine_accumulate:
     persistent_node: 1
   run_ids:
     (Pong-v5):
-      tws47f25122200196b904:
-        status: STOPPED
-        submission_id: pbt_fine_accumulate_ALE-Pong-v5_2025-12-22_00:18:30
-      tws47f25122200424ba34:
-        status: FAILED
-        submission_id: pbt_fine_accumulate_ALE-Pong-v5_2025-12-22_00:40:31
       tws47f2512240030d77e4:
-        status: RUNNING
+        status: FAILED
         submission_id: pbt_fine_accumulate_ALE-Pong-v5_2025-12-24_00:30:12
 pbt_fine_num_envs:
   # This is a comment
@@ -106,12 +100,17 @@ pbt_fine_num_envs:
     persistent_node: 1
   run_ids:
     (Pong-v5):
-      tws47f2512220056185b4:
-        status: FAILED
-        submission_id: pbt_fine_num_envs_ALE-Pong-v5_2025-12-22_00:40:31
       tws47f251224003126dc4:
-        status: RUNNING
+        status: RESTORE
         submission_id: pbt_fine_num_envs_ALE-Pong-v5_2025-12-24_00:30:12
+      tws47f25122423042bd14:
+        status: RUNNING
+        submission_id:
+          pbt_fine_num_envs_ALE-Pong-v5_2025-12-24_00:30:12_restore_2025-12-24_23:03:34
+      Pong-v5:
+        status: FAILED
+        submission_id:
+          pbt_fine_num_envs_ALE-Pong-v5_2025-12-24_00:30:12_restore_2025-12-24_23:03:34
 pbt_fine_num_envs_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale
@@ -182,11 +181,6 @@ pbt_fine_gamma_base:
   entrypoint_resources:
     persistent_node: 1
 
-  run_ids:
-    (Pong-v5):
-      tws47f25122204121dc64:
-        status: FAILED
-        submission_id: pbt_fine_gamma_base_ALE-Pong-v5_2025-12-22_00:40:31
 pbt_fine_gamma_large:
   entrypoint_pattern:
     pattern: global_pattern_1

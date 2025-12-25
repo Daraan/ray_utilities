@@ -664,10 +664,6 @@ pbt_fine_num_envs_large:
           outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Swimmer-v5-PPO-tws47f25122004272baa4
 pbt_fine_clip_param:
   # TODO: Change to base
-  <ENV_TYPE>:
-  - CartPole-v1
-  - Acrobot-v1
-  - LunarLander-v3
   entrypoint_resources:
     persistent_node: 1
   entrypoint_pattern:
@@ -805,11 +801,6 @@ pbt_fine_clip_param_base_large:
         file_path:
           outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:clip_param/Default-mlp-Swimmer-v5-PPO-tws47f25122006252a0f4
 pbt_fine_entropy_coeff_base:
-  # TODO: Change to base
-  <ENV_TYPE>:
-  - CartPole-v1
-  - Acrobot-v1
-  - LunarLander-v3
   entrypoint_resources:
     persistent_node: 1
   entrypoint_pattern:
@@ -840,11 +831,6 @@ pbt_fine_entropy_coeff_base:
         file_path:
           outputs/shared_backup/needs_sync/Default-mlp-LunarLander-v3/pbt-tune_tune:entropy_coeff/Default-mlp-LunarLander-v3-PPO-tws47f25121723329ef94
 pbt_fine_vf_loss_coeff_base:
-  # TODO: Change to base
-  <ENV_TYPE>:
-  - CartPole-v1
-  - Acrobot-v1
-  - LunarLander-v3
   entrypoint_resources:
     persistent_node: 1
   entrypoint_pattern:

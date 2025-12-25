@@ -102,19 +102,28 @@ DROP_COLUMNS = [
 
 DEFAULT_GROUP_BY = ("pbt_epoch", "pbt_group_key")
 
-LOG_SETTINGS = {
-    "lr",
-    "batch_size",
-    "minibatch_size",
-    "entropy_coeff",
-    "vf_clip_param",
-    "grad_clip",
-    "gamma",
-    "accumulate_gradients_every",
+LOG_SETTINGS: dict[str, int] = {
+    "lr": 2,
+    "batch_size": 2,
+    "minibatch_size": 2,
+    "entropy_coeff": 2,
+    "vf_clip_param": 10,
+    "grad_clip": 10,
+    "gamma": 10,
+    "accumulate_gradients_every": 2,
 }
 
-MAX_ENV_LOWER_BOUND = {"LunarLander-v3": -750}
+MAX_ENV_LOWER_BOUND: dict[str, float] = {"LunarLander-v3": -750, "HalfCheetah-v5": -750}
 """Lower bound clip for plots"""
+
+__t_margin = 1.1
+
+ENV_BOUNDS: dict[str, tuple[float | None, float | None]] = {
+    "CartPole-v1": (0, 500.0 * __t_margin),
+    "Acrobot-v1": (-500.0, -80 * (2 - __t_margin)),
+    "LunarLander-v3": (None, 220.0),
+    "HalfCheetah-v5": (-450, 600),
+}
 
 FULL_EXPERIMENT_FILE = Path("experiment_full_data.parquet")
 
@@ -1083,7 +1092,7 @@ def _get_epoch_end_steps(df) -> pd.DataFrame | None:
                 if set(parents_next_epoch) & set(run_ids_in_missing) == set(parents_next_epoch):
                     # set main branch in miss; however likely we wont get there else it would already be correct
                     missing_epoch.loc[parents_next_epoch, ifill("config", "__pbt_main_branch__")] = True
-                    main_branch_info = df[ifill("config", "__pbt_main_branch__")]
+                    main_branch_info = df[ifill("config", "__pbt_main_branch__")].copy()
                     main_branch_info[
                         (df.config.pbt_epoch == miss).to_numpy().flatten()
                         & df.index.get_level_values("run_id").isin(parents_next_epoch)  # ,
@@ -1093,8 +1102,12 @@ def _get_epoch_end_steps(df) -> pd.DataFrame | None:
                 else:
                     logger.warning(
                         "Could not fix __pbt_main_branch__ for missing epoch %s "
-                        "as parents could not determined but could determine epoch end steps",
+                        "as parents could not determined but could determine epoch end steps. "
+                        "Parents next epoch: %s, runs in missing epoch: %s",
                         miss,
+                        parents_next_epoch,
+                        run_ids_in_missing,
+                        stacklevel=2,
                     )
             except Exception:
                 logger.exception("Could not fix __pbt_main_branch__ for missing epoch %s", miss)

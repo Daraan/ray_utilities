@@ -1132,10 +1132,6 @@ pbt_fine_num_envs_large:
           outputs/shared/experiments/Default-mlp-Reacher-v5/pbt-tune_tune:num_envs_per_env_runner/Default-mlp-Reacher-v5-PPO-tws47f251221121764944
 pbt_fine_clip_param:
   # TODO: Change to base
-  <ENV_TYPE>:
-  - CartPole-v1
-  - Acrobot-v1
-  - LunarLander-v3
   entrypoint_resources:
     persistent_node: 1
   entrypoint_pattern:
@@ -1162,6 +1158,45 @@ pbt_fine_clip_param:
         submission_id: pbt_fine_clip_param_LunarLander-v3_2025-12-10_15:30:30
         file_path:
           outputs/shared_backup/Default-mlp-LunarLander-v3/pbt-tune_tune:clip_param/Default-mlp-LunarLander-v3-PPO-tws47f25121016361b764
+    (HumanoidStandup-v5):
+      tws47f251224203160f04:
+        status: RUNNING
+        submission_id:
+          pbt_fine_clip_param_HumanoidStandup-v5_2025-12-24_20:31:20
+    (Pusher-v5):
+      tws47f2512242046c6894:
+        status: RUNNING
+        submission_id: pbt_fine_clip_param_Pusher-v5_2025-12-24_20:46:21
+    (Reacher-v5):
+      tws47f251224213244ca4:
+        status: RUNNING
+        submission_id: pbt_fine_clip_param_Reacher-v5_2025-12-24_20:46:21
+    (Swimmer-v5):
+      tws47f251224213294734:
+        status: RUNNING
+        submission_id: pbt_fine_clip_param_Swimmer-v5_2025-12-24_20:46:21
+    (Ant-v5):
+      tws47f2512242132b15c4:
+        status: RUNNING
+        submission_id: pbt_fine_clip_param_Ant-v5_2025-12-24_20:46:21
+    (Walker2d-v5):
+      tws47f2512242211e23f4:
+        status: RUNNING
+        submission_id: pbt_fine_clip_param_Walker2d-v5_2025-12-24_20:46:21
+    (InvertedPendulum-v5):
+      tws47f2512242211057f4:
+        status: RUNNING
+        submission_id:
+          pbt_fine_clip_param_InvertedPendulum-v5_2025-12-24_20:46:21
+    (InvertedDoublePendulum-v5):
+      tws47f251224223997284:
+        status: RUNNING
+        submission_id:
+          pbt_fine_clip_param_InvertedDoublePendulum-v5_2025-12-24_20:46:21
+    (Hopper-v5):
+      tws47f2512242239eb124:
+        status: RUNNING
+        submission_id: pbt_fine_clip_param_Hopper-v5_2025-12-24_20:46:21
 pbt_fine_clip_param_base_large:
   # Change to non-base
   entrypoint_resources:
@@ -1285,10 +1320,6 @@ pbt_fine_clip_param_base_large:
           outputs/shared/experiments/Default-mlp-Reacher-v5/pbt-tune_tune:clip_param/Default-mlp-Reacher-v5-PPO-tws47f251221141390004
 pbt_fine_entropy_coeff_base:
   # TODO: Change to base
-  <ENV_TYPE>:
-  - CartPole-v1
-  - Acrobot-v1
-  - LunarLander-v3
   entrypoint_resources:
     persistent_node: 1
   entrypoint_pattern:
@@ -1320,10 +1351,6 @@ pbt_fine_entropy_coeff_base:
           outputs/shared_backup/needs_sync/Default-mlp-LunarLander-v3/pbt-tune_tune:entropy_coeff/Default-mlp-LunarLander-v3-PPO-tws47f251210163697d54
 pbt_fine_vf_loss_coeff_base:
   # TODO: Change to base
-  <ENV_TYPE>:
-  - CartPole-v1
-  - Acrobot-v1
-  - LunarLander-v3
   entrypoint_resources:
     persistent_node: 1
   entrypoint_pattern:

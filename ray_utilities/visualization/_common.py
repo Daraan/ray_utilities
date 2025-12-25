@@ -32,6 +32,8 @@ sns.set_theme(
     },
 )
 
+DEFAULT_SNS_CONTEXT = sns.plotting_context()
+
 
 class SubmissionRun(TypedDict):
     group_name: str

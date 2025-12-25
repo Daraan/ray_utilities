@@ -844,8 +844,10 @@ sympol_pbt_lr_large:
         status: RESTORE
         submission_id: sympol_pbt_lr_large_Humanoid-v5_2025-12-23_03:03:38
       sp87c6251223184885ba4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: sympol_pbt_lr_large_Humanoid-v5_2025-12-23_18:41:40
+        file_path:
+          outputs/shared/experiments/SYMPOL-mlp-Humanoid-v5/pbt-tune_tune:lr/SYMPOL-mlp-Humanoid-v5-PPO-sp87c6251223184885ba4
     (Swimmer-v5):
       sp87c6251223064984234:
         status: RESTORE
@@ -864,19 +866,19 @@ sympol_pbt_lr_large:
       sp87c625122308385f964:
         status: SUCCEEDED
         submission_id: sympol_pbt_lr_large_HalfCheetah-v5_2025-12-23_03:03:38
+        file_path:
+          outputs/shared/experiments/SYMPOL-mlp-HalfCheetah-v5/pbt-tune_tune:lr/SYMPOL-mlp-HalfCheetah-v5-PPO-sp87c625122308385f964
     (Ant-v5):
       sp87c62512232120335c4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: sympol_pbt_lr_large_Ant-v5_2025-12-23_18:41:40
+        file_path:
+          outputs/shared/experiments/SYMPOL-mlp-Ant-v5/pbt-tune_tune:lr/SYMPOL-mlp-Ant-v5-PPO-sp87c62512232120335c4
     (Walker2d-v5):
       sp87c62512232138b5874:
         status: FAILED
         submission_id: sympol_pbt_lr_large_Walker2d-v5_2025-12-23_18:41:40
     (InvertedDoublePendulum-v5):
-      sp87c62512232221973d4:
-        status: FAILED
-        submission_id:
-          sympol_pbt_lr_large_InvertedDoublePendulum-v5_2025-12-23_18:41:40
       sp87c6251223144074b14:
         status: RESTORE
         submission_id:
@@ -1312,20 +1314,20 @@ sympol_pbt_gamma_large:
   run_ids:
     (Ant-v5):
       sp87c62512232233554b4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: sympol_pbt_gamma_large_Ant-v5_2025-12-23_18:41:40
+        file_path:
+          outputs/shared/experiments/SYMPOL-mlp-Ant-v5/pbt-tune_tune:gamma/SYMPOL-mlp-Ant-v5-PPO-sp87c62512232233554b4
     (Hopper-v5):
       sp87c625122322365f474:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: sympol_pbt_gamma_large_Hopper-v5_2025-12-23_18:41:40
+        file_path:
+          outputs/shared/experiments/SYMPOL-mlp-Hopper-v5/pbt-tune_tune:gamma/SYMPOL-mlp-Hopper-v5-PPO-sp87c625122322365f474
     (Walker2d-v5):
       sp87c6251223223906464:
         status: STOPPED
         submission_id: sympol_pbt_gamma_large_Walker2d-v5_2025-12-23_18:41:40
-    (HalfCheetah-v5):
-      sp87c625122322425e714:
-        status: FAILED
-        submission_id: sympol_pbt_gamma_large_HalfCheetah-v5_2025-12-23_18:41:40
     (Swimmer-v5):
       sp87c62512232245ce5e4:
         status: FAILED
@@ -1337,9 +1339,11 @@ sympol_pbt_gamma_large:
           sympol_pbt_gamma_large_InvertedDoublePendulum-v5_2025-12-23_18:41:40
     (InvertedPendulum-v5):
       sp87c6251223225164b54:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           sympol_pbt_gamma_large_InvertedPendulum-v5_2025-12-23_18:41:40
+        file_path:
+          outputs/shared/experiments/SYMPOL-mlp-InvertedPendulum-v5/pbt-tune_tune:gamma/SYMPOL-mlp-InvertedPendulum-v5-PPO-sp87c6251223225164b54
 sympol_pbt_gamma_base_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -1357,14 +1361,18 @@ sympol_pbt_gamma_base_large:
   run_ids:
     (CartPole-v1):
       sp87c62512232254e4484:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           sympol_pbt_gamma_base_large_CartPole-v1_2025-12-23_18:41:40
+        file_path:
+          outputs/shared/experiments/SYMPOL-mlp-CartPole-v1/pbt-tune_tune:gamma/SYMPOL-mlp-CartPole-v1-PPO-sp87c62512232254e4484
     (Acrobot-v1):
       sp87c62512232257fa9d4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           sympol_pbt_gamma_base_large_Acrobot-v1_2025-12-23_18:41:40
+        file_path:
+          outputs/shared/experiments/SYMPOL-mlp-Acrobot-v1/pbt-tune_tune:gamma/SYMPOL-mlp-Acrobot-v1-PPO-sp87c62512232257fa9d4
     (LunarLander-v3):
       sp87c62512232300f47b4:
         status: STOPPED
@@ -1440,6 +1448,8 @@ sympol_pbt_grad_clip:
       sp87c6251223012989f04:
         status: SUCCEEDED
         submission_id: sympol_pbt_grad_clip_HalfCheetah-v5_2025-12-22_09:44:12
+        file_path:
+          outputs/shared/experiments/SYMPOL-mlp-HalfCheetah-v5/pbt-tune_tune:grad_clip/SYMPOL-mlp-HalfCheetah-v5-PPO-sp87c6251223012989f04
     (Swimmer-v5):
       sp87c625122301517eff4:
         status: RESTORE
@@ -1476,11 +1486,52 @@ sympol_pbt_grad_clip_large:
         status: FAILED
         submission_id:
           sympol_pbt_grad_clip_large_InvertedDoublePendulum-v5_2025-12-23_03:03:38
+      sp87c62512241817c5e14:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_grad_clip_large_InvertedDoublePendulum-v5_2025-12-23_18:41:40
+        file_path:
+          outputs/shared/experiments/SYMPOL-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:grad_clip/SYMPOL-mlp-InvertedDoublePendulum-v5-PPO-sp87c62512241817c5e14
     (Humanoid-v5):
       sp87c62512240009f7f34:
         status: STOPPED
         submission_id:
           sympol_pbt_grad_clip_large_Humanoid-v5_2025-12-23_18:41:40
+    (Ant-v5):
+      sp87c6251224115596a64:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_grad_clip_large_Ant-v5_2025-12-23_18:41:40
+        file_path:
+          outputs/shared/experiments/SYMPOL-mlp-Ant-v5/pbt-tune_tune:grad_clip/SYMPOL-mlp-Ant-v5-PPO-sp87c6251224115596a64
+    (Hopper-v5):
+      sp87c6251224163284c04:
+        status: SUCCEEDED
+        submission_id: sympol_pbt_grad_clip_large_Hopper-v5_2025-12-23_18:41:40
+        file_path:
+          outputs/shared/experiments/SYMPOL-mlp-Hopper-v5/pbt-tune_tune:grad_clip/SYMPOL-mlp-Hopper-v5-PPO-sp87c6251224163284c04
+    (Walker2d-v5):
+      sp87c6251224163579054:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_grad_clip_large_Walker2d-v5_2025-12-23_18:41:40
+        file_path:
+          outputs/shared/experiments/SYMPOL-mlp-Walker2d-v5/pbt-tune_tune:grad_clip/SYMPOL-mlp-Walker2d-v5-PPO-sp87c6251224163579054
+    (HalfCheetah-v5):
+      sp87c62512241756d8394:
+        status: RUNNING
+        submission_id:
+          sympol_pbt_grad_clip_large_HalfCheetah-v5_2025-12-23_18:41:40
+    (Swimmer-v5):
+      sp87c625122418147ffd4:
+        status: RUNNING
+        submission_id: sympol_pbt_grad_clip_large_Swimmer-v5_2025-12-23_18:41:40
+    (InvertedPendulum-v5):
+      sp87c62512241820b93d4:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_grad_clip_large_InvertedPendulum-v5_2025-12-23_18:41:40
+        file_path:
+          outputs/shared/experiments/SYMPOL-mlp-InvertedPendulum-v5/pbt-tune_tune:grad_clip/SYMPOL-mlp-InvertedPendulum-v5-PPO-sp87c62512241820b93d4
 sympol_pbt_grad_clip_base_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -1493,3 +1544,25 @@ sympol_pbt_grad_clip_base_large:
   entrypoint_resources:
     persistent_node: 1
 #endregion
+  run_ids:
+    (CartPole-v1):
+      sp87c62512241823e35a4:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_grad_clip_base_large_CartPole-v1_2025-12-23_18:41:40
+        file_path:
+          outputs/shared/experiments/SYMPOL-mlp-CartPole-v1/pbt-tune_tune:grad_clip/SYMPOL-mlp-CartPole-v1-PPO-sp87c62512241823e35a4
+    (Acrobot-v1):
+      sp87c62512241826ecd04:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_grad_clip_base_large_Acrobot-v1_2025-12-23_18:41:40
+        file_path:
+          outputs/shared/experiments/SYMPOL-mlp-Acrobot-v1/pbt-tune_tune:grad_clip/SYMPOL-mlp-Acrobot-v1-PPO-sp87c62512241826ecd04
+    (LunarLander-v3):
+      sp87c62512241829b9c04:
+        status: SUCCEEDED
+        submission_id:
+          sympol_pbt_grad_clip_base_large_LunarLander-v3_2025-12-23_18:41:40
+        file_path:
+          outputs/shared/experiments/SYMPOL-mlp-LunarLander-v3/pbt-tune_tune:grad_clip/SYMPOL-mlp-LunarLander-v3-PPO-sp87c62512241829b9c04
