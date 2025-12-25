@@ -1165,7 +1165,7 @@ pbt_fine_clip_param:
           pbt_fine_clip_param_HumanoidStandup-v5_2025-12-24_20:31:20
     (Pusher-v5):
       tws47f2512242046c6894:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_fine_clip_param_Pusher-v5_2025-12-24_20:46:21
     (Reacher-v5):
       tws47f251224213244ca4:
@@ -1201,11 +1201,11 @@ pbt_fine_clip_param:
           pbt_fine_clip_param_InvertedDoublePendulum-v5_2025-12-24_20:46:21
     (Hopper-v5):
       tws47f2512242239eb124:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id: pbt_fine_clip_param_Hopper-v5_2025-12-24_20:46:21
     (Humanoid-v5):
       tws47f2512251103814c4:
-        status: RUNNING
+        status: SUCCEEDED - not really
         submission_id: pbt_fine_clip_param_Humanoid-v5_2025-12-24_20:46:21
     (HalfCheetah-v5):
       tws47f2512251110fb3f4:
@@ -1412,14 +1412,14 @@ pbt_fine_entropy_coeff_base:
           pbt_fine_entropy_coeff_base_Humanoid-v5_2025-12-24_20:46:21
     (HalfCheetah-v5):
       tws47f251225203460e04:
-        status: RUNNING
+        status: STOPPED
         submission_id:
           pbt_fine_entropy_coeff_base_HalfCheetah-v5_2025-12-24_20:46:21
 pbt_fine_vf_loss_coeff_base:
   <ENV_TYPE>:
-    - CartPole-v1
-    - Acrobot-v1
-    - LunarLander-v3
+  - CartPole-v1
+  - Acrobot-v1
+  - LunarLander-v3
   entrypoint_resources:
     persistent_node: 1
   entrypoint_pattern:

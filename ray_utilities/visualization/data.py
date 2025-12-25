@@ -1156,7 +1156,7 @@ def _get_epoch_end_steps(df) -> pd.DataFrame | None:
 
 def get_epoch_stats(
     df, metric, *, individual_runs: bool = False
-) -> tuple[pd.DataFrame, pd.DataFrame, tuple[pd.DataFrame, pd.DataFrame]]:
+) -> tuple[pd.DataFrame | None, pd.DataFrame, tuple[pd.DataFrame, pd.DataFrame]]:
     # region Variance
     # backup = df
     def ifill(*cols, n=df.columns.nlevels):
@@ -1300,31 +1300,47 @@ def calculate_hyperparam_metrics(
     metric_key = metric if isinstance(metric, str) else "-".join(metric)
     metric_values, epoch_end_steps, (value_shifter, value_shifter_with_first) = get_epoch_stats(df, metric)
     # Subtract initial mean from each group to get variance around start value
-    centered_metric_values = metric_values.sub(value_shifter[metric_key].to_frame(), level="pbt_epoch")[
-        metric_key
-    ].dropna()
-    # Rough start value for all groups; not good when we tune batch_size
-    normed_metric_values = metric_values.divide(value_shifter_with_first.replace(0, nan), level="pbt_epoch")[
-        metric_key
-    ].dropna()
-    # Also center the first epoch
-    centered_metric_values2 = metric_values.sub(value_shifter_with_first, level="pbt_epoch")[metric_key].dropna()
+    if metric_values is not None:
+        centered_metric_values = metric_values.sub(value_shifter[metric_key].to_frame(), level="pbt_epoch")[
+            metric_key
+        ].dropna()
+        # Rough start value for all groups; not good when we tune batch_size
+        normed_metric_values = metric_values.divide(value_shifter_with_first.replace(0, nan), level="pbt_epoch")[
+            metric_key
+        ].dropna()
+        # Also center the first epoch
+        centered_metric_values2 = metric_values.sub(value_shifter_with_first, level="pbt_epoch")[metric_key].dropna()
 
-    groupby = "current_step" if not per_epoch else ["current_step", "pbt_epoch"]
+        groupby = "current_step" if not per_epoch else ["current_step", "pbt_epoch"]
 
-    centered_metrics = centered_metric_values.groupby(level=groupby).aggregate(["var", "std", "mean"])
-    centered_metrics2 = centered_metric_values2.groupby(level=groupby).aggregate(["var", "std", "mean"])
-    # For mean we need to subtract mean of pbt_epoch 0
-    normed_metrics = normed_metric_values.groupby(level=groupby).aggregate(["var", "std", "mean"])
+        centered_metrics = centered_metric_values.groupby(level=groupby).aggregate(["var", "std", "mean"])
+        centered_metrics2 = centered_metric_values2.groupby(level=groupby).aggregate(["var", "std", "mean"])
+        # For mean we need to subtract mean of pbt_epoch 0
+        normed_metrics = normed_metric_values.groupby(level=groupby).aggregate(["var", "std", "mean"])
 
-    # Normed metrics 2: Normalize: subtract mean and divide by stddev of epoch begin from value_shifter_with_first
-    normalized_metric_values = (
-        metric_values[metric_key]
-        .sub(value_shifter_with_first[metric_key], level="pbt_epoch")
-        .div(value_shifter_with_first["metric_std"], level="pbt_epoch")
-    ).dropna()
-    normalized_metric = normalized_metric_values.groupby(level=groupby).aggregate(["var", "std", "mean"])
-    # endregion
+        # Normed metrics 2: Normalize: subtract mean and divide by stddev of epoch begin from value_shifter_with_first
+        normalized_metric_values = (
+            metric_values[metric_key]
+            .sub(value_shifter_with_first[metric_key], level="pbt_epoch")
+            .div(value_shifter_with_first["metric_std"], level="pbt_epoch")
+        ).dropna()
+        normalized_metric = normalized_metric_values.groupby(level=groupby).aggregate(["var", "std", "mean"])
+        # endregion
+    else:
+        centered_metrics = None
+        centered_metrics2 = None
+        centered_metric_values = None
+        normalized_metric = None
+        normed_metrics = None
+        normed_metric_values = None
+        metric_values = df
+        # for kendal tau make artificial 8 end steps
+        epoch_end_steps = pd.DataFrame(
+            {"current_step": np.linspace(0, df.current_step.max().item(), num=8, dtype=int)},
+            index=pd.Index(range(8), name="pbt_epoch"),
+        )
+        if "pbt_epoch" not in df.config:
+            df[ifill("config", "pbt_epoch", n=df.columns.nlevels)] = 0
 
     # region Gini
     # Calculate the gini coefficient for each point in time
@@ -1396,7 +1412,7 @@ def calculate_hyperparam_metrics(
             # ignore this error for short aborted runs, kendall will be NaN then
             AB = pd.concat([A, B], axis=1, names=[metric_key, "rank2"])
     except Exception:
-        remote_breakpoint(5679)
+        pass
     AB.columns = [metric_key, "rank2"]
     # tau ~0 no consistent ordering, ~1 consistent ordering
     # high p value, no evidence of monotonic relationship. Tau is compatible with random change
@@ -1406,7 +1422,7 @@ def calculate_hyperparam_metrics(
         .groupby("current_step")
         .apply(lambda x: pd.Series(kendalltau(x[metric_key], x["rank2"]), index=["tau", "pvalue"]))
     )
-    if per_epoch:
+    if per_epoch and centered_metrics is not None:
         # if we want epoch in the index and not the current_step:
         # step_to_epoch = epoch_end_steps.reset_index().set_index("current_step")["pbt_epoch"].to_dict()
         # kendall_metrics.index = kendall_metrics.index.map(step_to_epoch)
@@ -1452,49 +1468,62 @@ def calculate_hyperparam_metrics(
             )
         return df
 
-    stats = pd.concat(
-        [
-            to_multiindex(
-                centered_metrics.clip(
-                    lower=centered_metrics.quantile(0.02) - 1, upper=centered_metrics.quantile(0.98) + 1, axis=1
+    if centered_metrics is not None:
+        stats = pd.concat(
+            [
+                to_multiindex(
+                    centered_metrics.clip(
+                        lower=centered_metrics.quantile(0.02) - 1, upper=centered_metrics.quantile(0.98) + 1, axis=1
+                    ),
+                    "centered_metrics",
                 ),
-                "centered_metrics",
-            ),
-            to_multiindex(
-                centered_metrics2.clip(
-                    lower=centered_metrics2.quantile(0.02) - 1, upper=centered_metrics2.quantile(0.98) + 1, axis=1
+                to_multiindex(
+                    centered_metrics2.clip(
+                        lower=centered_metrics2.quantile(0.02) - 1, upper=centered_metrics2.quantile(0.98) + 1, axis=1
+                    ),
+                    "centered_metrics2",
                 ),
-                "centered_metrics2",
-            ),
-            to_multiindex(
-                normed_metrics.clip(
-                    lower=normed_metrics.quantile(0.01) - 1, upper=normed_metrics.quantile(0.98) + 1, axis=1
+                to_multiindex(
+                    normed_metrics.clip(
+                        lower=normed_metrics.quantile(0.01) - 1, upper=normed_metrics.quantile(0.98) + 1, axis=1
+                    ),
+                    "normed_metrics",
                 ),
-                "normed_metrics",
-            ),
-            to_multiindex(
-                normalized_metric.clip(
-                    lower=normalized_metric.quantile(0.01) - 1, upper=normalized_metric.quantile(0.98) + 1, axis=1
+                to_multiindex(
+                    normalized_metric.clip(
+                        lower=normalized_metric.quantile(0.01) - 1, upper=normalized_metric.quantile(0.98) + 1, axis=1
+                    ),
+                    "normalized_metrics",
                 ),
-                "normalized_metrics",
-            ),
-            to_multiindex(
-                gini_metrics.clip(lower=gini_metrics.quantile(0.01) - 1, upper=gini_metrics.quantile(0.98) + 1),
-                "gini_metrics",
-            ),
-            to_multiindex(kendall_metrics, "kendall_metrics"),
-        ],
-        axis=1,
-    )
+                to_multiindex(
+                    gini_metrics.clip(lower=gini_metrics.quantile(0.01) - 1, upper=gini_metrics.quantile(0.98) + 1),
+                    "gini_metrics",
+                ),
+                to_multiindex(kendall_metrics, "kendall_metrics"),
+            ],
+            axis=1,
+        )
+    else:
+        stats = pd.concat(
+            [
+                to_multiindex(
+                    gini_metrics.clip(lower=gini_metrics.quantile(0.01) - 1, upper=gini_metrics.quantile(0.98) + 1),
+                    "gini_metrics",
+                ),
+                to_multiindex(kendall_metrics, "kendall_metrics"),
+            ],
+            axis=1,
+        )
     # mean and std of the variance and metrics
     stats_reduced = stats.agg(["mean", "std"]).T.drop(["mean", "std"], axis=0, level=1).sort_index()
-    stats_reduced = pd.concat(
-        [
-            stats_reduced.drop("normed_metrics"),
-            to_multiindex(normed_metrics, "normed_metrics").agg(["mean", "std"]).T.drop("std", level=1),
-        ],
-        axis=0,
-    )
+    if normed_metrics is not None:
+        stats_reduced = pd.concat(
+            [
+                stats_reduced.drop("normed_metrics"),
+                to_multiindex(normed_metrics, "normed_metrics").agg(["mean", "std"]).T.drop("std", level=1),
+            ],
+            axis=0,
+        )
     return stats, stats_reduced.to_string(), (intra_group_variance, intra_group_variance_global)
 
 
