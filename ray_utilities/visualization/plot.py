@@ -54,26 +54,31 @@ def make_cmap(
     log: bool = False,
 ):
     # Create a continuous colormap for the group_stat (logarithmic scale)
-    if log:
-        norm = mcolors.LogNorm(
-            vmin=values.replace(0, nan).replace(float("-inf"), nan).min(),
-            vmax=values.max(),
-        )
-    else:
-        norm = mcolors.Normalize(
-            vmin=values.min(),
-            vmax=values.max(),
-        )
-    cmap = colormaps.get_cmap(name)
+    try:
+        if log:
+            norm = mcolors.LogNorm(
+                vmin=values.replace(0, nan).replace(float("-inf"), nan).min(),
+                vmax=values.max(),
+            )
+        else:
+            norm = mcolors.Normalize(
+                vmin=values.min(),
+                vmax=values.max(),
+            )
+        cmap = colormaps.get_cmap(name)
 
-    # Map group_stat values to colors
-    unique_stats = values.unique()
-    color_map = {val: mcolors.to_hex(cmap(norm(val))) for val in unique_stats if not log or val > 0}
-    # For zero or negative values, fallback to a default color
-    for val in unique_stats:
-        if (log and val <= 0) or pd.isna(val) or val in (float("inf"), float("-inf"), None):
-            color_map[val] = "#cccccc"
-    # add masked values color, included nan, -inf
+        # Map group_stat values to colors
+        unique_stats = values.unique()
+        color_map = {val: mcolors.to_hex(cmap(norm(val))) for val in unique_stats if not log or val > 0}
+        # For zero or negative values, fallback to a default color
+        for val in unique_stats:
+            if (log and val <= 0) or pd.isna(val) or val in (float("inf"), float("-inf"), None):
+                color_map[val] = "#cccccc"
+        # add masked values color, included nan, -inf
+    except ValueError:
+        logger.exception("Failed to create colormap for values: %s", values)
+        remote_breakpoint()
+        raise
     return color_map, cmap, norm
 
 
@@ -284,7 +289,7 @@ def apply_context_fonts(fig, ctx):
                 legend.get_title().set_fontsize(ctx.get("legend.title_fontsize", ctx["legend.fontsize"]))
 
 
-@with_seaborn_context(font_scale=1.6)
+@with_seaborn_context(font_scale=1.75)
 def plot_run_data(
     df: pd.DataFrame,
     metrics: Sequence[str | tuple[str, ...]],
@@ -645,6 +650,7 @@ def plot_run_data(
             secax.set_xlabel("PBT Epoch", labelpad=4)
             if max_epoch == 0:
                 secax.xaxis.label.set_visible(False)
+                secax.set_xticks([])
             else:
                 secax.set_xticks([e for e in range(num_pbt_epochs) if e % pbt_plot_interval == 1])
             # Show tick labels for secondary xaxis, inside and closer to the plot
@@ -698,7 +704,7 @@ def plot_run_data(
             else:
                 pbt_epoch = 0
             # Add background shade when group changes
-            if pbt_epoch == max_epoch:
+            if pbt_epoch > 0 and pbt_epoch == max_epoch:
                 (pbt_epoch, stat_val), group = next(last_group_iter)  # noqa: PLW2901
 
             if pbt_epoch != last_epoch:
@@ -970,7 +976,7 @@ def plot_run_data(
                 title=legend_title,
                 loc="upper center",
                 bbox_to_anchor=(0.5, -0.12),
-                ncol=min(len(labels), 5),
+                ncol=min(len(labels), 4),
                 fancybox=True,
                 framealpha=0.8,
             )

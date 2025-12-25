@@ -2582,7 +2582,7 @@ if __name__ == "__main__":
                             parquet_file = Path(
                                 f"outputs/shared/experiments/Default-mlp-{env}/hyperparameter_importance_{submission_name}.parquet"
                             )
-                            param_choices = params = list(distributions.keys())
+                            param_choices = list(distributions.keys())
                             if env not in ("CartPole-v1", "Acrobot-v1", "LunarLander-v3", "Hopper-v5"):
                                 param_choices = param_choices.copy()
                                 param_choices.remove("vf_loss_coeff")
@@ -2786,7 +2786,7 @@ if __name__ == "__main__":
         )
         if clear_now_for_env:
             cleared_cache_once = True
-        param_choices = params = list(distributions.keys())
+        param_choices = list(distributions.keys())
         if env not in ("CartPole-v1", "Acrobot-v1", "LunarLander-v3", "Hopper-v5"):
             param_choices = param_choices.copy()
             param_choices.remove("vf_loss_coeff")

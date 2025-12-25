@@ -831,6 +831,10 @@ pbt_fine_entropy_coeff_base:
         file_path:
           outputs/shared_backup/needs_sync/Default-mlp-LunarLander-v3/pbt-tune_tune:entropy_coeff/Default-mlp-LunarLander-v3-PPO-tws47f25121723329ef94
 pbt_fine_vf_loss_coeff_base:
+  <ENV_TYPE>:
+  - CartPole-v1
+  - Acrobot-v1
+  - LunarLander-v3
   entrypoint_resources:
     persistent_node: 1
   entrypoint_pattern:

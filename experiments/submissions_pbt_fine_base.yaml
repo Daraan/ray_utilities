@@ -1416,7 +1416,10 @@ pbt_fine_entropy_coeff_base:
         submission_id:
           pbt_fine_entropy_coeff_base_HalfCheetah-v5_2025-12-24_20:46:21
 pbt_fine_vf_loss_coeff_base:
-  # TODO: Change to base
+  <ENV_TYPE>:
+    - CartPole-v1
+    - Acrobot-v1
+    - LunarLander-v3
   entrypoint_resources:
     persistent_node: 1
   entrypoint_pattern:

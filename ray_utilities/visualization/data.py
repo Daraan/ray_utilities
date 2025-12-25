@@ -8,7 +8,7 @@ import logging
 # cause of this caching the trial data might not be complete!
 # pyright: reportAttributeAccessIssue=warning
 # ruff: noqa: G004
-import pickle
+from cloudpickle import cloudpickle
 import re
 import time
 import traceback
@@ -114,7 +114,12 @@ LOG_SETTINGS: dict[str, int] = {
     "accumulate_gradients_every": 2,
 }
 
-MAX_ENV_LOWER_BOUND: dict[str, float] = {"LunarLander-v3": -750, "HalfCheetah-v5": -750}
+MAX_ENV_LOWER_BOUND: dict[str, float] = {
+    "LunarLander-v3": -750,
+    "HalfCheetah-v5": -750,
+    "Ant-v5": -200,
+    "Pusher-v5": -150,
+}
 """Lower bound clip for plots"""
 
 __t_margin = 1.1
@@ -124,6 +129,9 @@ ENV_BOUNDS: dict[str, tuple[float | None, float | None]] = {
     "Acrobot-v1": (-500.0, -80 * (2 - __t_margin)),
     "LunarLander-v3": (None, 220.0),
     "HalfCheetah-v5": (-450, 600),
+    "Ant-v5": (None, 1000 * __t_margin),
+    "Hopper-v5": (0, 2200),
+    "Pusher-v5": (None, -30),
 }
 
 FULL_EXPERIMENT_FILE = Path("experiment_full_data.parquet")
@@ -1372,7 +1380,7 @@ def calculate_hyperparam_metrics(
                 AB = pd.concat([A, B], axis=1, names=[metric_key, "rank2"])
                 # try to throw away those in the last epoch that are not present in A, ignore the step
             except Exception:
-                logger.error("Failed to align A and B for kendall tau calculation")
+                logger.warning("Failed to align A and B for kendall tau calculation")
                 B: pd.Series = metric_values.loc[epoch_end_steps.current_step, metric_key].drop(
                     epoch_end_steps.iloc[-1]
                 )
@@ -1678,22 +1686,27 @@ def plot_n_save(
     cached_fig = None
     if use_cached_figures and save_path.with_suffix(".pkl").exists():
         with open(save_path.with_suffix(".pkl"), "wb") as f:
-            cached_fig = pickle.load(f)
-    fig, error_figures = plot_run_data(
-        df,
-        metrics,
-        experiment_keys,
-        figsize,
-        group_stat,
-        group_by,
-        plot_option=plot_option,
-        log=log,
-        show=False,
-        plot_errors=plot_errors,
-        plot_errors_type=plot_errors_type,
-        fig=cached_fig,
-        **kwargs,
-    )
+            cached_fig = cloudpickle.load(f)
+    try:
+        fig, error_figures = plot_run_data(
+            df,
+            metrics,
+            experiment_keys,
+            figsize,
+            group_stat,
+            group_by,
+            plot_option=plot_option,
+            log=log,
+            show=False,
+            plot_errors=plot_errors,
+            plot_errors_type=plot_errors_type,
+            fig=cached_fig,
+            **kwargs,
+        )
+    except Exception:
+        logger.exception("Failed to plot run data for saving to %s", save_path)
+        remote_breakpoint()
+        return None
     if fig is None:  # pyright: ignore[reportUnnecessaryComparison]
         return None
     save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1706,7 +1719,8 @@ def plot_n_save(
     fig.savefig(save_path, format=format, bbox_inches="tight")
     # pickle figure
     with open(save_path.with_suffix(".pkl"), "wb") as f:
-        pickle.dump(fig, f)
+        # need to use cloudpickle because of axis transformation lambda
+        cloudpickle.dump(fig, f)
     if close:
         plt.close(fig)
     outfiles: list[Path] = [save_path]
@@ -2430,12 +2444,20 @@ def export_all_runs(
             print("\n--------------------------------\n")
             logger.error(f"Failed export for {failed_path}:\n{tb}")  # noqa: G004
     end = time.time()
-    logger.info(
-        "Exported %d files in %s:\n%s",
-        len(saved_files),
-        f"{(end - start) / 60:.1f} min",
-        "\n".join(map(str, {f.parent.parent for f in saved_files})),
-    )  # noqa: G004
+    if not tracebacks:
+        logger.info(
+            "Exported %d files in %s:\n%s",
+            len(saved_files),
+            f"{(end - start) / 60:.1f} min",
+            "\n".join(map(str, {f.parent.parent for f in saved_files})),
+        )  # noqa: G004
+    else:
+        # do not print files to leave space for tracebacks
+        logger.info(
+            "Exported %d files with some errors in %s",
+            len(saved_files),
+            f"{(end - start) / 60:.1f} min",
+        )  # noqa: G004
     if zip_plots:
         logger.info(f"Zipped plots saved to {zip_path}")  # pyright: ignore[reportPossiblyUnboundVariable] # noqa: G004
     return saved_files

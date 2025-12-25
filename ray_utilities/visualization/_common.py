@@ -182,8 +182,9 @@ def make_zip_arcname(
         # arcname to **/experiment(large)/plots/*large
         if len(parts) >= abs(EXP_DIR_IDX) and not any("large" in p for p in parts[EXP_DIR_IDX]):
             if "-mlp-" not in parts[EXP_DIR_IDX]:
-                _logger.warning("Part %s does not contain the expected '-mlp-' substring.", parts[-3])
-            parts[EXP_DIR_IDX] = parts[EXP_DIR_IDX] + "(large)"
+                _logger.warning(
+                    "Part '%s' does not contain the expected '-mlp-' substring. Parts: %s", parts[EXP_DIR_IDX], parts
+                )
             rel = Path(*parts)
     arcname = rel if rel is not None else Path(file_path.name)
     arcname_str = str(arcname).replace(":", "_")
