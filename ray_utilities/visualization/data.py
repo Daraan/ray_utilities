@@ -816,16 +816,35 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
             cast("list[pd.DataFrame]", dfs), keys=dataframes.keys(), names=["run_id", "training_iteration"]
         ).sort_index(key=_base62_sort_key)
         # Replace NaN in MultiIndex with the Placeholder sentinel
-        if isinstance(combined_df.columns, pd.MultiIndex):
-            new_tuples = [
-                tuple(Placeholder if (isinstance(v, float) and np.isnan(v)) else v for v in idx)
-                for idx in combined_df.columns
-            ]
-            combined_df.columns = pd.MultiIndex.from_tuples(new_tuples, names=combined_df.columns.names)
     except Exception as e:  # noqa: PERF203
         logger.error(f"Failed to concatenate DataFrames: {e!r}", exc_info=True)  # noqa: G004
-        remote_breakpoint()  # Will print "starting debugpy. Listening on port: 5678"
-        raise
+        too_deep_columns = [
+            i for i, df in enumerate(dfs) if isinstance(df.columns, pd.MultiIndex) and df.columns.nlevels > 4
+        ]
+        if any(too_deep_columns) and len(too_deep_columns) != len(dfs):
+            logger.error(
+                f"DataFrames at indices {too_deep_columns} have too many MultiIndex levels (>4). "
+                "Consider flattening the columns before combining."
+            )
+            # Drop columns were last level is not a Placeholder
+            for idx in too_deep_columns:
+                df = dfs[idx]
+                if isinstance(df.columns, pd.MultiIndex):
+                    mask = [col[-1] == Placeholder for col in df.columns]
+                    dfs[idx] = df.loc[:, mask]
+                    df.columns = df.columns.droplevel(-1)
+            combined_df = pd.concat(
+                cast("list[pd.DataFrame]", dfs), keys=dataframes.keys(), names=["run_id", "training_iteration"]
+            ).sort_index(key=_base62_sort_key)
+        else:
+            remote_breakpoint()  # Will print "starting debugpy. Listening on port: 5678"
+            raise
+    if isinstance(combined_df.columns, pd.MultiIndex):
+        new_tuples = [
+            tuple(Placeholder if (isinstance(v, float) and np.isnan(v)) else v for v in idx)
+            for idx in combined_df.columns
+        ]
+        combined_df.columns = pd.MultiIndex.from_tuples(new_tuples, names=combined_df.columns.names)
     shape_before = combined_df.shape
     try:
         combined_df = combined_df.drop_duplicates(keep="first")
@@ -1542,9 +1561,10 @@ def calculate_hyperparam_metrics(
             metric_key
         ].agg(["var", "std", "mean"])
     except (ValueError, KeyError) as e:
-        if metric_key not in df:
+        if metric_key not in df and "-" in metric_key:
+            metric_key = [ifill(*metric_key.split("-", 1))]
             intra_group_variance = df.groupby([ifill("config", "pbt_epoch"), ifill("config", "pbt_group_key")])[
-                [ifill(*metric_key.split("-", 1))]
+                metric_key
             ].agg(["var", "std", "mean"])
         else:
             logger.exception("Failed to calculate intra group variance.")
@@ -2350,7 +2370,7 @@ def _export_multiple(
                 calc_stats = False
                 if file_paths is not None:
                     dump_str = "\n".join(map(str, file_paths))
-                    logger.info(f"Exported run data for {experiment_path} to {dump_str}\n-----")  # noqa: G004
+                    logger.info(f"Exported run data for {experiment_path} to \n'{dump_str}'\n-----")  # noqa: G004
                     saved_files.extend(file_paths)
     return saved_files, errors
 

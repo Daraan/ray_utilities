@@ -537,7 +537,7 @@ def plot_run_data(
         if group_stat == "minibatch_size":
             # for consistency could scale upt to 8192 for all cases.
             pass
-        if group_stat == "gradient_clip":
+        if group_stat == "grad_clip":
             plot_df[group_stat] = plot_df[group_stat].fillna(float("inf"))
         color_map, cmap, norm = make_cmap(plot_df[group_stat], log=log)
         # Sort each subgroup by their std from highest to lowest
@@ -831,7 +831,7 @@ def plot_run_data(
                         group_by_keys_only=group_by_keys_only,
                     )
                 except Exception as e:
-                    logger.error("Failed to plot group for epoch %s stat %s: %r", pbt_epoch, stat_val, e)
+                    logger.warning("Failed to plot group for epoch %s stat %s: %r", pbt_epoch, stat_val, e)
                     group = group.set_index("current_step", append=True)
                     # duplicated = group.index[group.index.duplicated(keep=False)].unique()
                     # Keep last as these are the one we continue with;
@@ -973,24 +973,25 @@ def plot_run_data(
             )
             # Plot baseline if provided
         if baseline_df is not None:
-            try:
-                BASELINE_COLOR = "#000000"
-                baseline_metric = baseline_df[metric_key]
-                ax.plot(
-                    baseline_df.index,
-                    baseline_metric,
-                    color=BASELINE_COLOR,  # Dark red (colorblind-friendly)
-                    linestyle="--",
-                    linewidth=2.5,
-                    label="Baseline",
-                    zorder=100,  # Plot on top
-                )
-                logger.info("Added baseline to plot for metric %s", metric_key)
-                h2 = plt.Line2D([], [], linestyle="--", color=BASELINE_COLOR, label="baseline")
-                handles = (h2, *handles)
-                labels = ("baseline", *labels)
-            except (KeyError, AttributeError) as e:
-                logger.warning("Could not plot baseline for metric %s: %r", metric_key, e)
+            if "baseline" not in labels:  # then we loaded the figure
+                try:
+                    BASELINE_COLOR = "#FF008C"
+                    baseline_metric = baseline_df[metric_key]
+                    ax.plot(
+                        baseline_df.index,
+                        baseline_metric,
+                        color=BASELINE_COLOR,  # Dark red (colorblind-friendly)
+                        linestyle="--",
+                        linewidth=2.5,
+                        label="Baseline",
+                        zorder=40,  # Plot on top
+                    )
+                    logger.info("Added baseline to plot for metric %s", metric_key)
+                    h2 = plt.Line2D([], [], linestyle="--", color=BASELINE_COLOR, label="baseline")
+                    handles = (h2, *handles)
+                    labels = ("baseline", *labels)
+                except (KeyError, AttributeError) as e:
+                    logger.warning("Could not plot baseline for metric %s: %r", metric_key, e)
 
         try:
             legend = ax.legend(
