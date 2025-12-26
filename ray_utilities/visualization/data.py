@@ -1228,9 +1228,22 @@ def _get_epoch_end_steps(df) -> pd.DataFrame | None:
     epoch_end_steps.columns = ["current_step"]
     # Find the ending position. This might be wrong as some trials have been trained for longer accidentially => use harded max step, but it should align with the last_step + perturb interval
     max_epoch = epoch_end_steps.index.max()
+    # possibility that 1_179_648 is not in the df
+    if 1_179_648 not in df.current_step.values and 1_179_648 < df.current_step.max().item():
+        # find closest
+        # cast all above down then remove duplicates
+        idx_too_large = df.index[(df.current_step > 1_179_648).values.flatten()]
+        runs_too_large = idx_too_large.get_level_values("run_id")
+        drop_runs = runs_too_large.duplicated(keep="first")
+        df.loc[(df.current_step > 1_179_648).values.flatten(), ifill("current_step", n=df.columns.nlevels)] = 1_179_648
+        if any(drop_runs):
+            df.drop(index=runs_too_large[drop_runs], inplace=True)
     try:
         if pd.isna(max_epoch) and epoch_end_steps.empty:
             max_epoch = -1
+
+            # drop duplicated steps for each run_id
+
         epoch_end_steps.loc[max_epoch + 1] = int(
             min(
                 df.current_step.max().item(),
@@ -1272,6 +1285,7 @@ def get_epoch_stats(
     )
     df.index.names = [*df.index.names[:-3], "pbt_epoch", "pbt_group_key", "current_step"]
     if not individual_runs:
+        # if the run is not complete this could rase an index error
         last_epoch_values = (
             # Exclude final step from list as not pinned on main branch
             df.loc[pd.IndexSlice[:, :, :, :, epoch_end_steps.T.values.tolist()[0]]]

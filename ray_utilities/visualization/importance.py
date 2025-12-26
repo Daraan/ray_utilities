@@ -603,7 +603,7 @@ def load_study_results(parquet_file: str | Path, **kwargs) -> pd.DataFrame | Non
         df.index = index
         df = df.sort_index(axis=1, key=__sort_columns)
 
-    if "_|" in df.columns.get_level_values("key")[0]:
+    if "_|" in df.columns.get_level_values("key")[0] or df.columns.get_level_values("key")[0].endswith("_"):
         df.columns = df.columns.map(__clean_wrong_key)
         save_analysis_to_parquet(df, parquet_file)
     return df
@@ -734,7 +734,7 @@ def get_optuna_study(
         if clear_study == "all":
             clear_study = True
         elif isinstance(clear_study, (Sequence, Collection)):  # includes single strings
-            if "step=" in study_name:
+            if "step=" in study_name and "step=" not in clear_study:
                 step_part = study_name.split("step=")[-1].split("_")[0]
 
                 study_name_no_step = re.sub(f"step={step_part}_?", "", study_name).rstrip("_")
@@ -1096,19 +1096,13 @@ def optuna_create_studies(
                     group_stat = _group_stat
                 is_large_flag = False
                 if group_stat not in ("batch_size", "train_batch_size_per_learner"):
-                    batch_size_raw = df.iloc[0].config.get(
-                        "train_batch_size_per_learner",
-                        df.iloc[0].config.get("batch_size", df.iloc[0].get("batch_size")),
-                    )
+                    batch_size_raw = df.batch_size.max()
                     batch_size_value = _coerce_to_int(batch_size_raw)
                     is_large_flag = bool(batch_size_value is not None and batch_size_value >= 8192)
                 else:
-                    batch_size_raw = df.iloc[0].config.get(
-                        "minibatch_size",
-                        df.iloc[0].config.get("minibatch_size", df.iloc[0].get("minibatch_size")),
-                    )
+                    batch_size_raw = df.minibatch_size.max()
                     batch_size_value = _coerce_to_int(batch_size_raw)
-                    is_large_flag = bool(batch_size_value is not None and batch_size_value >= 8192)
+                    is_large_flag = bool(batch_size_value is not None and batch_size_value >= 1024)
 
                 metric = check_metric_backport(df, metric_to_check)
                 # Get tools to center epochs
@@ -2022,7 +2016,7 @@ def plot_importance_studies(
                             plt.title(f"Hyperparameter Importance {key_with_env} ({evaluator_name})")
                         plt.xlabel("Step")
                         safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", str(key_with_env)).replace("pbt_study_env_", "")
-                        safe_submission_tag = re.sub(r"[^A-Za-z0-9_.-]", "_", submission_tag)
+                        safe_submission_tag = re.sub(r"[^A-Za-z0-9_.-]", "_", submission_tag).strip("_.-")
                         if submission_tag in safe_key:
                             safe_submission_tag = ""
                         else:
@@ -2231,9 +2225,9 @@ if __name__ == "__main__":
         "Swimmer-v5",
         "InvertedDoublePendulum-v5",
         "InvertedPendulum-v5",
-        "Reacher-v5",
-        "Pusher-v5",
-        "Ant-v5",
+        # "Reacher-v5",
+        # "Pusher-v5",
+        # "Ant-v5",
     ]
 
     zipfile = None
@@ -2603,7 +2597,7 @@ if __name__ == "__main__":
                                         output_path=f"outputs/shared/experiments/Default-mlp-{env}",
                                         params=param_choices,
                                         env=env,
-                                        title=args.title,
+                                        title=args.add_title,
                                     )
                                     if outfiles and zipfile:
                                         for outfile in outfiles:

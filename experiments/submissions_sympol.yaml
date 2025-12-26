@@ -263,7 +263,7 @@ sympol_pbt_batch_size:
           pbt_batch_size_pbt_batch_size_Reacher-v5_2025-12-05_01:58:18
     (InvertedDoublePendulum-v5):
       sp87c6251206030573604:
-        status: SUCCEEDED
+        status: SUCCEEDED  - messy data
         submission_id:
           sympol_pbt_batch_size_InvertedDoublePendulum-v5_2025-12-05_22:37:50
         file_path:
