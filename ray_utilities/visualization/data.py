@@ -65,7 +65,7 @@ else:
     yaml_dump = yaml.dump
 
 # from ray_utilities.constants import EPISODE_RETURN_MEAN_EMA
-# from ray_utilities.testing_utils import remote_breakpoint
+remote_breakpoint = lambda port=None: None
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
@@ -106,6 +106,7 @@ DEFAULT_GROUP_BY = ("pbt_epoch", "pbt_group_key")
 LOG_SETTINGS: dict[str, int] = {
     "lr": 2,
     "batch_size": 2,
+    "train_batch_size_per_learner": 2,
     "minibatch_size": 2,
     "entropy_coeff": 2,
     "vf_clip_param": 10,
@@ -1444,9 +1445,14 @@ def calculate_hyperparam_metrics(
             metric_key
         ].agg(["var", "std", "mean"])
     except (ValueError, KeyError) as e:
-        logger.exception("Failed to calculate intra group variance.")
-        remote_breakpoint(5680)
-        raise
+        if metric_key not in df:
+            intra_group_variance = df.groupby([ifill("config", "pbt_epoch"), ifill("config", "pbt_group_key")])[
+                [ifill(*metric_key.split("-", 1))]
+            ].agg(["var", "std", "mean"])
+        else:
+            logger.exception("Failed to calculate intra group variance.")
+            remote_breakpoint(5680)
+            raise
     intra_group_variance.index.names = ["pbt_epoch", "pbt_group_key"]
     intra_group_variance_global = df.groupby([ifill("config", "pbt_group_key")])[metric_key].agg(["var", "std", "mean"])
     intra_group_variance_global.index.names = ["pbt_group_key"]
@@ -1931,6 +1937,7 @@ def export_run_data(
     save_path: str | Path | None = None,
     calc_stats: bool = True,
     use_cache: bool = True,
+    use_cached_figures: bool = False,
     **kwargs,
 ) -> list[Path] | None:
     """
@@ -2009,6 +2016,7 @@ def export_run_data(
         figsize=figsize,
         log=log,
         format=format,
+        use_cached_figures=use_cached_figures,
         **kwargs,
     )
     if not files:
@@ -2026,6 +2034,7 @@ def _export_one(args, group_by, figsize, format, **kwargs):
             group_by=group_by,
             figsize=figsize,
             format=format,
+            use_cached_figures=args.load_figures,
             **kwargs,
         )
     except Exception as e:  # noqa: PERF203
@@ -2070,10 +2079,14 @@ def _export_multiple(
     group_by: Sequence[str],
     figsize: tuple[int, int],
     format: str,
+    use_cached_figures: bool = False,
     **kwargs: OptionalRepeat[Any],
 ) -> tuple[list[Path], list[tuple[Exception, str, Path]]]:
     experiment_path = Path(experiment_path)
     saved_files: list[Path] = []
+    import matplotlib as mpl  # noqa: PLC0415
+
+    mpl.use("Agg")
     try:
         data = load_run_data(experiment_path)
     except Exception as e:  # noqa: PERF203
@@ -2162,6 +2175,7 @@ def _export_multiple(
                             format=format,
                             save_path=out_path,
                             calc_stats=metric not in calced_stat_for_metric,
+                            use_cached_figures=use_cached_figures,
                             **combo_kwargs,
                         )
                         calced_stat_for_metric.add(metric)
@@ -2281,6 +2295,7 @@ def export_all_runs(
     plot_errors_type: OptionalRepeat[Literal["box", "violin"]] = "box",
     zip_file: Optional[ZipFile] = None,
     run_infos: Optional[dict[str, SubmissionRun]] = None,
+    use_cached_figures: bool = False,
     **kwargs,
 ):
     """
@@ -2406,6 +2421,7 @@ def export_all_runs(
                     figsize=figsize,
                     format=format,
                     plot_options=plot_options,
+                    use_cached_figures=use_cached_figures,
                     **base_kwargs,
                 )
             )
@@ -2584,9 +2600,7 @@ if __name__ == "__main__":
 
     assert not args.all or not args.main_only, "Cannot use --all and --main_only together."
     if args.metrics is None:
-        args.metrics = [
-            "episode_reward_mean",
-        ]  # ("training", "episode_return_mean")]  # , ("learners", "total_loss")]  # XXX
+        args.metrics = ["episode_reward_mean", ("training", "episode_return_mean"), ("learners", "total_loss")]  # XXX
     else:
         args.metrics = list(map(literal_eval, args.metrics))
     excludes: set[str] = file_excludes.union(set(args.excludes)).union(running_experiments)
@@ -2656,6 +2670,7 @@ if __name__ == "__main__":
                 plot_errors_type=args.error_plot_type,
                 zip_file=zipfile,
                 run_infos=run_infos,
+                use_cached_figures=args.load_figures,
             )
     finally:
         if zipfile:

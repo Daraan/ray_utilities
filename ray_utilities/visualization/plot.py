@@ -15,6 +15,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import matplotlib as mpl
+
+mpl.use("Agg")
 from matplotlib import cm, colormaps, patheffects
 from typing_extensions import Final, Literal
 
@@ -57,13 +60,13 @@ def make_cmap(
     try:
         if log:
             norm = mcolors.LogNorm(
-                vmin=values.replace(0, nan).replace(float("-inf"), nan).min(),
-                vmax=values.max(),
+                vmin=values.replace(0, nan).replace(float("-inf"), nan).replace(float("inf"), nan).min(),
+                vmax=values.replace(float("-inf"), nan).replace(float("inf"), nan).max(),
             )
         else:
             norm = mcolors.Normalize(
-                vmin=values.min(),
-                vmax=values.max(),
+                vmin=values.replace(float("-inf"), nan).replace(float("inf"), nan).min(),
+                vmax=values.replace(float("-inf"), nan).replace(float("inf"), nan).max(),
             )
         cmap = colormaps.get_cmap(name)
 
@@ -77,7 +80,6 @@ def make_cmap(
         # add masked values color, included nan, -inf
     except ValueError:
         logger.exception("Failed to create colormap for values: %s", values)
-        remote_breakpoint()
         raise
     return color_map, cmap, norm
 
@@ -371,7 +373,6 @@ def plot_run_data(
             except Exception as e:
                 logger.error("Failed to get perturbation interval at %s %r", (first_change[0], first_change[1] - 1), e)
                 remote_breakpoint()
-                pass
                 raise
         except KeyError:
             df = _drop_duplicate_steps(df)
@@ -1089,7 +1090,7 @@ def plot_intra_group_variances(
     )
     # group_variance_global["var"].plot.barh(ax=ax_global, colormap=cmap)#color="skyblue")
     ax_global.set_xlabel("Variance")
-    ax_global.set_ylabel(group_stat_str)
+    ax_global.set_ylabel(group_stat_str.replace("train batch size per learner", "batch size"))
     if plot_option.title:
         ax_global.set_title("Group Variance Global")
     fig_global.tight_layout()
