@@ -15,6 +15,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import matplotlib as mpl
+
+mpl.use("Agg")
 from matplotlib import cm, colormaps, patheffects
 from typing_extensions import Final, Literal
 
@@ -57,13 +60,13 @@ def make_cmap(
     try:
         if log:
             norm = mcolors.LogNorm(
-                vmin=values.replace(0, nan).replace(float("-inf"), nan).min(),
-                vmax=values.max(),
+                vmin=values.replace(0, nan).replace(float("-inf"), nan).replace(float("inf"), nan).min(),
+                vmax=values.replace(float("-inf"), nan).replace(float("inf"), nan).max(),
             )
         else:
             norm = mcolors.Normalize(
-                vmin=values.min(),
-                vmax=values.max(),
+                vmin=values.replace(float("-inf"), nan).replace(float("inf"), nan).min(),
+                vmax=values.replace(float("-inf"), nan).replace(float("inf"), nan).max(),
             )
         cmap = colormaps.get_cmap(name)
 
@@ -77,7 +80,6 @@ def make_cmap(
         # add masked values color, included nan, -inf
     except ValueError:
         logger.exception("Failed to create colormap for values: %s", values)
-        remote_breakpoint()
         raise
     return color_map, cmap, norm
 
@@ -372,7 +374,6 @@ def plot_run_data(
             except Exception as e:
                 logger.error("Failed to get perturbation interval at %s %r", (first_change[0], first_change[1] - 1), e)
                 remote_breakpoint()
-                pass
                 raise
         except KeyError:
             df = _drop_duplicate_steps(df)
@@ -536,7 +537,7 @@ def plot_run_data(
         if group_stat == "minibatch_size":
             # for consistency could scale upt to 8192 for all cases.
             pass
-        if group_stat == "gradient_clip":
+        if group_stat == "grad_clip":
             plot_df[group_stat] = plot_df[group_stat].fillna(float("inf"))
         color_map, cmap, norm = make_cmap(plot_df[group_stat], log=log)
         # Sort each subgroup by their std from highest to lowest
@@ -830,7 +831,7 @@ def plot_run_data(
                         group_by_keys_only=group_by_keys_only,
                     )
                 except Exception as e:
-                    logger.error("Failed to plot group for epoch %s stat %s: %r", pbt_epoch, stat_val, e)
+                    logger.warning("Failed to plot group for epoch %s stat %s: %r", pbt_epoch, stat_val, e)
                     group = group.set_index("current_step", append=True)
                     # duplicated = group.index[group.index.duplicated(keep=False)].unique()
                     # Keep last as these are the one we continue with;
@@ -972,24 +973,25 @@ def plot_run_data(
             )
             # Plot baseline if provided
         if baseline_df is not None:
-            try:
-                BASELINE_COLOR = "#000000"
-                baseline_metric = baseline_df[metric_key]
-                ax.plot(
-                    baseline_df.index,
-                    baseline_metric,
-                    color=BASELINE_COLOR,  # Dark red (colorblind-friendly)
-                    linestyle="--",
-                    linewidth=2.5,
-                    label="Baseline",
-                    zorder=100,  # Plot on top
-                )
-                logger.info("Added baseline to plot for metric %s", metric_key)
-                h2 = plt.Line2D([], [], linestyle="--", color=BASELINE_COLOR, label="baseline")
-                handles = (h2, *handles)
-                labels = ("baseline", *labels)
-            except (KeyError, AttributeError) as e:
-                logger.warning("Could not plot baseline for metric %s: %r", metric_key, e)
+            if "baseline" not in labels:  # then we loaded the figure
+                try:
+                    BASELINE_COLOR = "#FF008C"
+                    baseline_metric = baseline_df[metric_key]
+                    ax.plot(
+                        baseline_df.index,
+                        baseline_metric,
+                        color=BASELINE_COLOR,  # Dark red (colorblind-friendly)
+                        linestyle="--",
+                        linewidth=2.5,
+                        label="Baseline",
+                        zorder=40,  # Plot on top
+                    )
+                    logger.info("Added baseline to plot for metric %s", metric_key)
+                    h2 = plt.Line2D([], [], linestyle="--", color=BASELINE_COLOR, label="baseline")
+                    handles = (h2, *handles)
+                    labels = ("baseline", *labels)
+                except (KeyError, AttributeError) as e:
+                    logger.warning("Could not plot baseline for metric %s: %r", metric_key, e)
 
         try:
             legend = ax.legend(
@@ -1112,7 +1114,7 @@ def plot_intra_group_variances(
     )
     # group_variance_global["var"].plot.barh(ax=ax_global, colormap=cmap)#color="skyblue")
     ax_global.set_xlabel("Variance")
-    ax_global.set_ylabel(group_stat_str)
+    ax_global.set_ylabel(group_stat_str.replace("train batch size per learner", "batch size"))
     if plot_option.title:
         ax_global.set_title("Group Variance Global")
     fig_global.tight_layout()

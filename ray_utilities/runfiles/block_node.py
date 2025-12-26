@@ -26,7 +26,7 @@ if __name__ == "__main__":
     parser.add_argument("--number", "-n", type=int, default=None)
     parser.add_argument("--timeout", "-t", type=int, default=24 * 60 * 60)
     parser.add_argument("--persistent_node", "-p", action="store_true")
-    parser.add_argument("--num-cpus", "-c", type=int, default=1)
+    parser.add_argument("--num-cpus", "-c", type=float, default=1)
     parser.add_argument("--num-gpus", "-g", type=float, default=0)
     args = parser.parse_args()
     if args.label.replace("-", "_") in ("node_id",):

@@ -39,8 +39,10 @@ pbt_fine_batch_size_base:
   run_ids:
     (Pong-v5):
       tws47f2512242309c8874:
-        status: FAILED
+        status: SUCCEEDED - not really flag for plot
         submission_id: pbt_fine_batch_size_base_ALE-Pong-v5_2025-12-24_23:08:58
+        file_path:
+          outputs/shared_backup/Default-mlp-ALE-Pong-v5/pbt-tune_tune:batch_size/Default-mlp-Pong-v5-PPO-tws47f2512242309c8874
 pbt_fine_batch_size_base_large:
   entrypoint_pattern:
     pattern: global_pattern_1
@@ -86,8 +88,10 @@ pbt_fine_accumulate:
   run_ids:
     (Pong-v5):
       tws47f2512240030d77e4:
-        status: FAILED
+        status: SUCCEEDED - not really flag for plot
         submission_id: pbt_fine_accumulate_ALE-Pong-v5_2025-12-24_00:30:12
+        file_path:
+          outputs/shared_backup/Default-mlp-ALE-Pong-v5/pbt-tune_tune:accumulate_gradients_every/Default-mlp-Pong-v5-PPO-tws47f2512240030d77e4
 pbt_fine_num_envs:
   # This is a comment
   comment: small minibatch_size=256 and train_batch_size=2048
@@ -101,16 +105,20 @@ pbt_fine_num_envs:
   run_ids:
     (Pong-v5):
       tws47f251224003126dc4:
-        status: RESTORE
+        status: SUCCEEDED - not really flag for plot
         submission_id: pbt_fine_num_envs_ALE-Pong-v5_2025-12-24_00:30:12
+        file_path:
+          outputs/shared_backup/Default-mlp-ALE-Pong-v5/pbt-tune_tune:num_envs_per_env_runner/Pong-v5-PPO-tws47f251224003126dc4
       tws47f25122423042bd14:
-        status: RUNNING
+        status: SUCCEEDED - not really flag for plot
         submission_id:
-          pbt_fine_num_envs_ALE-Pong-v5_2025-12-24_00:30:12_restore_2025-12-24_23:03:34
+          pbt_fine_num_envs_ALE-Pong-v5_2025-12-24_00:30:12_SUCCEEDED - not
+          really flag for plot_2025-12-24_23:03:34
       Pong-v5:
-        status: FAILED
+        status: SUCCEEDED - not really flag for plot
         submission_id:
-          pbt_fine_num_envs_ALE-Pong-v5_2025-12-24_00:30:12_restore_2025-12-24_23:03:34
+          pbt_fine_num_envs_ALE-Pong-v5_2025-12-24_00:30:12_SUCCEEDED - not
+          really flag for plot_2025-12-24_23:03:34
 pbt_fine_num_envs_large:
   comment: minibatch_size=516 and train_batch_size_per_learner=8192 (same 1/16)
     scale
@@ -233,7 +241,7 @@ pbt_fine_vf_clip_param_base:
   run_ids:
     (Pong-v5):
       tws47f25122204214b754:
-        status: FAILED
+        status: SUCCEEDED - not really flag for plot
         submission_id:
           pbt_fine_vf_clip_param_base_ALE-Pong-v5_2025-12-22_00:40:31
 pbt_fine_grad_clip_base:
@@ -248,7 +256,7 @@ pbt_fine_grad_clip_base:
   run_ids:
     (Pong-v5):
       tws47f2512220423f76d4:
-        status: FAILED
+        status: SUCCEEDED - not really flag for plot
         submission_id: pbt_fine_grad_clip_base_ALE-Pong-v5_2025-12-22_00:40:31
 pbt_fine_grad_clip_base_large:
   entrypoint_pattern:
