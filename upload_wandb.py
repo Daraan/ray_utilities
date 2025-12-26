@@ -545,21 +545,25 @@ if __name__ == "__main__":
                     )
                 single_experiment = args.experiment_key
             group_glob = "*"
-            output_dir, offline_results = find_experiment_dir(
-                args.experiment_path,
-                "*"
-                + args.run_id
-                + (
-                    f"/**/result*{single_experiment}.json"
-                    if ExperimentKey.FORK_SEPARATOR in single_experiment
-                    else "result.json"
-                ),
-                project=project,
-                group_glob=group_glob,
-            )
+            if not args.experiment_path.endswith(".json"):
+                output_dir, offline_results = find_experiment_dir(
+                    args.experiment_path,
+                    "*"
+                    + args.run_id
+                    + (
+                        f"/**/result*{single_experiment}.json"
+                        if ExperimentKey.FORK_SEPARATOR in single_experiment
+                        else "result.json"
+                    ),
+                    project=project,
+                    group_glob=group_glob,
+                )
+            else:
+                offline_results = [Path(args.experiment_path)]
+                output_dir = Path(args.experiment_path).parent.parent.parent.parent.parent
             assert len(offline_results) == 1, (
                 f"Could not find unique offline results for run_id {args.run_id} "
-                f"and experiment_key {single_experiment} in {output_dir}."
+                f"and experiment_key {single_experiment} in {output_dir}. Found: {offline_results}."
             )
             offline_json_path = offline_results[0]
 

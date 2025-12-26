@@ -36,9 +36,10 @@ from ray_utilities.config.parser.default_argument_parser import DefaultArgumentP
 from ray_utilities.misc import cast_numpy_numbers, round_floats
 from ray_utilities.setup.extensions import load_distributions_from_json
 from ray_utilities.testing_utils import remote_breakpoint
-from ray_utilities.visualization._common import Placeholder
+from ray_utilities.visualization._common import Placeholder, make_zip_arcname
 from ray_utilities.visualization.data import (
     LOG_SETTINGS,
+    PATHS,
     SubmissionRun,
     check_metric_backport,
     clean_placeholder_keys,
@@ -1743,6 +1744,7 @@ def optuna_analyze_studies(
     evaluators = {
         "MeanDecreaseImpurity": MeanDecreaseImpurityImportanceEvaluator(),
         "PedAnovaLocal": PedAnovaImportanceEvaluator(evaluate_on_local=True),  # default
+        "PedAnovaLocal25": PedAnovaImportanceEvaluator(evaluate_on_local=True, baseline_quantile=0.25),  # default
         "Fanova(default)": FanovaImportanceEvaluator(),  # default
         # "MeanDecreaseImpurity8": MeanDecreaseImpurityImportanceEvaluator(n_trees=12, max_depth=12),
         "PedAnovaGlobal": PedAnovaImportanceEvaluator(evaluate_on_local=False),
@@ -1948,6 +1950,8 @@ def plot_importance_studies(
                             )
                         # Group index to have batch_size, vf and other parameters nearby.
                         view_df = view_df.sort_index(axis=0, key=_sort_index)
+                        # Drop 0 rows
+                        view_df = view_df.loc[~(view_df <= 1e-5).all(axis=1)]
 
                         add_global = "global" in view_df.columns
                         fig, ax = plt.subplots(figsize=(12, max(6, 0.5 * len(view_df))))
@@ -2024,7 +2028,7 @@ def plot_importance_studies(
                         else:
                             safe_submission_tag = f"submission={safe_submission_tag}"
                         safe_evaluator = re.sub(r"[^A-Za-z0-9_.-]", "_", evaluator_name).rstrip("_.-")
-                        subdirs = [submission_tag] if submission_tag != "default" else []
+                        subdirs = [submission_tag] if submission_tag != "default" else ["all"]
                         subdirs.extend(
                             [
                                 "centered=True" if centered_bool else "centered=False",
@@ -2038,11 +2042,11 @@ def plot_importance_studies(
 
                         if "default" in safe_submission_tag:
                             safe_submission_tag = "all"
-                        file_name = f"hp_importance_{safe_key}-{safe_submission_tag}-{safe_evaluator}.pdf"
                         if large_mode != "all":
-                            file_name += f"_{large_mode}"
+                            safe_evaluator += f"_{large_mode}"
+                        file_name = f"hp_importance_{safe_key}-{safe_submission_tag}-{safe_evaluator}.pdf"
                         file_name = file_name.replace("(default)", "").replace("__", "_").replace("--", "-")
-                        file_path = Path(output_dir, *subdirs, file_name)
+                        file_path = Path(output_dir, "hp_importance", *subdirs, file_name)
                         assert file_path not in written_paths, "File path already written: %s" % file_path
                         file_path.parent.mkdir(parents=True, exist_ok=True)
                         fig.savefig(
@@ -2486,8 +2490,12 @@ if __name__ == "__main__":
                         if outfiles and zipfile:  # have no outfiles here currently
                             for outfile in outfiles:
                                 if outfile.exists():
-                                    zipfile.write(outfile, arcname=outfile.name)
+                                    arcname_str = make_zip_arcname(outfile, PATHS, use_dir_flags=False)
+
+                                    zipfile.write(outfile, arcname=arcname_str)
                                     saved_files.append(outfile)
+                                else:
+                                    logger.error("Expected outfile %s does not exist.", outfile)
                         if analysis_task:
                             # Submit and immediately wait to avoid queue deadlock
                             logger.info("Submitting analysis process for env %s submission %s", _env, submission_name)
@@ -2600,8 +2608,12 @@ if __name__ == "__main__":
                                     if outfiles and zipfile:
                                         for outfile in outfiles:
                                             if outfile.exists():
-                                                zipfile.write(outfile, arcname=outfile.name)
+                                                arcname_str = make_zip_arcname(outfile, PATHS, use_dir_flags=False)
+
+                                                zipfile.write(outfile, arcname=arcname_str)
                                                 saved_files.append(outfile)
+                                            else:
+                                                logger.error("Expected outfile %s does not exist.", outfile)
                         logger.info("Plotting complete for submission %s", submission_name)
                 except KeyboardInterrupt:
                     logger.warning(
@@ -2738,16 +2750,35 @@ if __name__ == "__main__":
                     add_title=args.add_title,
                 )
                 plot_futures[future] = env
+            try:
+                # Collect results and add to zipfile
+                for future in as_completed(plot_futures):
+                    env, outfiles = future.result()
+                    logger.info("Received plotting results for env %s", env)
+                    if outfiles and zipfile:
+                        for outfile in outfiles:
+                            if outfile.exists():
+                                arcname_str = make_zip_arcname(outfile, PATHS, use_dir_flags=False)
 
-            # Collect results and add to zipfile
-            for future in as_completed(plot_futures):
-                env, outfiles = future.result()
-                logger.info("Received plotting results for env %s", env)
-                if outfiles and zipfile:
-                    for outfile in outfiles:
-                        if outfile.exists():
-                            zipfile.write(outfile, arcname=outfile.name)
-                            saved_files.append(outfile)
+                                zipfile.write(outfile, arcname=arcname_str)
+                                saved_files.append(outfile)
+                            else:
+                                logger.error("Expected outfile %s does not exist.", outfile)
+
+            except KeyboardInterrupt:
+                logger.warning(
+                    "KeyboardInterrupt received during combined plotting; canceling all tasks and aborting. Waiting 5s to finish writes"
+                )
+                for future in plot_futures:
+                    future.cancel()
+                import time
+
+                time.sleep(1)
+                try:
+                    plot_executor.shutdown(wait=False, cancel_futures=True)
+                except TypeError:
+                    plot_executor.shutdown(wait=False)
+                sys.exit("1")
 
         logger.info("Completed all combined importance plotting")
         sys.exit()
@@ -2794,6 +2825,10 @@ if __name__ == "__main__":
         if outfiles and zipfile:
             for outfile in outfiles:
                 if outfile.exists():
-                    zipfile.write(outfile, arcname=outfile.name)
+                    arcname_str = make_zip_arcname(outfile, PATHS, use_dir_flags=False)
+
+                    zipfile.write(outfile, arcname=arcname_str)
                     saved_files.append(outfile)
-        logger.info("All Trials processed for env %s. Saved files: %s", env, outfiles)
+                else:
+                    logger.error("Expected outfile %s does not exist.", outfile)
+        logger.info("All Trials processed for env %s. Saved files: %s", env, saved_files)

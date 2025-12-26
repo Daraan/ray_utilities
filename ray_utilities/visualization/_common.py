@@ -176,7 +176,7 @@ def make_zip_arcname(
                 if insert:
                     parts[GROUP_DIR_IDX + 1] = "_".join(insert)
         rel = Path(*parts)
-    if "large" in str(file_path.name):
+    if use_dir_flags and "large" in str(file_path.name):
         # rename parent
         # path should have structure of **/experiment/plots/*large
         # arcname to **/experiment(large)/plots/*large

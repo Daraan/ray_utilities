@@ -1167,6 +1167,8 @@ pbt_fine_clip_param:
       tws47f2512242046c6894:
         status: SUCCEEDED
         submission_id: pbt_fine_clip_param_Pusher-v5_2025-12-24_20:46:21
+        file_path:
+          outputs/shared/experiments/Default-mlp-Pusher-v5/pbt-tune_tune:clip_param/Default-mlp-Pusher-v5-PPO-tws47f2512242046c6894
     (Reacher-v5):
       tws47f251224213244ca4:
         status: SUCCEEDED
@@ -1203,10 +1205,14 @@ pbt_fine_clip_param:
       tws47f2512242239eb124:
         status: SUCCEEDED
         submission_id: pbt_fine_clip_param_Hopper-v5_2025-12-24_20:46:21
+        file_path:
+          outputs/shared/experiments/Default-mlp-Hopper-v5/pbt-tune_tune:clip_param/Default-mlp-Hopper-v5-PPO-tws47f2512242239eb124
     (Humanoid-v5):
       tws47f2512251103814c4:
         status: SUCCEEDED - not really
         submission_id: pbt_fine_clip_param_Humanoid-v5_2025-12-24_20:46:21
+        file_path:
+          outputs/shared/experiments/Default-mlp-Humanoid-v5/pbt-tune_tune:clip_param/Default-mlp-Humanoid-v5-PPO-tws47f2512251103814c4
     (HalfCheetah-v5):
       tws47f2512251110fb3f4:
         status: FAILED
@@ -1401,6 +1407,12 @@ pbt_fine_entropy_coeff_base:
         status: STOPPED
         submission_id:
           pbt_fine_entropy_coeff_base_InvertedDoublePendulum-v5_2025-12-24_20:46:21
+      tws47f25122420356c324:
+        status: SUCCEEDED
+        submission_id:
+          pbt_fine_entropy_coeff_base_InvertedDoublePendulum-v5_2025-12-24_20:31:20
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:entropy_coeff/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f25122420356c324
     (Hopper-v5):
       tws47f2512252029dee94:
         status: STOPPED
@@ -1515,9 +1527,6 @@ pbt_fine_gamma_base:
       tws47f25121417139b474:
         status: STOPPED
         submission_id: pbt_fine_gamma_base_Swimmer-v5_2025-12-14_17:10:50
-      tws47f251215230289804:
-        status: FAILED
-        submission_id: pbt_fine_gamma_base_Swimmer-v5_2025-12-15_22:58:29
       tws47f2512170416f7bd4:
         status: SUCCEEDED
         submission_id: pbt_fine_gamma_base_Swimmer-v5_2025-12-17_02:35:42
