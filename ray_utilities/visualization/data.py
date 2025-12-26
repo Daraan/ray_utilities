@@ -342,6 +342,103 @@ def get_run_directories_from_submission(
             return
 
 
+def load_baseline(
+    group_stat: str,
+    environment: str,
+    *,
+    large: bool = False,
+    sympol: bool = False,
+) -> pd.DataFrame | None:
+    """
+    Load baseline data for comparison plotting.
+
+    Args:
+        group_stat: The hyperparameter being varied (e.g., "batch_size", "lr").
+        environment: Environment name to match in run_key (e.g., "CartPole-v1").
+        large: Whether to look for large batch size runs (>= 8192).
+        sympol: Whether to look for sympol-specific baselines.
+
+    Returns:
+        DataFrame with max values per training step, or None if no matching baseline found.
+    """
+    assert group_stat
+    run_infos = get_runs_from_submission("experiments/submissions_pbt_baselines.yaml")
+
+    # Filter runs matching criteria
+    matching_runs = []
+    for run_id, run_info in run_infos.items():
+        group_name = run_info.get("group_name", "")
+        run_key = run_info.get("run_key", "")
+
+        if large and ("large" not in group_name and "8192" not in group_name):
+            continue
+        if not large and ("large" in group_name or "8192" in group_name):
+            continue
+
+        # Check if group_stat is in submission name
+        if group_stat not in group_name:
+            if group_stat != "train_batch_size_per_learner":
+                continue
+            if "minibatch_size" in group_name:
+                continue
+            if "batch_size" not in group_name:
+                continue
+
+        # Check if environment is in run_key
+        if environment not in run_key:
+            continue
+
+        matching_runs.append(run_info)
+
+    if not matching_runs:
+        logger.warning(
+            "No baseline found for group_stat=%s, environment=%s, large=%s, sympol=%s",
+            group_stat,
+            environment,
+            large,
+            sympol,
+        )
+        return None
+
+    if len(matching_runs) > 1:
+        logger.warning(
+            "Multiple baselines found for group_stat=%s, environment=%s. Using first match.",
+            group_stat,
+            environment,
+        )
+        raise ValueError(matching_runs)
+
+    # Use the first matching run
+    baseline_run = matching_runs[0]
+    file_path = baseline_run.get("file_path")
+
+    if not file_path:
+        logger.error("Baseline run has no file_path: %s", baseline_run)
+        return None
+
+    # Load the baseline data
+    try:
+        df = load_run_data(Path(file_path))
+        if not isinstance(df, pd.DataFrame):
+            df = combine_df(df)
+
+        # Group by current_step and get max value
+        if "current_step" not in df:
+            logger.error("Baseline dataframe missing 'current_step' column")
+            return None
+
+        # Assume we want episode_reward_mean or similar metric
+        # The actual metric will be added when plotting
+        grouped = df.groupby(ifill("current_step", n=df.columns.nlevels)).max()
+        # Filter to only include every 16384
+        grouped = grouped[grouped.index.get_level_values(0) % 16384 == 0]
+        return grouped
+
+    except Exception as e:
+        logger.error("Failed to load baseline from %s: %r", file_path, e, exc_info=True)
+        return None
+
+
 class _NoReprDict(dict):
     """Dict for faster debugging"""
 
@@ -726,7 +823,7 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
             combined_df.columns = pd.MultiIndex.from_tuples(new_tuples, names=combined_df.columns.names)
     except Exception as e:  # noqa: PERF203
         logger.error(f"Failed to concatenate DataFrames: {e!r}", exc_info=True)  # noqa: G004
-        breakpoint()
+        remote_breakpoint()  # Will print "starting debugpy. Listening on port: 5678"
         raise
     shape_before = combined_df.shape
     try:
@@ -1696,6 +1793,7 @@ def plot_n_save(
     plot_errors: bool | Literal["only"] | str | Sequence[str] = True,
     plot_errors_type: Literal["box", "violin"] = "box",
     use_cached_figures: bool = False,
+    baseline_df: pd.DataFrame | None = None,
     **kwargs,
 ) -> list[Path] | None:
     # for metric in metrics: [metric]
@@ -1730,6 +1828,7 @@ def plot_n_save(
             plot_errors=plot_errors,
             plot_errors_type=plot_errors_type,
             fig=cached_fig,
+            baseline_df=baseline_df,
             **kwargs,
         )
     except Exception:
@@ -1998,6 +2097,28 @@ def export_run_data(
             )
         except Exception as e:  # noqa: PERF203
             logger.exception("Failed to calculate experiment stats: %r", e)  # noqa: G004
+
+    # Load baseline if requested
+    baseline_df = None
+    if kwargs.get("baselines", False):
+        # Extract environment and group_stat for baseline loading
+        env_type = combined_df.iloc[0].config.cli_args.env_type
+        if not isinstance(env_type, str):
+            env_type = env_type.item()
+
+        large_baseline = bool(large)
+        sympol = False  # Could detect from config if needed
+
+        baseline_df = load_baseline(
+            group_stat=group_stat,
+            environment=env_type,
+            large=large_baseline,
+            sympol=sympol,
+        )
+
+    # Remove baselines from kwargs since we're passing baseline_df directly
+    kwargs.pop("baselines", None)
+
     files = plot_n_save(
         combined_df,
         plot_option=plot_option,
@@ -2009,6 +2130,7 @@ def export_run_data(
         figsize=figsize,
         log=log,
         format=format,
+        baseline_df=baseline_df,
         **kwargs,
     )
     if not files:
@@ -2070,6 +2192,8 @@ def _export_multiple(
     group_by: Sequence[str],
     figsize: tuple[int, int],
     format: str,
+    *,
+    baselines: bool = False,
     **kwargs: OptionalRepeat[Any],
 ) -> tuple[list[Path], list[tuple[Exception, str, Path]]]:
     experiment_path = Path(experiment_path)
@@ -2162,6 +2286,7 @@ def _export_multiple(
                             format=format,
                             save_path=out_path,
                             calc_stats=metric not in calced_stat_for_metric,
+                            baselines=baselines,
                             **combo_kwargs,
                         )
                         calced_stat_for_metric.add(metric)
@@ -2199,6 +2324,7 @@ def _export_multiple(
                     format=format,
                     save_path=out_path,
                     calc_stats=calc_stats,
+                    baselines=baselines,
                     **kws,
                 )
             except Exception as e:  # noqa: PERF203
@@ -2272,6 +2398,7 @@ def export_all_runs(
     zip_plots: bool = False,
     excludes: Collection[str] = (),
     redo: bool = False,
+    baselines: bool = False,
     # need to be passed on
     format="pdf",
     figsize=(14, 10),
@@ -2406,6 +2533,7 @@ def export_all_runs(
                     figsize=figsize,
                     format=format,
                     plot_options=plot_options,
+                    baselines=baselines,
                     **base_kwargs,
                 )
             )
@@ -2656,6 +2784,7 @@ if __name__ == "__main__":
                 plot_errors_type=args.error_plot_type,
                 zip_file=zipfile,
                 run_infos=run_infos,
+                baselines=True,
             )
     finally:
         if zipfile:

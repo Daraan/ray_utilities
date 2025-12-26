@@ -306,6 +306,7 @@ def plot_run_data(
     plot_errors: bool | Literal["only"] | str | Sequence[str] = True,
     plot_errors_type: Literal["box", "violin"] = "box",
     fig: Figure | None = None,
+    baseline_df: pd.DataFrame | None = None,
     # auto parameter by decorator, only use for unpickling
     sns_context=None,
     font_scale=None,
@@ -969,6 +970,27 @@ def plot_run_data(
                     .split("_"),
                 )
             )
+            # Plot baseline if provided
+        if baseline_df is not None:
+            try:
+                BASELINE_COLOR = "#000000"
+                baseline_metric = baseline_df[metric_key]
+                ax.plot(
+                    baseline_df.index,
+                    baseline_metric,
+                    color=BASELINE_COLOR,  # Dark red (colorblind-friendly)
+                    linestyle="--",
+                    linewidth=2.5,
+                    label="Baseline",
+                    zorder=100,  # Plot on top
+                )
+                logger.info("Added baseline to plot for metric %s", metric_key)
+                h2 = plt.Line2D([], [], linestyle="--", color=BASELINE_COLOR, label="baseline")
+                handles = (h2, *handles)
+                labels = ("baseline", *labels)
+            except (KeyError, AttributeError) as e:
+                logger.warning("Could not plot baseline for metric %s: %r", metric_key, e)
+
         try:
             legend = ax.legend(
                 handles,
@@ -1013,6 +1035,7 @@ def plot_run_data(
             )
             if err_fig is not None:
                 error_figures[metric_key] = err_fig
+
         if env_type in ENV_BOUNDS or env_type in MAX_ENV_LOWER_BOUND:
             y_min, y_max = ENV_BOUNDS.get(env_type, (None, None))
             if env_type in MAX_ENV_LOWER_BOUND:
