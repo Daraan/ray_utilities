@@ -22,9 +22,9 @@ from ray.util.debug import log_once
 
 from ray_utilities.callbacks.tuner._file_logger_fork_mixin import FileLoggerForkMixin
 from ray_utilities.callbacks.tuner._log_result_grouping import exclude_results
-from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback, round_floats
+from ray_utilities.callbacks.tuner.new_style_logger_callback import NewStyleLoggerCallback
 from ray_utilities.constants import EVALUATED_THIS_STEP, FORK_FROM
-from ray_utilities.misc import warn_if_slow
+from ray_utilities.misc import round_floats, warn_if_slow
 from ray_utilities.postprocessing import remove_videos
 
 if TYPE_CHECKING:

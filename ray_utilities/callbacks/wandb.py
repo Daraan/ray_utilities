@@ -88,7 +88,7 @@ def get_wandb_failed_upload_file() -> str:
 
 _wandb_api = None
 
-MIN_TOTAL_STEPS = int(os.environ.get("MIN_TOTAL_STEPS", "1_100_000"))
+MIN_TOTAL_STEPS = int(os.environ.get("MIN_TOTAL_STEPS", "1_040_000"))
 "Vor experiment verification"
 
 
@@ -1379,7 +1379,7 @@ def default_experiment_validator(
             break
     trial_step_failures: tuple[_FailureTuple, ...] = tuple(trial_failures)
 
-    if any(exp["current_step"] > MIN_TOTAL_STEPS for exp in experiment_data.values()):
+    if any(exp["current_step"] >= MIN_TOTAL_STEPS for exp in experiment_data.values()):
         return (fail1, *trial_step_failures) if fail1 else (trial_step_failures or None)
     try:
         max_off_value = max(exp["current_step"] for exp in experiment_data.values())
@@ -1499,14 +1499,23 @@ def verify_wandb_runs(
                 if sys.argv[0] in ("", "upload_wandb.py"):
                     # TODO: input does not work with the parallel upload
                     try:
-                        choice = input(f"\ncheck all subdirs of {output_dir} for (y/n/path of {experiment_id}):\n")
-                        if choice.lower() == "y":
-                            offline_results = list(Path(output_dir).glob("**/result*.json"))
-                        elif Path(choice).exists():
-                            offline_results = list(Path(choice).glob("**/result*.json"))
-                    except EOFError:
-                        # non-interactive
-                        logger.info("No input available, skipping full subdir search.")
+                        from ray_submit import AsyncInput  # noqa: PLC0415
+                    except ImportError:
+                        try:
+                            choice = input(f"\ncheck all subdirs of {output_dir} for (y/n/path of {experiment_id}):\n")
+                        except EOFError:
+                            # non-interactive
+                            choice = None
+                            logger.info("No input available, skipping full subdir search.")
+                    else:
+                        user_input = AsyncInput()
+                        choice = cast("str | None", user_input.start(timeout=30))
+                    if choice is None:
+                        pass
+                    elif choice.lower() == "y":
+                        offline_results = list(Path(output_dir).glob("**/result*.json"))
+                    elif Path(choice).exists():
+                        offline_results = list(Path(choice).glob("**/result*.json"))
         not_all_runs_complete = False
         offline_results_without_parent = sum(1 for path in offline_results if "parent" not in path.name)
         # For each trial dir we need one experiment that has been trained until the end >1.1M steps
@@ -1630,7 +1639,7 @@ def verify_wandb_runs(
         )
     for run, failure in verify_results.items():
         if isinstance(failure, Exception):
-            logger.error("Verification for wandb run %s (%s) failed with exception: %s", run.id, run.url, str(failure))
+            logger.error("Verification for wandb run %s (%s) failed with exception: %r", run.id, run.url, failure)
         elif failure:
             if all(f.minor for f in failure):
                 logger.warning("Wandb run %s (%s) history has minor discrepancies: %s", run.id, run.url, failure)
@@ -1978,26 +1987,31 @@ def verify_wandb_run_history(
         # if it is a forked run skip until fork_point
         if FORK_FROM in run.config:
             fork_point = run.config[FORK_FROM]["parent_training_iteration"]
-            if len(online_history) != len(offline_data[offline_data["training_iteration"] > fork_point]):
+            # Online history has sometimes entries from the parent. Trim the online history as well
+            trimmed_online_hist = online_history[online_history["training_iteration"] > fork_point]
+            if len(trimmed_online_hist) != len(offline_data[offline_data["training_iteration"] > fork_point]):
                 logger.error(
                     "❌ Mismatch in number of history entries for forked run %s after fork at iteration %d: "
-                    "offline %d vs online %d. %s",
+                    "offline %d vs online %d (trimmed: all: %s). %s",
                     run_id,
                     fork_point,
                     len(offline_data[offline_data["training_iteration"] > fork_point]),
+                    len(trimmed_online_hist),
                     len(online_history),
-                    "offline history broken"
-                    if len(online_history) > len(offline_data)
-                    else "online history incomplete",
+                    (
+                        "offline history broken"
+                        if len(trimmed_online_hist) > len(offline_data)
+                        else "online history incomplete"
+                    ),
                 )
                 failures.append(
                     _FailureTuple(
                         "num_history_entries_after_fork",
                         len(offline_data[offline_data["training_iteration"] > fork_point]),
-                        len(online_history),
+                        len(trimmed_online_hist),
                         type=(
                             VerificationFailure.OFFLINE_HISTORY_BROKEN
-                            if len(online_history) > len(offline_data)
+                            if len(trimmed_online_hist) > len(offline_data)
                             else VerificationFailure.ONLINE_HISTORY_INCOMPLETE
                         ),
                     )

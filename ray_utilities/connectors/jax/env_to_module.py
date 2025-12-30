@@ -34,7 +34,6 @@ The default Learner connector pipeline is::
 from __future__ import annotations
 
 import logging
-from functools import partial
 from typing import TYPE_CHECKING, Callable, Optional
 
 from ray.rllib.connectors.env_to_module import (

@@ -1,4 +1,0 @@
-# Requirements for WandB Selenium Login Script
-selenium>=4.15.0
-webdriver-manager>=4.0.0  # Optional: for automatic driver management
-wandb>=0.16.0

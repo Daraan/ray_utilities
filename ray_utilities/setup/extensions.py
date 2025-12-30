@@ -116,6 +116,8 @@ def optuna_dist_to_ray_distribution(dist: optuna.distributions.BaseDistribution)
 
 def dict_to_ray_distributions(
     dist_dict: dict[str, dict[str, Any]] | dict[Literal["grid_search"], Sequence[Any]],
+    *,
+    as_optuna: bool = False,
 ) -> ParameterSpace[Any]:
     """Convert a dictionary of Optuna distributions to Ray Tune distributions.
 
@@ -132,10 +134,17 @@ def dict_to_ray_distributions(
     if "grid_search" in dist_dict:
         if len(dist_dict) != 1:
             _logger.warning("A grid_search dict should only contain the grid_search key, ignoring others keys")
+        if as_optuna:
+            return optuna.distributions.CategoricalDistribution(dist_dict["grid_search"])
         return {"grid_search": cast("Sequence[Any]", dist_dict["grid_search"])}
     try:
-        return optuna_dist_to_ray_distribution(optuna.distributions.json_to_distribution(json.dumps(dist_dict)))
-    except (ValueError, TypeError, KeyError):
+        optuna_dist = optuna.distributions.json_to_distribution(json.dumps(dist_dict))
+        if as_optuna:
+            return optuna_dist
+        return optuna_dist_to_ray_distribution(optuna_dist)
+    except (ValueError, TypeError, KeyError) as e:
+        if as_optuna:
+            raise TypeError("Cannot convert dict to Optuna distribution.") from e
         # Assume key, value match tune functions
         key, value = next(iter(dist_dict.items()))
         return getattr(tune, key)(**value)  # pyright: ignore[reportCallIssue]
@@ -143,6 +152,8 @@ def dict_to_ray_distributions(
 
 def load_distributions_from_json(
     json_dict: dict[str, Any] | Path | str,
+    *,
+    as_optuna: bool = False,
 ) -> dict[str, ParameterSpace[Any]]:
     if isinstance(json_dict, str):
         json_dict = Path(json_dict)
@@ -165,7 +176,7 @@ def load_distributions_from_json(
                 else:
                     raise
         assert isinstance(json_dict, dict)
-    return {k: dict_to_ray_distributions(v) for k, v in json_dict.items()}
+    return {k: dict_to_ray_distributions(v, as_optuna=as_optuna) for k, v in json_dict.items()}
 
 
 class TunableSetupMixin(ExperimentSetupBase[ParserType_co, ConfigType_co, AlgorithmType_co]):
