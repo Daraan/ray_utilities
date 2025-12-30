@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import json
 import logging
 import os
 import sys
@@ -17,6 +18,7 @@ from typing import TYPE_CHECKING, Iterable, Optional, cast
 
 import argcomplete
 import ray
+import wandb
 
 from ray_utilities.callbacks.wandb import (
     FailureDictType,
@@ -27,7 +29,7 @@ from ray_utilities.callbacks.wandb import (
 )
 from ray_utilities.callbacks.wandb import logger as ru_wandb_logger
 from ray_utilities.constants import FORK_FROM
-from ray_utilities.misc import ExperimentKey
+from ray_utilities.misc import ExperimentKey, RE_GET_TRIAL_ID
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -172,6 +174,66 @@ def _filter_keys_from_config(config: dict) -> dict:
     return config
 
 
+def _get_parents_from_json(offline_path: Path | str, parents: dict | None = None) -> dict:
+    parents = {} if parents is None else parents
+    with open(offline_path, "r") as f:
+        for line in f:
+            data = json.loads(line)
+            if FORK_FROM in data.get("config", {}):
+                parents[data["config"][FORK_FROM]["parent_fork_id"]] = data["config"][FORK_FROM]["fork_id"]
+    return parents
+
+
+def _find_parent_json_file(offline_path: Path | str, parent_run_id: str) -> Path | None:
+    # Get trial_number
+
+    offline_path = Path(offline_path)
+    if ExperimentKey.FORK_SEPARATOR in parent_run_id:
+        parent_search = offline_path.parent.parent.glob(f"*/result*{parent_run_id}.json")
+    else:
+        parent_trial_part = parent_run_id.split(ExperimentKey.RUN_ID_SEPARATOR)[-1]
+        if ExperimentKey.COUNT_SEPARATOR in parent_trial_part:
+            trial_part, count_part = parent_trial_part.rstrip(ExperimentKey.RIGHT_PAD_CHAR).split(
+                ExperimentKey.COUNT_SEPARATOR
+            )
+            if ExperimentKey.REPLACE_3ZEROS != "" and ExperimentKey.REPLACE_3ZEROS in count_part:
+                count_part = count_part.replace(ExperimentKey.REPLACE_3ZEROS, "000")
+            else:
+                count_part = "000" + count_part
+        else:
+            trial_part, count_part = parent_trial_part.split("_")
+        parent_run_id = f"{trial_part}_{count_part}"  # noqa: PLW2901
+        trial_number = int(count_part)
+        if id_match := RE_GET_TRIAL_ID.search(str(offline_path)):
+            path_id = int(id_match["trial_number"])
+            if path_id != trial_number:
+                # We are looking in the wrong path - which is the normal case
+                # assume offline_path points to the json file
+                parent_search = offline_path.parent.parent.glob(f"*id={parent_run_id}*/result.json")
+            else:
+                # same dir
+                parent_search = offline_path.parent.glob("result.json")
+        else:
+            logger.error("Cannot identify which result.json file to select for partent run id %s", parent_run_id)
+            # TODO: Need to check all for the id, but we should not end up here normally
+            return None
+        # check trial number
+    parent_files = list(parent_search)
+    if len(parent_files) > 1:
+        logger.warning("Found multiple parent json files for parent run id %s: %s", parent_run_id, parent_files)
+        return parent_files[-1]
+    if len(parent_files) == 1:
+        return parent_files[0]
+    # possibly looking for result.json
+    if parent_run_id.endswith(ExperimentKey.RIGHT_PAD_CHAR) and ExperimentKey.FORK_SEPARATOR not in parent_run_id:
+        parent_search = offline_path.parent.glob("result.json")
+        parent_files = list(parent_search)
+        if len(parent_files) == 1:
+            return parent_files[0]
+    logger.error("Did not find parent json file for parent run id %s in %s", parent_run_id, offline_path.parent)
+    return None
+
+
 def patch_offline_history(
     offline_path: Path | str,
     run: Optional[RunApi | str] = None,
@@ -179,6 +241,7 @@ def patch_offline_history(
     entity: Optional[str] = None,
     project: Optional[str] = None,
     experiment_key: Optional[str] = None,
+    patch_with_offline: bool = False,
 ) -> None:
     """
     Patch an incomplete offline history JSON file with online WandB data.
@@ -193,8 +256,6 @@ def patch_offline_history(
     Returns:
         None
     """
-    import json  # noqa: PLC0415
-
     from ray.rllib.utils import unflatten_dict  # noqa: PLC0415
 
     api = wandb_api()
@@ -233,6 +294,7 @@ def patch_offline_history(
     # We can use the new trial_id_history if available to find the parent runs.
     # CAREFUL: If we load a parent it means it has continued training, only load data from before the fork_point
     parent_runs: list[RunApi] = []
+    parent_offline_files = []
     if "trial_id_history" in run.config:
         # do we have a clue about the fork point here?
         parent_run_ids = [
@@ -251,23 +313,46 @@ def patch_offline_history(
                 or ExperimentKey.FORK_SEPARATOR not in parent_run_id
             ):
                 logger.warning(
-                    "parent_run_id in slot %s seems might be wrong due to a bug. "
-                    "Check carefully. Skipping. All Ids: %s",
+                    "parent_run_id in slot %s seems might be wrong due to a bug. Check carefully. Skipping. All Id: %s",
                     i,
-                    parent_run_ids,
+                    parent_run_id,
                 )
                 if sys.argv[0] == "":
+                    logger.info("Require input...")
                     while (choice := input("Skip this parent? (y/n): ").lower()) not in ("y", "n"):
                         pass
                     if choice == "y":
                         continue
                 else:
                     continue
+            parent_file = _find_parent_json_file(offline_path, parent_run_id)
+            # if parent_file:
+            # parent_offline_files.append(parent_file)
             try:
-                if entity:
-                    parent_run = api.run(f"{entity}/{project}/{parent_run_id}")
-                else:
-                    parent_run = api.run(f"{project}/{parent_run_id}")
+                try:
+                    if entity:
+                        parent_run = api.run(f"{entity}/{project}/{parent_run_id}")
+                    else:
+                        parent_run = api.run(f"{project}/{parent_run_id}")
+                except wandb.errors.errors.CommError:
+                    if ExperimentKey.RIGHT_PAD_CHAR not in parent_run_id:
+                        raise
+                    # Convert to abc13_0000 format
+                    id_part, count_part = (
+                        parent_run_id.split(ExperimentKey.RUN_ID_SEPARATOR)[-1]
+                        .rstrip(ExperimentKey.RIGHT_PAD_CHAR)
+                        .split(ExperimentKey.COUNT_SEPARATOR)
+                    )
+                    if ExperimentKey.REPLACE_3ZEROS != "" and ExperimentKey.REPLACE_3ZEROS in count_part:
+                        count_part = count_part.replace(ExperimentKey.REPLACE_3ZEROS, "000")
+                    else:
+                        count_part = "000" + count_part
+                    parent_run_id = f"{id_part}_{count_part}"  # noqa: PLW2901
+                    if entity:
+                        parent_run = api.run(f"{entity}/{project}/{parent_run_id}")
+                    else:
+                        parent_run = api.run(f"{project}/{parent_run_id}")
+
                 parent_runs.append(parent_run)
             except Exception as e:
                 logger.warning("Could not find parent run %s: %s", parent_run_id, e)
@@ -460,21 +545,25 @@ if __name__ == "__main__":
                     )
                 single_experiment = args.experiment_key
             group_glob = "*"
-            output_dir, offline_results = find_experiment_dir(
-                args.experiment_path,
-                "*"
-                + args.run_id
-                + (
-                    f"/**/result*{single_experiment}.json"
-                    if ExperimentKey.FORK_SEPARATOR in single_experiment
-                    else "result.json"
-                ),
-                project=project,
-                group_glob=group_glob,
-            )
+            if not args.experiment_path.endswith(".json"):
+                output_dir, offline_results = find_experiment_dir(
+                    args.experiment_path,
+                    "*"
+                    + args.run_id
+                    + (
+                        f"/**/result*{single_experiment}.json"
+                        if ExperimentKey.FORK_SEPARATOR in single_experiment
+                        else "result.json"
+                    ),
+                    project=project,
+                    group_glob=group_glob,
+                )
+            else:
+                offline_results = [Path(args.experiment_path)]
+                output_dir = Path(args.experiment_path).parent.parent.parent.parent.parent
             assert len(offline_results) == 1, (
                 f"Could not find unique offline results for run_id {args.run_id} "
-                f"and experiment_key {single_experiment} in {output_dir}."
+                f"and experiment_key {single_experiment} in {output_dir}. Found: {offline_results}."
             )
             offline_json_path = offline_results[0]
 

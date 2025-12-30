@@ -349,6 +349,39 @@ RAY_TMPDIR="${TMPDIR:-/tmp}/ray_client_${SLURM_JOB_ID}"
 # Output directories (likely unused)
 LOG_DIR="${WORKSPACE_DIR}/outputs/slurm_logs"
 
+# Detect GPU VRAM if GPUs are requested
+GPU_VRAM_INFO=""
+if [ -n "${SLURM_GPUS_PER_TASK:-}" ] && echo "${SLURM_GPUS_PER_TASK}" | grep -Eq '^[0-9]+$' && [ "${SLURM_GPUS_PER_TASK}" -gt 0 ]; then
+    if command -v nvidia-smi &>/dev/null; then
+        # Query total memory (MiB) per visible GPU
+        VRAM_LINES=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null || true)
+        if [ -n "${VRAM_LINES:-}" ]; then
+            DETECTED_GPUS=$(echo "${VRAM_LINES}" | wc -l)
+            NUM_USED=${SLURM_GPUS_PER_TASK}
+            if [ "${DETECTED_GPUS}" -lt "${NUM_USED}" ]; then
+                NUM_USED=${DETECTED_GPUS}
+            fi
+            VRAM_PER_GPU=$(echo "${VRAM_LINES}" | head -n1 | tr -d '[:space:]')
+            VRAM_TOTAL=$(echo "${VRAM_LINES}" | head -n "${NUM_USED}" | awk '{s+=$1} END {print s}')
+            GPU_VRAM_INFO="(VRAM per GPU: ${VRAM_PER_GPU} MiB, total for ${NUM_USED} GPUs: ${VRAM_TOTAL} MiB)"
+            export GPU_VRAM_PER_GPU="${VRAM_PER_GPU}"
+            export GPU_VRAM_TOTAL="${VRAM_TOTAL}"
+        else
+            GPU_VRAM_INFO="(VRAM: unknown - nvidia-smi returned no data)"
+        fi
+    else
+        GPU_VRAM_INFO="(VRAM: nvidia-smi not available)"
+    fi
+fi
+
+# Set GPU_VRAM to total VRAM in .1f GB, or 0 if none is present
+if [ -n "${GPU_VRAM_TOTAL:-}" ]; then
+    GPU_VRAM=$(awk "BEGIN {printf \"%.1f\", ${GPU_VRAM_TOTAL} / 1024}")
+else
+    GPU_VRAM=0
+fi
+
+
 # ============================================================================
 # Setup
 # ============================================================================
@@ -361,7 +394,7 @@ echo "RUN_ID:         ${RUN_ID}"
 echo "Entry point:    ${ENTRY_POINT} (ID: ${ENTRY_POINT_ID})"
 echo "Node:           ${SLURM_JOB_NODELIST}"
 echo "CPUs:           ${SLURM_CPUS_PER_TASK}"
-echo "GPUs:           ${SLURM_GPUS_PER_TASK:-0}"
+echo "GPUs:           ${SLURM_GPUS_PER_TASK:-0} ${GPU_VRAM_INFO}"
 echo "Memory:         ${SLURM_MEM_PER_NODE}MB"
 echo "Workspace:      ${WORKSPACE_DIR}"
 echo "Output dir:     ${OUTPUT_DIR}"

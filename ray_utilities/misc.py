@@ -1067,7 +1067,14 @@ def calc_env_size(env: gym.Env | str | None):
         return 1
     close_env = False
     if isinstance(env, str):
-        env = gym.make(env)
+        try:
+            env = gym.make(env)
+        except gym.error.NameNotFound:
+            from ray.tune.registry import _global_registry, ENV_CREATOR  # noqa: PLC0415
+
+            _global_registry.contains(ENV_CREATOR, env)
+            entry_point = _global_registry.get(ENV_CREATOR, env)
+            env = entry_point({})
         close_env = True
     try:
         prod = np.prod(env.observation_space.shape)  # pyright: ignore[reportArgumentType, reportCallIssue]
@@ -1188,8 +1195,8 @@ def get_available_memory_bytes() -> int:
     return int(available_mem)
 
 
-def _round_floats(path, value: float | str | Any):
-    if not isinstance(value, float) or isnan(value) or value == 0.0 or "lr" == path[-1]:
+def _round_floats(path, value: float | str | Any, *, round_lr: bool = True):
+    if not isinstance(value, float) or isnan(value) or value == 0.0 or (not round_lr and path and "lr" == path[-1]):
         return value
     if abs(value) > 100:
         return round(value, 2)
