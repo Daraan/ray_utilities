@@ -33,11 +33,11 @@ notes: |
 - use another key
 - Ant-v5
 - Pusher-v5
+- Reacher-v5
 <basic_envs>:
 - InvertedPendulum-v5
 - InvertedDoublePendulum-v5
 - Hopper-v5
-- Reacher-v5
 - Walker2d-v5
 - Swimmer-v5
 - HumanoidStandup-v5
@@ -1157,6 +1157,8 @@ pbt_fine_clip_param:
         status: SUCCEEDED - not but for plots
         submission_id:
           pbt_fine_clip_param_HumanoidStandup-v5_2025-12-24_20:31:20
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:clip_param/Default-mlp-HumanoidStandup-v5-PPO-tws47f251224203160f04
       tws47f251226191802a24:
         status: RUNNING
         submission_id:
@@ -1177,6 +1179,8 @@ pbt_fine_clip_param:
       tws47f251224213294734:
         status: SUCCEEDED - not but for plots
         submission_id: pbt_fine_clip_param_Swimmer-v5_2025-12-24_20:46:21
+        file_path:
+          outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:clip_param/Default-mlp-Swimmer-v5-PPO-tws47f251224213294734
       tws47f2512261918557b4:
         status: RUNNING
         submission_id: pbt_fine_clip_param_Swimmer-v5_2025-12-26_19:18:15
@@ -1184,6 +1188,8 @@ pbt_fine_clip_param:
       tws47f2512242132b15c4:
         status: SUCCEEDED - not but for plots
         submission_id: pbt_fine_clip_param_Ant-v5_2025-12-24_20:46:21
+        file_path:
+          outputs/shared/experiments/Default-mlp-Ant-v5/pbt-tune_tune:clip_param/Default-mlp-Ant-v5-PPO-tws47f2512242132b15c4
     (Walker2d-v5):
       tws47f2512242211e23f4:
         status: SUCCEEDED
@@ -1202,6 +1208,8 @@ pbt_fine_clip_param:
         status: SUCCEEDED - not but for plots
         submission_id:
           pbt_fine_clip_param_InvertedDoublePendulum-v5_2025-12-24_20:46:21
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:clip_param/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f251224223997284
       tws47f2512261918b2954:
         status: RUNNING
         submission_id:
@@ -1222,6 +1230,8 @@ pbt_fine_clip_param:
       tws47f2512251110fb3f4:
         status: SUCCEEDED - not but for plots
         submission_id: pbt_fine_clip_param_HalfCheetah-v5_2025-12-24_20:46:21
+        file_path:
+          outputs/shared/experiments/Default-mlp-HalfCheetah-v5/pbt-tune_tune:clip_param/Default-mlp-HalfCheetah-v5-PPO-tws47f2512251110fb3f4
 pbt_fine_clip_param_base_large:
   # Change to non-base
   entrypoint_resources:
@@ -1392,9 +1402,11 @@ pbt_fine_entropy_coeff_base:
         submission_id:
           pbt_fine_entropy_coeff_base_HumanoidStandup-v5_2025-12-24_20:46:21
       tws47f25122522131fd44:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_entropy_coeff_base_HumanoidStandup-v5_2025-12-25_22:13:34
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:entropy_coeff/Default-mlp-HumanoidStandup-v5-PPO-tws47f25122522131fd44
     (Pusher-v5):
       tws47f2512251127bbcf4:
         status: STOPPED
@@ -1414,9 +1426,11 @@ pbt_fine_entropy_coeff_base:
         submission_id:
           pbt_fine_entropy_coeff_base_Swimmer-v5_2025-12-24_20:46:21
       tws47f251225221813bc4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_entropy_coeff_base_Swimmer-v5_2025-12-25_22:18:06
+        file_path:
+          outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:entropy_coeff/Default-mlp-Swimmer-v5-PPO-tws47f251225221813bc4
     (Ant-v5):
       tws47f251225184559524:
         status: FAILED
@@ -1457,15 +1471,19 @@ pbt_fine_entropy_coeff_base:
       tws47f2512252219db254:
         status: SUCCEEDED
         submission_id: pbt_fine_entropy_coeff_base_Hopper-v5_2025-12-25_22:18:06
+        file_path:
+          outputs/shared/experiments/Default-mlp-Hopper-v5/pbt-tune_tune:entropy_coeff/Default-mlp-Hopper-v5-PPO-tws47f2512252219db254
     (Humanoid-v5):
       tws47f25122520327dda4:
         status: STOPPED
         submission_id:
           pbt_fine_entropy_coeff_base_Humanoid-v5_2025-12-24_20:46:21
       tws47f25122522190eed4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_entropy_coeff_base_Humanoid-v5_2025-12-25_22:18:06
+        file_path:
+          outputs/shared/experiments/Default-mlp-Humanoid-v5/pbt-tune_tune:entropy_coeff/Default-mlp-Humanoid-v5-PPO-tws47f25122522190eed4
     (HalfCheetah-v5):
       tws47f251225203460e04:
         status: STOPPED
@@ -1507,48 +1525,66 @@ pbt_fine_vf_loss_coeff_base:
           outputs/shared_backup/needs_sync/Default-mlp-LunarLander-v3/pbt-tune_tune:vf_loss_coeff/Default-mlp-LunarLander-v3-PPO-tws47f251210172528c64
     (HumanoidStandup-v5):
       tws47f25122522217f1a4:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_vf_loss_coeff_base_HumanoidStandup-v5_2025-12-25_22:21:19
+        file_path:
+          outputs/shared/experiments/Default-mlp-HumanoidStandup-v5/pbt-tune_tune:vf_loss_coeff/Default-mlp-HumanoidStandup-v5-PPO-tws47f25122522217f1a4
     (Reacher-v5):
       tws47f251225222131a94:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_loss_coeff_base_Reacher-v5_2025-12-25_22:21:19
+        file_path:
+          outputs/shared/experiments/Default-mlp-Reacher-v5/pbt-tune_tune:vf_loss_coeff/Default-mlp-Reacher-v5-PPO-tws47f251225222131a94
     (Swimmer-v5):
       tws47f251225222258564:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_vf_loss_coeff_base_Swimmer-v5_2025-12-25_22:21:19
+        file_path:
+          outputs/shared/experiments/Default-mlp-Swimmer-v5/pbt-tune_tune:vf_loss_coeff/Default-mlp-Swimmer-v5-PPO-tws47f251225222258564
     (Walker2d-v5):
       tws47f251225222227e34:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_loss_coeff_base_Walker2d-v5_2025-12-25_22:21:19
+        file_path:
+          outputs/shared/experiments/Default-mlp-Walker2d-v5/pbt-tune_tune:vf_loss_coeff/Default-mlp-Walker2d-v5-PPO-tws47f251225222227e34
     (InvertedPendulum-v5):
       tws47f2512252222372f4:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_loss_coeff_base_InvertedPendulum-v5_2025-12-25_22:21:19
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedPendulum-v5/pbt-tune_tune:vf_loss_coeff/Default-mlp-InvertedPendulum-v5-PPO-tws47f2512252222372f4
     (InvertedDoublePendulum-v5):
       tws47f251225222202884:
         status: SUCCEEDED
         submission_id:
           pbt_fine_vf_loss_coeff_base_InvertedDoublePendulum-v5_2025-12-25_22:21:19
+        file_path:
+          outputs/shared/experiments/Default-mlp-InvertedDoublePendulum-v5/pbt-tune_tune:vf_loss_coeff/Default-mlp-InvertedDoublePendulum-v5-PPO-tws47f251225222202884
     (Hopper-v5):
       tws47f251225222254b24:
         status: SUCCEEDED
         submission_id: pbt_fine_vf_loss_coeff_base_Hopper-v5_2025-12-25_22:21:19
+        file_path:
+          outputs/shared/experiments/Default-mlp-Hopper-v5/pbt-tune_tune:vf_loss_coeff/Default-mlp-Hopper-v5-PPO-tws47f251225222254b24
     (Humanoid-v5):
       tws47f2512252222d8144:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_vf_loss_coeff_base_Humanoid-v5_2025-12-25_22:21:19
+        file_path:
+          outputs/shared/experiments/Default-mlp-Humanoid-v5/pbt-tune_tune:vf_loss_coeff/Default-mlp-Humanoid-v5-PPO-tws47f2512252222d8144
     (HalfCheetah-v5):
       tws47f251225222218e04:
-        status: RUNNING
+        status: SUCCEEDED
         submission_id:
           pbt_fine_vf_loss_coeff_base_HalfCheetah-v5_2025-12-25_22:21:19
+        file_path:
+          outputs/shared/experiments/Default-mlp-HalfCheetah-v5/pbt-tune_tune:vf_loss_coeff/Default-mlp-HalfCheetah-v5-PPO-tws47f251225222218e04
 pbt_fine_gamma_base:
   entrypoint_pattern:
     pattern: global_pattern_1

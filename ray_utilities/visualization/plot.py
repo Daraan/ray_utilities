@@ -373,7 +373,6 @@ def plot_run_data(
                 perturbation_interval = int(df.current_step.loc[(first_change[0], first_change[1] - 1)].iloc[0, 0])
             except Exception as e:
                 logger.error("Failed to get perturbation interval at %s %r", (first_change[0], first_change[1] - 1), e)
-                remote_breakpoint()
                 raise
         except KeyError:
             df = _drop_duplicate_steps(df)
@@ -419,13 +418,9 @@ def plot_run_data(
         ]
     except KeyError as ke:
         logger.exception("Failed to get group columns %s from df columns %s", group_cols, df.columns)
-        remote_breakpoint()
 
     # Combine into a DataFrame for groupby
-    try:
-        group_df = pd.concat(group_values, axis=1, keys=["current_step", *group_by, "seed", group_stat], copy=False)
-    except AssertionError:
-        remote_breakpoint()
+    group_df = pd.concat(group_values, axis=1, keys=["current_step", *group_by, "seed", group_stat], copy=False)
     # Problem we get duplicated values as the dfs contain their parents data - need to drop these when we aggregate
     group_df = group_df[~group_df.duplicated(keep="first")]
     group_df.columns = ["current_step", *group_by, "seed", group_stat]  # flatten for groupby
@@ -580,7 +575,6 @@ def plot_run_data(
             )
         except KeyError:  # noqa: TRY203
             # group stat is nan. Possibly None value in choices
-            remote_breakpoint()
             raise
 
         # ATTENTION # XXX - for older runs the pbt_epoch might go into the next epoch if a run was continued!
@@ -760,11 +754,9 @@ def plot_run_data(
                     group[group_stat] = "other"  # <-- sets on a copy
                 except IndexError:
                     logger.error("Failed to group rest for epoch %s", pbt_epoch)
-                    remote_breakpoint()
                     raise
                 except Exception as e:
                     logger.error("Failed to group rest for epoch %s: %r", pbt_epoch, e)
-                    remote_breakpoint()
                     raise
             elif plot_option.main_only and not group_by_keys_only:
                 logger.debug("Skipping non-main group: %s %s", pbt_epoch, stat_val)
@@ -791,16 +783,10 @@ def plot_run_data(
                         bg_color_idx += 1
                 except Exception as e:
                     logger.error("Failed to shade background for epoch %s: %r", pbt_epoch, e)
-                    remote_breakpoint()
-            if isinstance(pbt_epoch, str):
-                remote_breakpoint()
 
             last_bg_epoch = pbt_epoch
             prev_group = group
-            try:
-                color_map[stat_val]
-            except KeyError:
-                remote_breakpoint()
+            color_map[stat_val]
             # Plot
             # if len(group.index) != group.index.nunique():
             #    logger.warning(
@@ -872,7 +858,6 @@ def plot_run_data(
         # Make the colorbar 20% smaller by adjusting its fraction
         ax2.tick_params(axis="y", which="both", left=False, right=False, labelleft=False, labelright=True)
         if plot_option.colorbar:
-            remote_breakpoint()
             cbar = plt.colorbar(sm, ax=ax2, pad=0.01, fraction=0.075)  # default fraction is ~0.1
             # Remove all ticks from both sides of the colorbar
             cbar.ax.tick_params(axis="both", which="both", left=False, right=True, labelleft=False, labelright=False)
@@ -1008,7 +993,6 @@ def plot_run_data(
             if len(handles) == len(labels) == 0 and plot_option.main_only and not plot_df["__pbt_main_branch__"].any():
                 return None, None
             logger.exception("Failed to create legend with handles %s and labels %s: %r", handles, labels, ve)
-            remote_breakpoint()
         # Reduce legend font size by 2
         # fontsize = max(legend.get_texts()[0].get_fontsize() - 2, 1) if legend.get_texts() else 10
         # for text in legend.get_texts():

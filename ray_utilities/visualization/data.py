@@ -39,7 +39,6 @@ from tqdm import tqdm
 from typing_extensions import Final, Literal, Sentinel, TypeVarTuple, Unpack
 
 from ray_utilities.misc import ExperimentKey
-from ray_utilities.testing_utils import remote_breakpoint
 from ray_utilities.visualization._common import Placeholder, SubmissionRun, PlotOption, make_zip_arcname
 
 try:
@@ -64,8 +63,6 @@ else:
     yaml_load = yaml.load
     yaml_dump = yaml.dump
 
-# from ray_utilities.constants import EPISODE_RETURN_MEAN_EMA
-remote_breakpoint = lambda port=None: None
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
@@ -536,8 +533,6 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
             ]
             if levels_to_drop:
                 df.columns = df.columns.droplevel(level=levels_to_drop)
-            if "timers" in df:
-                remote_breakpoint()
             # df.columns = pd.MultiIndex.from_tuples(cast("list[tuple[str, ...]]", df.columns))
             try:
                 experiment_key = df.config.experiment_key.iloc[-1]
@@ -605,7 +600,6 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
                                     new_experiment_key = history[latest_history_idx]
                                 else:
                                     # This can somehow happen if a wrong ID was written in a prior place
-                                    remote_breakpoint()
                                     raise ValueError(
                                         f"Experiment key {experiment_key} does not match filename. Possibly the history is incomplete or due to a bug written wrongly."
                                     )
@@ -613,7 +607,6 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
                             # no trial_id history but we are a main branch, believe this is a bug
                             new_experiment_key = result_file.name.split("-")[-1].split(".")[0]
                         else:
-                            remote_breakpoint()
                             raise ValueError(
                                 f"Experiment key {experiment_key}does not match filename. Possibly the history is incomplete."
                             )
@@ -638,7 +631,6 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
                         df.loc[mask, ("config", "experiment_key")] = new_experiment_key
                     else:
                         logger.error("error with experiment_key cannot restore")
-                        remote_breakpoint()  # some other bug
                         raise ValueError(
                             f"Experiment key {experiment_key} does not match id in file name {result_file}"
                         )
@@ -668,11 +660,9 @@ def load_run_data(offline_run: str | Path, experiment_dir=None, *, use_cache=Tru
                         )
                 # experiment_key = df.config.experiment_id.values.item()+"_"+df.config.trial_id.values.item()
                 if experiment_key in run_data:
-                    remote_breakpoint()
                     raise ValueError(f"Duplicate experiment_key {experiment_key} already present in {offline_run}")  # noqa: B904
                 if result_file.name != "result.json" and experiment_key not in result_file.name:
                     logger.error(f"Experiment key {experiment_key} does does not match id in file name {result_file}")
-                    remote_breakpoint()
                     continue
         except Exception as e:  # noqa: PERF203
             if "patched.json" in str(result_file):
@@ -837,7 +827,6 @@ def combine_df(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
                 cast("list[pd.DataFrame]", dfs), keys=dataframes.keys(), names=["run_id", "training_iteration"]
             ).sort_index(key=_base62_sort_key)
         else:
-            remote_breakpoint()  # Will print "starting debugpy. Listening on port: 5678"
             raise
     if isinstance(combined_df.columns, pd.MultiIndex):
         new_tuples = [
@@ -1029,10 +1018,8 @@ def _get_group_stat(df: pd.DataFrame | pd.Series, group_key: str | Hashable):
                 if len(candidates) == 1:
                     return candidates.pop()
                 logger.warning(f"Multiple possible group keys found {candidates}, using 'lr'")
-                remote_breakpoint()
                 return candidates.pop()
             logger.error("No suitable group key found - 'batch_size' is likely incorrect")
-            remote_breakpoint()
             raise ValueError("No suitable group key detected. Is batch_size correct?")
         return tune
     return tune[0]
@@ -1109,10 +1096,8 @@ def which_continued(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     if continued_legacy is not None:
         if set(continued_legacy.index) != set(continued.index):
             logger.warning("A: Discrepancy between continued runs detected between methods.")
-            remote_breakpoint()
         if (continued_legacy != continued).any().item():
             logger.warning("Discrepancy between continued runs detected between methods.")
-            remote_breakpoint()
     if "__pbt_main_branch__" in df.config:
         main_branch_info = (
             df[(df.config.__pbt_main_branch__).fillna(False).values].index.get_level_values("run_id").unique()
@@ -1122,7 +1107,6 @@ def which_continued(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
             and not (df.config.__pbt_main_branch__).fillna(False).any().item()
         ):
             logger.warning("Continued runs do not match main branch runs.")
-            remote_breakpoint()
     return continued, df
 
 
@@ -1181,7 +1165,6 @@ def _get_epoch_end_steps(df) -> pd.DataFrame | None:
         if main_branch_data.empty:
             logger.error("No main branch data found for calculating hyperparam metrics.")
             return None
-        remote_breakpoint()
         raise
     # Does not contain last epoch as there is no main branch
     epoch_end_steps = epoch_grouper.last().current_step.astype(int).copy()
@@ -1237,7 +1220,6 @@ def _get_epoch_end_steps(df) -> pd.DataFrame | None:
                     )
             except Exception:
                 logger.exception("Could not fix __pbt_main_branch__ for missing epoch %s", miss)
-                remote_breakpoint(5679)
 
         epoch_end_steps = epoch_end_steps.sort_index()
         # Check which step is missing and fill it in
@@ -1272,9 +1254,6 @@ def _get_epoch_end_steps(df) -> pd.DataFrame | None:
             )
         )
     except (KeyError, ValueError) as e:
-        if max_epoch != -1 or isinstance(e, ValueError):
-            # A value error happens if we cast int to nan
-            remote_breakpoint()
         epoch_end_steps.loc[max_epoch + 1] = int(
             min(
                 df.current_step.max().item(),
@@ -1328,9 +1307,6 @@ def get_epoch_stats(
         epoch_end_steps.current_step
     )
     if not individual_runs:
-        # we want to add this as -1; but possibly the minium is 0?
-        if last_epoch_values.index.min().item() != 0:
-            remote_breakpoint()
         last_epoch_values.loc[last_epoch_values.index.min() - 1] = 0
     else:
         new_head = pd.DataFrame(
@@ -1404,8 +1380,7 @@ def get_epoch_stats(
                 first_loc = metric_agg.loc[idx].isna().idxmin()["mean"]
                 value_shifter_with_first.loc[idx, :] = metric_agg.loc[(*idx, first_loc)].values
     except (ValueError, KeyError):
-        remote_breakpoint()
-
+        raise
     return metric_values, epoch_end_steps, (value_shifter.sort_index(), value_shifter_with_first.sort_index())
 
 
@@ -1565,11 +1540,12 @@ def calculate_hyperparam_metrics(
         # TODO: However this does not tell us how robust a configuration is over time
         # Cast epochs to step
         epoch_to_steps = epoch_end_steps["current_step"].to_dict()
-        try:
-            for metrics_df in (gini_metrics, centered_metrics, centered_metrics2, normed_metrics, normalized_metric):
+        for metrics_df in (gini_metrics, centered_metrics, centered_metrics2, normed_metrics, normalized_metric):
+            try:
                 metrics_df.index = metrics_df.index.map(epoch_to_steps)
-        except ValueError:
-            remote_breakpoint(5680)
+            except ValueError:
+                logger.error("Failed to map epoch to steps for metrics_df index.")
+                raise
     try:
         intra_group_variance = df.groupby([ifill("config", "pbt_epoch"), ifill("config", "pbt_group_key")])[
             metric_key
@@ -1582,7 +1558,6 @@ def calculate_hyperparam_metrics(
             ].agg(["var", "std", "mean"])
         else:
             logger.exception("Failed to calculate intra group variance.")
-            remote_breakpoint(5680)
             raise
     intra_group_variance.index.names = ["pbt_epoch", "pbt_group_key"]
     intra_group_variance_global = df.groupby([ifill("config", "pbt_group_key")])[metric_key].agg(["var", "std", "mean"])
@@ -1693,7 +1668,6 @@ def _drop_duplicate_steps(df: pd.DataFrame) -> pd.DataFrame:
         if "argmax of an empty sequence" not in str(ve):
             raise
         # no changes; likely early terminated experiment
-        remote_breakpoint()
         raise
     except KeyError:
         # When this is a baseline run we do not have pbt_epoch. Other duplicate cleaning should take
@@ -1789,7 +1763,6 @@ def _drop_duplicate_steps(df: pd.DataFrame) -> pd.DataFrame:
     if perturbation_interval > 200_000:
         logger.warning("Too large perturbation interval detected: %d", perturbation_interval)
         epoch_end_steps = _get_epoch_end_steps(df)
-        remote_breakpoint()
         if perturbation_interval_alt is not None:
             perturbation_interval = perturbation_interval_alt
     df.attrs["perturbation_interval"] = perturbation_interval
@@ -1811,8 +1784,8 @@ def _drop_duplicate_steps(df: pd.DataFrame) -> pd.DataFrame:
             "Disagreement between pbt_epoch fixing methods, using method 1. Overstepping: %s",
             (df.current_step.max() > perturbation_interval * 8).item(),
         )
-        if (df.current_step.max() < perturbation_interval * 8).item():
-            remote_breakpoint()
+        # if (df.current_step.max() < perturbation_interval * 8).item():
+        #    breakpoint()
     df.loc[:, ifill("config", "pbt_epoch")] = method2.to_numpy()
     return df.sort_index(axis=1).copy()
 
@@ -1873,7 +1846,6 @@ def plot_n_save(
         )
     except Exception:
         logger.exception("Failed to plot run data for saving to %s", save_path)
-        remote_breakpoint()
         return None
     if fig is None:  # pyright: ignore[reportUnnecessaryComparison]
         return None
@@ -2038,7 +2010,6 @@ def get_and_check_group_stat(
         except TypeError:
             df = df.assign(**{group_stat: df.config[group_stat].values})
         except KeyError:
-            remote_breakpoint()
             from_cli_args = df.config.cli_args[group_stat]
             if from_cli_args.empty or (from_cli_args.iloc[0] == from_cli_args).all():
                 # wrong group_stat key

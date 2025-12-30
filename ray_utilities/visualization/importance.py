@@ -35,7 +35,6 @@ from experiments.create_tune_parameters import default_distributions, write_dist
 from ray_utilities.config.parser.default_argument_parser import DefaultArgumentParser
 from ray_utilities.misc import cast_numpy_numbers, round_floats
 from ray_utilities.setup.extensions import load_distributions_from_json
-from ray_utilities.testing_utils import remote_breakpoint
 from ray_utilities.visualization._common import Placeholder, make_zip_arcname
 from ray_utilities.visualization.data import (
     LOG_SETTINGS,
@@ -163,7 +162,10 @@ def _run_env_analysis_process(task: EnvAnalysisProcessTask, tqdm_idx: int | None
         # Return results for plotting in main process
         # Don't plot in worker process to avoid matplotlib/multiprocessing issues
         logger.info(
-            "Analysis complete for env %s submission %s, skipping plots in worker", task.env, task.submission_name
+            "%s: Analysis complete for env %s submission %s, skipping plots in worker",
+            datetime.now(),
+            task.env,
+            task.submission_name,
         )
         return EnvAnalysisProcessResult(task.env, None, tqdm_idx)
     finally:
@@ -174,9 +176,6 @@ def _run_env_analysis_process(task: EnvAnalysisProcessTask, tqdm_idx: int | None
 _REPORT_INTERVAL = 32
 
 DEBUG = False
-
-# remote_breakpoint = partial(remote_breakpoint, port=5681)
-# remote_breakpoint = lambda port=None: None
 
 
 @dataclass
@@ -641,8 +640,7 @@ def save_analysis_to_parquet(df, parquet_file: str | Path):
         for w in caught:
             msg = str(w.message)
             if "The DataFrame has column names of mixed type" in msg:
-                remote_breakpoint()
-                # raise ValueError(msg)
+                raise ValueError(msg)
 
 
 def _get_storage(experiment_path: str | Path, direction: str | None = "maximize") -> optuna.storages.BaseStorage:
@@ -1132,7 +1130,6 @@ def optuna_create_studies(
                     run_frames = load_run_data(experiment_dir, use_cache=False)
                     df = combine_df(run_frames)
                     if "pbt_epoch" not in df.config:
-                        remote_breakpoint()
                         raise
                     save_run_data(experiment_dir, df)
                     max_epoch = df.config.pbt_epoch.max().item()
@@ -1229,7 +1226,6 @@ def optuna_create_studies(
                         except Exception:  # noqa: BLE001
                             # Most common KeyError as some epoch and main data is missing.
                             logger.exception("Could not compute centered metric for %s", trial_identifier)
-                            remote_breakpoint()
                             metric_centered = None
 
                     if not per_pbt_epoch:
@@ -1307,10 +1303,11 @@ def optuna_create_studies(
                 if "does does not match id in file name" in str(e):
                     # likely incomplete offline data
                     continue
-                remote_breakpoint()
                 continue
             logger.info("Adding trials from experiment %s to studies", experiment_dir)
-            for study, trials in trials_to_add.items():
+            for i, (study, trials) in enumerate(trials_to_add.items()):
+                if i % 4 == 0 or i == len(trials_to_add) - 1:
+                    logger.info("Adding %d trials to study %s/%s", len(trials), i + 1, len(trials_to_add))
                 maybe_add_trials_to_study(trials, study)
             if no_errors and study_each_epoch is None:  # add it as finished when we checked both types.
                 add_finished_experiment(experiment_id, tracking_study)
@@ -1707,11 +1704,7 @@ def _analyze_single_study(
             logger.warning("No tasks generated for study with key %s and submission filter %s", key, submission_filter)
     except Exception:  # noqa: BLE001
         logger.exception("Failed to analyze study for key %s", key)
-        try:
-            if len(study.get_trials()) > 1:
-                remote_breakpoint()
-        except Exception:  # noqa: BLE001
-            remote_breakpoint()
+        raise
     return rows
 
 
@@ -1987,6 +1980,7 @@ def plot_importance_studies(
                                 # capitalize
                                 ylabel.replace("train_batch_size_per_per_learner", "batch size")
                                 .replace("accumulate_gradients_every", "grad accumu.")
+                                .replace("num_envs_per_env_runner", "num envs")
                                 .split("_"),
                             )
                             for ylabel in ytick_labels
@@ -2066,7 +2060,6 @@ def plot_importance_studies(
                             large_mode,
                             submission_tag,
                         )
-                        remote_breakpoint()
                     finally:
                         if fig:
                             plt.close(fig)
@@ -2151,7 +2144,7 @@ if __name__ == "__main__":
 
     # possibly for repair sqlite3 "outputs/shared/optuna_hp_study.db" ".dump" | sqlite3 new.db
 
-    logger = nice_logger(logger, logging.DEBUG)
+    logger = nice_logger(logger, logging.INFO)
     # Interpret --clear-experiment-cache values: None = not provided; [] = provided without envs (global);
     # [envs...] = provided env names to clear (only on first submission in submissions mode)
     _clear_cache_arg = args.clear_experiment_cache  # None | list[str]
@@ -2433,19 +2426,21 @@ if __name__ == "__main__":
                 )
                 return env, studies, analysis_task, None
 
-            process_workers = max(1, min(len(envs), int((os.cpu_count() or 2) * 0.75)))
-            max_process_workers = min(len(envs), 2 * (os.cpu_count() or 2), 28)
-            with (
-                ProcessPoolExecutor(max_workers=process_workers) as process_executor,
-                ThreadPoolExecutor(max_workers=max_process_workers) as executor,
-            ):
-                tqdm_indices = set(range(max_process_workers))
-                tqdm_indices_used = set()
-                process_futures: set[Future[EnvAnalysisProcessResult]] = set()
+            process_workers = max(1, min(len(envs), int((os.cpu_count() or 2) * 0.9)))
+            max_thread_workers = min(len(envs), 2 * (os.cpu_count() or 2), 16)
+
+            # Fix deadlock: Separate into two phases instead of nested executors
+            # Phase 1: ThreadPoolExecutor for _process_env (study loading/preparation)
+            # Phase 2: ProcessPoolExecutor with sequential submission (no nested calls)
+            analysis_tasks_to_submit: list[EnvAnalysisProcessTask] = []
+
+            # PHASE 1: Study preparation using ThreadPoolExecutor only
+            logger.info("Phase 1: Loading and preparing studies using ThreadPoolExecutor")
+            with ThreadPoolExecutor(max_workers=max_thread_workers) as thread_executor:
                 futures = {
                     # For the first submission, pass clear_studies as-is. For later submissions,
                     # if clearing was requested (True or "all"), clear only the submission-specific studies.
-                    executor.submit(
+                    thread_executor.submit(
                         _process_env,
                         env,
                         submission_name_param=submission_name,
@@ -2467,47 +2462,58 @@ if __name__ == "__main__":
                     ): env
                     for idx, env in enumerate(envs)
                 }
-                try:
-                    not_done_envs = set(envs)
-                    not_done_tasks = {}
-                    env_studies: dict[Any, optuna.Study] | dict[Any, tuple[str, Path]]
-                    # _process_env execution
-                    for future in as_completed(futures):
-                        _env, env_studies, analysis_task, outfiles = future.result()
-                        study_update = {
-                            k: (
-                                study if isinstance(study, optuna.Study) else (study, Path(analysis_task.database_path))
+
+                # Collect all analysis tasks from Phase 1
+                for future in as_completed(futures):
+                    _env, env_studies, analysis_task, outfiles = future.result()
+                    study_update = {
+                        k: (study if isinstance(study, optuna.Study) else (study, Path(analysis_task.database_path)))
+                        for k, study in env_studies.items()
+                    }
+                    all_studies.update(study_update)
+                    if outfiles and zipfile:  # have no outfiles here currently
+                        for outfile in outfiles:
+                            if outfile.exists():
+                                arcname_str = make_zip_arcname(outfile, PATHS, use_dir_flags=False)
+                                zipfile.write(outfile, arcname=arcname_str)
+                                saved_files.append(outfile)
+                            else:
+                                logger.error("Expected outfile %s does not exist.", outfile)
+                    if analysis_task:
+                        logger.info("Collected analysis task for env %s submission %s", _env, submission_name)
+                        analysis_tasks_to_submit.append(analysis_task)
+
+            # PHASE 2: Analysis using ProcessPoolExecutor with sequential submission from main thread
+            logger.info(
+                "Phase 2: Running analysis on %d tasks using ProcessPoolExecutor", len(analysis_tasks_to_submit)
+            )
+            if analysis_tasks_to_submit:
+                with ProcessPoolExecutor(max_workers=process_workers) as process_executor:
+                    process_futures: set[Future[EnvAnalysisProcessResult]] = set()
+                    not_done_envs = {task.env for task in analysis_tasks_to_submit}
+                    not_done_tasks = {task.env: task for task in analysis_tasks_to_submit}
+                    task_start_times: dict[str, float] = {}
+
+                    try:
+                        # Sequential submission from main thread (no nested executor calls)
+                        for analysis_task in analysis_tasks_to_submit:
+                            logger.info(
+                                "Submitting analysis process for env %s submission %s",
+                                analysis_task.env,
+                                submission_name,
                             )
-                            for k, study in env_studies.items()
-                        }
-                        all_studies.update(study_update)
-                        if outfiles and zipfile:  # have no outfiles here currently
-                            for outfile in outfiles:
-                                if outfile.exists():
-                                    arcname_str = make_zip_arcname(outfile, PATHS, use_dir_flags=False)
 
-                                    zipfile.write(outfile, arcname=arcname_str)
-                                    saved_files.append(outfile)
-                                else:
-                                    logger.error("Expected outfile %s does not exist.", outfile)
-                        if analysis_task:
-                            # Submit and immediately wait to avoid queue deadlock
-                            logger.info("Submitting analysis process for env %s submission %s", _env, submission_name)
-                            try:
-                                tqdm_idx = min(tqdm_indices - tqdm_indices_used)
-                            except ValueError:
-                                tqdm_idx = 0
-                            tqdm_indices_used.add(tqdm_idx)
-
-                            # Submit the future
-                            not_done_tasks[analysis_task.env] = analysis_task
                             process_future = process_executor.submit(
                                 _run_env_analysis_process, analysis_task, tqdm_idx=None
                             )
                             process_futures.add(process_future)
 
-                            # Immediately drain completed futures to prevent queue buildup
-                            timeouts = 0
+                            # Track when this task started
+                            import time
+
+                            task_start_times[analysis_task.env] = time.time()
+
+                            # Drain completed futures to prevent queue buildup
                             while len(process_futures) >= process_workers:
                                 logger.info(
                                     "Draining completed processes... tasks in flight: %s/%s",
@@ -2516,45 +2522,54 @@ if __name__ == "__main__":
                                 )
                                 try:
                                     done_futures, process_futures = wait(
-                                        process_futures, return_when=FIRST_COMPLETED, timeout=900
+                                        process_futures, return_when=FIRST_COMPLETED, timeout=600
                                     )
                                 except TimeoutError:
-                                    logger.error("No analysis processes completed within the last 15 min")
-                                    timeouts += 1
-                                    if timeouts >= 3:
-                                        logger.error("Multiple timeouts reached while waiting for analysis processes.")
-                                        if process_executor._processes:
-                                            try:
-                                                for p in process_executor._processes.values():
-                                                    os.kill(p.pid, signal.SIGKILL)  # or SIGINT / SIGTERM
-                                            except Exception as e:
-                                                logger.error(
-                                                    "Error killing process: %s. Not completed envs %s, Tasks %s ",
-                                                    e,
-                                                    not_done_envs,
-                                                    not_done_tasks,
-                                                )
-                                            raise
+                                    logger.error("No analysis processes completed within the last 10 min")
+                                    # Kill only stuck tasks (older than timeout)
+                                    current_time = time.time()
+                                    stuck_envs = [
+                                        env
+                                        for env, start_time in task_start_times.items()
+                                        if current_time - start_time > 900  # 15 min
+                                    ]
+                                    if stuck_envs and hasattr(process_executor, "_processes"):
+                                        logger.warning("Killing stuck processes for envs: %s", stuck_envs)
+                                        try:
+                                            import signal
+
+                                            for p in process_executor._processes.values():
+                                                try:
+                                                    os.kill(p.pid, signal.SIGKILL)
+                                                    logger.warning("Killed stuck process PID %s", p.pid)
+                                                except (OSError, ProcessLookupError):
+                                                    pass
+                                        except Exception as e:
+                                            logger.error("Error killing processes: %s", e)
+                                        raise TimeoutError(f"Analysis processes stuck for envs: {stuck_envs}")
+                                    break
                                 else:
                                     for done_future in done_futures:
                                         result: EnvAnalysisProcessResult = done_future.result()
                                         not_done_envs.discard(result.env)
                                         not_done_tasks.pop(result.env, None)
+                                        task_start_times.pop(result.env, None)
                                         logger.info(
                                             "Analysis process for env %s completed. Remaining: %d",
                                             result.env,
                                             len(not_done_envs),
                                         )
-                                        tqdm_indices_used.discard(result.tqdm_idx)
                                         if result.outfiles and zipfile:
                                             for outfile in result.outfiles:
                                                 if outfile.exists():
                                                     zipfile.write(outfile, arcname=outfile.name)
                                                     saved_files.append(outfile)
-                    # complete all processes
-                    if process_futures:
-                        logger.info("Waiting for remaining %s analysis processes to complete...", len(process_futures))
-                        try:
+
+                        # Complete remaining processes
+                        if process_futures:
+                            logger.info(
+                                "Waiting for remaining %s analysis processes to complete...", len(process_futures)
+                            )
                             for process_future in as_completed(process_futures, timeout=1800):
                                 result = process_future.result()
                                 not_done_envs.discard(result.env)
@@ -2569,69 +2584,47 @@ if __name__ == "__main__":
                                         if outfile.exists():
                                             zipfile.write(outfile, arcname=outfile.name)
                                             saved_files.append(outfile)
-                        except TimeoutError:
-                            logger.error("Not all futures completed within the timeout period.")
-                        else:
                             logger.info(
                                 "All %s analysis processes completed for submission %s",
-                                len(process_futures),
+                                len(analysis_tasks_to_submit),
                                 submission_name,
                             )
 
-                        # Now generate plots in main process (not in workers) to avoid matplotlib issues
-                        logger.info("Generating plots in main process for submission %s...", submission_name)
-                        for env in envs:
-                            parquet_file = Path(
-                                f"outputs/shared/experiments/Default-mlp-{env}/hyperparameter_importance_{submission_name}.parquet"
-                            )
+                    except KeyboardInterrupt:
+                        logger.warning("KeyboardInterrupt received; canceling all tasks and aborting.")
+                        for process_future in process_futures:
+                            process_future.cancel()
+                        process_futures.clear()
+                        raise
+
+                # Phase 2.5: Generate plots in main process after all analysis is complete
+                logger.info("Generating plots in main process for submission %s...", submission_name)
+                for task in analysis_tasks_to_submit:
+                    parquet_file = Path(task.parquet_file)
+                    if parquet_file.exists():
+                        logger.info("Generating plots for env %s", task.env)
+                        study_results = load_study_results(parquet_file)
+                        if study_results is not None and not study_results.empty:
                             param_choices = list(distributions.keys())
-                            if env not in ("CartPole-v1", "Acrobot-v1", "LunarLander-v3", "Hopper-v5"):
+                            if task.env not in ("CartPole-v1", "Acrobot-v1", "LunarLander-v3", "Hopper-v5"):
                                 param_choices = param_choices.copy()
                                 param_choices.remove("vf_loss_coeff")
-                            if parquet_file.exists():
-                                logger.info("Generating plots for env %s", env)
-                                study_results = load_study_results(parquet_file)
-                                if study_results is not None and not study_results.empty:
-                                    outfiles = plot_importance_studies(
-                                        study_results,
-                                        output_path=f"outputs/shared/experiments/Default-mlp-{env}",
-                                        params=param_choices,
-                                        env=env,
-                                        title=args.add_title,
-                                    )
-                                    if outfiles and zipfile:
-                                        for outfile in outfiles:
-                                            if outfile.exists():
-                                                arcname_str = make_zip_arcname(outfile, PATHS, use_dir_flags=False)
-
-                                                zipfile.write(outfile, arcname=arcname_str)
-                                                saved_files.append(outfile)
-                                            else:
-                                                logger.error("Expected outfile %s does not exist.", outfile)
-                        logger.info("Plotting complete for submission %s", submission_name)
-                except KeyboardInterrupt:
-                    logger.warning(
-                        "KeyboardInterrupt received; canceling all tasks and aborting. Waiting 5s to finish writes"
-                    )
-                    for future in futures:
-                        future.cancel()
-                    for process_future in process_futures:
-                        process_future.cancel()
-                    import time
-
-                    time.sleep(5)
-                    try:
-                        executor.shutdown(wait=False, cancel_futures=True)
-                        process_executor.shutdown(wait=False, cancel_futures=True)
-                    except TypeError:
-                        executor.shutdown(wait=False)
-                        process_executor.shutdown(wait=False)
-                    try:
-                        if input("Exit now? (y/n): ").lower().startswith("y"):
-                            sys.exit(1)
-                    except KeyboardInterrupt:
-                        sys.exit("1")
-            logger.info("Exiting executor context (will shutdown executors) for submission %s...", submission_name)
+                            outfiles = plot_importance_studies(
+                                study_results,
+                                output_path=task.output_path,
+                                params=param_choices,
+                                env=task.env,
+                                title=args.add_title,
+                            )
+                            if outfiles and zipfile:
+                                for outfile in outfiles:
+                                    if outfile.exists():
+                                        arcname_str = make_zip_arcname(outfile, PATHS, use_dir_flags=False)
+                                        zipfile.write(outfile, arcname=arcname_str)
+                                        saved_files.append(outfile)
+                                    else:
+                                        logger.error("Expected outfile %s does not exist.", outfile)
+                logger.info("Plotting complete for submission %s", submission_name)
 
         if args.update_db_only:
             logger.info("Update DB only specified; exiting after DB update.")
@@ -2719,7 +2712,6 @@ if __name__ == "__main__":
         # Run plotting in parallel using ProcessPoolExecutor
         plot_workers = max(1, min(len(envs), int((os.cpu_count() or 2) * 0.75)))
         plot_workers = len(envs)
-        plot_workers = 1
         with ProcessPoolExecutor(max_workers=plot_workers) as plot_executor:
             plot_futures = {}
             for env in envs:
