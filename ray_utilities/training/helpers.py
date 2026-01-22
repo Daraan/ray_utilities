@@ -790,7 +790,7 @@ def split_sum_stats_over_env_runners(
         return [split_sum_stats_over_env_runners(v, path, parent, num_env_runners=num_env_runners) for v in struct]
     if (
         parent is not None
-        and parent["reduce"] == "sum"
+        and parent.get("reduce", "") == "sum"  # 2.53 has no more reduce key
         and parent["clear_on_reduce"] is False
         and (
             path[-1] == "values"
@@ -833,7 +833,7 @@ def nan_to_zero_hist_leaves(
             remove_all
             or (
                 parent is not None
-                and parent["reduce"] == "sum"
+                and parent.get("reduce", "") == "sum"
                 and parent["clear_on_reduce"] is False
                 and parent["window"] in (None, float("inf"))
             )

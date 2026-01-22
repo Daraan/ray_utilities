@@ -113,7 +113,7 @@ See Also:
     - https://github.com/ray-project/ray/pull/55527
 """
 
-RAY_METRICS_V2 = False
+RAY_METRICS_V2 = True
 """
 Indicate the ray version when metrics V2 is used.
 Currently not yet release. See https://github.com/ray-project/ray/pull/56838
